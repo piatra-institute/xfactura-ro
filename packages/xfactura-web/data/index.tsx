@@ -119,6 +119,7 @@ export const ENVIRONMENT = {
     X_DOMAIN: process.env.NEXT_PUBLIC_X_DOMAIN || '',
     AI_DOMAIN: process.env.NEXT_PUBLIC_AI_DOMAIN || '',
     API_DOMAIN: process.env.NEXT_PUBLIC_API_DOMAIN || '',
+    STRIPE_KEY: process.env.NEXT_PUBLIC_STRIPE_KEY || '',
     GOOGLE_LOGIN: process.env.NEXT_PUBLIC_GOOGLE_LOGIN || '',
 };
 
