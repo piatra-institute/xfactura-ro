@@ -1,5 +1,6 @@
 import {
     useState,
+    useEffect,
 } from 'react';
 
 import {
@@ -97,6 +98,19 @@ export default function ActsModal({
         console.log('Login Failed');
     }
     // #endregion handlers
+
+
+    // #region effects
+    useEffect(() => {
+        if (localStorage.user) {
+            setLoggedIn(true);
+        }
+
+        // if (localStorage.smartActs) {
+        //     setSmartActsLeft(true);
+        // }
+    }, []);
+    // #endregion effects
 
 
     // #region render

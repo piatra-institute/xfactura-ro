@@ -5,11 +5,7 @@ import {
 
 import Image from 'next/image';
 
-import { googleLogout } from '@react-oauth/google';
-
-import localStorage, {
-    localKeys,
-} from '@/data/localStorage';
+import localStorage from '@/data/localStorage';
 
 import LinkButton from '../../components/LinkButton';
 
@@ -19,6 +15,10 @@ import InvoicesList from '../../containers/InvoicesList';
 import About from '../../containers/About';
 import AI from '../../containers/AI';
 import Settings from '../../containers/Settings';
+
+import {
+    logout,
+} from '@/logic/user';
 
 
 
@@ -59,6 +59,11 @@ export const MenuIcon = ({
 
 
 export default function Menu() {
+    const [
+        showUser,
+        setShowUser,
+    ] = useState(false);
+
     const [
         showBgBlack,
         setShowBgBlack,
@@ -115,6 +120,10 @@ export default function Menu() {
     }, [
         showMenu,
     ]);
+
+    useEffect(() => {
+        setShowUser(true);
+    }, []);
 
 
     let viewElement: JSX.Element | undefined;
@@ -211,18 +220,18 @@ export default function Menu() {
                         />
                     </li>
 
-                    <li
-                        className="m-4 mt-8 cursor-pointer"
-                        onClick={() => {
-                            googleLogout();
-                        }}
-                    >
-                        <LinkButton
-                            text="delogare"
-                            onClick={() => {}}
-                        />
+                    {showUser && localStorage.user && (
+                        <li
+                            className="m-4 mt-8 cursor-pointer"
+                            onClick={() => {
+                                logout();
+                            }}
+                        >
+                            <LinkButton
+                                text="delogare"
+                                onClick={() => {}}
+                            />
 
-                        {!showBgBlack && localStorage.user && (
                             <div
                                 className="flex flex-row items-center justify-center gap-2 mt-2"
                             >
@@ -235,13 +244,13 @@ export default function Menu() {
                                 />
 
                                 <div
-                                    className="text-xs"
+                                    className="text-xs font-bold"
                                 >
                                     {localStorage.user.name || localStorage.user.email}
                                 </div>
                             </div>
-                        )}
-                    </li>
+                        </li>
+                    )}
                 </ul>
             );
             break;

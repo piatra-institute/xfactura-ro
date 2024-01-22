@@ -29,38 +29,42 @@ export default function BuyScreen({
         </div>
 
         <div
-            className="font-bold cursor-pointer select-none"
+            className="w-[300px] m-auto flex flex-col gap-8 justify-center items-center"
         >
-            <div>
-                70 RON
+            <div
+                className="font-bold w-full border p-4 cursor-pointer select-none"
+            >
+                <div>
+                    70 RON
+                </div>
+
+                <div>
+                    300 acte inteligente
+                </div>
             </div>
 
-            <div>
-                300 acte inteligente
-            </div>
-        </div>
+            <div
+                className="font-bold w-full border p-4 cursor-pointer select-none"
+            >
+                <div>
+                    150 RON
+                </div>
 
-        <div
-            className="font-bold cursor-pointer select-none"
-        >
-            <div>
-                150 RON
-            </div>
-
-            <div>
-                1.000 acte inteligente
-            </div>
-        </div>
-
-        <div
-            className="font-bold cursor-pointer select-none"
-        >
-            <div>
-                500 RON
+                <div>
+                    1.000 acte inteligente
+                </div>
             </div>
 
-            <div>
-                5.000 acte inteligente
+            <div
+                className="font-bold w-full border p-4 cursor-pointer select-none"
+            >
+                <div>
+                    500 RON
+                </div>
+
+                <div>
+                    5.000 acte inteligente
+                </div>
             </div>
         </div>
 
