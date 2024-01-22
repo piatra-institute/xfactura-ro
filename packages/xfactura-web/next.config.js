@@ -17,6 +17,13 @@ const nextConfig = {
             },
         ]
     },
+    images: {
+        remotePatterns: [
+            {
+                hostname: '*.googleusercontent.com',
+            },
+        ],
+    },
 }
 
 module.exports = nextConfig
