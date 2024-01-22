@@ -1,4 +1,5 @@
 import {
+    User,
     NewParty,
 } from './index';
 
@@ -6,6 +7,7 @@ import {
 
 export const localKeys = {
     usingStorage: 'usingStorage',
+    user: 'user',
     generateEinvoiceLocally: 'generateEinvoiceLocally',
     smartActs: 'smartActs',
     defaultSeller: 'defaultSeller',
@@ -15,6 +17,7 @@ export const localKeys = {
 
 export type Keys =
     | 'usingStorage'
+    | 'user'
     | 'defaultSeller'
     | 'generateEinvoiceLocally'
     | 'smartActs';
@@ -82,6 +85,7 @@ const deleteAllLocalStorage = (
 
 
 class LocalStorage {
+    public user: User | null = null;
     public usingStorage: boolean = true;
     public generateEinvoiceLocally: boolean = false;
     public smartActs: string = 'unspecified';
@@ -100,6 +104,7 @@ class LocalStorage {
         }
 
         this.usingStorage = getLocalStorage(localKeys.usingStorage, true);
+        this.user = getLocalStorage(localKeys.user, null);
         this.generateEinvoiceLocally = getLocalStorage(localKeys.generateEinvoiceLocally, false);
         this.smartActs = getLocalStorage(localKeys.smartActs, 'unspecified');
         this.defaultSeller = getLocalStorage(localKeys.defaultSeller, '');
@@ -113,6 +118,7 @@ class LocalStorage {
     ) {
         if (!this.usingStorage
             && key !== localKeys.usingStorage
+            && key !== localKeys.user
             && key !== localKeys.smartActs
         ) {
             return;
@@ -123,12 +129,14 @@ class LocalStorage {
 
     public obliterate() {
         deleteLocalStorage(localKeys.defaultSeller);
+        deleteLocalStorage(localKeys.user);
         deleteLocalStorage(localKeys.generateEinvoiceLocally);
         deleteLocalStorage(localKeys.smartActs);
         deleteAllLocalStorage(localKeys.company);
         deleteAllLocalStorage(localKeys.invoice);
 
         this.defaultSeller = '';
+        this.user = null;
         this.generateEinvoiceLocally = false;
         this.smartActs = 'unspecified';
         this.companies = {};

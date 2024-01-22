@@ -7,6 +7,10 @@ import {
     OAuth2Client,
 } from 'google-auth-library';
 
+import {
+    jwtDecode,
+} from 'jwt-decode';
+
 
 
 const oAuth2Client = new OAuth2Client(
@@ -20,7 +24,26 @@ export default async function handler(
     req: NextApiRequest,
     res: NextApiResponse<any>,
 ) {
-    const { tokens } = await oAuth2Client.getToken(req.body.code);
+    try {
+        const { tokens } = await oAuth2Client.getToken(req.body.code);
+        const decoded: any = jwtDecode(tokens.id_token || '');
 
-    res.json(tokens);
+        // store
+        // tokens.access_token
+        // tokens.refresh_token
+
+        const {
+            email,
+            name,
+            picture,
+        } = decoded;
+
+        res.json({
+            email,
+            name,
+            picture,
+        });
+    } catch (error) {
+        return;
+    }
 }

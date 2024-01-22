@@ -3,7 +3,13 @@ import {
     useEffect,
 } from 'react';
 
+import Image from 'next/image';
+
 import { googleLogout } from '@react-oauth/google';
+
+import localStorage, {
+    localKeys,
+} from '@/data/localStorage';
 
 import LinkButton from '../../components/LinkButton';
 
@@ -205,15 +211,36 @@ export default function Menu() {
                         />
                     </li>
 
-                    <li className="m-4 mt-8">
+                    <li
+                        className="m-4 mt-8 cursor-pointer"
+                        onClick={() => {
+                            googleLogout();
+                        }}
+                    >
                         <LinkButton
                             text="delogare"
-                            onClick={() => {
-                                // if logged in
-
-                                googleLogout();
-                            }}
+                            onClick={() => {}}
                         />
+
+                        {!showBgBlack && localStorage.user && (
+                            <div
+                                className="flex flex-row items-center justify-center gap-2 mt-2"
+                            >
+                                <Image
+                                    src={localStorage.user.picture || ''}
+                                    alt={localStorage.user.name}
+                                    width={30}
+                                    height={30}
+                                    className="rounded-full"
+                                />
+
+                                <div
+                                    className="text-xs"
+                                >
+                                    {localStorage.user.name || localStorage.user.email}
+                                </div>
+                            </div>
+                        )}
                     </li>
                 </ul>
             );

@@ -7,7 +7,9 @@ import {
     CodeResponse as GoogleCodeResponse,
 } from '@react-oauth/google';
 
-import localStorage from '../../data/localStorage';
+import localStorage, {
+    localKeys,
+} from '../../data/localStorage';
 
 import LinkButton from '../LinkButton';
 import Subtitle from '../Subtitle';
@@ -65,6 +67,8 @@ export default function ActsModal({
         })
             .then(async (response) => {
                 const data = await response.json();
+                localStorage.set(localKeys.user, data);
+                localStorage.user = data;
 
                 setLoggedIn(true);
                 setShowBuyScreen(true);
