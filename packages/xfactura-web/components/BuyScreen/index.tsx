@@ -20,7 +20,9 @@ import Subtitle from '../Subtitle';
 
 
 
-const stripePromise = loadStripe(ENVIRONMENT.STRIPE_KEY);
+const stripePromise = loadStripe(ENVIRONMENT.STRIPE_KEY, {
+    locale: 'ro',
+});
 
 
 export default function BuyScreen({
@@ -69,7 +71,9 @@ export default function BuyScreen({
             >
                 <EmbeddedCheckoutProvider
                     stripe={stripePromise}
-                    options={{clientSecret}}
+                    options={{
+                        clientSecret,
+                    }}
                 >
                     <EmbeddedCheckout />
                 </EmbeddedCheckoutProvider>
