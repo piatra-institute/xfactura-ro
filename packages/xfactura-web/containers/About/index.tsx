@@ -20,7 +20,7 @@ export default function About({
             <p>
                 xfactura.ro este un proiect&nbsp;
                 <a
-                    href="https://github.com/piatra-institute/xfactura-ro/tree/main/packages/xfactura-web"
+                    href="https://github.com/piatra-institute/xfactura-ro/tree/main"
                     target="_blank"
                 >
                     open source
@@ -54,7 +54,7 @@ export default function About({
             <p>
                 xfactura.ro poate fi rulat pe propriul calculator folosind&nbsp;
                 <a
-                    href="https://github.com/piatra-institute/xfactura-ro/blob/main/packages/xfactura-web/README.md#self-hosting"
+                    href="https://github.com/piatra-institute/xfactura-ro/tree/main?tab=readme-ov-file#self-hosting"
                     target="_blank"
                 >
                     docker
