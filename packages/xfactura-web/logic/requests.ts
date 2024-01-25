@@ -113,3 +113,25 @@ export const uploadFile = async (
             logger('error', error);
         });
 }
+
+
+
+export const apiLogin = async (
+    data: any,
+) => {
+    return fetch(ENVIRONMENT.API_DOMAIN + '/login', {
+        method: 'POST',
+        mode: 'no-cors',
+        credentials: 'omit',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            ...data,
+        }),
+    })
+        .then((response) => response.json())
+        .catch((error) => {
+            logger('error', error);
+        });
+}

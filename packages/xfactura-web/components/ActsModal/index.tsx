@@ -10,7 +10,7 @@ import {
 
 import localStorage, {
     localKeys,
-} from '../../data/localStorage';
+} from '@/data/localStorage';
 
 import LinkButton from '../LinkButton';
 import Subtitle from '../Subtitle';
