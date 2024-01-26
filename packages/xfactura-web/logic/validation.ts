@@ -31,6 +31,7 @@ export const normalizeCountyString = (
         .toLowerCase()
         .replace(/ /g, '')
         .replace(/-/g, '')
+        .replace(/mun\.?(icipiul?)?/i, '');
 
     return normalizeDiacritics(normalizedValue);
 }
@@ -48,6 +49,25 @@ export const normalizeUserCounty = (
             return normalizeUserCountry(userCountry) + '-' + value;
         }
     }
+}
+
+export const normalizeUserCity = (
+    userCity: string,
+    userCounty: string,
+) => {
+    const normalizedUserCounty = normalizeCountyString(userCounty);
+
+    if (normalizedUserCounty === 'bucuresti') {
+        const match = userCity
+            .trim()
+            .toLowerCase()
+            .match(/sector? (\d)/i);
+        if (match) {
+            return 'SECTOR' + match[1];
+        }
+    }
+
+    return userCity;
 }
 
 export const normalizeUserCountry = (
