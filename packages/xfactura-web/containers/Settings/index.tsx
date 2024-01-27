@@ -48,6 +48,11 @@ export default function Settings({
     ] = useState(localStorage.generateEinvoiceLocally);
 
     const [
+        storeGoogleDrive,
+        setStoreGoogleDrive,
+    ] = useState(false);
+
+    const [
         smartActs,
         setSmartActs,
     ] = useState(localStorage.smartActs);
@@ -144,7 +149,7 @@ export default function Settings({
             />
 
             <div
-                className="grid gap-4"
+                className="grid gap-4 min-w-[300px]"
             >
                 <Toggle
                     text="stocare date locale"
@@ -174,9 +179,7 @@ export default function Settings({
                                 dacă această opțiune este activată, efactura se va genera în browser, fără a fi trimisă către serverul xfactura.ro · recomandat în browser-ul Chrome sau Firefox pe desktop
                             </p>
                             <p
-                                style={{
-                                    margin: 0,
-                                }}
+                                className="mb-0"
                             >
                                 dacă această opțiune este dezactivată, efactura se va genera pe serverul xfactura.ro fără a fi stocate datele
                             </p>
@@ -208,15 +211,32 @@ export default function Settings({
                                 modelele neuronale pentru actele inteligente pot rula în browser (local—complet gratuit) sau pe serverul xfactura.ro (cloud—contra cost)
                             </p>
                             <p
-                                style={{
-                                    margin: 0,
-                                }}
+                                className="mb-0"
                             >
                                 prin selectarea acestei opțiuni generarea inteligentă va rula direct modelul neuronal local sau în cloud
                             </p>
                         </>
                     )}
                 />
+
+                {localStorage.user && (
+                    <Toggle
+                        text="sincronizare Google Drive"
+                        value={storeGoogleDrive}
+                        toggle={() => {
+                            setStoreGoogleDrive(!storeGoogleDrive);
+                        }}
+                        tooltip={(
+                            <>
+                                <p
+                                    className="mb-0"
+                                >
+                                    stocarea datelor în Google Drive permite sincronizarea datelor între dispozitive și backup
+                                </p>
+                            </>
+                        )}
+                    />
+                )}
 
                 <LinkButton
                     text="export"
