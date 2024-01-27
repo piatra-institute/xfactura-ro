@@ -1,13 +1,9 @@
-import {
-    Request,
-    Response,
-} from 'express';
+import login from './login';
+import uploadDatabaseGoogleDrive from './uploadDatabaseGoogleDrive';
 
 
 
-export const login = (
-    request: Request,
-    response: Response,
-) => {
-    response.send('login');
-}
+export {
+    login,
+    uploadDatabaseGoogleDrive,
+};
