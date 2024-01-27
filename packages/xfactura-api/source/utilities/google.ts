@@ -26,7 +26,7 @@ export async function createFolder(
 
         return file.data.id || '';
     } catch (error) {
-        logger('error', error);
+        logger('warn', error);
     }
 }
 
@@ -47,7 +47,7 @@ export async function searchFolder(
 
         return res.data.files[0].id;
     } catch (error) {
-        logger('error', error);
+        logger('warn', error);
     }
 }
 
@@ -68,6 +68,6 @@ export async function searchFile(
 
         return res.data.files[0].id;
     } catch (error) {
-        logger('error', error);
+        logger('warn', error);
     }
 }
