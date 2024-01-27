@@ -1,5 +1,4 @@
-import MenuBack from '../../components/MenuBack';
-import Subtitle from '../../components/Subtitle';
+import BuyScreen from '../../components/BuyScreen';
 
 
 
@@ -10,15 +9,14 @@ export default function AI({
 }) {
     return (
         <div
-            className="text-left"
+            className={`
+                grid items-center justify-center place-content-center gap-12
+            `}
         >
-            <Subtitle
-                text="acte inteligente"
-                centered={true}
-            />
-
-            <MenuBack
-                back={back}
+            <BuyScreen
+                setShowBuyScreen={() => {
+                    back();
+                }}
             />
         </div>
     );
