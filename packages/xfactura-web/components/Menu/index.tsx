@@ -225,6 +225,7 @@ export default function Menu() {
                             className="m-4 mt-8 cursor-pointer"
                             onClick={() => {
                                 logout();
+                                setShowUser(false);
                             }}
                         >
                             <LinkButton

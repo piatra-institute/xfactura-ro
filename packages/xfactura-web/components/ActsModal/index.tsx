@@ -86,6 +86,7 @@ export default function ActsModal({
         flow: 'auth-code',
         onSuccess: (codeResponse) => googleSuccessLogin(codeResponse),
         onError: () => googleErrorLogin(),
+        scope: 'https://www.googleapis.com/auth/drive.file',
     });
 
 
