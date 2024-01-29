@@ -175,8 +175,11 @@ export const normalizePartyName = (
     value: string,
 ) => {
     return toNormalCase(value)
+        .trim()
         .replace(/S.r.l.$/, 'SRL')
-        .replace(/S.a.$/, 'SA');
+        .replace(/Srl$/, 'SRL')
+        .replace(/S.a.$/, 'SA')
+        .replace(/Sa$/, 'SA');
 }
 
 
