@@ -246,9 +246,11 @@ export default function Home() {
     }
 
     const resetInvoice = () => {
-        setSeller({
-            ...newParty,
-        });
+        if (!seller.vatNumber) {
+            setSeller({
+                ...newParty,
+            });
+        }
 
         setBuyer({
             ...newParty,
