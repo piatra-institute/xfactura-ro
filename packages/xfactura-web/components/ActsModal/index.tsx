@@ -8,6 +8,10 @@ import {
     CodeResponse as GoogleCodeResponse,
 } from '@react-oauth/google';
 
+import {
+    ENVIRONMENT,
+} from '@/data';
+
 import localStorage, {
     localKeys,
 } from '@/data/localStorage';
@@ -59,7 +63,7 @@ export default function ActsModal({
     const googleSuccessLogin = (
         codeResponse:  Omit<GoogleCodeResponse, 'error' | 'error_description' | 'error_uri'>,
     ) => {
-        fetch('/api/google_log_in', {
+        fetch(ENVIRONMENT.API_DOMAIN + '/google-login', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',

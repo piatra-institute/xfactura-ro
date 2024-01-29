@@ -39,7 +39,7 @@ export default function BuyScreen({
     const buy = (
         productType: '300' | '1000' | '5000',
     ) => {
-        fetch('/api/checkout_sessions', {
+        fetch(ENVIRONMENT.API_DOMAIN + '/stripe-checkout-sessions', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
