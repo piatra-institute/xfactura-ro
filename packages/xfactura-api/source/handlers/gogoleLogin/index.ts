@@ -11,6 +11,10 @@ import {
     jwtDecode,
 } from 'jwt-decode';
 
+import {
+    logger,
+} from '../../utilities';
+
 
 
 const oAuth2Client = new OAuth2Client(
@@ -21,11 +25,11 @@ const oAuth2Client = new OAuth2Client(
 
 
 export default async function handler(
-    req: Request,
-    res: Response,
+    request: Request,
+    respone: Response,
 ) {
     try {
-        const { tokens } = await oAuth2Client.getToken(req.body.code);
+        const { tokens } = await oAuth2Client.getToken(request.body.code);
         const decoded: any = jwtDecode(tokens.id_token || '');
 
         // store
@@ -38,12 +42,19 @@ export default async function handler(
             picture,
         } = decoded;
 
-        res.json({
-            email,
-            name,
-            picture,
+        respone.json({
+            status: true,
+            data: {
+                email,
+                name,
+                picture,
+            },
         });
     } catch (error) {
-        return;
+        logger('error', error);
+
+        respone.status(500).json({
+            status: false,
+        });
     }
 }
