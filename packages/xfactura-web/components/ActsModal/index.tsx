@@ -65,15 +65,20 @@ export default function ActsModal({
     ) => {
         fetch(ENVIRONMENT.API_DOMAIN + '/google-login', {
             method: 'POST',
+            credentials: 'include',
+            mode: 'cors',
             headers: {
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify(codeResponse),
         })
             .then(async (response) => {
-                const data = await response.json();
-                localStorage.set(localKeys.user, data);
-                localStorage.user = data;
+                const request = await response.json();
+                if (!request.status) {
+                    return;
+                }
+                localStorage.set(localKeys.user, request.data);
+                localStorage.user = request.data;
 
                 setLoggedIn(true);
                 setShowBuyScreen(true);
