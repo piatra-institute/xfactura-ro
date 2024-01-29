@@ -69,6 +69,7 @@ export default function Party({
                 if (localStorageData && verifyPartyData(localStorageData)) {
                     setParty(localStorageData);
                     setUsingLocalData(true);
+                    setLoadingVatNumber(false);
                     return;
                 }
             }
@@ -119,7 +120,7 @@ export default function Party({
             }));
             return;
         }
-    });
+    }, 2500);
 
     const updateParty = (
         type: typeof partyFields[number],
@@ -133,6 +134,7 @@ export default function Party({
                     vatNumber: value,
                 }));
 
+                setLoadingVatNumber(true);
                 checkVatNumber(value);
                 return;
             }

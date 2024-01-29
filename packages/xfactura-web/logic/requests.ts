@@ -4,7 +4,6 @@ import {
     EINVOICE_API,
     UPLOAD_AUDIO_API,
     UPLOAD_FILE_API,
-    ExtractedResponse,
 } from '../data';
 
 import {
