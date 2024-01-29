@@ -4,7 +4,9 @@ import multer from 'multer';
 
 import {
     login,
-    uploadDatabaseGoogleDrive,
+    gogoleLogin,
+    googleUploadDatabase,
+    checkoutSessions,
 } from './handlers';
 
 
@@ -16,7 +18,9 @@ const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
 app.post('/login', login);
-app.post('/upload-database-google-drive', upload.single('file'), uploadDatabaseGoogleDrive);
+app.post('/google-login', gogoleLogin);
+app.post('/google-upload-database', upload.single('file'), googleUploadDatabase);
+app.post('/stripe-checkout-sessions', checkoutSessions);
 
 app.listen(port, () => {
     console.log(`Server started on ${port}`);

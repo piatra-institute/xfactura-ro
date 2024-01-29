@@ -1,9 +1,13 @@
 import login from './login';
-import uploadDatabaseGoogleDrive from './uploadDatabaseGoogleDrive';
+import googleUploadDatabase from './googleUploadDatabase';
+import checkoutSessions from './checkoutSessions';
+import gogoleLogin from './gogoleLogin';
 
 
 
 export {
     login,
-    uploadDatabaseGoogleDrive,
+    googleUploadDatabase,
+    checkoutSessions,
+    gogoleLogin,
 };

@@ -21,7 +21,7 @@ import {
 
 
 
-const uploadDatabaseGoogleDrive = async (
+const googleUploadDatabase = async (
     request: Request,
     response: Response,
 ) => {
@@ -93,4 +93,4 @@ const uploadDatabaseGoogleDrive = async (
 }
 
 
-export default uploadDatabaseGoogleDrive;
+export default googleUploadDatabase;
