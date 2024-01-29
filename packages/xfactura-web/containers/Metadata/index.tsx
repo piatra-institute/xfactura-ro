@@ -35,12 +35,18 @@ export default function Metadata({
                 text="număr factură"
                 value={metadata.number}
                 setValue={(value) => updateMetadata('number', value)}
+                inputProps={{
+                    placeholder: 'SERIE-0001',
+                }}
             />
 
             <Input
                 text="monedă"
                 value={metadata.currency}
                 setValue={(value) => updateMetadata('currency', value)}
+                inputProps={{
+                    placeholder: 'RON | EUR | USD',
+                }}
             />
 
             <Datepicker
