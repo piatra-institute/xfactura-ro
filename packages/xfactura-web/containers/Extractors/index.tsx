@@ -1,6 +1,7 @@
 import {
     useRef,
     useState,
+    useEffect,
     Dispatch,
     SetStateAction,
 } from 'react';
@@ -106,6 +107,25 @@ export default function Extractors({
         setActsModalTitle('');
         setActsModalDescription(<></>);
     }
+
+
+    useEffect(() => {
+        const handleEscape = (event: KeyboardEvent) => {
+            if (event.key === 'Escape' && showActsModal) {
+                setShowActsModal(false);
+            }
+        }
+
+        if (showActsModal) {
+            window.addEventListener('keydown', handleEscape);
+        }
+
+        return () => {
+            window.removeEventListener('keydown', handleEscape);
+        };
+    }, [
+        showActsModal,
+    ]);
 
 
     return (
