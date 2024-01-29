@@ -64,6 +64,7 @@ export default function Input({
                 <Spinner
                     absolute={true}
                     style={{
+                        zIndex: 1,
                         right: '4px',
                         top: '19px',
                     }}
