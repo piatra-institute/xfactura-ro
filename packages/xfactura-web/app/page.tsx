@@ -14,27 +14,27 @@ import {
     emptyMetadata,
     Metadata as IMetadata,
     ExtractedResponse,
-} from '../data';
+} from '@/data';
 
-import Menu from '../components/Menu';
-import Party from '../components/Party';
-import Lines from '../components/Lines';
-import Spinner from '../components/Spinner';
-import Deleter from '../components/Deleter';
-import GenerateButton from '../components/GenerateButton';
+import Menu from '@/components/Menu';
+import Party from '@/components/Party';
+import Lines from '@/components/Lines';
+import Spinner from '@/components/Spinner';
+import Deleter from '@/components/Deleter';
+import GenerateButton from '@/components/GenerateButton';
 
-import Title from '../containers/Title';
-import Extractors from '../containers/Extractors';
-import Metadata from '../containers/Metadata';
-import Camera from '../containers/Camera';
-import Audio from '../containers/Audio';
+import Title from '@/containers/Title';
+import Extractors from '@/containers/Extractors';
+import Metadata from '@/containers/Metadata';
+import Camera from '@/containers/Camera';
+import Audio from '@/containers/Audio';
 
-import webContainerRunner from '../logic/node-php';
+import webContainerRunner from '@/logic/node-php';
 
 import {
     downloadTextFile,
     getDateFormat,
-} from '../logic/utilities';
+} from '@/logic/utilities';
 
 import {
     checkValidParty,
@@ -53,19 +53,25 @@ import {
     verifyInputUserInvoiceNumber,
     verifyInputUserCurrency,
     verifyInputUserDate,
-} from '../logic/validation';
+} from '@/logic/validation';
 
 import {
     getEInvoice,
     uploadFile,
     uploadAudio,
-} from '../logic/requests';
+} from '@/logic/requests';
 
 import {
     logicCamera,
-} from '../logic/camera';
+} from '@/logic/camera';
 
-import localStorage from '../data/localStorage';
+import {
+    seriesParser,
+} from '@/logic/series';
+
+import localStorage, {
+    localKeys,
+} from '@/data/localStorage';
 
 
 
@@ -232,17 +238,18 @@ export default function Home() {
                 },
             );
         } else {
-                const response = await getEInvoice(invoice);
-                setLoadingEInvoice(false);
+            const response = await getEInvoice(invoice);
+            setLoadingEInvoice(false);
 
-                if (response && response.status) {
-                    downloadTextFile(
-                        filename,
-                        response.data,
-                    );
-                }
-
+            if (response && response.status) {
+                downloadTextFile(
+                    filename,
+                    response.data,
+                );
+            }
         }
+
+        localStorage.set(localKeys.lastInvoiceSeries, invoice.metadata.number);
     }
 
     const resetInvoice = () => {
@@ -404,6 +411,19 @@ export default function Home() {
         metadata,
         lines,
     ]);
+
+    /** series */
+    useEffect(() => {
+        const seriesData = seriesParser(localStorage.lastInvoiceSeries);
+        if (!seriesData) {
+            return;
+        }
+
+        setMetadata(prevValues => ({
+            ...prevValues,
+            number: seriesData.nextSeries,
+        }));
+    }, []);
     // #endregion effects
 
 

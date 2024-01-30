@@ -156,8 +156,6 @@ export default function Settings({
                     value={useLocalStorage}
                     toggle={() => {
                         localStorage.set(localKeys.usingStorage, !localStorage.usingStorage);
-                        localStorage.usingStorage = !localStorage.usingStorage;
-
                         setUseLocalStorage(localStorage.usingStorage);
                     }}
                 />
@@ -167,8 +165,6 @@ export default function Settings({
                     value={generateEinvoiceLocally}
                     toggle={() => {
                         localStorage.set(localKeys.generateEinvoiceLocally, !localStorage.generateEinvoiceLocally);
-                        localStorage.generateEinvoiceLocally = !localStorage.generateEinvoiceLocally;
-
                         setGenerateEinvoiceLocally(localStorage.generateEinvoiceLocally);
 
                         reload();

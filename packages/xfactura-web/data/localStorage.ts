@@ -9,6 +9,7 @@ export const localKeys = {
     usingStorage: 'usingStorage',
     user: 'user',
     generateEinvoiceLocally: 'generateEinvoiceLocally',
+    lastInvoiceSeries: 'lastInvoiceSeries',
     smartActs: 'smartActs',
     defaultSeller: 'defaultSeller',
     company: 'company-',
@@ -18,8 +19,9 @@ export const localKeys = {
 export type Keys =
     | 'usingStorage'
     | 'user'
-    | 'defaultSeller'
     | 'generateEinvoiceLocally'
+    | 'lastInvoiceSeries'
+    | 'defaultSeller'
     | 'smartActs';
 export type CompanyKey = `company-${string}`;
 export type InvoiceKey = `invoice-${string}`;
@@ -86,10 +88,11 @@ const deleteAllLocalStorage = (
 
 class LocalStorage {
     public user: User | null = null;
-    public usingStorage: boolean = true;
-    public generateEinvoiceLocally: boolean = false;
-    public smartActs: string = 'unspecified';
-    public defaultSeller: string = '';
+    public usingStorage = true;
+    public generateEinvoiceLocally = false;
+    public lastInvoiceSeries = '';
+    public smartActs = 'unspecified';
+    public defaultSeller = '';
     public companies: Record<string, NewParty | undefined> = {};
     public invoices: Record<string, any | undefined> = {};
     public inventory: Record<string, any | undefined> = {};
@@ -106,6 +109,7 @@ class LocalStorage {
         this.usingStorage = getLocalStorage(localKeys.usingStorage, true);
         this.user = getLocalStorage(localKeys.user, null);
         this.generateEinvoiceLocally = getLocalStorage(localKeys.generateEinvoiceLocally, false);
+        this.lastInvoiceSeries = getLocalStorage(localKeys.lastInvoiceSeries, '');
         this.smartActs = getLocalStorage(localKeys.smartActs, 'unspecified');
         this.defaultSeller = getLocalStorage(localKeys.defaultSeller, '');
         this.invoices = getAllLocalStorage(localKeys.invoice);
@@ -124,6 +128,7 @@ class LocalStorage {
             return;
         }
 
+        (this as any)[key] = value;
         setLocalStorage(key, value);
     }
 

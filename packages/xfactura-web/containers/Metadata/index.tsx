@@ -1,6 +1,6 @@
 import {
     Metadata,
-} from '../../data';
+} from '@/data';
 
 import Input from '../../components/Input';
 import Datepicker from '../../components/Datepicker';
