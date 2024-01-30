@@ -24,7 +24,7 @@ export default function LinkButton({
         <button
             className={`
                 cursor-pointer select-none font-bold
-                flex items-center gap-2
+                flex items-center gap-2 p-1
                 focus:outline-none focus:ring-2 focus:ring-white
                 m-auto
             `}
