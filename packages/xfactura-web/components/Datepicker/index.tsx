@@ -80,7 +80,7 @@ const customTheme: CustomFlowbiteTheme = {
                 "base": "flex mt-2 space-x-2",
                 "button": {
                     "base": "w-full px-5 py-2 text-center text-sm font-medium focus:ring-4 focus:ring-gray-300",
-                    "today": "bg-gray-600 text-white hover:bg-gray-800 dark:bg-gray-600 dark:hover:bg-gray-700",
+                    "today": "bg-gray-800 text-white hover:bg-gray-700 dark:bg-gray-600 dark:hover:bg-gray-700",
                     "clear": "border border-gray-300 bg-black text-white hover:bg-gray-100 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:hover:bg-gray-600"
                 }
             }
