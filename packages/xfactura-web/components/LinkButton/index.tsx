@@ -3,17 +3,21 @@ import {
     ButtonHTMLAttributes,
 } from 'react';
 
+import Image from 'next/image';
+
 
 
 export type LinkButtonProps = {
     text: string | JSX.Element;
     centered?: boolean;
+    icon?: string;
 } & DetailedHTMLProps<ButtonHTMLAttributes<HTMLButtonElement>, HTMLButtonElement>;
 
 
 export default function LinkButton({
     text,
     centered,
+    icon,
     ...rest
 }: LinkButtonProps) {
     const button = (
@@ -30,6 +34,15 @@ export default function LinkButton({
             <div
                 className="flex items-center justify-center gap-2"
             >
+                {icon && (
+                    <Image
+                        src={icon}
+                        width={20}
+                        height={20}
+                        alt={typeof text === 'string' ? text : ''}
+                    />
+                )}
+
                 {button}
             </div>
         );
