@@ -46,7 +46,7 @@ export default function LineMenu({
         >
             <button
                 onClick={() => setShow(!show)}
-                className="lg:mt-10"
+                className="focus:outline-none focus:ring-2 focus:ring-white lg:mt-10"
             >
                 {show ? (
                     <>{collapse}</>
