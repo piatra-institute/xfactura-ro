@@ -1,3 +1,7 @@
+import LinkButton from '../LinkButton';
+
+
+
 export default function MenuBack({
     back,
 } : {
@@ -7,12 +11,10 @@ export default function MenuBack({
         <div
             className="mt-8 flex justify-center font-bold"
         >
-            <div
-                className="cursor-pointer select-none text-center inline"
+            <LinkButton
+                text="înapoi"
                 onClick={() => back()}
-            >
-                înapoi
-            </div>
+            />
         </div>
     );
 }

@@ -253,7 +253,6 @@ export default function ActsModal({
                 onClick={() => {
                     googleLogin();
                 }}
-                centered={true}
                 icon="/assets/google-logo.png"
             />
 
@@ -262,7 +261,6 @@ export default function ActsModal({
                 onClick={() => {
                     appleSuccessLogin();
                 }}
-                centered={true}
                 icon="/assets/apple-logo.png"
             />
 

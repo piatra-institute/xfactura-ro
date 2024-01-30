@@ -10,7 +10,7 @@ import Image from 'next/image';
 export type LinkButtonProps = {
     text: string | JSX.Element;
     centered?: boolean;
-    icon?: string;
+    icon?: string | JSX.Element;
 } & DetailedHTMLProps<ButtonHTMLAttributes<HTMLButtonElement>, HTMLButtonElement>;
 
 
@@ -22,10 +22,34 @@ export default function LinkButton({
 }: LinkButtonProps) {
     const button = (
         <button
-            className="cursor-pointer select-none font-bold focus:outline-none focus:ring-2 focus:ring-white"
+            className={`
+                cursor-pointer select-none font-bold
+                flex items-center gap-2
+                focus:outline-none focus:ring-2 focus:ring-white
+                m-auto
+            `}
             {...rest}
         >
-            {text}
+            {typeof icon === 'string' ? (
+                <Image
+                    src={icon}
+                    width={20}
+                    height={20}
+                    alt={typeof text === 'string' ? text : ''}
+                />
+            ) : (
+                <>
+                    {icon}
+                </>
+            )}
+
+            {icon ? (
+                <div>
+                    {text}
+                </div>
+            ) : (
+                <>{text}</>
+            )}
         </button>
     );
 
@@ -34,15 +58,6 @@ export default function LinkButton({
             <div
                 className="flex items-center justify-center gap-2"
             >
-                {icon && (
-                    <Image
-                        src={icon}
-                        width={20}
-                        height={20}
-                        alt={typeof text === 'string' ? text : ''}
-                    />
-                )}
-
                 {button}
             </div>
         );

@@ -151,8 +151,6 @@ export default function Extractors({
                     <div
                         className="flex items-center gap-1"
                     >
-                        {uploadIcon}
-
                         <LinkButton
                             text={extractorTitles.upload}
                             onClick={() => {
@@ -161,6 +159,7 @@ export default function Extractors({
                                 setActsModalTitle(extractorTitles.upload);
                                 setActsModalDescription(extractorDescriptions.upload);
                             }}
+                            icon={uploadIcon}
                         />
                     </div>
                 </Tooltip>
@@ -177,8 +176,6 @@ export default function Extractors({
                             <div
                                 className="flex items-center gap-1"
                             >
-                                {photoIcon}
-
                                 <LinkButton
                                     text={extractorTitles.camera}
                                     onClick={() => {
@@ -187,6 +184,7 @@ export default function Extractors({
                                         setActsModalTitle(extractorTitles.camera);
                                         setActsModalDescription(extractorDescriptions.camera);
                                     }}
+                                    icon={photoIcon}
                                 />
                             </div>
                         </Tooltip>
@@ -201,8 +199,6 @@ export default function Extractors({
                             <div
                                 className="flex items-center gap-1"
                             >
-                                {microphoneIcon}
-
                                 <LinkButton
                                     text={extractorTitles.record}
                                     onClick={() => {
@@ -211,6 +207,7 @@ export default function Extractors({
                                         setActsModalTitle(extractorTitles.record);
                                         setActsModalDescription(extractorDescriptions.record);
                                     }}
+                                    icon={microphoneIcon}
                                 />
                             </div>
                         </Tooltip>
