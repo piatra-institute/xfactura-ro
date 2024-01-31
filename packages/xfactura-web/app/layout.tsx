@@ -13,8 +13,6 @@ import {
 
 
 
-const inter = Inter({ subsets: ['latin'] })
-
 export const metadata: Metadata = {
     applicationName: 'xfactura.ro',
     title: 'xfactura.ro',
@@ -26,6 +24,7 @@ export const metadata: Metadata = {
     classification: 'Business',
     robots: 'index, follow',
     referrer: 'origin',
+    metadataBase: new URL('https://xfactura.ro'),
     icons: {
         icon: [
             {
@@ -56,6 +55,9 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
     themeColor: '#000000',
 }
+
+
+const inter = Inter({ subsets: ['latin'] });
 
 
 export default function RootLayout({
