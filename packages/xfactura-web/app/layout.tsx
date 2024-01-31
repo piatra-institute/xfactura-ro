@@ -45,10 +45,6 @@ export default function RootLayout({
             lang="ro"
             suppressHydrationWarning
         >
-            {/* <Head>
-                <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
-            </Head> */}
-
             <body className={inter.className}>
                 <GoogleOAuthProvider
                     clientId={ENVIRONMENT.GOOGLE_LOGIN}
