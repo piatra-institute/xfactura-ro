@@ -7,6 +7,10 @@ import {
 
 import Tooltip from '../Tooltip';
 
+import {
+    arrowDownIcon,
+} from '@/data/icons';
+
 
 
 const theme: FlowbiteDropdownTheme = {
@@ -30,7 +34,7 @@ const theme: FlowbiteDropdownTheme = {
         "hidden": "invisible opacity-0",
         "item": {
             "container": "bg-black",
-            "base": "flex items-center justify-end py-2 px-4 text-sm text-white cursor-pointer w-full hover:bg-gray-100 hover:text-black focus:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-600 focus:outline-none dark:hover:text-white dark:focus:bg-gray-600 dark:focus:text-white",
+            "base": "flex items-center justify-end py-2 px-4 text-sm text-white cursor-pointer w-full hover:bg-gray-700 hover:text-black hover:text-white focus:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 focus:outline-none dark:hover:text-white dark:focus:bg-gray-600 dark:focus:text-white",
             "icon": "mr-2 h-4 w-4"
         },
         "style": {
@@ -88,7 +92,18 @@ export default function CustomDropdown({
             </div>
 
             <Dropdown
-                label={selected}
+                label=""
+                renderTrigger={() => (
+                    <button
+                        className="focus:outline-none focus:ring-2 focus:ring-white p-1 flex gap-2 items-center"
+                    >
+                        {selected}
+
+                        <span>
+                            {arrowDownIcon}
+                        </span>
+                    </button>
+                )}
                 dismissOnClick={true}
                 inline={true}
                 theme={theme}
@@ -98,6 +113,9 @@ export default function CustomDropdown({
                     return (
                         <Dropdown.Item
                             key={selectable}
+                            className={`
+                                ${selectable === selected && 'bg-gray-700 text-white cursor-default'}
+                            `}
                             onClick={() => {
                                 atSelect(selectable);
                             }}
