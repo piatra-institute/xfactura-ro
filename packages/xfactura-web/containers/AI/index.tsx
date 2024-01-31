@@ -1,4 +1,7 @@
 import BuyScreen from '../../components/BuyScreen';
+import LoginScreen from '../../components/LoginScreen';
+
+import localStorage from '@/data/localStorage';
 
 
 
@@ -15,11 +18,18 @@ export default function AI({
                 grid items-center justify-center place-content-center gap-12
             `}
         >
-            <BuyScreen
-                setShowBuyScreen={() => {
-                    back();
-                }}
-            />
+            {localStorage.user ? (
+                <BuyScreen
+                    setShowBuyScreen={() => {
+                        back();
+                    }}
+                />
+            ) : (
+                <LoginScreen
+                    atLoginSuccess={() => {}}
+                    back={() => back()}
+                />
+            )}
         </div>
     );
 }
