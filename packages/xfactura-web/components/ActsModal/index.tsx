@@ -3,23 +3,13 @@ import {
     useEffect,
 } from 'react';
 
-import {
-    useGoogleLogin,
-    CodeResponse as GoogleCodeResponse,
-} from '@react-oauth/google';
-
-import {
-    ENVIRONMENT,
-} from '@/data';
-
-import localStorage, {
-    localKeys,
-} from '@/data/localStorage';
+import localStorage from '@/data/localStorage';
 
 import LinkButton from '../LinkButton';
 import Subtitle from '../Subtitle';
 import TooltipQuestion from '../TooltipQuestion';
 import BuyScreen from '../BuyScreen';
+import LoginScreen from '../LoginScreen';
 
 
 
@@ -57,57 +47,6 @@ export default function ActsModal({
         setShowBuyScreen,
     ] = useState(false);
     // #endregion state
-
-
-    // #region handlers
-    const googleSuccessLogin = (
-        codeResponse:  Omit<GoogleCodeResponse, 'error' | 'error_description' | 'error_uri'>,
-    ) => {
-        fetch(ENVIRONMENT.API_DOMAIN + '/google-login', {
-            method: 'POST',
-            credentials: 'include',
-            mode: 'cors',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(codeResponse),
-        })
-            .then(async (response) => {
-                const request = await response.json();
-                if (!request.status) {
-                    return;
-                }
-                localStorage.set(localKeys.user, request.data);
-                localStorage.user = request.data;
-
-                setLoggedIn(true);
-                setShowBuyScreen(true);
-                setShowLoginScreen(false);
-            })
-            .catch((error) => {
-                console.log('error', error);
-            });
-    }
-    const googleErrorLogin = () => {
-        console.log('Login Failed');
-    }
-    const googleLogin = useGoogleLogin({
-        flow: 'auth-code',
-        onSuccess: (codeResponse) => googleSuccessLogin(codeResponse),
-        onError: () => googleErrorLogin(),
-        scope: 'https://www.googleapis.com/auth/drive.file',
-    });
-
-
-    const appleSuccessLogin = () => {
-        setLoggedIn(true);
-        setShowBuyScreen(true);
-        setShowLoginScreen(false);
-    }
-    const appleErrorLogin = () => {
-        console.log('Login Failed');
-    }
-    // #endregion handlers
 
 
     // #region effects
@@ -239,47 +178,22 @@ export default function ActsModal({
     );
 
     const loginScreen = (
-        <>
-            <div
-                className="m-auto"
-            >
-                <Subtitle
-                    text={"logare"}
-                />
-            </div>
-
-            <LinkButton
-                text="logare prin Google"
-                onClick={() => {
-                    googleLogin();
-                }}
-                icon="/assets/google-logo.png"
-            />
-
-            <LinkButton
-                text="logare prin Apple"
-                onClick={() => {
-                    appleSuccessLogin();
-                }}
-                icon="/assets/apple-logo.png"
-            />
-
-            <LinkButton
-                text="înapoi"
-                onClick={() => {
-                    setShowLoginScreen(false);
-                }}
-                centered={true}
-            />
-        </>
+        <LoginScreen
+            atLoginSuccess={() => {
+                setLoggedIn(true);
+                setShowBuyScreen(true);
+                setShowLoginScreen(false);
+            }}
+            back={() => {
+                setShowLoginScreen(false);
+            }}
+        />
     );
 
     const buyScreen = (
-        <>
-            <BuyScreen
-                setShowBuyScreen={setShowBuyScreen}
-            />
-        </>
+        <BuyScreen
+            setShowBuyScreen={setShowBuyScreen}
+        />
     );
 
     const screen = showLoginScreen ? loginScreen
