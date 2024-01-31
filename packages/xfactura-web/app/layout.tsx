@@ -1,7 +1,7 @@
-import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 
-import Head from 'next/head';
+import type { Metadata } from 'next';
+import type { Viewport } from 'next'
 
 import { GoogleOAuthProvider } from '@react-oauth/google';
 
@@ -16,9 +16,23 @@ import {
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
+    applicationName: 'xfactura.ro',
     title: 'xfactura.ro',
     description: 'generare e-factura',
+    keywords: `
+        factura, e-factura, generare factura, factura electronica, factura online, factura romania, factura simpla, factura simplificata
+    `.trim().replace(/\s+/g, ', '),
+    category: 'Business',
+    icons: [
+        '/favicon-32x32.png',
+        '/favicon-16x16.png',
+    ],
 };
+
+
+export const viewport: Viewport = {
+    themeColor: '#000000',
+}
 
 
 export default function RootLayout({
@@ -31,14 +45,9 @@ export default function RootLayout({
             lang="ro"
             suppressHydrationWarning
         >
-            <Head>
+            {/* <Head>
                 <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
-                <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
-                <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
-                <link rel="manifest" href="/site.webmanifest" />
-                <meta name="msapplication-TileColor" content="#2b5797" />
-                <meta name="theme-color" content="#000000" />
-            </Head>
+            </Head> */}
 
             <body className={inter.className}>
                 <GoogleOAuthProvider
