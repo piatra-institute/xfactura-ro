@@ -24,6 +24,15 @@ export default function LoginScreen({
     back: () => void,
 }) {
     // #region handlers
+    const loginSuccess = (
+        data: any,
+    ) => {
+        localStorage.set(localKeys.user, data);
+        localStorage.user = data;
+
+        atLoginSuccess();
+    }
+
     const googleSuccessLogin = (
         codeResponse:  Omit<GoogleCodeResponse, 'error' | 'error_description' | 'error_uri'>,
     ) => {
@@ -41,10 +50,8 @@ export default function LoginScreen({
                 if (!request.status) {
                     return;
                 }
-                localStorage.set(localKeys.user, request.data);
-                localStorage.user = request.data;
 
-                atLoginSuccess();
+                loginSuccess(request.data);
             })
             .catch((error) => {
                 console.log('error', error);
