@@ -25,8 +25,11 @@ export const metadata: Metadata = {
     robots: 'index, follow',
     referrer: 'origin',
     metadataBase: new URL('https://xfactura.ro'),
+    alternates: {
+        canonical: 'https://xfactura.ro',
+    },
     icons: {
-        icon: [
+        other: [
             {
                 rel: 'mask-icon',
                 url: '/safari-pinned-tab.svg',
@@ -42,7 +45,7 @@ export const metadata: Metadata = {
         siteName: 'xfactura.ro',
         images: [
             {
-            url: 'https://xfactura.ro/og.png',
+                url: 'https://xfactura.ro/og.png',
             },
         ],
     },
@@ -54,10 +57,12 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
     themeColor: '#000000',
-}
+};
 
 
-const inter = Inter({ subsets: ['latin'] });
+const inter = Inter({
+    subsets: ['latin'],
+});
 
 
 export default function RootLayout({
