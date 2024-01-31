@@ -1,7 +1,7 @@
 import { Inter } from 'next/font/google';
 
 import type { Metadata } from 'next';
-import type { Viewport } from 'next'
+import type { Viewport } from 'next';
 
 import { GoogleOAuthProvider } from '@react-oauth/google';
 
@@ -23,10 +23,30 @@ export const metadata: Metadata = {
         factura, e-factura, generare factura, factura electronica, factura online, factura romania, factura simpla, factura simplificata
     `.trim().replace(/\s+/g, ', '),
     category: 'Business',
-    icons: [
-        '/favicon-32x32.png',
-        '/favicon-16x16.png',
-    ],
+    icons: {
+        icon: [
+            {
+                rel: 'mask-icon',
+                url: '/safari-pinned-tab.svg',
+                color: '#000000',
+            },
+        ],
+    },
+    other: {
+        'msapplication-TileColor': '#000000',
+    },
+    openGraph: {
+        type: 'website',
+        url: 'https://xfactura.ro',
+        title: 'xfactura.ro',
+        description: 'generare e-factura',
+        siteName: 'xfactura.ro',
+        images: [
+            {
+            url: 'https://xfactura.ro/og.png',
+            },
+        ],
+    },
 };
 
 
