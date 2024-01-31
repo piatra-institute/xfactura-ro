@@ -19,10 +19,13 @@ export const metadata: Metadata = {
     applicationName: 'xfactura.ro',
     title: 'xfactura.ro',
     description: 'generare e-factura',
-    keywords: `
-        factura, e-factura, generare factura, factura electronica, factura online, factura romania, factura simpla, factura simplificata
-    `.trim().replace(/\s+/g, ', '),
+    keywords: 'factura e-factura stocuri generare electronica online romania simpla simplificata contabilitate ai inteligenta artificiala',
     category: 'Business',
+    creator: 'xfactura.ro',
+    publisher: 'xfactura.ro',
+    classification: 'Business',
+    robots: 'index, follow',
+    referrer: 'origin',
     icons: {
         icon: [
             {
@@ -31,9 +34,6 @@ export const metadata: Metadata = {
                 color: '#000000',
             },
         ],
-    },
-    other: {
-        'msapplication-TileColor': '#000000',
     },
     openGraph: {
         type: 'website',
@@ -46,6 +46,9 @@ export const metadata: Metadata = {
             url: 'https://xfactura.ro/og.png',
             },
         ],
+    },
+    other: {
+        'msapplication-TileColor': '#000000',
     },
 };
 
