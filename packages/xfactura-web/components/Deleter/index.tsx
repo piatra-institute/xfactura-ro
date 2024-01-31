@@ -6,6 +6,8 @@ import {
     defocus,
 } from '../../logic/utilities';
 
+import LinkButton from '../LinkButton';
+
 
 
 export default function Deleter({
@@ -24,7 +26,7 @@ export default function Deleter({
     if (showDelete) {
         return (
             <div
-                className="select-none flex gap-14 items-center justify-center text-center min-w-[90px] min-h-[25px]"
+                className="select-none flex gap-14 items-center justify-center text-center min-w-[90px] min-h-[32px]"
             >
                 <button
                     onClick={() => {
@@ -32,7 +34,7 @@ export default function Deleter({
                         setShowDelete(false);
                         defocus();
                     }}
-                    className="focus:outline-none focus:ring-2 focus:ring-white"
+                    className="focus:outline-none focus:ring-2 focus:ring-white p-1"
                 >
                     <svg
                         xmlns="http://www.w3.org/2000/svg" x="0px" y="0px" width="100" height="100" viewBox="0 0 32 32"
@@ -49,7 +51,7 @@ export default function Deleter({
 
                 <button
                     onClick={() => setShowDelete(false)}
-                    className="focus:outline-none focus:ring-2 focus:ring-white"
+                    className="focus:outline-none focus:ring-2 focus:ring-white p-1"
                 >
                     <svg
                         xmlns="http://www.w3.org/2000/svg" x="0px" y="0px" width="100" height="100" viewBox="0 0 50 50"
@@ -69,17 +71,15 @@ export default function Deleter({
 
     return (
         <div
-            className="select-none flex gap-4 items-center justify-center text-center min-w-[90px] min-h-[25px]"
+            className="select-none flex gap-4 items-center justify-center text-center min-w-[90px] min-h-[32px]"
         >
-            <button
+            <LinkButton
+                text={title || 'ștergere'}
                 onClick={() => {
                     setShowDelete(true);
                     defocus();
                 }}
-                className="font-bold focus:outline-none focus:ring-2 focus:ring-white"
-            >
-                {title || 'ștergere'}
-            </button>
+            />
         </div>
     );
 }
