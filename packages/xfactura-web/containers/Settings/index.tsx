@@ -5,27 +5,29 @@ import {
 
 import {
     smartActsLabels,
-} from '../../data';
+} from '@/data';
 
 import localStorage, {
     localKeys,
-} from '../../data/localStorage';
+} from '@/data/localStorage';
 
-import MenuBack from '../../components/MenuBack';
-import Deleter from '../../components/Deleter';
-import LinkButton from '../../components/LinkButton';
-import Toggle from '../../components/Toggle';
-import Dropdown from '../../components/Dropdown';
-import Subtitle from '../../components/Subtitle';
+import MenuBack from '@/components/MenuBack';
+import Deleter from '@/components/Deleter';
+import LinkButton from '@/components/LinkButton';
+import Toggle from '@/components/Toggle';
+import Dropdown from '@/components/Dropdown';
+import Subtitle from '@/components/Subtitle';
 
 import {
     isObject,
-} from '../../logic/validation';
+} from '@/logic/validation';
 
 import {
     downloadTextFile,
     defocus,
-} from '../../logic/utilities';
+} from '@/logic/utilities';
+
+import useStore from '@/store';
 
 
 
@@ -37,15 +39,13 @@ export default function Settings({
     const importInput = useRef<HTMLInputElement | null>(null);
 
 
+    const generateEinvoiceLocally = useStore((state) => state.generateEinvoiceLocally);
+    const toggleGenerateEinvoiceLocally = useStore((state) => state.toggleGenerateEinvoiceLocally);
+
     const [
         useLocalStorage,
         setUseLocalStorage,
     ] = useState(localStorage.usingStorage);
-
-    const [
-        generateEinvoiceLocally,
-        setGenerateEinvoiceLocally,
-    ] = useState(localStorage.generateEinvoiceLocally);
 
     const [
         storeGoogleDrive,
@@ -164,8 +164,7 @@ export default function Settings({
                     text="generare efactura local"
                     value={generateEinvoiceLocally}
                     toggle={() => {
-                        localStorage.set(localKeys.generateEinvoiceLocally, !localStorage.generateEinvoiceLocally);
-                        setGenerateEinvoiceLocally(localStorage.generateEinvoiceLocally);
+                        toggleGenerateEinvoiceLocally();
 
                         reload();
                     }}
