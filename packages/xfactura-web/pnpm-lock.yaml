@@ -11,6 +11,9 @@ dependencies:
   '@react-oauth/google':
     specifier: ^0.12.1
     version: 0.12.1(react-dom@18.2.0)(react@18.2.0)
+  '@redux-devtools/extension':
+    specifier: ^3.3.0
+    version: 3.3.0(redux@5.0.1)
   '@stripe/react-stripe-js':
     specifier: ^2.4.0
     version: 2.4.0(@stripe/stripe-js@2.3.0)(react-dom@18.2.0)(react@18.2.0)
@@ -1122,6 +1125,16 @@ packages:
     dependencies:
       react: 18.2.0
       react-dom: 18.2.0(react@18.2.0)
+    dev: false
+
+  /@redux-devtools/extension@3.3.0(redux@5.0.1):
+    resolution: {integrity: sha512-X34S/rC8S/M1BIrkYD1mJ5f8vlH0BDqxXrs96cvxSBo4FhMdbhU+GUGsmNYov1xjSyLMHgo8NYrUG8bNX7525g==}
+    peerDependencies:
+      redux: ^3.1.0 || ^4.0.0 || ^5.0.0
+    dependencies:
+      '@babel/runtime': 7.23.8
+      immutable: 4.3.5
+      redux: 5.0.1
     dev: false
 
   /@rushstack/eslint-patch@1.7.0:
@@ -3187,6 +3200,10 @@ packages:
     engines: {node: '>=14.0.0'}
     dev: false
 
+  /immutable@4.3.5:
+    resolution: {integrity: sha512-8eabxkth9gZatlwl5TBuJnCsoTADlL6ftEr7A4qgdaTsPyreilDSnUk57SO+jfKcNtxPa22U5KK6DSeAYhpBJw==}
+    dev: false
+
   /import-fresh@3.3.0:
     resolution: {integrity: sha512-veYYhQa+D1QBKznvhUHxb8faxlrwUnxseDAbAp457E0wLNio2bOSKnjYDhMj+YiAq61xrMGhQk9iXVk5FzgQMw==}
     engines: {node: '>=6'}
@@ -5245,6 +5262,10 @@ packages:
     engines: {node: '>=8.10.0'}
     dependencies:
       picomatch: 2.3.1
+
+  /redux@5.0.1:
+    resolution: {integrity: sha512-M9/ELqF6fy8FwmkpnF0S3YKOqMyoWJ4+CS5Efg2ct3oY9daQvd/Pc71FpGZsVsbl3Cpb+IIcjBDUnnyBdQbq4w==}
+    dev: false
 
   /reflect.getprototypeof@1.0.4:
     resolution: {integrity: sha512-ECkTw8TmJwW60lOTR+ZkODISW6RQ8+2CL3COqtiJKLd6MmB45hN51HprHFziKLGkAuTGQhBb91V8cy+KHlaCjw==}
