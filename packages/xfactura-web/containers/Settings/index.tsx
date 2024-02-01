@@ -42,6 +42,9 @@ export default function Settings({
     const generateEinvoiceLocally = useStore((state) => state.generateEinvoiceLocally);
     const toggleGenerateEinvoiceLocally = useStore((state) => state.toggleGenerateEinvoiceLocally);
 
+    const smartActs = useStore((state) => state.smartActs);
+    const setSmartActs = useStore((state) => state.setSmartActs);
+
     const [
         useLocalStorage,
         setUseLocalStorage,
@@ -51,11 +54,6 @@ export default function Settings({
         storeGoogleDrive,
         setStoreGoogleDrive,
     ] = useState(false);
-
-    const [
-        smartActs,
-        setSmartActs,
-    ] = useState(localStorage.smartActs);
 
 
     const exportData = () => {
@@ -191,8 +189,6 @@ export default function Settings({
                     atSelect={(selected) => {
                         Object.keys(smartActsLabels).forEach((key) => {
                             if ((smartActsLabels as any)[key] === selected) {
-                                localStorage.set(localKeys.smartActs, key);
-                                localStorage.smartActs = key;
                                 setSmartActs(key);
                             }
                         });
