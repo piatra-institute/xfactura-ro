@@ -1,15 +1,16 @@
-import { Inter } from 'next/font/google';
-
 import type { Metadata } from 'next';
 import type { Viewport } from 'next';
 
 import { GoogleOAuthProvider } from '@react-oauth/google';
 
-import './globals.css';
-
 import {
     ENVIRONMENT,
-} from '../data';
+} from '@/data';
+
+import fonts from '@/logic/fonts';
+import getUser from '@/logic/getUser';
+
+import './globals.css';
 
 
 
@@ -60,22 +61,19 @@ export const viewport: Viewport = {
 };
 
 
-const inter = Inter({
-    subsets: ['latin'],
-});
-
-
-export default function RootLayout({
+export default async function RootLayout({
     children,
 }: {
     children: React.ReactNode,
 }) {
+    const _ = await getUser();
+
     return (
         <html
             lang="ro"
             suppressHydrationWarning
         >
-            <body className={inter.className}>
+            <body className={fonts}>
                 <GoogleOAuthProvider
                     clientId={ENVIRONMENT.GOOGLE_LOGIN}
                 >
