@@ -1,4 +1,4 @@
-import login from './login';
+import logout from './logout';
 import googleUploadDatabase from './googleUploadDatabase';
 import checkoutSessions from './checkoutSessions';
 import gogoleLogin from './gogoleLogin';
@@ -6,7 +6,7 @@ import gogoleLogin from './gogoleLogin';
 
 
 export {
-    login,
+    logout,
     googleUploadDatabase,
     checkoutSessions,
     gogoleLogin,

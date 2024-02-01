@@ -26,15 +26,11 @@ const oAuth2Client = new OAuth2Client(
 
 export default async function handler(
     request: Request,
-    respone: Response,
+    response: Response,
 ) {
     try {
         const { tokens } = await oAuth2Client.getToken(request.body.code);
         const decoded: any = jwtDecode(tokens.id_token || '');
-
-        // store
-        // tokens.access_token
-        // tokens.refresh_token
 
         const {
             email,
@@ -42,7 +38,18 @@ export default async function handler(
             picture,
         } = decoded;
 
-        respone.json({
+        response.cookie('access_token', tokens.access_token, {
+            httpOnly: true,
+            secure: true,
+            sameSite: 'none',
+        });
+        response.cookie('refresh_token', tokens.refresh_token, {
+            httpOnly: true,
+            secure: true,
+            sameSite: 'none',
+        });
+
+        response.json({
             status: true,
             data: {
                 email,
@@ -53,7 +60,7 @@ export default async function handler(
     } catch (error) {
         logger('error', error);
 
-        respone.status(500).json({
+        response.status(500).json({
             status: false,
         });
     }

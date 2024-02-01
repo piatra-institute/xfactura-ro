@@ -1,9 +1,10 @@
 import express from 'express';
+import cookieParser from 'cookie-parser';
 
 import multer from 'multer';
 
 import {
-    login,
+    logout,
     gogoleLogin,
     googleUploadDatabase,
     checkoutSessions,
@@ -15,6 +16,7 @@ const port = process.env.PORT || 8089;
 const app = express();
 
 app.use(express.json());
+app.use(cookieParser());
 
 app.all('*', function (req, res, next) {
     const origin = req.get('origin');
@@ -30,7 +32,7 @@ app.all('*', function (req, res, next) {
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
-app.post('/login', login);
+app.post('/logout', logout);
 app.post('/google-login', gogoleLogin);
 app.post('/google-upload-database', upload.single('file'), googleUploadDatabase);
 app.post('/stripe-checkout-sessions', checkoutSessions);
