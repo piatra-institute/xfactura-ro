@@ -7,6 +7,10 @@ import {
     logger,
 } from '../../utilities';
 
+import {
+    clearAuthCookies,
+} from '../../utilities/cookies';
+
 
 
 export default async function handler(
@@ -14,8 +18,7 @@ export default async function handler(
     response: Response,
 ) {
     try {
-        response.clearCookie('access_token');
-        response.clearCookie('refresh_token');
+        clearAuthCookies(response);
 
         response.json({
             status: true,

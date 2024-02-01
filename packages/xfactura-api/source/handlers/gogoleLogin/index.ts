@@ -4,24 +4,19 @@ import type {
 } from 'express';
 
 import {
-    OAuth2Client,
-} from 'google-auth-library';
-
-import {
     jwtDecode,
 } from 'jwt-decode';
+
+import googleClient from '../../services/google';
 
 import {
     logger,
 } from '../../utilities';
 
+import {
+    setAuthCookies,
+} from '../../utilities/cookies';
 
-
-const oAuth2Client = new OAuth2Client(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET,
-    'postmessage',
-);
 
 
 export default async function handler(
@@ -29,8 +24,15 @@ export default async function handler(
     response: Response,
 ) {
     try {
-        const { tokens } = await oAuth2Client.getToken(request.body.code);
+        const { tokens } = await googleClient.getToken(request.body.code);
         const decoded: any = jwtDecode(tokens.id_token || '');
+
+        if (!tokens.access_token || !tokens.refresh_token) {
+            response.status(400).json({
+                status: false,
+            });
+            return;
+        }
 
         const {
             email,
@@ -38,15 +40,9 @@ export default async function handler(
             picture,
         } = decoded;
 
-        response.cookie('access_token', tokens.access_token, {
-            httpOnly: true,
-            secure: true,
-            sameSite: 'none',
-        });
-        response.cookie('refresh_token', tokens.refresh_token, {
-            httpOnly: true,
-            secure: true,
-            sameSite: 'none',
+        setAuthCookies(response, {
+            accessToken: tokens.access_token,
+            refreshToken: tokens.refresh_token,
         });
 
         response.json({
