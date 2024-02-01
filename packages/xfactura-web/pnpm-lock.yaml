@@ -26,6 +26,9 @@ dependencies:
   flowbite-react:
     specifier: ^0.7.2
     version: 0.7.2(@types/react@18.2.48)(esbuild@0.19.11)(next@14.0.4)(react-dom@18.2.0)(react@18.2.0)(tailwindcss@3.4.1)
+  immer:
+    specifier: ^10.0.3
+    version: 10.0.3
   next:
     specifier: 14.0.4
     version: 14.0.4(@opentelemetry/api@1.7.0)(react-dom@18.2.0)(react@18.2.0)
@@ -49,7 +52,7 @@ dependencies:
     version: 10.0.0(react@18.2.0)
   zustand:
     specifier: ^4.5.0
-    version: 4.5.0(@types/react@18.2.48)(react@18.2.0)
+    version: 4.5.0(@types/react@18.2.48)(immer@10.0.3)(react@18.2.0)
 
 devDependencies:
   '@types/node':
@@ -3198,6 +3201,10 @@ packages:
   /imagescript@1.2.18:
     resolution: {integrity: sha512-8AwTawraXovLo2PgKvFt96SZqJDwl0CnHDyrtoPUQHMmoA7u9M8EnqFZwCofSM+Uo623Z580iKW74bs2fzjoYQ==}
     engines: {node: '>=14.0.0'}
+    dev: false
+
+  /immer@10.0.3:
+    resolution: {integrity: sha512-pwupu3eWfouuaowscykeckFmVTpqbzW+rXFCX8rQLkZzM9ftBmU/++Ra+o+L27mz03zJTlyV4UUr+fdKNffo4A==}
     dev: false
 
   /immutable@4.3.5:
@@ -6512,7 +6519,7 @@ packages:
     resolution: {integrity: sha512-iC+8Io04lddc+mVqQ9AZ7OQ2MrUKGN+oIQyq1vemgt46jwCwLfhq7/pwnBnNXXXZb8VTVLKwp9EDkx+ryxIWmg==}
     dev: false
 
-  /zustand@4.5.0(@types/react@18.2.48)(react@18.2.0):
+  /zustand@4.5.0(@types/react@18.2.48)(immer@10.0.3)(react@18.2.0):
     resolution: {integrity: sha512-zlVFqS5TQ21nwijjhJlx4f9iGrXSL0o/+Dpy4txAP22miJ8Ti6c1Ol1RLNN98BMib83lmDH/2KmLwaNXpjrO1A==}
     engines: {node: '>=12.7.0'}
     peerDependencies:
@@ -6528,6 +6535,7 @@ packages:
         optional: true
     dependencies:
       '@types/react': 18.2.48
+      immer: 10.0.3
       react: 18.2.0
       use-sync-external-store: 1.2.0(react@18.2.0)
     dev: false
