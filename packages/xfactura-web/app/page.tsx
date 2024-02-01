@@ -7,8 +7,8 @@ import {
 } from 'react';
 
 import {
-    newParty,
-    NewParty,
+    company,
+    Company,
     emptyInvoiceLine,
     InvoiceLine,
     emptyMetadata,
@@ -115,15 +115,15 @@ export default function Home() {
     const [
         seller,
         setSeller,
-    ] = useState<NewParty>({
-        ...newParty,
+    ] = useState<Company>({
+        ...company,
     });
 
     const [
         buyer,
         setBuyer,
-    ] = useState<NewParty>({
-        ...newParty,
+    ] = useState<Company>({
+        ...company,
     });
 
     const [
@@ -255,12 +255,12 @@ export default function Home() {
     const resetInvoice = () => {
         if (!seller.vatNumber) {
             setSeller({
-                ...newParty,
+                ...company,
             });
         }
 
         setBuyer({
-            ...newParty,
+            ...company,
         });
 
         setMetadata({

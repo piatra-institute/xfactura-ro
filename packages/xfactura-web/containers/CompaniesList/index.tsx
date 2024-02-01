@@ -3,7 +3,7 @@ import {
 } from 'react';
 
 import {
-    NewParty,
+    Company,
 } from '../../data';
 
 import localStorage from '../../data/localStorage';
@@ -21,8 +21,8 @@ export default function CompaniesList({
     const [
         companies,
         setCompanies,
-    ] = useState<NewParty[]>(
-        Object.values(localStorage.companies) as NewParty[],
+    ] = useState<Company[]>(
+        Object.values(localStorage.companies) as Company[],
     );
 
 

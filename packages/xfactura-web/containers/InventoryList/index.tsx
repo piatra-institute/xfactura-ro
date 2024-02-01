@@ -3,7 +3,7 @@ import {
 } from 'react';
 
 import {
-    NewParty,
+    Company,
 } from '../../data';
 
 import localStorage from '../../data/localStorage';
@@ -21,7 +21,7 @@ export default function InventoryList({
     const [
         inventory,
         setInventory,
-    ] = useState<NewParty[]>(
+    ] = useState<Company[]>(
         Object.values(localStorage.inventory),
     );
 

@@ -1,5 +1,5 @@
 import {
-    NewParty,
+    Company,
     InvoiceLine,
     Metadata,
 
@@ -82,7 +82,7 @@ export const normalizeUserCountry = (
 }
 
 
-export const checkValidParty = (party: NewParty) => {
+export const checkValidParty = (party: Company) => {
     const validName = party.name.length > 0;
     const validVatNumber = party.vatNumber.length > 0;
     const validCounty = party.county.length > 0 && !!normalizeUserCounty(party.county, party.country);
@@ -198,7 +198,7 @@ export const normalizePartyCounty = (
 
 
 export const verifyPartyData = (
-    data: NewParty,
+    data: Company,
 ) => {
     try {
         return typeof data.vatNumber === 'string'

@@ -4,7 +4,7 @@ import type { } from '@redux-devtools/extension';
 
 import {
     User,
-    NewParty,
+    Company,
     Invoice,
     Inventory,
 } from '@/data';
@@ -27,8 +27,8 @@ export interface State {
     storeGoogleDrive: boolean;
     toggleStoreGoogleDrive: () => void;
 
-    companies: Record<string, NewParty>;
-    addCompany: (company: NewParty) => void;
+    companies: Record<string, Company>;
+    addCompany: (company: Company) => void;
     removeCompany: (id: string) => void;
 
     invoices: Record<string, Invoice>;
@@ -40,9 +40,9 @@ export interface State {
     removeInventory: (id: string) => void;
 
     loadData: (data: {
-        companies: Record<string, any>;
-        invoices: Record<string, any>;
-        inventory: Record<string, any>;
+        companies: Record<string, Company>;
+        invoices: Record<string, Invoice>;
+        inventory: Record<string, Inventory>;
     }) => void;
     obliterate: () => void;
 }
@@ -67,7 +67,7 @@ const useStore = create<State>()(
                 toggleStoreGoogleDrive: () => set((state) => ({ storeGoogleDrive: !state.storeGoogleDrive })),
 
                 companies: {},
-                addCompany: (company: NewParty) => set((state) => ({
+                addCompany: (company: Company) => set((state) => ({
                     companies: {
                         ...state.companies,
                         [company.vatNumber]: company,

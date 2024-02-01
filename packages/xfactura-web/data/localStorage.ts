@@ -1,6 +1,6 @@
 import {
     User,
-    NewParty,
+    Company,
 } from './index';
 
 
@@ -93,7 +93,7 @@ class LocalStorage {
     public lastInvoiceSeries = '';
     public smartActs = 'unspecified';
     public defaultSeller = '';
-    public companies: Record<string, NewParty | undefined> = {};
+    public companies: Record<string, Company | undefined> = {};
     public invoices: Record<string, any | undefined> = {};
     public inventory: Record<string, any | undefined> = {};
 
@@ -151,7 +151,7 @@ class LocalStorage {
     public loadData(
         data: {
             defaultSeller: string,
-            companies: Record<string, NewParty | undefined>,
+            companies: Record<string, Company | undefined>,
             invoices: Record<string, any | undefined>,
         },
     ) {

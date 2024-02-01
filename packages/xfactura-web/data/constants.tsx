@@ -5,7 +5,7 @@ import {
 
 
 
-export const newParty = {
+export const company = {
     vatNumber: '',
     name: '',
     address: '',
@@ -14,7 +14,7 @@ export const newParty = {
     country: 'România',
 };
 
-export const partyText = {
+export const companyText = {
     vatNumber: 'CUI',
     name: 'nume',
     country: 'țară',
@@ -23,7 +23,7 @@ export const partyText = {
     address: 'adresă',
 } as const;
 
-export const partyFields = [
+export const companyFields = [
     'vatNumber',
     'name',
     'country',
@@ -32,7 +32,7 @@ export const partyFields = [
     'address',
 ] as const;
 
-export type NewParty = typeof newParty;
+export type Company = typeof company;
 
 export const emptyInvoiceLine: InvoiceLine = {
     name: '',

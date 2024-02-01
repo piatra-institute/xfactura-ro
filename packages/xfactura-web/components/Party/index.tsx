@@ -10,9 +10,9 @@ import {
 } from 'use-debounce';
 
 import {
-    NewParty,
-    partyText,
-    partyFields,
+    Company,
+    companyText,
+    companyFields,
 } from '../../data';
 
 import localStorage, {
@@ -45,8 +45,8 @@ export default function Party({
 }: {
     kind: 'seller' | 'buyer';
     title: string;
-    data: NewParty;
-    setParty: Dispatch<SetStateAction<NewParty>>;
+    data: Company;
+    setParty: Dispatch<SetStateAction<Company>>;
 }) {
     const [
         loadingVatNumber,
@@ -123,7 +123,7 @@ export default function Party({
     }, 2500);
 
     const updateParty = (
-        type: typeof partyFields[number],
+        type: typeof companyFields[number],
     ) => {
         return async (
             value: string,
@@ -209,7 +209,7 @@ export default function Party({
             />
 
             <div>
-                {partyFields.map(field => {
+                {companyFields.map(field => {
                     // if (field === 'county') {
                     //     return (
                     //         <div
@@ -225,7 +225,7 @@ export default function Party({
                             key={kind + field}
                         >
                             <Input
-                                text={partyText[field]}
+                                text={companyText[field]}
                                 value={data[field]}
                                 setValue={updateParty(field)}
                                 loading={field === 'vatNumber' && loadingVatNumber}
