@@ -2,14 +2,15 @@ import { create } from 'zustand';
 import { devtools, persist } from 'zustand/middleware';
 import type { } from '@redux-devtools/extension';
 
+import {
+    User,
+} from '@/data';
+
 
 
 export interface State {
-    user: {
-        email: string;
-        name: string;
-        picture: string;
-    } | null;
+    user: User | null;
+    setUser: (user: User) => void;
     usingLocalStorage: boolean;
     toggleUsingLocalStorage: () => void;
     generateEinvoiceLocally: boolean;
@@ -39,6 +40,7 @@ const useStore = create<State>()(
         persist(
             (set) => ({
                 user: null,
+                setUser: (user: User) => set({ user }),
                 usingLocalStorage: false,
                 toggleUsingLocalStorage: () => set((state) => ({ usingLocalStorage: !state.usingLocalStorage })),
                 generateEinvoiceLocally: false,

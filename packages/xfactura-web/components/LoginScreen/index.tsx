@@ -4,12 +4,12 @@ import {
 } from '@react-oauth/google';
 
 import {
+    User,
+
     ENVIRONMENT,
 } from '@/data';
 
-import localStorage, {
-    localKeys,
-} from '@/data/localStorage';
+import useStore from '@/store';
 
 import LinkButton from '../LinkButton';
 import Subtitle from '../Subtitle';
@@ -23,12 +23,16 @@ export default function LoginScreen({
     atLoginSuccess: () => void;
     back: () => void,
 }) {
+    const {
+        setUser,
+    } = useStore();
+
+
     // #region handlers
     const loginSuccess = (
-        data: any,
+        data: User,
     ) => {
-        localStorage.set(localKeys.user, data);
-        localStorage.user = data;
+        setUser(data);
 
         atLoginSuccess();
     }
