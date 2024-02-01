@@ -1,9 +1,4 @@
 import {
-    Dispatch,
-    SetStateAction,
-} from 'react';
-
-import {
     AudioRecorder,
     useAudioRecorder,
 } from 'react-audio-voice-recorder';
@@ -19,7 +14,7 @@ export default function Audio({
     extractInvoiceFromAudio,
     hide,
 } : {
-    setShowMicrophone: Dispatch<SetStateAction<boolean>>;
+    setShowMicrophone: (value: boolean) => void;
     extractInvoiceFromAudio: (blob: Blob) => void;
     hide: () => void;
 }) {

@@ -1,8 +1,6 @@
 import {
     useState,
     useEffect,
-    Dispatch,
-    SetStateAction,
 } from 'react';
 
 import {
@@ -13,18 +11,18 @@ import {
     Company,
     companyText,
     companyFields,
-} from '../../data';
+} from '@/data';
 
 import localStorage, {
     localKeys,
-} from '../../data/localStorage';
+} from '@/data/localStorage';
 
-import Subtitle from '../../components/Subtitle';
-import Input from '../../components/Input';
+import Subtitle from '@/components/Subtitle';
+import Input from '@/components/Input';
 
 import {
     getCompanyDetails,
-} from '../../logic/requests';
+} from '@/logic/requests';
 
 import {
     normalizePartyName,
@@ -33,7 +31,7 @@ import {
     normalizeVatNumber,
     verifyInputVatNumber,
     verifyPartyData,
-} from '../../logic/validation';
+} from '@/logic/validation';
 
 
 
@@ -46,7 +44,7 @@ export default function Party({
     kind: 'seller' | 'buyer';
     title: string;
     data: Company;
-    setParty: Dispatch<SetStateAction<Company>>;
+    setParty: (company: Company) => void,
 }) {
     const [
         loadingVatNumber,
@@ -97,27 +95,27 @@ export default function Party({
                 const city = adresa_domiciliu_fiscal.ddenumire_Localitate || adresa_sediu_social.sdenumire_Localitate || '';
                 const county = adresa_domiciliu_fiscal.ddenumire_Judet || adresa_sediu_social.sdenumire_Judet || '';
 
-                setParty(prevValues => ({
-                    ...prevValues,
+                setParty({
+                    ...data,
                     vatNumber: normalizeVatNumber(vatNumber),
-                    name: name ? normalizePartyName(name) : prevValues.name,
-                    address: address ? address : prevValues.address,
-                    city: city ? normalizePartyCity(city) : prevValues.city,
-                    county: county ? normalizePartyCounty(county) : prevValues.county,
+                    name: name ? normalizePartyName(name) : data.name,
+                    address: address ? address : data.address,
+                    city: city ? normalizePartyCity(city) : data.city,
+                    county: county ? normalizePartyCounty(county) : data.county,
                     country: 'România',
-                }));
+                });
             } else {
-                setParty(prevValues => ({
-                    ...prevValues,
+                setParty({
+                    ...data,
                     vatNumber: normalizeVatNumber(vatNumber),
-                }));
+                });
             }
         } catch (error) {
             setLoadingVatNumber(false);
-            setParty(prevValues => ({
-                ...prevValues,
+            setParty({
+                ...data,
                 vatNumber: value,
-            }));
+            });
             return;
         }
     }, 2500);
@@ -129,20 +127,20 @@ export default function Party({
             value: string,
         ) => {
             if (type === 'vatNumber' && verifyInputVatNumber(value).length > 5) {
-                setParty(prevValues => ({
-                    ...prevValues,
+                setParty({
+                    ...data,
                     vatNumber: value,
-                }));
+                });
 
                 setLoadingVatNumber(true);
                 checkVatNumber(value);
                 return;
             }
 
-            setParty(prevValues => ({
-                ...prevValues,
+            setParty({
+                ...data,
                 [type]: value,
-            }));
+            });
         }
     }
 

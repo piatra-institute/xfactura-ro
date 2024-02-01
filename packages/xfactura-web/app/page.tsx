@@ -1,49 +1,28 @@
 'use client';
 
 import {
-    useState,
     useRef,
     useEffect,
 } from 'react';
 
 import {
-    company,
-    Company,
     emptyInvoiceLine,
-    InvoiceLine,
-    emptyMetadata,
-    Metadata as IMetadata,
     ExtractedResponse,
 } from '@/data';
 
 import Menu from '@/components/Menu';
-import Party from '@/components/Party';
-import Lines from '@/components/Lines';
 import Spinner from '@/components/Spinner';
-import Deleter from '@/components/Deleter';
-import GenerateButton from '@/components/GenerateButton';
 
 import Title from '@/containers/Title';
 import Extractors from '@/containers/Extractors';
-import Metadata from '@/containers/Metadata';
 import Camera from '@/containers/Camera';
 import Audio from '@/containers/Audio';
+
+import Invoice from '@/containers/Invoice';
 
 import webContainerRunner from '@/logic/node-php';
 
 import {
-    downloadTextFile,
-    getDateFormat,
-} from '@/logic/utilities';
-
-import {
-    checkValidParty,
-    checkValidLine,
-    checkValidMetadata,
-    normalizeUserCountry,
-    normalizeUserCounty,
-    normalizeUserCity,
-    normalizeVatNumber,
     verifyInputVatNumber,
     verifyInputUserName,
     verifyInputUserCountry,
@@ -56,7 +35,6 @@ import {
 } from '@/logic/validation';
 
 import {
-    getEInvoice,
     uploadFile,
     uploadAudio,
 } from '@/logic/requests';
@@ -65,13 +43,9 @@ import {
     logicCamera,
 } from '@/logic/camera';
 
-import {
-    seriesParser,
-} from '@/logic/series';
+import localStorage from '@/data/localStorage';
 
-import localStorage, {
-    localKeys,
-} from '@/data/localStorage';
+import useStore from '@/store';
 
 
 
@@ -82,63 +56,25 @@ export default function Home() {
 
 
     // #region state
-    const [
+    const {
         showLoading,
         setShowLoading,
-    ] = useState(true);
 
-    const [
         hasMediaDevices,
         setHasMediaDevices,
-    ] = useState(true);
 
-    const [
         showCamera,
         setShowCamera,
-    ] = useState(false);
 
-    const [
         showMicrophone,
         setShowMicrophone,
-    ] = useState(false);
 
-    const [
-        loadingEInvoice,
-        setLoadingEInvoice,
-    ] = useState(false);
-
-    const [
-        validData,
-        setValidData,
-    ] = useState(false);
-
-    const [
-        seller,
-        setSeller,
-    ] = useState<Company>({
-        ...company,
-    });
-
-    const [
-        buyer,
-        setBuyer,
-    ] = useState<Company>({
-        ...company,
-    });
-
-    const [
-        metadata,
-        setMetadata,
-    ] = useState<IMetadata>({
-        ...emptyMetadata,
-    });
-
-    const [
-        lines,
-        setLines,
-    ] = useState<InvoiceLine[]>([{
-        ...emptyInvoiceLine,
-    }]);
+        newInvoice,
+        setNewInvoiceSeller,
+        setNewInvoiceBuyer,
+        setNewInvoiceMetadata,
+        setNewInvoiceLines,
+    } = useStore();
     // #endregion state
 
 
@@ -172,106 +108,6 @@ export default function Home() {
     }
 
 
-    const updateMetadata = (
-        type: keyof IMetadata,
-        value: string | number,
-    ) => {
-        setMetadata(prevValues => ({
-            ...prevValues,
-            [type]: value,
-        }));
-    }
-
-    const updateDate = (
-        kind: 'issueDate' | 'dueDate',
-        timestamp: number,
-    ) => {
-        updateMetadata(kind, timestamp);
-    }
-
-    const addNewLine = () => {
-        setLines(prevValues => ([
-            ...prevValues,
-            emptyInvoiceLine,
-        ]));
-    }
-
-    const generateEinvoice = async () => {
-        setLoadingEInvoice(true);
-
-        const invoice = {
-            metadata: {
-                ...metadata,
-                issueDate: getDateFormat(metadata.issueDate),
-                dueDate: getDateFormat(metadata.dueDate),
-            },
-            seller: {
-                ...seller,
-                vatNumber: normalizeVatNumber(seller.vatNumber),
-                country: normalizeUserCountry(seller.country),
-                subdivision: normalizeUserCounty(seller.county, seller.country),
-                city: normalizeUserCity(seller.city, seller.county),
-            },
-            buyer: {
-                ...buyer,
-                vatNumber: normalizeVatNumber(buyer.vatNumber),
-                country: normalizeUserCountry(buyer.country),
-                subdivision: normalizeUserCounty(buyer.county, buyer.country),
-                city: normalizeUserCity(buyer.city, buyer.county),
-            },
-            lines,
-        };
-
-
-        const filename = `efactura-${metadata.number}-${seller.name}-${buyer.name}.xml`;
-
-        if (localStorage.generateEinvoiceLocally) {
-            await webContainerRunner.writeData(invoice);
-            await webContainerRunner.startNodePHPServer(
-                (value) => {
-                    setLoadingEInvoice(false);
-
-                    downloadTextFile(
-                        filename,
-                        value,
-                    );
-                },
-            );
-        } else {
-            const response = await getEInvoice(invoice);
-            setLoadingEInvoice(false);
-
-            if (response && response.status) {
-                downloadTextFile(
-                    filename,
-                    response.data,
-                );
-            }
-        }
-
-        localStorage.set(localKeys.lastInvoiceSeries, invoice.metadata.number);
-    }
-
-    const resetInvoice = () => {
-        if (!seller.vatNumber) {
-            setSeller({
-                ...company,
-            });
-        }
-
-        setBuyer({
-            ...company,
-        });
-
-        setMetadata({
-            ...emptyMetadata,
-        });
-
-        setLines([{
-            ...emptyInvoiceLine,
-        }]);
-    }
-
     const handleExtractedData = (
         response: ExtractedResponse,
     ) => {
@@ -303,37 +139,34 @@ export default function Home() {
                 products,
             } = response.data;
 
-            setSeller(prevValues => ({
-                ...prevValues,
-                vatNumber: verifyInputVatNumber(vatNumberSeller) || prevValues.vatNumber,
-                name: verifyInputUserName(nameSeller) || prevValues.name,
-                country: verifyInputUserCountry(countrySeller) || prevValues.country,
-                county: verifyInputUserCounty(countySeller) || prevValues.county,
-                city: verifyInputUserCity(citySeller) || prevValues.city,
-                address: verifyInputUserAddress(addressSeller) || prevValues.address,
-            }));
+            setNewInvoiceSeller({
+                vatNumber: verifyInputVatNumber(vatNumberSeller) || newInvoice.seller.vatNumber,
+                name: verifyInputUserName(nameSeller) || newInvoice.seller.name,
+                country: verifyInputUserCountry(countrySeller) || newInvoice.seller.country,
+                county: verifyInputUserCounty(countySeller) || newInvoice.seller.county,
+                city: verifyInputUserCity(citySeller) || newInvoice.seller.city,
+                address: verifyInputUserAddress(addressSeller) || newInvoice.seller.address,
+            });
 
-            setBuyer(prevValues => ({
-                ...prevValues,
-                vatNumber: verifyInputVatNumber(vatNumberBuyer) || prevValues.vatNumber,
-                name: verifyInputUserName(nameBuyer) || prevValues.name,
-                country: verifyInputUserCountry(countryBuyer) || prevValues.country,
-                county: verifyInputUserCounty(countyBuyer) || prevValues.county,
-                city: verifyInputUserCity(cityBuyer) || prevValues.city,
-                address: verifyInputUserAddress(addressBuyer) || prevValues.address,
-            }));
+            setNewInvoiceBuyer({
+                vatNumber: verifyInputVatNumber(vatNumberBuyer) || newInvoice.buyer.vatNumber,
+                name: verifyInputUserName(nameBuyer) || newInvoice.buyer.name,
+                country: verifyInputUserCountry(countryBuyer) || newInvoice.buyer.country,
+                county: verifyInputUserCounty(countyBuyer) || newInvoice.buyer.county,
+                city: verifyInputUserCity(cityBuyer) || newInvoice.buyer.city,
+                address: verifyInputUserAddress(addressBuyer) || newInvoice.buyer.address,
+            });
 
-            setMetadata(prevValues => ({
-                ...prevValues,
-                number: verifyInputUserInvoiceNumber(invoiceNumber) || prevValues.number,
-                currency: verifyInputUserCurrency(currency) || prevValues.currency,
-                issueDate: verifyInputUserDate(issueDate) || prevValues.issueDate,
-                dueDate: verifyInputUserDate(dueDate) || prevValues.dueDate,
-            }));
+            setNewInvoiceMetadata({
+                number: verifyInputUserInvoiceNumber(invoiceNumber) || newInvoice.metadata.number,
+                currency: verifyInputUserCurrency(currency) || newInvoice.metadata.currency,
+                issueDate: verifyInputUserDate(issueDate) || newInvoice.metadata.issueDate,
+                dueDate: verifyInputUserDate(dueDate) || newInvoice.metadata.dueDate,
+            });
 
             if (Array.isArray(products)) {
                 const newLines = [
-                    ...lines,
+                    ...newInvoice.products,
                     ...products.map((product) => ({
                         ...emptyInvoiceLine,
                         name: product.description || '',
@@ -343,7 +176,7 @@ export default function Home() {
                     })),
                 ].filter(line => line.name !== '');
 
-                setLines([
+                setNewInvoiceLines([
                     ...newLines,
                 ]);
             }
@@ -375,6 +208,9 @@ export default function Home() {
         } else {
             setShowLoading(false);
         }
+
+        // Let effect run only once.
+        // eslint-disable-next-line
     }, []);
 
     /** media devices */
@@ -388,41 +224,9 @@ export default function Home() {
         }
 
         setHasMediaDevices(hasMediaDevices);
-    }, []);
 
-    /** valid data */
-    useEffect(() => {
-        const validSeller = checkValidParty(seller);
-        const validBuyer = checkValidParty(buyer);
-        const validMetadata = checkValidMetadata(metadata);
-        const validLines = lines.every(checkValidLine);
-
-        const validData = (
-            validSeller &&
-            validBuyer &&
-            validMetadata &&
-            validLines
-        );
-
-        setValidData(validData);
-    }, [
-        seller,
-        buyer,
-        metadata,
-        lines,
-    ]);
-
-    /** series */
-    useEffect(() => {
-        const seriesData = seriesParser(localStorage.lastInvoiceSeries);
-        if (!seriesData) {
-            return;
-        }
-
-        setMetadata(prevValues => ({
-            ...prevValues,
-            number: seriesData.nextSeries,
-        }));
+        // Let effect run only once.
+        // eslint-disable-next-line
     }, []);
     // #endregion effects
 
@@ -464,55 +268,7 @@ export default function Home() {
                     )}
                 </div>
 
-                <div
-                    className="grid items-center justify-center md:flex m-auto"
-                >
-                    <Party
-                        kind="seller"
-                        title="furnizor"
-                        data={seller}
-                        setParty={setSeller}
-                    />
-
-                    <Party
-                        kind="buyer"
-                        title="cumpărător"
-                        data={buyer}
-                        setParty={setBuyer}
-                    />
-                </div>
-
-                <Metadata
-                    metadata={metadata}
-                    updateMetadata={updateMetadata}
-                    updateDate={updateDate}
-                />
-
-                <Lines
-                    data={lines}
-                    setLines={setLines}
-                    addNewLine={addNewLine}
-                    currency={metadata.currency}
-                />
-
-                <GenerateButton
-                    loadingEInvoice={loadingEInvoice}
-                    validData={validData}
-                    generateEinvoice={generateEinvoice}
-                />
-
-                <div
-                    className="grid place-content-center p-8"
-                >
-                    <Deleter
-                        title="xfactură nouă"
-                        atDelete={() => resetInvoice()}
-                    />
-                </div>
-
-                <div
-                    className="mb-8"
-                />
+                <Invoice />
             </div>
         </>
     );

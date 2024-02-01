@@ -32,7 +32,6 @@ export const companyFields = [
     'address',
 ] as const;
 
-export type Company = typeof company;
 
 export const emptyInvoiceLine: InvoiceLine = {
     name: '',

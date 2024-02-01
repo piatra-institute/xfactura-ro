@@ -25,7 +25,7 @@ export default function Lines({
     currency,
 }: {
     data: InvoiceLine[];
-    setLines: Dispatch<SetStateAction<InvoiceLine[]>>;
+    setLines: (lines: InvoiceLine[]) => void;
     addNewLine: () => void;
     currency: string;
 }) {

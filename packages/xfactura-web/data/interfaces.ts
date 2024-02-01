@@ -60,6 +60,17 @@ export interface User {
     picture: string;
 }
 
+
+export interface Company {
+    vatNumber: string;
+    name: string;
+    address: string;
+    city: string;
+    county: string;
+    country: string;
+}
+
+
 export interface Inventory {
     id: string;
     name: string;
@@ -79,14 +90,10 @@ export interface InventoryHistory {
 }
 
 
-
 export interface Invoice {
     id: string;
-    seller: string;
-    buyer: string;
-    number: string;
-    currency: string;
-    issueDate: number;
-    dueDate: number;
+    seller: Company;
+    buyer: Company;
+    metadata: Metadata;
     products: InvoiceLine[];
 }

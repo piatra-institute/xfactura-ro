@@ -2,25 +2,23 @@ import {
     useRef,
     useState,
     useEffect,
-    Dispatch,
-    SetStateAction,
 } from 'react';
-
-import LinkButton from '../../components/LinkButton';
-import Tooltip from '../../components/Tooltip';
-import ActsModal from '../../components/ActsModal';
 
 import {
     acceptedInvoiceFiles,
     extractorTitles,
     extractorDescriptions,
-} from '../../data';
+} from '@/data';
 
 import {
     uploadIcon,
     photoIcon,
     microphoneIcon,
-} from '../../data/icons';
+} from '@/data/icons';
+
+import LinkButton from '@/components/LinkButton';
+import Tooltip from '@/components/Tooltip';
+import ActsModal from '@/components/ActsModal';
 
 
 
@@ -31,8 +29,8 @@ export default function Extractors({
     extractInvoiceFromFile,
 } : {
     hasMediaDevices: boolean;
-    setShowCamera: Dispatch<SetStateAction<boolean>>;
-    setShowMicrophone: Dispatch<SetStateAction<boolean>>;
+    setShowCamera: (value: boolean) => void;
+    setShowMicrophone: (value: boolean) => void;
     extractInvoiceFromFile: (file: File) => void;
 }) {
     const configInput = useRef<HTMLInputElement | null>(null);
