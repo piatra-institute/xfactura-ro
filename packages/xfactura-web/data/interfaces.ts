@@ -77,3 +77,16 @@ export interface InventoryHistory {
     acquisitionPrice: number;
     quantity: number;
 }
+
+
+
+export interface Invoice {
+    id: string;
+    seller: string;
+    buyer: string;
+    number: string;
+    currency: string;
+    issueDate: number;
+    dueDate: number;
+    products: InvoiceLine[];
+}
