@@ -1,15 +1,10 @@
 import {
     useRef,
-    useState,
 } from 'react';
 
 import {
     smartActsLabels,
 } from '@/data';
-
-import localStorage, {
-    localKeys,
-} from '@/data/localStorage';
 
 import MenuBack from '@/components/MenuBack';
 import Deleter from '@/components/Deleter';
@@ -39,29 +34,40 @@ export default function Settings({
     const importInput = useRef<HTMLInputElement | null>(null);
 
 
-    const generateEinvoiceLocally = useStore((state) => state.generateEinvoiceLocally);
-    const toggleGenerateEinvoiceLocally = useStore((state) => state.toggleGenerateEinvoiceLocally);
+    const {
+        user,
 
-    const smartActs = useStore((state) => state.smartActs);
-    const setSmartActs = useStore((state) => state.setSmartActs);
+        usingLocalStorage,
+        toggleUsingLocalStorage,
 
-    const [
-        useLocalStorage,
-        setUseLocalStorage,
-    ] = useState(localStorage.usingStorage);
+        generateEinvoiceLocally,
+        toggleGenerateEinvoiceLocally,
 
-    const [
+        smartActs,
+        setSmartActs,
+
         storeGoogleDrive,
-        setStoreGoogleDrive,
-    ] = useState(false);
+        toggleStoreGoogleDrive,
+
+        defaultSeller,
+        setDefaultSeller,
+
+        companies,
+        invoices,
+        inventory,
+
+        loadData,
+        obliterate,
+    } = useStore();
 
 
     const exportData = () => {
         const data = {
             exportedAt: Date.now(),
-            defaultSeller: localStorage.defaultSeller,
-            companies: localStorage.companies,
-            invoices: localStorage.invoices,
+            defaultSeller,
+            companies,
+            invoices,
+            inventory,
         };
 
         const date = new Date().toISOString().split('T')[0];
@@ -112,11 +118,14 @@ export default function Settings({
                     typeof parsedData.defaultSeller === 'string' && parsedData.defaultSeller
                     && isObject(parsedData.companies)
                     && isObject(parsedData.invoices)
+                    && isObject(parsedData.inventory)
                 ) {
-                    localStorage.loadData({
-                        defaultSeller: parsedData.defaultSeller,
+                    setDefaultSeller(parsedData.defaultSeller);
+
+                    loadData({
                         companies: parsedData.companies,
                         invoices: parsedData.invoices,
+                        inventory: parsedData.inventory,
                     });
 
                     setTimeout(() => {
@@ -151,10 +160,9 @@ export default function Settings({
             >
                 <Toggle
                     text="stocare date locale"
-                    value={useLocalStorage}
+                    value={usingLocalStorage}
                     toggle={() => {
-                        localStorage.set(localKeys.usingStorage, !localStorage.usingStorage);
-                        setUseLocalStorage(localStorage.usingStorage);
+                        toggleUsingLocalStorage();
                     }}
                 />
 
@@ -210,13 +218,11 @@ export default function Settings({
                     )}
                 />
 
-                {localStorage.user && (
+                {user && (
                     <Toggle
                         text="sincronizare Google Drive"
                         value={storeGoogleDrive}
-                        toggle={() => {
-                            setStoreGoogleDrive(!storeGoogleDrive);
-                        }}
+                        toggle={() => toggleStoreGoogleDrive()}
                         tooltip={(
                             <>
                                 <p
@@ -254,7 +260,8 @@ export default function Settings({
                 <Deleter
                     title="ștergere totală"
                     atDelete={() => {
-                        localStorage.obliterate();
+                        obliterate();
+
                         reload();
                     }}
                 />

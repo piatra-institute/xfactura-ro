@@ -10,6 +10,8 @@ export interface State {
         name: string;
         picture: string;
     } | null;
+    usingLocalStorage: boolean;
+    toggleUsingLocalStorage: () => void;
     generateEinvoiceLocally: boolean;
     toggleGenerateEinvoiceLocally: () => void;
     lastInvoiceSeries: string;
@@ -18,9 +20,18 @@ export interface State {
     setSmartActs: (smartActs: string) => void;
     defaultSeller: string;
     setDefaultSeller: (defaultSeller: string) => void;
+    storeGoogleDrive: boolean;
+    toggleStoreGoogleDrive: () => void;
     companies: Record<string, any>;
     invoices: Record<string, any>;
     inventory: Record<string, any>;
+
+    loadData: (data: {
+        companies: Record<string, any>;
+        invoices: Record<string, any>;
+        inventory: Record<string, any>;
+    }) => void;
+    obliterate: () => void;
 }
 
 const useStore = create<State>()(
@@ -28,6 +39,8 @@ const useStore = create<State>()(
         persist(
             (set) => ({
                 user: null,
+                usingLocalStorage: false,
+                toggleUsingLocalStorage: () => set((state) => ({ usingLocalStorage: !state.usingLocalStorage })),
                 generateEinvoiceLocally: false,
                 toggleGenerateEinvoiceLocally: () => set((state) => ({ generateEinvoiceLocally: !state.generateEinvoiceLocally })),
                 lastInvoiceSeries: '',
@@ -36,9 +49,29 @@ const useStore = create<State>()(
                 setSmartActs: (smartActs: string) => set({ smartActs }),
                 defaultSeller: '',
                 setDefaultSeller: (defaultSeller: string) => set({ defaultSeller }),
+                storeGoogleDrive: false,
+                toggleStoreGoogleDrive: () => set((state) => ({ storeGoogleDrive: !state.storeGoogleDrive })),
                 companies: {},
                 invoices: {},
                 inventory: {},
+
+                loadData: (data) => set(() => ({
+                    companies: data.companies,
+                    invoices: data.invoices,
+                    inventory: data.inventory,
+                })),
+                obliterate: () => set(() => ({
+                    user: null,
+                    usingLocalStorage: false,
+                    generateEinvoiceLocally: false,
+                    lastInvoiceSeries: '',
+                    smartActs: 'unspecified',
+                    defaultSeller: '',
+                    storeGoogleDrive: false,
+                    companies: {},
+                    invoices: {},
+                    inventory: {},
+                })),
             }),
             {
                 name: 'xfct-storage',
