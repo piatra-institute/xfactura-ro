@@ -34,7 +34,7 @@ export default function LoginScreen({
     }
 
     const googleSuccessLogin = (
-        codeResponse:  Omit<GoogleCodeResponse, 'error' | 'error_description' | 'error_uri'>,
+        codeResponse: Omit<GoogleCodeResponse, 'error' | 'error_description' | 'error_uri'>,
     ) => {
         fetch(ENVIRONMENT.API_DOMAIN + '/google-login', {
             method: 'POST',

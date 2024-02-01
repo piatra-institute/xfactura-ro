@@ -202,7 +202,6 @@ export default function ActsModal({
 
     return (
         <div
-            role="status"
             className={`
                 w-full h-full
                 backdrop-blur-md
