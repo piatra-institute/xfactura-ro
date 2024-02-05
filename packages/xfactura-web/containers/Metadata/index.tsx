@@ -2,9 +2,9 @@ import {
     Metadata,
 } from '@/data';
 
-import Input from '../../components/Input';
-import Datepicker from '../../components/Datepicker';
-import Subtitle from '../../components/Subtitle';
+import Input from '@/components/Input';
+import Datepicker from '@/components/Datepicker';
+import Subtitle from '@/components/Subtitle';
 
 
 

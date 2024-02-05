@@ -1,5 +1,5 @@
-import MenuBack from '../../components/MenuBack';
-import Subtitle from '../../components/Subtitle';
+import MenuBack from '@/components/MenuBack';
+import Subtitle from '@/components/Subtitle';
 
 
 

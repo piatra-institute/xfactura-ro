@@ -9,10 +9,10 @@ import {
     ENVIRONMENT,
 } from '@/data';
 
-import useStore from '@/store';
+import LinkButton from '@/components/LinkButton';
+import Subtitle from '@/components/Subtitle';
 
-import LinkButton from '../LinkButton';
-import Subtitle from '../Subtitle';
+import useStore from '@/store';
 
 
 

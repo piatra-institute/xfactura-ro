@@ -7,11 +7,11 @@ import {
     focusStyle,
 } from '@/data/styles';
 
+import Spinner from '@/components/Spinner';
+
 import {
     styleTrim,
 } from '@/logic/utilities';
-
-import Spinner from '../Spinner';
 
 
 

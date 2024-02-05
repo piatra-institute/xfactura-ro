@@ -1,3 +1,9 @@
+import {
+    styleTrim,
+} from '@/logic/utilities';
+
+
+
 export default function Subtitle({
     text,
     centered,
@@ -7,7 +13,10 @@ export default function Subtitle({
 }) {
     return (
         <h2
-            className={`select-none text-xl mb-4 ${centered ? 'text-center' : 'text-center md:text-left'}`}
+            className={styleTrim(`
+                select-none text-xl mb-4
+                ${centered ? 'text-center' : 'text-center md:text-left'}
+            `)}
         >
             {text}
         </h2>

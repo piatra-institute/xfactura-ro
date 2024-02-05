@@ -17,7 +17,7 @@ import {
     styleTrim,
 } from '@/logic/utilities';
 
-import Tooltip from '../Tooltip';
+import Tooltip from '@/components/Tooltip';
 
 
 

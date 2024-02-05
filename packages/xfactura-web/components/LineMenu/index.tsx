@@ -15,12 +15,12 @@ import {
     expandIcon,
 } from '@/data/icons';
 
+import Toggle from '@/components/Toggle';
+import Deleter from '@/components/Deleter';
+
 import {
     styleTrim,
 } from '@/logic/utilities';
-
-import Toggle from '../Toggle';
-import Deleter from '../Deleter';
 
 
 

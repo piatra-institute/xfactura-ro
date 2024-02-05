@@ -3,11 +3,11 @@ import {
     useEffect,
 } from 'react';
 
-import LinkButton from '../LinkButton';
-import Subtitle from '../Subtitle';
-import TooltipQuestion from '../TooltipQuestion';
-import BuyScreen from '../BuyScreen';
-import LoginScreen from '../LoginScreen';
+import LinkButton from '@/components/LinkButton';
+import Subtitle from '@/components/Subtitle';
+import TooltipQuestion from '@/components/TooltipQuestion';
+import BuyScreen from '@/components/BuyScreen';
+import LoginScreen from '@/components/LoginScreen';
 
 import useStore from '@/store';
 

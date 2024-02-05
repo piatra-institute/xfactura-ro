@@ -5,7 +5,7 @@ import {
 
 import {
     closeIcon,
-} from '../../data/icons';
+} from '@/data/icons';
 
 
 

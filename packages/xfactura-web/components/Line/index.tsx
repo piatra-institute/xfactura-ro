@@ -1,15 +1,15 @@
-import Input from '../Input';
-import LineMenu from '../LineMenu';
+import Input from '@/components/Input';
+import LineMenu from '@/components/LineMenu';
 
 import {
     InvoiceLine,
-} from '../../data';
+} from '@/data';
 
 import {
     toFixed,
     financial,
     formatNumber,
-} from '../../logic/utilities';
+} from '@/logic/utilities';
 
 
 

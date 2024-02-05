@@ -1,5 +1,8 @@
-import MenuBack from '@/components/MenuBack';
-import Subtitle from '@/components/Subtitle';
+import {
+    Inventory,
+} from '@/data';
+
+import SearchableList from '@/components/SearchableList';
 
 import useStore from '@/store';
 
@@ -15,35 +18,26 @@ export default function InventoryList({
     } = useStore();
 
 
+    const editInventory = (inventory: Inventory) => {
+
+    }
+
+
     return (
-        <div>
-            <Subtitle
-                text="stocuri"
-                centered={true}
-            />
-
-            {Object.values(inventory).length === 0 && (
-                <div>
-                    nici un stoc
-                </div>
-            )}
-
-            {/* {inventory.map(inventory => {
+        <SearchableList
+            name="stocuri"
+            noItemText="nici un stoc"
+            data={Object.values(inventory)}
+            editItem={editInventory}
+            getItemID={(inventory) => inventory.id}
+            getItemName={(inventory) => inventory.name}
+            checkItemFilter={(inventory, search) => {
                 return (
-                    <div
-                        key={inventory.id}
-                        className="flex justify-between items-center gap-4 p-2 mb-2 w-full"
-                    >
-                        <div>
-                            {inventory.name}
-                        </div>
-                    </div>
+                    inventory.name.toLowerCase().includes(search.toLowerCase()) ||
+                    (inventory.price + '').toLowerCase().includes(search.toLowerCase())
                 );
-            })} */}
-
-            <MenuBack
-                back={back}
-            />
-        </div>
+            }}
+            back={back}
+        />
     );
 }

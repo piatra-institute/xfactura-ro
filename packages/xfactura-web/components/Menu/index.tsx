@@ -14,10 +14,6 @@ import About from '@/containers/About';
 import AI from '@/containers/AI';
 import Settings from '@/containers/Settings';
 
-import useStore, {
-    useVolatileStore,
-} from '@/store';
-
 import {
     useLogout,
 } from '@/logic/user';
@@ -25,6 +21,10 @@ import {
 import {
     styleTrim,
 } from '@/logic/utilities';
+
+import useStore, {
+    useVolatileStore,
+} from '@/store';
 
 import MenuIcon from './MenuIcon';
 

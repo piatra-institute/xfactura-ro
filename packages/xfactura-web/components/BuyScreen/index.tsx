@@ -11,6 +11,9 @@ import {
     EmbeddedCheckout,
 } from '@stripe/react-stripe-js';
 
+import LinkButton from '@/components/LinkButton';
+import Subtitle from '@/components/Subtitle';
+
 import {
     ENVIRONMENT,
 } from '@/data';
@@ -22,9 +25,6 @@ import {
 import {
     styleTrim,
 } from '@/logic/utilities';
-
-import LinkButton from '../LinkButton';
-import Subtitle from '../Subtitle';
 
 
 

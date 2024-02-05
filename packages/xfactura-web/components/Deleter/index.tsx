@@ -11,7 +11,7 @@ import {
     styleTrim,
 } from '@/logic/utilities';
 
-import LinkButton from '../LinkButton';
+import LinkButton from '@/components/LinkButton';
 
 
 

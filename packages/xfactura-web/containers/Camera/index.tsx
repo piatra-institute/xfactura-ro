@@ -1,7 +1,7 @@
 import Camera from 'react-html5-camera-photo';
 import 'react-html5-camera-photo/build/css/index.css';
 
-import LinkButton from '../../components/LinkButton';
+import LinkButton from '@/components/LinkButton';
 
 
 
