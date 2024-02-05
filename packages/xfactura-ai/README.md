@@ -4,6 +4,10 @@
 ## development
 
 ``` bash
+pipenv install
+
+pipenv shell
+
 ./dev.sh
 ```
 
