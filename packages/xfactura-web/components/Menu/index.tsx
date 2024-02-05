@@ -241,7 +241,7 @@ export default function Menu() {
                         </li>
                     ) : (
                         <li
-                            className="h-[102px]"
+                            className={showBgBlack ? 'h-[102px]' : ''}
                         />
                     )}
                 </ul>
