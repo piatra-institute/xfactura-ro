@@ -27,6 +27,7 @@ import MenuIcon from './MenuIcon';
 
 
 export default function Menu() {
+    // #region state
     const {
         user,
     } = useStore();
@@ -52,8 +53,11 @@ export default function Menu() {
 
 
     const logout = useLogout();
+    // #endregion state
 
 
+    // #region effects
+    /** Background */
     useEffect(() => {
         setMenuView('general');
 
@@ -65,6 +69,7 @@ export default function Menu() {
         setMenuView,
     ]);
 
+    /** Keybinds */
     useEffect(() => {
         const handleScroll = (event: Event) => {
             if (showMenu) {
@@ -97,11 +102,14 @@ export default function Menu() {
         setShowMenu,
     ]);
 
+    /** User */
     useEffect(() => {
         setShowUser(true);
     }, []);
+    // #endregion effects
 
 
+    // #region render
     let viewElement: JSX.Element | undefined;
     switch (menuView) {
         case 'companies':
@@ -196,7 +204,7 @@ export default function Menu() {
                         />
                     </li>
 
-                    {showUser && user && (
+                    {showUser && user ? (
                         <li
                             className="m-4 mt-8 cursor-pointer"
                             onClick={() => {
@@ -227,6 +235,10 @@ export default function Menu() {
                                 </div>
                             </div>
                         </li>
+                    ) : (
+                        <li
+                            className="h-[102px]"
+                        />
                     )}
                 </ul>
             );
@@ -257,4 +269,5 @@ export default function Menu() {
             )}
         </>
     );
+    // #endregion render
 }
