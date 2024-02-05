@@ -18,7 +18,7 @@ export interface VolatileState {
 }
 
 
-const volatileStore = create<VolatileState>()(
+const useVolatileStore = create<VolatileState>()(
     devtools(
     immer(
         (set) => ({
@@ -32,4 +32,4 @@ const volatileStore = create<VolatileState>()(
 );
 
 
-export default volatileStore;
+export default useVolatileStore;

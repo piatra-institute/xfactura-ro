@@ -128,10 +128,7 @@ export default function Extractors({
 
     return (
         <div
-            className="grid gap-4 justify-center items-center text-center min-h-[50px] md:flex md:gap-6"
-            style={{
-                justifyItems: 'center',
-            }}
+            className="grid gap-4 justify-center items-center justify-items-center text-center min-h-[50px] md:flex md:gap-6"
         >
             <div
                 className="mb-4"

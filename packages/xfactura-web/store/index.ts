@@ -18,7 +18,7 @@ import {
     emptyMetadata,
 } from '@/data';
 
-import volatileStore from './volatileStore';
+import useVolatileStore from './volatileStore';
 
 
 
@@ -209,5 +209,5 @@ const useStore = create<State>()(
 export default useStore;
 
 export {
-    volatileStore,
+    useVolatileStore,
 };

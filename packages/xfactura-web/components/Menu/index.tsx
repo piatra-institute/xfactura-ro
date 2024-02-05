@@ -15,7 +15,7 @@ import AI from '@/containers/AI';
 import Settings from '@/containers/Settings';
 
 import useStore, {
-    volatileStore,
+    useVolatileStore,
 } from '@/store';
 
 import {
@@ -42,7 +42,7 @@ export default function Menu() {
 
         menuView,
         setMenuView,
-    } = volatileStore();
+    } = useVolatileStore();
 
 
     const [
