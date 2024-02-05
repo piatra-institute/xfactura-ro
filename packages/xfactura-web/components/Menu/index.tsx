@@ -167,7 +167,7 @@ export default function Menu() {
                     </li>
                     <li className="m-4">
                         <LinkButton
-                            text="xfacturi"
+                            text="facturi"
                             onClick={() => setMenuView('invoices')}
                         />
                     </li>
