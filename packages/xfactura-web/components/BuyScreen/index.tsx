@@ -15,6 +15,14 @@ import {
     ENVIRONMENT,
 } from '@/data';
 
+import {
+    focusStyle,
+} from '@/data/styles';
+
+import {
+    styleTrim,
+} from '@/logic/utilities';
+
 import LinkButton from '../LinkButton';
 import Subtitle from '../Subtitle';
 
@@ -87,6 +95,11 @@ export default function BuyScreen({
         );
     }
 
+    const buyButtonStyle = styleTrim(`
+        font-bold w-full border border-gray-500 p-4 cursor-pointer select-none
+        ${focusStyle}
+    `);
+
     return (
         <>
             <div
@@ -110,8 +123,8 @@ export default function BuyScreen({
             <div
                 className="w-[300px] m-auto flex flex-col gap-8 justify-center items-center"
             >
-                <div
-                    className="font-bold w-full border p-4 cursor-pointer select-none"
+                <button
+                    className={buyButtonStyle}
                     onClick={() => buy('300')}
                 >
                     <div>
@@ -121,10 +134,10 @@ export default function BuyScreen({
                     <div>
                         300 acte inteligente
                     </div>
-                </div>
+                </button>
 
-                <div
-                    className="font-bold w-full border p-4 cursor-pointer select-none"
+                <button
+                    className={buyButtonStyle}
                     onClick={() => buy('1000')}
                 >
                     <div>
@@ -134,10 +147,10 @@ export default function BuyScreen({
                     <div>
                         1.000 acte inteligente
                     </div>
-                </div>
+                </button>
 
-                <div
-                    className="font-bold w-full border p-4 cursor-pointer select-none"
+                <button
+                    className={buyButtonStyle}
                     onClick={() => buy('5000')}
                 >
                     <div>
@@ -147,7 +160,7 @@ export default function BuyScreen({
                     <div>
                         5.000 acte inteligente
                     </div>
-                </div>
+                </button>
             </div>
 
             {backButton}
