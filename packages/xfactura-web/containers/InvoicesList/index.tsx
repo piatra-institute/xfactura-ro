@@ -1,11 +1,7 @@
-import {
-    useState,
-} from 'react';
+import MenuBack from '@/components/MenuBack';
+import Subtitle from '@/components/Subtitle';
 
-import localStorage from '../../data/localStorage';
-
-import MenuBack from '../../components/MenuBack';
-import Subtitle from '../../components/Subtitle';
+import useStore from '@/store';
 
 
 
@@ -14,24 +10,21 @@ export default function InvoicesList({
 } : {
     back: () => void;
 }) {
-    const [
+    const {
         invoices,
-        setInvoices,
-    ] = useState<any[]>(
-        Object.values(localStorage.invoices) as any[],
-    );
+    } = useStore();
 
 
     return (
         <div>
             <Subtitle
-                text="xfacturi"
+                text="facturi"
                 centered={true}
             />
 
-            {invoices.length === 0 && (
+            {Object.values(invoices).length === 0 && (
                 <div>
-                    nici o xfactură
+                    nici o factură
                 </div>
             )}
 

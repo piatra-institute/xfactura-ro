@@ -43,8 +43,6 @@ import {
     logicCamera,
 } from '@/logic/camera';
 
-import localStorage from '@/data/localStorage';
-
 import useStore from '@/store';
 
 
@@ -74,6 +72,8 @@ export default function Home() {
         setNewInvoiceBuyer,
         setNewInvoiceMetadata,
         setNewInvoiceLines,
+
+        generateEinvoiceLocally,
     } = useStore();
     // #endregion state
 
@@ -195,7 +195,7 @@ export default function Home() {
         }
         mounted.current = true;
 
-        if (localStorage.generateEinvoiceLocally) {
+        if (generateEinvoiceLocally) {
             webContainerRunner.load()
                 .then((loaded) => {
                     setShowLoading(false);

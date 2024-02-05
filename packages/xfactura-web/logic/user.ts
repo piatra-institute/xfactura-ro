@@ -4,22 +4,25 @@ import {
     ENVIRONMENT,
 } from '@/data';
 
-import localStorage, {
-    localKeys,
-} from '@/data/localStorage';
+import useStore from '@/store';
 
 
 
-export const logout = async () => {
-    await fetch(ENVIRONMENT.API_DOMAIN + '/logout', {
-        method: 'POST',
-        credentials: 'include',
-    }).catch((error) => {
-        console.error(error);
-    });
+export const useLogout = () => {
+    const {
+        setUser,
+    } = useStore();
 
-    googleLogout();
+    return async () => {
+        await fetch(ENVIRONMENT.API_DOMAIN + '/logout', {
+            method: 'POST',
+            credentials: 'include',
+        }).catch((error) => {
+            console.error(error);
+        });
 
-    localStorage.user = null;
-    localStorage.set(localKeys.user, null);
+        googleLogout();
+
+        setUser(null);
+    }
 }

@@ -5,8 +5,6 @@ import {
 
 import Image from 'next/image';
 
-import localStorage from '@/data/localStorage';
-
 import LinkButton from '@/components/LinkButton';
 
 import CompaniesList from '@/containers/CompaniesList';
@@ -17,10 +15,10 @@ import AI from '@/containers/AI';
 import Settings from '@/containers/Settings';
 
 import {
-    logout,
+    useLogout,
 } from '@/logic/user';
 
-import {
+import useStore, {
     volatileStore,
 } from '@/store';
 
@@ -29,6 +27,10 @@ import MenuIcon from './MenuIcon';
 
 
 export default function Menu() {
+    const {
+        user,
+    } = useStore();
+
     const {
         showMenu,
         setShowMenu,
@@ -47,6 +49,9 @@ export default function Menu() {
         showBgBlack,
         setShowBgBlack,
     ] = useState(true);
+
+
+    const logout = useLogout();
 
 
     useEffect(() => {
@@ -191,7 +196,7 @@ export default function Menu() {
                         />
                     </li>
 
-                    {showUser && localStorage.user && (
+                    {showUser && user && (
                         <li
                             className="m-4 mt-8 cursor-pointer"
                             onClick={() => {
@@ -208,8 +213,8 @@ export default function Menu() {
                                 className="flex flex-row items-center justify-center gap-2 mt-2"
                             >
                                 <Image
-                                    src={localStorage.user.picture || ''}
-                                    alt={localStorage.user.name}
+                                    src={user.picture || ''}
+                                    alt={user.name}
                                     width={30}
                                     height={30}
                                     className="rounded-full"
@@ -218,7 +223,7 @@ export default function Menu() {
                                 <div
                                     className="text-xs font-bold"
                                 >
-                                    {localStorage.user.name || localStorage.user.email}
+                                    {user.name || user.email}
                                 </div>
                             </div>
                         </li>

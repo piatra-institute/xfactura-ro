@@ -1,7 +1,7 @@
-import BuyScreen from '../../components/BuyScreen';
-import LoginScreen from '../../components/LoginScreen';
+import BuyScreen from '@/components/BuyScreen';
+import LoginScreen from '@/components/LoginScreen';
 
-import localStorage from '@/data/localStorage';
+import useStore from '@/store';
 
 
 
@@ -10,6 +10,10 @@ export default function AI({
 } : {
     back: () => void;
 }) {
+    const {
+        user,
+    } = useStore();
+
     return (
         <div
             className={`
@@ -18,7 +22,7 @@ export default function AI({
                 grid items-center justify-center place-content-center gap-12
             `}
         >
-            {localStorage.user ? (
+            {user ? (
                 <BuyScreen
                     setShowBuyScreen={() => {
                         back();

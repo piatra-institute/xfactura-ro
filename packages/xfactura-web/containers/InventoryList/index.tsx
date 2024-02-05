@@ -1,15 +1,7 @@
-import {
-    useState,
-} from 'react';
+import MenuBack from '@/components/MenuBack';
+import Subtitle from '@/components/Subtitle';
 
-import {
-    Company,
-} from '../../data';
-
-import localStorage from '../../data/localStorage';
-
-import MenuBack from '../../components/MenuBack';
-import Subtitle from '../../components/Subtitle';
+import useStore from '@/store';
 
 
 
@@ -18,12 +10,9 @@ export default function InventoryList({
 } : {
     back: () => void;
 }) {
-    const [
+    const {
         inventory,
-        setInventory,
-    ] = useState<Company[]>(
-        Object.values(localStorage.inventory),
-    );
+    } = useStore();
 
 
     return (
@@ -33,7 +22,7 @@ export default function InventoryList({
                 centered={true}
             />
 
-            {inventory.length === 0 && (
+            {Object.values(inventory).length === 0 && (
                 <div>
                     nici un stoc
                 </div>

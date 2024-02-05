@@ -24,7 +24,7 @@ import volatileStore from './volatileStore';
 
 export interface State {
     user: User | null;
-    setUser: (user: User) => void;
+    setUser: (user: User | null) => void;
     usingLocalStorage: boolean;
     toggleUsingLocalStorage: () => void;
     generateEinvoiceLocally: boolean;
@@ -83,7 +83,7 @@ const useStore = create<State>()(
     immer(
         (set) => ({
             user: null,
-            setUser: (user: User) => set({ user }),
+            setUser: (user: User | null) => set({ user }),
             usingLocalStorage: false,
             toggleUsingLocalStorage: () => set((state) => ({ usingLocalStorage: !state.usingLocalStorage })),
             generateEinvoiceLocally: false,
@@ -199,7 +199,7 @@ const useStore = create<State>()(
         }),
     ),
         {
-            name: 'xfct-storage',
+            name: 'ZXFCT',
         },
     ),
     ),

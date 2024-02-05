@@ -40,14 +40,9 @@ import {
     getEInvoice,
 } from '@/logic/requests';
 
-
 import {
     seriesParser,
 } from '@/logic/series';
-
-import localStorage, {
-    localKeys,
-} from '@/data/localStorage';
 
 import useStore from '@/store';
 
@@ -61,6 +56,11 @@ export default function Home() {
         setNewInvoiceBuyer,
         setNewInvoiceMetadata,
         setNewInvoiceLines,
+
+        generateEinvoiceLocally,
+
+        lastInvoiceSeries,
+        setLastInvoiceSeries,
     } = useStore();
 
     const [
@@ -131,7 +131,7 @@ export default function Home() {
 
         const filename = `efactura-${newInvoice.metadata.number}-${newInvoice.seller.name}-${newInvoice.buyer.name}.xml`;
 
-        if (localStorage.generateEinvoiceLocally) {
+        if (generateEinvoiceLocally) {
             await webContainerRunner.writeData(invoice);
             await webContainerRunner.startNodePHPServer(
                 (value) => {
@@ -155,7 +155,7 @@ export default function Home() {
             }
         }
 
-        localStorage.set(localKeys.lastInvoiceSeries, invoice.metadata.number);
+        setLastInvoiceSeries(invoice.metadata.number);
     }
 
     const resetInvoice = () => {
@@ -206,7 +206,7 @@ export default function Home() {
 
     /** series */
     useEffect(() => {
-        const seriesData = seriesParser(localStorage.lastInvoiceSeries);
+        const seriesData = seriesParser(lastInvoiceSeries);
         if (!seriesData) {
             return;
         }

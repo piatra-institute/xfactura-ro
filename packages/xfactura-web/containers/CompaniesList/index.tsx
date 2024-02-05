@@ -1,15 +1,7 @@
-import {
-    useState,
-} from 'react';
+import MenuBack from '@/components/MenuBack';
+import Subtitle from '@/components/Subtitle';
 
-import {
-    Company,
-} from '../../data';
-
-import localStorage from '../../data/localStorage';
-
-import MenuBack from '../../components/MenuBack';
-import Subtitle from '../../components/Subtitle';
+import useStore from '@/store';
 
 
 
@@ -18,12 +10,9 @@ export default function CompaniesList({
 } : {
     back: () => void;
 }) {
-    const [
+    const {
         companies,
-        setCompanies,
-    ] = useState<Company[]>(
-        Object.values(localStorage.companies) as Company[],
-    );
+    } = useStore();
 
 
     return (
@@ -33,13 +22,13 @@ export default function CompaniesList({
                 centered={true}
             />
 
-            {companies.length === 0 && (
+            {Object.values(companies).length === 0 && (
                 <div>
                     nici o companie
                 </div>
             )}
 
-            {companies.map(company => {
+            {Object.values(companies).map(company => {
                 return (
                     <div
                         key={company.vatNumber}

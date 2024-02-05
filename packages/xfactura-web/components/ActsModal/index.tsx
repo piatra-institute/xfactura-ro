@@ -3,13 +3,13 @@ import {
     useEffect,
 } from 'react';
 
-import localStorage from '@/data/localStorage';
-
 import LinkButton from '../LinkButton';
 import Subtitle from '../Subtitle';
 import TooltipQuestion from '../TooltipQuestion';
 import BuyScreen from '../BuyScreen';
 import LoginScreen from '../LoginScreen';
+
+import useStore from '@/store';
 
 
 
@@ -27,6 +27,11 @@ export default function ActsModal({
     ) => void;
 }) {
     // #region state
+    const {
+        user,
+        usingLocalStorage,
+    } = useStore();
+
     const [
         loggedIn,
         setLoggedIn,
@@ -51,14 +56,16 @@ export default function ActsModal({
 
     // #region effects
     useEffect(() => {
-        if (localStorage.user) {
+        if (user) {
             setLoggedIn(true);
         }
 
-        // if (localStorage.smartActs) {
+        // if (smartActs) {
         //     setSmartActsLeft(true);
         // }
-    }, []);
+    }, [
+        user,
+    ]);
     // #endregion effects
 
 
@@ -80,7 +87,7 @@ export default function ActsModal({
                 {description}
             </div>
 
-            {localStorage.usingStorage ? (
+            {usingLocalStorage ? (
                 <div>
                     datele sunt stocate doar local
                 </div>

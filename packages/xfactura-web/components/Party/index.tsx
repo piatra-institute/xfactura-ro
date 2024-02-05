@@ -14,10 +14,6 @@ import {
     companyFields,
 } from '@/data';
 
-import localStorage, {
-    localKeys,
-} from '@/data/localStorage';
-
 import Subtitle from '@/components/Subtitle';
 import Input from '@/components/Input';
 
@@ -34,6 +30,8 @@ import {
     verifyPartyData,
 } from '@/logic/validation';
 
+import useStore from '@/store';
+
 
 
 export default function Party({
@@ -49,6 +47,14 @@ export default function Party({
 }) {
     const mountedTime = useRef(Date.now());
 
+
+    const {
+        usingLocalStorage,
+        companies,
+        defaultSeller,
+        setDefaultSeller,
+        addCompany,
+    } = useStore();
 
     const [
         loadingVatNumber,
@@ -71,10 +77,10 @@ export default function Party({
             }
 
             const vatNumber = verifyInputVatNumber(value);
-            if (localStorage.usingStorage && localStorage.companies[vatNumber]) {
-                const localStorageData = localStorage.companies[vatNumber];
-                if (localStorageData && verifyPartyData(localStorageData)) {
-                    setParty(localStorageData);
+            if (usingLocalStorage && companies[vatNumber]) {
+                const companyData = companies[vatNumber];
+                if (companyData && verifyPartyData(companyData)) {
+                    setParty(companyData);
                     setUsingLocalData(true);
                     setLoadingVatNumber(false);
                     return;
@@ -156,34 +162,32 @@ export default function Party({
 
     useEffect(() => {
         if (verifyPartyData(data)) {
-            localStorage.set(
-                `${localKeys.company}${data.vatNumber}`,
+            addCompany(
                 data,
             );
         }
     }, [
         data,
+        addCompany,
     ]);
 
     useEffect(() => {
         if (kind === 'seller' && verifyPartyData(data)) {
-            localStorage.set(
-                localKeys.defaultSeller,
-                data.vatNumber,
-            );
+            setDefaultSeller(data.vatNumber);
         }
     }, [
         kind,
         data,
+        setDefaultSeller,
     ]);
 
     useEffect(() => {
         if (
             kind === 'seller'
-            && localStorage.usingStorage
-            && localStorage.defaultSeller
+            && usingLocalStorage
+            && defaultSeller
         ) {
-            const defaultData = localStorage.companies[localStorage.defaultSeller];
+            const defaultData = companies[defaultSeller];
             if (!defaultData) {
                 return;
             }
@@ -194,6 +198,9 @@ export default function Party({
         }
     }, [
         kind,
+        usingLocalStorage,
+        defaultSeller,
+        companies,
         setParty,
     ]);
 
