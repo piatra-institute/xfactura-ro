@@ -4,7 +4,7 @@ import {
 
 import {
     defocus,
-} from '../../logic/utilities';
+} from '@/logic/utilities';
 
 import LinkButton from '../LinkButton';
 

@@ -124,3 +124,12 @@ export function debounce(callback: any, delay = 2000) {
         });
     }
 }
+
+
+export const styleTrim = (
+    style: string,
+) => {
+    return style
+        .replace(/\s+|\n/g, ' ')
+        .trim();
+}

@@ -5,6 +5,10 @@ import {
 
 import Image from 'next/image';
 
+import {
+    styleTrim,
+} from '@/logic/utilities';
+
 
 
 export type LinkButtonProps = {
@@ -22,12 +26,12 @@ export default function LinkButton({
 }: LinkButtonProps) {
     const button = (
         <button
-            className={`
+            className={styleTrim(`
                 cursor-pointer select-none font-bold
                 flex items-center gap-2 p-1
                 focus:outline-none focus:ring-2 focus:ring-white
                 m-auto
-            `}
+            `)}
             {...rest}
         >
             {typeof icon === 'string' ? (
@@ -38,9 +42,7 @@ export default function LinkButton({
                     alt={typeof text === 'string' ? text : ''}
                 />
             ) : (
-                <>
-                    {icon}
-                </>
+                <>{icon}</>
             )}
 
             {icon ? (
@@ -64,8 +66,6 @@ export default function LinkButton({
     }
 
     return (
-        <>
-            {button}
-        </>
+        <>{button}</>
     );
 }

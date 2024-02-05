@@ -14,13 +14,17 @@ import About from '@/containers/About';
 import AI from '@/containers/AI';
 import Settings from '@/containers/Settings';
 
+import useStore, {
+    volatileStore,
+} from '@/store';
+
 import {
     useLogout,
 } from '@/logic/user';
 
-import useStore, {
-    volatileStore,
-} from '@/store';
+import {
+    styleTrim,
+} from '@/logic/utilities';
 
 import MenuIcon from './MenuIcon';
 
@@ -254,11 +258,11 @@ export default function Menu() {
 
             {showMenu && (
                 <div
-                    className={`
+                    className={styleTrim(`
                         ${showBgBlack ? 'bg-black': 'animate-fadeIn backdrop-blur-md'}
                         fixed z-40 top-0 h-screen right-0 left-0 botom-0
                         grid place-items-center text-center
-                    `}
+                    `)}
                 >
                     <div
                         className="max-w-xl p-4"
