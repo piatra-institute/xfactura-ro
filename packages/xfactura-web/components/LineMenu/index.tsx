@@ -2,26 +2,26 @@ import {
     useState,
 } from 'react';
 
+import {
+    InvoiceLine,
+} from '@/data';
+
+import {
+    focusStyle,
+} from '@/data/styles';
+
+import {
+    collapseIcon,
+    expandIcon,
+} from '@/data/icons';
+
+import {
+    styleTrim,
+} from '@/logic/utilities';
+
 import Toggle from '../Toggle';
 import Deleter from '../Deleter';
 
-import {
-    InvoiceLine,
-} from '../../data';
-
-
-
-const collapse = (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <polyline points="6 15 12 9 18 15"></polyline>
-    </svg>
-);
-
-const expand = (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <polyline points="6 9 12 15 18 9"></polyline>
-    </svg>
-);
 
 
 export default function LineMenu({
@@ -46,18 +46,24 @@ export default function LineMenu({
         >
             <button
                 onClick={() => setShow(!show)}
-                className="focus:outline-none focus:ring-2 focus:ring-white lg:mt-10"
+                className={styleTrim(`
+                    ${focusStyle} lg:mt-10
+                `)}
             >
                 {show ? (
-                    <>{collapse}</>
+                    <>{collapseIcon}</>
                 ) : (
-                    <>{expand}</>
+                    <>{expandIcon}</>
                 )}
             </button>
 
             {show && (
                 <div
-                    className="absolute z-30 border top-[40px] left-0 w-[220px] backdrop-blur-md shadow-2xl p-4 lg:right-0 lg:left-auto lg:top-[80px]"
+                    className={styleTrim(`
+                        z-30 absolute top-[40px] left-0 w-[220px] border
+                        backdrop-blur-md shadow-2xl p-4
+                        lg:right-0 lg:left-auto lg:top-[80px]
+                    `)}
                 >
                     <Toggle
                         text="TVA inclus"

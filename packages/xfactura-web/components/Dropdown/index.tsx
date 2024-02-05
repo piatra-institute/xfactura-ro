@@ -5,11 +5,19 @@ import {
     FlowbiteDropdownTheme,
 } from 'flowbite-react';
 
-import Tooltip from '../Tooltip';
+import {
+    focusStyle,
+} from '@/data/styles';
 
 import {
     arrowDownIcon,
 } from '@/data/icons';
+
+import {
+    styleTrim,
+} from '@/logic/utilities';
+
+import Tooltip from '../Tooltip';
 
 
 
@@ -95,7 +103,9 @@ export default function CustomDropdown({
                 label=""
                 renderTrigger={() => (
                     <button
-                        className="focus:outline-none focus:ring-2 focus:ring-white p-1 flex gap-2 items-center"
+                        className={styleTrim(`
+                            ${focusStyle} p-1 flex gap-2 items-center
+                        `)}
                     >
                         {selected}
 

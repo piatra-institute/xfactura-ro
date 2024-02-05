@@ -3,6 +3,14 @@ import {
     InputHTMLAttributes,
 } from 'react';
 
+import {
+    focusStyle,
+} from '@/data/styles';
+
+import {
+    styleTrim,
+} from '@/logic/utilities';
+
 import Spinner from '../Spinner';
 
 
@@ -33,7 +41,10 @@ export default function Input({
 }) {
     return (
         <div
-            className={`flex relative items-center justify-between my-2 gap-4 ${asGrid ? 'lg:grid' : 'lg:flex'}`}
+            className={styleTrim(`
+                flex relative items-center justify-between my-2 gap-4
+                ${asGrid ? 'lg:grid' : 'lg:flex'}
+            `)}
         >
             <div
                 className="select-none"
@@ -42,7 +53,11 @@ export default function Input({
             </div>
 
             <input
-                className="bg-gray-800 w-[200px] p-2 border-none rounded-none text-white focus:outline-none focus:ring-2 focus:ring-white disabled:bg-gray-600"
+                className={styleTrim(`
+                    bg-gray-800 w-[200px] p-2 border-none rounded-none text-white
+                    disabled:bg-gray-600
+                    ${focusStyle}
+                `)}
                 name={text}
                 value={value}
                 onChange={(event) => {

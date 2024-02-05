@@ -3,7 +3,15 @@ import {
 } from 'react';
 
 import {
+    focusStyle,
+} from '@/data/styles';
+
+import {
     defocus,
+} from '@/logic/utilities';
+
+import {
+    styleTrim,
 } from '@/logic/utilities';
 
 import LinkButton from '../LinkButton';
@@ -34,7 +42,9 @@ export default function Deleter({
                         setShowDelete(false);
                         defocus();
                     }}
-                    className="focus:outline-none focus:ring-2 focus:ring-white p-1"
+                    className={styleTrim(`
+                        ${focusStyle} p-1
+                    `)}
                 >
                     <svg
                         xmlns="http://www.w3.org/2000/svg" x="0px" y="0px" width="100" height="100" viewBox="0 0 32 32"
@@ -51,7 +61,9 @@ export default function Deleter({
 
                 <button
                     onClick={() => setShowDelete(false)}
-                    className="focus:outline-none focus:ring-2 focus:ring-white p-1"
+                    className={styleTrim(`
+                        ${focusStyle} p-1
+                    `)}
                 >
                     <svg
                         xmlns="http://www.w3.org/2000/svg" x="0px" y="0px" width="100" height="100" viewBox="0 0 50 50"

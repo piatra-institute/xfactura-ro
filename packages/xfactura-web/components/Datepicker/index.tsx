@@ -1,6 +1,10 @@
 import type { CustomFlowbiteTheme } from 'flowbite-react';
 import { Flowbite, Datepicker } from 'flowbite-react';
 
+import {
+    focusStyle,
+} from '@/data/styles';
+
 
 
 const customTheme: CustomFlowbiteTheme = {
@@ -18,7 +22,7 @@ const customTheme: CustomFlowbiteTheme = {
                 "svg": "h-5 w-5 text-gray-500 dark:text-gray-400"
             },
             "input": {
-                "base": "w-[200px] h-[40px] rounded-none border-none focus:outline-none focus:ring-2 focus:ring-white disabled:cursor-not-allowed disabled:opacity-50",
+                "base": `w-[200px] h-[40px] rounded-none border-none ${focusStyle} disabled:cursor-not-allowed disabled:opacity-50`,
                 "sizes": {
                     "sm": "p-2",
                     "md": "p-2",

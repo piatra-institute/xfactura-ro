@@ -6,6 +6,10 @@ import {
 import Image from 'next/image';
 
 import {
+    focusStyle,
+} from '@/data/styles';
+
+import {
     styleTrim,
 } from '@/logic/utilities';
 
@@ -27,10 +31,10 @@ export default function LinkButton({
     const button = (
         <button
             className={styleTrim(`
+                flex items-center gap-2
+                p-1 m-auto
                 cursor-pointer select-none font-bold
-                flex items-center gap-2 p-1
-                focus:outline-none focus:ring-2 focus:ring-white
-                m-auto
+                ${focusStyle}
             `)}
             {...rest}
         >
