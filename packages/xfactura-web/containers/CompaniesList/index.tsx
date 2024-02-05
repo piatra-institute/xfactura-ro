@@ -4,7 +4,9 @@ import {
 
 import SearchableList from '@/components/SearchableList';
 
-import useStore from '@/store';
+import useStore, {
+    useVolatileStore,
+} from '@/store';
 
 
 
@@ -17,17 +19,20 @@ export default function CompaniesList({
         companies,
     } = useStore();
 
-
-    const editCompany = (company: Company) => {
-    }
-
+    const {
+        setMenuView,
+        setEditID,
+    } = useVolatileStore();
 
     return (
         <SearchableList
             name="companii"
             noItemText="nici o companie"
             data={Object.values(companies)}
-            editItem={editCompany}
+            editItem={(company: Company) => {
+                setEditID(company.vatNumber);
+                setMenuView('edit-company');
+            }}
             getItemID={(company) => company.vatNumber}
             getItemName={(company) => company.name}
             checkItemFilter={(company, search) => {

@@ -7,7 +7,12 @@ import type { } from '@redux-devtools/extension';
 
 
 
-export type MenuView = 'general' | 'about' | 'ai' | 'companies' | 'inventory' | 'invoices' | 'settings';
+export type MenuView =
+    | 'general' | 'about' | 'ai'
+    | 'companies' | 'edit-company'
+    | 'inventory'
+    | 'invoices'
+    | 'settings';
 
 
 export interface VolatileState {
@@ -15,6 +20,8 @@ export interface VolatileState {
     setShowMenu: (showMenu: boolean) => void;
     menuView: MenuView;
     setMenuView: (view: MenuView) => void;
+    editID: string;
+    setEditID: (id: string) => void;
 }
 
 
@@ -26,6 +33,8 @@ const useVolatileStore = create<VolatileState>()(
             setShowMenu: (showMenu: boolean) => set({ showMenu }),
             menuView: 'general',
             setMenuView: (menuView: MenuView) => set({ menuView }),
+            editID: '',
+            setEditID: (editID: string) => set({ editID }),
         }),
     ),
     ),

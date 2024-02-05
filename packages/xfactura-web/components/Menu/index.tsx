@@ -8,6 +8,7 @@ import Image from 'next/image';
 import LinkButton from '@/components/LinkButton';
 
 import CompaniesList from '@/containers/CompaniesList';
+import EditCompany from '@/containers/EditCompany';
 import InventoryList from '@/containers/InventoryList';
 import InvoicesList from '@/containers/InvoicesList';
 import About from '@/containers/About';
@@ -119,6 +120,13 @@ export default function Menu() {
         case 'companies':
             viewElement = (
                 <CompaniesList
+                    back={() => setMenuView('general')}
+                />
+            );
+            break;
+        case 'edit-company':
+            viewElement = (
+                <EditCompany
                     back={() => setMenuView('general')}
                 />
             );

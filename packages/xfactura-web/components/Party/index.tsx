@@ -39,15 +39,18 @@ export default function Party({
     title,
     data,
     setParty,
+    styleless,
 }: {
     kind: 'seller' | 'buyer';
     title: string;
     data: Company;
-    setParty: (company: Company) => void,
+    setParty: (company: Company) => void;
+    styleless?: boolean;
 }) {
     const mountedTime = useRef(Date.now());
 
 
+    // #region state
     const {
         usingLocalStorage,
         companies,
@@ -65,8 +68,10 @@ export default function Party({
         usingLocalData,
         setUsingLocalData,
     ] = useState(false);
+    // #endregion state
 
 
+    // #region handlers
     const checkVatNumber = useDebouncedCallback(async (
         value: string,
     ) => {
@@ -158,8 +163,10 @@ export default function Party({
             });
         }
     }
+    // #endregion handlers
 
 
+    // #region effects
     useEffect(() => {
         if (verifyPartyData(data)) {
             addCompany(
@@ -212,11 +219,13 @@ export default function Party({
         data.vatNumber,
         checkVatNumber,
     ]);
+    // #endregion effects
 
 
+    // #region render
     return (
         <div
-            className="max-w-[400px] md:w-1/2 min-h-[300px] p-4 md:p-8"
+            className={styleless ? '' : 'max-w-[400px] md:w-1/2 min-h-[300px] p-4 md:p-8'}
         >
             <Subtitle
                 text={title}
@@ -250,4 +259,5 @@ export default function Party({
             </div>
         </div>
     );
+    // #endregion render
 }
