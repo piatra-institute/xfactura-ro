@@ -228,7 +228,7 @@ export default function Settings({
                                 <p
                                     className="mb-0"
                                 >
-                                    stocarea datelor în Google Drive permite sincronizarea datelor între dispozitive și backup
+                                    stocarea datelor în Google Drive permite sincronizarea datelor între dispozitive și crearea de copii de siguranță
                                 </p>
                             </>
                         )}
