@@ -107,11 +107,15 @@ export default function CompaniesList({
                                     <div
                                         className="flex justify-between items-center w-full gap-2"
                                     >
-                                        <div>
+                                        <div
+                                            className="select-all"
+                                        >
                                             {company.vatNumber}
                                         </div>
 
-                                        <div>
+                                        <div
+                                            className="select-all"
+                                        >
                                             {company.name}
                                         </div>
                                     </div>
