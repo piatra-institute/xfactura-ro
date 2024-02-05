@@ -1,4 +1,5 @@
 import {
+    useRef,
     useState,
     useEffect,
 } from 'react';
@@ -46,6 +47,9 @@ export default function Party({
     data: Company;
     setParty: (company: Company) => void,
 }) {
+    const mountedTime = useRef(Date.now());
+
+
     const [
         loadingVatNumber,
         setLoadingVatNumber,
@@ -61,6 +65,11 @@ export default function Party({
         value: string,
     ) => {
         try {
+            const now = Date.now();
+            if (now - mountedTime.current < 3000) {
+                return;
+            }
+
             const vatNumber = verifyInputVatNumber(value);
             if (localStorage.usingStorage && localStorage.companies[vatNumber]) {
                 const localStorageData = localStorage.companies[vatNumber];
