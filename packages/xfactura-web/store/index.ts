@@ -18,6 +18,8 @@ import {
     emptyMetadata,
 } from '@/data';
 
+import volatileStore from './volatileStore';
+
 
 
 export interface State {
@@ -73,6 +75,7 @@ export interface State {
     setNewInvoiceMetadata: (metadata: Metadata) => void;
     setNewInvoiceLines: (lines: InvoiceLine[]) => void;
 }
+
 
 const useStore = create<State>()(
     devtools(
@@ -204,3 +207,7 @@ const useStore = create<State>()(
 
 
 export default useStore;
+
+export {
+    volatileStore,
+};

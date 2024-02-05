@@ -19,24 +19,32 @@ export const getCompanyDetails = async (
         return;
     }
 
-    return fetch(COMPANY_DETAILS_API, {
-        method: 'POST',
-        mode: 'no-cors',
-        credentials: 'omit',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            vatNumber,
-        }),
-    })
-        .then((response) => response.json())
-        .then((data) => {
-            return data;
-        })
-        .catch((error) => {
-            logger('error', error);
+    const controller = new AbortController();
+    const timeout = 5_000;
+    const id = setTimeout(() => controller.abort(), timeout);
+
+    try {
+        const request = await fetch(COMPANY_DETAILS_API, {
+            method: 'POST',
+            mode: 'no-cors',
+            credentials: 'omit',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                vatNumber,
+            }),
+            signal: controller.signal,
         });
+        clearTimeout(id);
+
+        const data = await request.json();
+
+        return data;
+    } catch (error) {
+        logger('error', error);
+        clearTimeout(id);
+    }
 }
 
 

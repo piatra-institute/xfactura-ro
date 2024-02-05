@@ -7,58 +7,37 @@ import Image from 'next/image';
 
 import localStorage from '@/data/localStorage';
 
-import LinkButton from '../../components/LinkButton';
+import LinkButton from '@/components/LinkButton';
 
-import CompaniesList from '../../containers/CompaniesList';
-import InventoryList from '../../containers/InventoryList';
-import InvoicesList from '../../containers/InvoicesList';
-import About from '../../containers/About';
-import AI from '../../containers/AI';
-import Settings from '../../containers/Settings';
+import CompaniesList from '@/containers/CompaniesList';
+import InventoryList from '@/containers/InventoryList';
+import InvoicesList from '@/containers/InvoicesList';
+import About from '@/containers/About';
+import AI from '@/containers/AI';
+import Settings from '@/containers/Settings';
 
 import {
     logout,
 } from '@/logic/user';
 
+import {
+    volatileStore,
+} from '@/store';
 
+import MenuIcon from './MenuIcon';
 
-export const MenuIcon = ({
-    show,
-    atClick,
-}: {
-    show: boolean;
-    atClick: () => void;
-}) => (
-    <button
-        className="z-50 fixed top-[4px] left-0 m-4 cursor-pointer"
-        onClick={(event) => {
-            event.stopPropagation();
-            event.preventDefault();
-
-            atClick();
-        }}
-    >
-        <svg
-            xmlns="http://www.w3.org/2000/svg" x="0px" y="0px" width="100" height="100" viewBox="0 0 50 50"
-            style={{
-                filter: 'invert(1)', width: '25px', height: '25px',
-            }}
-        >
-            {show ? (
-                <path d="M 7.71875 6.28125 L 6.28125 7.71875 L 23.5625 25 L 6.28125 42.28125 L 7.71875 43.71875 L 25 26.4375 L 42.28125 43.71875 L 43.71875 42.28125 L 26.4375 25 L 43.71875 7.71875 L 42.28125 6.28125 L 25 23.5625 Z">
-                    {/* close */}
-                </path>
-            ) : (
-                <path d="M 0 9 L 0 11 L 50 11 L 50 9 Z M 0 24 L 0 26 L 50 26 L 50 24 Z M 0 39 L 0 41 L 50 41 L 50 39 Z">
-                    {/* hamburger */}
-                </path>
-            )}
-        </svg>
-    </button>
-);
 
 
 export default function Menu() {
+    const {
+        showMenu,
+        setShowMenu,
+
+        menuView,
+        setMenuView,
+    } = volatileStore();
+
+
     const [
         showUser,
         setShowUser,
@@ -69,25 +48,16 @@ export default function Menu() {
         setShowBgBlack,
     ] = useState(true);
 
-    const [
-        showMenu,
-        setShowMenu,
-    ] = useState(true);
-
-    const [
-        view,
-        setView,
-    ] = useState<'general' | 'about' | 'ai' | 'companies' | 'inventory' | 'invoices' | 'settings'>('general');
-
 
     useEffect(() => {
-        setView('general');
+        setMenuView('general');
 
         if (!showMenu) {
             setShowBgBlack(false);
         }
     }, [
         showMenu,
+        setMenuView,
     ]);
 
     useEffect(() => {
@@ -119,6 +89,7 @@ export default function Menu() {
         };
     }, [
         showMenu,
+        setShowMenu,
     ]);
 
     useEffect(() => {
@@ -127,46 +98,46 @@ export default function Menu() {
 
 
     let viewElement: JSX.Element | undefined;
-    switch (view) {
+    switch (menuView) {
         case 'companies':
             viewElement = (
                 <CompaniesList
-                    back={() => setView('general')}
+                    back={() => setMenuView('general')}
                 />
             );
             break;
         case 'inventory':
             viewElement = (
                 <InventoryList
-                    back={() => setView('general')}
+                    back={() => setMenuView('general')}
                 />
             );
             break;
         case 'invoices':
             viewElement = (
                 <InvoicesList
-                    back={() => setView('general')}
+                    back={() => setMenuView('general')}
                 />
             );
             break;
         case 'about':
             viewElement = (
                 <About
-                    back={() => setView('general')}
+                    back={() => setMenuView('general')}
                 />
             );
             break;
         case 'ai':
             viewElement = (
                 <AI
-                    back={() => setView('general')}
+                    back={() => setMenuView('general')}
                 />
             );
             break;
         case 'settings':
             viewElement = (
                 <Settings
-                    back={() => setView('general')}
+                    back={() => setMenuView('general')}
                 />
             );
             break;
@@ -185,38 +156,38 @@ export default function Menu() {
                     <li className="m-4">
                         <LinkButton
                             text="companii"
-                            onClick={() => setView('companies')}
+                            onClick={() => setMenuView('companies')}
                         />
                     </li>
                     <li className="m-4">
                         <LinkButton
                             text="stocuri"
-                            onClick={() => setView('inventory')}
+                            onClick={() => setMenuView('inventory')}
                         />
                     </li>
                     <li className="m-4">
                         <LinkButton
                             text="xfacturi"
-                            onClick={() => setView('invoices')}
+                            onClick={() => setMenuView('invoices')}
                         />
                     </li>
 
                     <li className="m-4 mt-8">
                         <LinkButton
                             text="despre xfactura.ro"
-                            onClick={() => setView('about')}
+                            onClick={() => setMenuView('about')}
                         />
                     </li>
                     <li className="m-4">
                         <LinkButton
                             text="acte inteligente"
-                            onClick={() => setView('ai')}
+                            onClick={() => setMenuView('ai')}
                         />
                     </li>
                     <li className="m-4">
                         <LinkButton
                             text="setări"
-                            onClick={() => setView('settings')}
+                            onClick={() => setMenuView('settings')}
                         />
                     </li>
 
@@ -266,7 +237,11 @@ export default function Menu() {
 
             {showMenu && (
                 <div
-                    className={`${showBgBlack ? 'bg-black': 'animate-fadeIn backdrop-blur-md'} fixed z-40 top-0 h-screen right-0 left-0 botom-0 grid place-items-center text-center`}
+                    className={`
+                        ${showBgBlack ? 'bg-black': 'animate-fadeIn backdrop-blur-md'}
+                        fixed z-40 top-0 h-screen right-0 left-0 botom-0
+                        grid place-items-center text-center
+                    `}
                 >
                     <div
                         className="max-w-xl p-4"

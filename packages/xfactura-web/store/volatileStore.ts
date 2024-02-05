@@ -1,0 +1,35 @@
+import { create } from 'zustand';
+import { devtools } from 'zustand/middleware';
+import { immer } from 'zustand/middleware/immer';
+
+// Required for zustand.
+import type { } from '@redux-devtools/extension';
+
+
+
+export type MenuView = 'general' | 'about' | 'ai' | 'companies' | 'inventory' | 'invoices' | 'settings';
+
+
+export interface VolatileState {
+    showMenu: boolean;
+    setShowMenu: (showMenu: boolean) => void;
+    menuView: MenuView;
+    setMenuView: (view: MenuView) => void;
+}
+
+
+const volatileStore = create<VolatileState>()(
+    devtools(
+    immer(
+        (set) => ({
+            showMenu: true,
+            setShowMenu: (showMenu: boolean) => set({ showMenu }),
+            menuView: 'general',
+            setMenuView: (menuView: MenuView) => set({ menuView }),
+        }),
+    ),
+    ),
+);
+
+
+export default volatileStore;
