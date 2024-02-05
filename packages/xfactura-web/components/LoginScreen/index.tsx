@@ -72,12 +72,12 @@ export default function LoginScreen({
     });
 
 
-    const appleSuccessLogin = () => {
-        atLoginSuccess();
-    }
-    const appleErrorLogin = () => {
-        console.log('Login Failed');
-    }
+    // const appleSuccessLogin = () => {
+    //     atLoginSuccess();
+    // }
+    // const appleErrorLogin = () => {
+    //     console.log('Login Failed');
+    // }
     // #endregion handlers
 
 
@@ -99,13 +99,13 @@ export default function LoginScreen({
                 icon="/assets/google-logo.png"
             />
 
-            <LinkButton
+            {/* <LinkButton
                 text="logare prin Apple"
                 onClick={() => {
                     appleSuccessLogin();
                 }}
                 icon="/assets/apple-logo.png"
-            />
+            /> */}
 
             <LinkButton
                 text="înapoi"
