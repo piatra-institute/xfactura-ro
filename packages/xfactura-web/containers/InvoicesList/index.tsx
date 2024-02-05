@@ -1,10 +1,8 @@
-import {
-    Invoice,
-} from '@/data';
-
 import SearchableList from '@/components/SearchableList';
 
-import useStore from '@/store';
+import useStore, {
+    useVolatileStore,
+} from '@/store';
 
 
 
@@ -17,17 +15,20 @@ export default function InvoicesList({
         invoices,
     } = useStore();
 
-
-    const editInvoice = (invoice: Invoice) => {
-
-    }
+    const {
+        setMenuView,
+        setEditID,
+    } = useVolatileStore();
 
     return (
         <SearchableList
             name="facturi"
             noItemText="nici o factură"
             data={Object.values(invoices)}
-            editItem={editInvoice}
+            editItem={(invoice) => {
+                setEditID(invoice.id);
+                setMenuView('edit-invoice');
+            }}
             getItemID={(invoice) => invoice.id}
             getItemName={(invoice) => invoice.metadata.number}
             checkItemFilter={(invoice, search) => {

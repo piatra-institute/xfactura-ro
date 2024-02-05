@@ -1,6 +1,7 @@
 import {
     InvoiceLine,
     Metadata,
+    Inventory,
 } from './interfaces';
 
 
@@ -47,6 +48,19 @@ export const emptyMetadata: Metadata = {
     currency: 'RON',
     issueDate: Date.now(),
     dueDate: Date.now(),
+};
+
+
+export const emptyInventory: Inventory = {
+    id: '',
+    unit: 'buc',
+    belongsTo: '',
+    history: [],
+    leftInStock: 0,
+    name: '',
+    price: 1,
+    vatRate: 19,
+    vatIncluded: false,
 };
 
 

@@ -10,8 +10,8 @@ import type { } from '@redux-devtools/extension';
 export type MenuView =
     | 'general' | 'about' | 'ai'
     | 'companies' | 'edit-company'
-    | 'inventory'
-    | 'invoices'
+    | 'inventory' | 'edit-inventory'
+    | 'invoices' | 'edit-invoice'
     | 'settings';
 
 

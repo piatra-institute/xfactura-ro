@@ -17,6 +17,7 @@ import {
 
 import MenuBack from '@/components/MenuBack';
 import Subtitle from '@/components/Subtitle';
+import PureButton from '@/components/PureButton';
 import Input from '@/components/Input';
 
 
@@ -30,6 +31,8 @@ export default function SearchableList<T extends object>({
     getItemName,
     checkItemFilter,
     back,
+    addNewItem,
+    addNewItemText,
 } : {
     name: string;
     noItemText: string;
@@ -39,6 +42,8 @@ export default function SearchableList<T extends object>({
     getItemName: (item: T) => string;
     checkItemFilter: (item: T, search: string) => boolean;
     back: () => void;
+    addNewItem?: () => void;
+    addNewItemText?: string;
 }) {
     const [
         search,
@@ -140,6 +145,13 @@ export default function SearchableList<T extends object>({
                     </>
                 )}
             </div>
+
+            {addNewItem && (
+                <PureButton
+                    text={addNewItemText || 'adaugă'}
+                    atClick={addNewItem}
+                />
+            )}
 
             <MenuBack
                 back={back}

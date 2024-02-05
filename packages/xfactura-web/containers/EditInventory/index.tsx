@@ -3,12 +3,12 @@ import {
 } from 'react';
 
 import {
-    Company,
+    Inventory,
 } from '@/data';
 
 import Subtitle from '@/components/Subtitle';
+import InventoryItem from '@/components/InventoryItem';
 import MenuBack from '@/components/MenuBack';
-import Party from '@/components/Party';
 import PureButton from '@/components/PureButton';
 import Deleter from '@/components/Deleter';
 
@@ -18,15 +18,15 @@ import useStore, {
 
 
 
-export default function EditCompany({
+export default function EditInventory({
     back,
 } : {
     back: () => void;
 }) {
     const {
-        companies,
-        addCompany,
-        removeCompany,
+        inventory,
+        addInventory,
+        removeInventory,
     } = useStore();
 
     const {
@@ -35,18 +35,18 @@ export default function EditCompany({
     } = useVolatileStore();
 
     const [
-        company,
-        setCompany,
-    ] = useState<Company | null>(
-        companies[editID] || null,
+        inventoryItem,
+        setInventoryItem,
+    ] = useState<Inventory | null>(
+        inventory[editID] || null,
     );
 
 
-    if (!company) {
+    if (!inventoryItem) {
         return (
             <div>
                 <div>
-                    compania {editID} nu a fost găsită
+                    stocul nu a fost găsit
                 </div>
 
                 <MenuBack
@@ -59,37 +59,36 @@ export default function EditCompany({
     return (
         <div>
             <Subtitle
-                text="editare companie"
+                text="editare stoc"
                 centered={true}
             />
 
-            <Party
-                kind="seller"
-                title=""
-                data={company}
-                setParty={setCompany}
-                styleless={true}
+            <InventoryItem
+                data={inventoryItem}
+                atChange={(newInventoryItem) => {
+                    setInventoryItem(newInventoryItem);
+                }}
             />
 
             <PureButton
                 text="salvare"
                 atClick={() => {
-                    addCompany(company);
-                    setMenuView('companies');
+                    addInventory(inventoryItem);
+                    setMenuView('inventory');
                 }}
             />
 
             <Deleter
                 title="ștergere"
                 atDelete={() => {
-                    removeCompany(company.vatNumber);
-                    setMenuView('companies');
+                    removeInventory(inventoryItem.id);
+                    setMenuView('inventory');
                 }}
             />
 
             <MenuBack
                 back={() => {
-                    setMenuView('companies');
+                    setMenuView('inventory');
                 }}
             />
         </div>

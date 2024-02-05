@@ -1,7 +1,3 @@
-import {
-    Company,
-} from '@/data';
-
 import SearchableList from '@/components/SearchableList';
 
 import useStore, {
@@ -29,7 +25,7 @@ export default function CompaniesList({
             name="companii"
             noItemText="nici o companie"
             data={Object.values(companies)}
-            editItem={(company: Company) => {
+            editItem={(company) => {
                 setEditID(company.vatNumber);
                 setMenuView('edit-company');
             }}
