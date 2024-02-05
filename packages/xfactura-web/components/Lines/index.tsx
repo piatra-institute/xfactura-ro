@@ -1,20 +1,15 @@
-import {
-    Dispatch,
-    SetStateAction,
-} from 'react';
-
-import Line from '../../components/Line';
-import LinkButton from '../../components/LinkButton';
-import Subtitle from '../../components/Subtitle';
+import Line from '@/components/Line';
+import LinkButton from '@/components/LinkButton';
+import Subtitle from '@/components/Subtitle';
 
 import {
     InvoiceLine,
-} from '../../data';
+} from '@/data';
 
 import {
     formatNumber,
     financial,
-} from '../../logic/utilities';
+} from '@/logic/utilities';
 
 
 

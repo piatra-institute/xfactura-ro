@@ -46,11 +46,13 @@ export default function Input({
                 ${asGrid ? 'lg:grid' : 'lg:flex'}
             `)}
         >
-            <div
-                className="select-none"
-            >
-                {text}
-            </div>
+            {text && (
+                <div
+                    className="select-none"
+                >
+                    {text}
+                </div>
+            )}
 
             <input
                 className={styleTrim(`
@@ -63,15 +65,15 @@ export default function Input({
                 onChange={(event) => {
                     setValue(event.target.value);
                 }}
-                style={{
-                    width,
-                }}
                 type={type}
                 disabled={disabled}
                 spellCheck={false}
                 autoCapitalize="off"
                 autoCorrect="off"
                 autoComplete="off"
+                style={{
+                    width,
+                }}
                 {...inputProps}
             />
 
