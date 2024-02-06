@@ -5,6 +5,17 @@ import { immer } from 'zustand/middleware/immer';
 // Required for zustand.
 import type { } from '@redux-devtools/extension';
 
+import {
+    Company,
+    Invoice,
+    Metadata,
+    InvoiceLine,
+
+    company,
+    emptyInvoiceLine,
+    emptyMetadata,
+} from '@/data';
+
 
 
 export type MenuView =
@@ -16,6 +27,24 @@ export type MenuView =
 
 
 export interface VolatileState {
+    showLoading: boolean;
+    setShowLoading: (loading: boolean) => void;
+
+    hasMediaDevices: boolean;
+    setHasMediaDevices: (hasMediaDevices: boolean) => void;
+
+    showCamera: boolean;
+    setShowCamera: (showCamera: boolean) => void;
+
+    showMicrophone: boolean;
+    setShowMicrophone: (showMicrophone: boolean) => void;
+
+    newInvoice: Invoice;
+    setNewInvoiceSeller: (seller: Company) => void;
+    setNewInvoiceBuyer: (seller: Company) => void;
+    setNewInvoiceMetadata: (metadata: Metadata) => void;
+    setNewInvoiceLines: (lines: InvoiceLine[]) => void;
+
     showMenu: boolean;
     setShowMenu: (showMenu: boolean) => void;
     menuView: MenuView;
@@ -29,6 +58,40 @@ const useVolatileStore = create<VolatileState>()(
     devtools(
     immer(
         (set) => ({
+            showLoading: false,
+            setShowLoading: (showLoading: boolean) => set({ showLoading }),
+
+            hasMediaDevices: true,
+            setHasMediaDevices: (hasMediaDevices: boolean) => set({ hasMediaDevices }),
+
+            showCamera: false,
+            setShowCamera: (showCamera: boolean) => set({ showCamera }),
+
+            showMicrophone: false,
+            setShowMicrophone: (showMicrophone: boolean) => set({ showMicrophone }),
+
+            newInvoice: {
+                id: '',
+                seller: {...company},
+                buyer: {...company},
+                metadata: {...emptyMetadata},
+                products: [
+                    {...emptyInvoiceLine},
+                ],
+            },
+            setNewInvoiceSeller: (seller: Company) => set((state) => {
+                state.newInvoice.seller = seller;
+            }),
+            setNewInvoiceBuyer: (buyer: Company) => set((state) => {
+                state.newInvoice.buyer = buyer;
+            }),
+            setNewInvoiceMetadata: (metadata: Metadata) => set((state) => {
+                state.newInvoice.metadata = metadata;
+            }),
+            setNewInvoiceLines: (lines: InvoiceLine[]) => set((state) => {
+                state.newInvoice.products = lines;
+            }),
+
             showMenu: true,
             setShowMenu: (showMenu: boolean) => set({ showMenu }),
             menuView: 'general',

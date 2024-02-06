@@ -43,7 +43,9 @@ import {
     logicCamera,
 } from '@/logic/camera';
 
-import useStore from '@/store';
+import useStore, {
+    useVolatileStore,
+} from '@/store';
 
 
 
@@ -54,6 +56,10 @@ export default function Home() {
 
 
     // #region state
+    const {
+        generateEinvoiceLocally,
+    } = useStore();
+
     const {
         showLoading,
         setShowLoading,
@@ -72,9 +78,7 @@ export default function Home() {
         setNewInvoiceBuyer,
         setNewInvoiceMetadata,
         setNewInvoiceLines,
-
-        generateEinvoiceLocally,
-    } = useStore();
+    } = useVolatileStore();
     // #endregion state
 
 
@@ -228,6 +232,30 @@ export default function Home() {
         // Let effect run only once.
         // eslint-disable-next-line
     }, []);
+
+    useEffect(() => {
+        if (newInvoice.buyer.name === ''
+            || newInvoice.products.every((product) => product.name === '')
+        ) {
+            return;
+        }
+
+        const beforeUnloadHandler = (event: Event) => {
+            // Recommended
+            event.preventDefault();
+            // Included for legacy support, e.g. Chrome/Edge < 119
+            event.returnValue = true;
+        };
+
+        window.addEventListener('beforeunload', beforeUnloadHandler);
+
+        return () => {
+            window.removeEventListener('beforeunload', beforeUnloadHandler);
+        }
+    }, [
+        newInvoice.buyer.name,
+        newInvoice.products,
+    ]);
     // #endregion effects
 
 

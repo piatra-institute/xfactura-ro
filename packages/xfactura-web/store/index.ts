@@ -10,12 +10,6 @@ import {
     Company,
     Invoice,
     Inventory,
-    Metadata,
-    InvoiceLine,
-
-    company,
-    emptyInvoiceLine,
-    emptyMetadata,
 } from '@/data';
 
 import useVolatileStore from './volatileStore';
@@ -56,24 +50,6 @@ export interface State {
         inventory: Record<string, Inventory>;
     }) => void;
     obliterate: () => void;
-
-    showLoading: boolean;
-    setShowLoading: (loading: boolean) => void;
-
-    hasMediaDevices: boolean;
-    setHasMediaDevices: (hasMediaDevices: boolean) => void;
-
-    showCamera: boolean;
-    setShowCamera: (showCamera: boolean) => void;
-
-    showMicrophone: boolean;
-    setShowMicrophone: (showMicrophone: boolean) => void;
-
-    newInvoice: Invoice;
-    setNewInvoiceSeller: (seller: Company) => void;
-    setNewInvoiceBuyer: (seller: Company) => void;
-    setNewInvoiceMetadata: (metadata: Metadata) => void;
-    setNewInvoiceLines: (lines: InvoiceLine[]) => void;
 }
 
 
@@ -84,7 +60,7 @@ const useStore = create<State>()(
         (set) => ({
             user: null,
             setUser: (user: User | null) => set({ user }),
-            usingLocalStorage: false,
+            usingLocalStorage: true,
             toggleUsingLocalStorage: () => set((state) => ({ usingLocalStorage: !state.usingLocalStorage })),
             generateEinvoiceLocally: false,
             toggleGenerateEinvoiceLocally: () => set((state) => ({ generateEinvoiceLocally: !state.generateEinvoiceLocally })),
@@ -162,40 +138,6 @@ const useStore = create<State>()(
                 invoices: {},
                 inventory: {},
             })),
-
-            showLoading: false,
-            setShowLoading: (showLoading: boolean) => set({ showLoading }),
-
-            hasMediaDevices: true,
-            setHasMediaDevices: (hasMediaDevices: boolean) => set({ hasMediaDevices }),
-
-            showCamera: false,
-            setShowCamera: (showCamera: boolean) => set({ showCamera }),
-
-            showMicrophone: false,
-            setShowMicrophone: (showMicrophone: boolean) => set({ showMicrophone }),
-
-            newInvoice: {
-                id: '',
-                seller: {...company},
-                buyer: {...company},
-                metadata: {...emptyMetadata},
-                products: [
-                    {...emptyInvoiceLine},
-                ],
-            },
-            setNewInvoiceSeller: (seller: Company) => set((state) => {
-                state.newInvoice.seller = seller;
-            }),
-            setNewInvoiceBuyer: (buyer: Company) => set((state) => {
-                state.newInvoice.buyer = buyer;
-            }),
-            setNewInvoiceMetadata: (metadata: Metadata) => set((state) => {
-                state.newInvoice.metadata = metadata;
-            }),
-            setNewInvoiceLines: (lines: InvoiceLine[]) => set((state) => {
-                state.newInvoice.products = lines;
-            }),
         }),
     ),
         {

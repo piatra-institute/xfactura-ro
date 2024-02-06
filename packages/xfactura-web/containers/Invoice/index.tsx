@@ -24,19 +24,15 @@ import {
     seriesParser,
 } from '@/logic/series';
 
-import useStore from '@/store';
+import useStore, {
+    useVolatileStore,
+} from '@/store';
 
 
 
 export default function Home() {
     // #region state
     const {
-        newInvoice,
-        setNewInvoiceSeller,
-        setNewInvoiceBuyer,
-        setNewInvoiceMetadata,
-        setNewInvoiceLines,
-
         generateEinvoiceLocally,
 
         lastInvoiceSeries,
@@ -44,6 +40,14 @@ export default function Home() {
 
         addInvoice,
     } = useStore();
+
+    const {
+        newInvoice,
+        setNewInvoiceSeller,
+        setNewInvoiceBuyer,
+        setNewInvoiceMetadata,
+        setNewInvoiceLines,
+    } = useVolatileStore();
     // #endregion state
 
 

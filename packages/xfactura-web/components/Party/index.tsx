@@ -72,6 +72,25 @@ export default function Party({
 
 
     // #region handlers
+    const checkLocalCompany = (
+        value: string,
+    ) => {
+        const vatNumber = verifyInputVatNumber(value);
+        const companyData = companies['RO' + vatNumber];
+
+        if (usingLocalStorage
+            && companyData
+            && verifyPartyData(companyData)
+        ) {
+            setParty(companyData);
+            setUsingLocalData(true);
+            setLoadingVatNumber(false);
+            return true;
+        }
+
+        return false;
+    }
+
     const checkVatNumber = useDebouncedCallback(async (
         value: string,
     ) => {
@@ -82,18 +101,10 @@ export default function Party({
             }
 
             const vatNumber = verifyInputVatNumber(value);
-            if (usingLocalStorage && companies[vatNumber]) {
-                const companyData = companies[vatNumber];
-                if (companyData && verifyPartyData(companyData)) {
-                    setParty(companyData);
-                    setUsingLocalData(true);
-                    setLoadingVatNumber(false);
-                    return;
-                }
-            }
 
             setLoadingVatNumber(true);
             const request: any = await getCompanyDetails(vatNumber);
+            console.log('request');
             setLoadingVatNumber(false);
             if (request && request.status) {
                 if (usingLocalData) {
@@ -153,7 +164,10 @@ export default function Party({
                 });
 
                 setLoadingVatNumber(true);
-                checkVatNumber(value);
+                const local = checkLocalCompany(value);
+                if (!local) {
+                    checkVatNumber(value);
+                }
                 return;
             }
 
@@ -167,6 +181,7 @@ export default function Party({
 
 
     // #region effects
+    /** Add company */
     useEffect(() => {
         if (verifyPartyData(data)) {
             addCompany(
@@ -178,6 +193,7 @@ export default function Party({
         addCompany,
     ]);
 
+    /** Default seller */
     useEffect(() => {
         if (kind === 'seller' && verifyPartyData(data)) {
             setDefaultSeller(data.vatNumber);
@@ -188,6 +204,7 @@ export default function Party({
         setDefaultSeller,
     ]);
 
+    /** Seller */
     useEffect(() => {
         if (
             kind === 'seller'
@@ -211,13 +228,19 @@ export default function Party({
         setParty,
     ]);
 
+    /** Check VAT */
     useEffect(() => {
+        if (usingLocalData) {
+            return;
+        }
+
         if (data.vatNumber.length > 5) {
             checkVatNumber(data.vatNumber);
         }
     }, [
         data.vatNumber,
         checkVatNumber,
+        usingLocalData,
     ]);
     // #endregion effects
 
