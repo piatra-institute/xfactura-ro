@@ -53,13 +53,13 @@ export default function InventoryList({
                 return (
                     <>
                         <div
-                            className="select-all"
+                            className="select-all text-left"
                         >
                             {inventory.name || 'stoc nou'} ({inventory.leftInStock} {inventory.unit})
                         </div>
 
                         <div
-                            className="select-all"
+                            className="select-all text-right"
                         >
                             {inventory.price} {inventory.currency}
                         </div>
