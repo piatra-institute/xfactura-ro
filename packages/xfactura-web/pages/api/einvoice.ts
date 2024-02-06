@@ -11,11 +11,11 @@ import type {
 
 import {
     ResponseData,
-} from '../../data';
+} from '@/data';
 
 import {
     logger,
-} from '../../logic/utilities';
+} from '@/logic/utilities';
 
 
 
@@ -32,23 +32,29 @@ class PHPRunner {
             return;
         }
 
-        this.php = await NodePHP.load('8.0', {
-            requestHandler: {
-                documentRoot: '/srv',
-                absoluteUrl: 'http://localhost:3001',
-            },
-        });
+        try {
+            this.php = await NodePHP.load('8.0', {
+                requestHandler: {
+                    documentRoot: '/srv',
+                    absoluteUrl: 'http://localhost:3001',
+                },
+            });
 
-        this.php.mkdir('/srv');
-        this.php.chdir('/srv');
+            this.php.mkdir('/srv');
+            this.php.chdir('/srv');
 
-        this.php.mount(
-            path.join(
-                process.cwd(),
-                '/node-php',
-            ),
-            '/srv',
-        );
+            this.php.mount(
+                path.join(
+                    process.cwd(),
+                    '/node-php',
+                ),
+                '/srv',
+            );
+        } catch (error) {
+            logger('error', error);
+
+            return;
+        }
     }
 
     public async request(
@@ -58,11 +64,17 @@ class PHPRunner {
             return;
         }
 
-        return await this.php.request({
-            method: 'POST',
-            url: '/run.php',
-            body,
-        });
+        try {
+            return await this.php.request({
+                method: 'POST',
+                url: '/run.php',
+                body,
+            });
+        } catch (error) {
+            logger('error', error);
+
+            return;
+        }
     }
 }
 

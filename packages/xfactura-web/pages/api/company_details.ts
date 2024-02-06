@@ -5,15 +5,15 @@ import type {
 
 import {
     ResponseData,
-} from '../../data';
+} from '@/data';
 
 import {
     verifyInputVatNumber,
-} from '../../logic/validation';
+} from '@/logic/validation';
 
 import {
     logger,
-} from '../../logic/utilities';
+} from '@/logic/utilities';
 
 
 
