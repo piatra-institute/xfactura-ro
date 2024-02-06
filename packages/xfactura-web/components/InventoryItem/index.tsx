@@ -3,6 +3,7 @@ import {
 } from '@/data';
 
 import Input from '@/components/Input';
+import Toggle from '@/components/Toggle';
 
 import {
     formatNumber,
@@ -34,12 +35,26 @@ export default function InventoryItem({
             return '';
         }
 
+        if (vatIncluded) {
+            return formatNumber(
+                price * leftInStock / (1 + vatRate / 100),
+                currency,
+            );
+        }
+
         return formatNumber(price * leftInStock, currency);
     }
 
     const computeVAT = () => {
         if (!price || !leftInStock || !vatRate) {
             return '';
+        }
+
+        if (vatIncluded) {
+            return formatNumber(
+                (price * leftInStock) - (price * leftInStock / (1 + vatRate / 100)),
+                currency,
+            );
         }
 
         return formatNumber(
@@ -51,6 +66,13 @@ export default function InventoryItem({
     const computeTotal = () => {
         if (!price || !leftInStock || !vatRate) {
             return '';
+        }
+
+        if (vatIncluded) {
+            return formatNumber(
+                price * leftInStock,
+                currency,
+            );
         }
 
         return formatNumber(
@@ -68,7 +90,7 @@ export default function InventoryItem({
                 setValue={(name) => {
                     atChange({
                         ...data,
-                        name,
+                        name: name.trim(),
                     });
                 }}
             />
@@ -109,7 +131,7 @@ export default function InventoryItem({
                 setValue={(unit) => {
                     atChange({
                         ...data,
-                        unit,
+                        unit: unit.trim(),
                     });
                 }}
             />
@@ -120,7 +142,7 @@ export default function InventoryItem({
                 setValue={(currency) => {
                     atChange({
                         ...data,
-                        currency,
+                        currency: currency.trim(),
                     });
                 }}
             />
@@ -139,6 +161,21 @@ export default function InventoryItem({
                     min: 0,
                 }}
             />
+
+            <div
+                className="my-4"
+            >
+                <Toggle
+                    text="TVA inclus"
+                    value={vatIncluded}
+                    toggle={() => {
+                        atChange({
+                            ...data,
+                            vatIncluded: !vatIncluded,
+                        });
+                    }}
+                />
+            </div>
 
             <Input
                 text="valoare"
