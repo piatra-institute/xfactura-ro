@@ -10,7 +10,7 @@ export default function About({
 }) {
     return (
         <div
-            className="text-left"
+            className="max-w-xl p-4 text-left"
         >
             <Subtitle
                 text="despre xfactura.ro"

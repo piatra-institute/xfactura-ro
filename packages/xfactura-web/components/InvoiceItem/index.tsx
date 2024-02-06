@@ -5,6 +5,9 @@ import {
 
 import {
     Invoice,
+    Company,
+    Metadata as IMetadata,
+    InvoiceLine,
 
     emptyInvoiceLine,
 } from '@/data';
@@ -33,14 +36,17 @@ export default function InvoiceItem({
     generateEinvoice,
 }: {
     data: Invoice;
-    updateSeller: (data: any) => void;
-    updateBuyer: (data: any) => void;
-    updateMetadata: (data: any) => void;
+    updateSeller: (data: Company) => void;
+    updateBuyer: (data: Company) => void;
+    updateMetadata: (
+        type: keyof IMetadata,
+        value: string | number,
+    ) => void;
     updateDate: (
         kind: 'issueDate' | 'dueDate',
         timestamp: number,
     ) => void;
-    updateProducts: (data: any) => void;
+    updateProducts: (data: InvoiceLine[]) => void;
     generateEinvoice: (
         setLoadingEInvoice: (value: boolean) => void,
     ) => void;

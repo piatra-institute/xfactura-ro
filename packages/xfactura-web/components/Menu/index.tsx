@@ -12,6 +12,7 @@ import EditCompany from '@/containers/EditCompany';
 import InventoryList from '@/containers/InventoryList';
 import EditInventory from '@/containers/EditInventory';
 import InvoicesList from '@/containers/InvoicesList';
+import EditInvoice from '@/containers/EditInvoice';
 import About from '@/containers/About';
 import AI from '@/containers/AI';
 import Settings from '@/containers/Settings';
@@ -177,6 +178,13 @@ export default function Menu() {
                 />
             );
             break;
+        case 'edit-invoice':
+            viewElement = (
+                <EditInvoice
+                    back={() => setMenuView('general')}
+                />
+            );
+            break;
         case 'about':
             viewElement = (
                 <About
@@ -200,6 +208,9 @@ export default function Menu() {
             break;
         case 'general':
             viewElement = (
+                <div
+                    className="max-w-xl p-4"
+                >
                 <ul>
                     <li className="m-4">
                         <LinkButton
@@ -285,6 +296,7 @@ export default function Menu() {
                         />
                     )}
                 </ul>
+                </div>
             );
             break;
     }
@@ -304,11 +316,7 @@ export default function Menu() {
                         grid place-items-center text-center
                     `)}
                 >
-                    <div
-                        className="max-w-xl p-4"
-                    >
-                        {viewElement}
-                    </div>
+                    {viewElement}
                 </div>
             )}
         </>

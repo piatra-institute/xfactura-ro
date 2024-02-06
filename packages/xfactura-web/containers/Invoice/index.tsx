@@ -201,7 +201,7 @@ export default function Home() {
                 data={newInvoice}
                 updateSeller={setNewInvoiceSeller}
                 updateBuyer={setNewInvoiceBuyer}
-                updateMetadata={setNewInvoiceMetadata}
+                updateMetadata={updateMetadata}
                 updateDate={updateDate}
                 updateProducts={setNewInvoiceLines}
                 generateEinvoice={generateEinvoice}
