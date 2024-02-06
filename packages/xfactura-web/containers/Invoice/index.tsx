@@ -1,7 +1,6 @@
 'use client';
 
 import {
-    useState,
     useEffect,
 } from 'react';
 
@@ -14,12 +13,8 @@ import {
     Metadata as IMetadata,
 } from '@/data';
 
-import Party from '@/components/Party';
-import Lines from '@/components/Lines';
 import Deleter from '@/components/Deleter';
-import GenerateButton from '@/components/GenerateButton';
-
-import Metadata from '@/containers/Metadata';
+import InvoiceItem from '@/components/InvoiceItem';
 
 import webContainerRunner from '@/logic/node-php';
 
@@ -29,9 +24,6 @@ import {
 } from '@/logic/utilities';
 
 import {
-    checkValidParty,
-    checkValidLine,
-    checkValidMetadata,
     normalizeUserCountry,
     normalizeUserCounty,
     normalizeUserCity,
@@ -66,16 +58,6 @@ export default function Home() {
 
         addInvoice,
     } = useStore();
-
-    const [
-        loadingEInvoice,
-        setLoadingEInvoice,
-    ] = useState(false);
-
-    const [
-        validData,
-        setValidData,
-    ] = useState(false);
     // #endregion state
 
 
@@ -97,14 +79,9 @@ export default function Home() {
         updateMetadata(kind, timestamp);
     }
 
-    const addNewLine = () => {
-        setNewInvoiceLines([
-            ...newInvoice.products,
-            emptyInvoiceLine,
-        ]);
-    }
-
-    const generateEinvoice = async () => {
+    const generateEinvoice = async (
+        setLoadingEInvoice: (value: boolean) => void,
+    ) => {
         setLoadingEInvoice(true);
 
         const invoice = {
@@ -200,29 +177,6 @@ export default function Home() {
 
 
     // #region effects
-    /** valid data */
-    useEffect(() => {
-        const validSeller = checkValidParty(newInvoice.seller);
-        const validBuyer = checkValidParty(newInvoice.buyer);
-        const validMetadata = checkValidMetadata(newInvoice.metadata);
-        const validLines = newInvoice.products.every(checkValidLine);
-
-        const validData = (
-            validSeller &&
-            validBuyer &&
-            validMetadata &&
-            validLines
-        );
-
-        setValidData(validData);
-    }, [
-        newInvoice,
-        newInvoice.seller,
-        newInvoice.buyer,
-        newInvoice.metadata,
-        newInvoice.products,
-    ]);
-
     /** series */
     useEffect(() => {
         const seriesData = seriesParser(lastInvoiceSeries);
@@ -243,40 +197,13 @@ export default function Home() {
 
     return (
         <>
-            <div
-                className="grid items-center justify-center md:flex m-auto"
-            >
-                <Party
-                    kind="seller"
-                    title="furnizor"
-                    data={newInvoice.seller}
-                    setParty={setNewInvoiceSeller}
-                />
-
-                <Party
-                    kind="buyer"
-                    title="cumpărător"
-                    data={newInvoice.buyer}
-                    setParty={setNewInvoiceBuyer}
-                />
-            </div>
-
-            <Metadata
-                metadata={newInvoice.metadata}
-                updateMetadata={updateMetadata}
+            <InvoiceItem
+                data={newInvoice}
+                updateSeller={setNewInvoiceSeller}
+                updateBuyer={setNewInvoiceBuyer}
+                updateMetadata={setNewInvoiceMetadata}
                 updateDate={updateDate}
-            />
-
-            <Lines
-                data={newInvoice.products}
-                setLines={setNewInvoiceLines}
-                addNewLine={addNewLine}
-                currency={newInvoice.metadata.currency}
-            />
-
-            <GenerateButton
-                loadingEInvoice={loadingEInvoice}
-                validData={validData}
+                updateProducts={setNewInvoiceLines}
                 generateEinvoice={generateEinvoice}
             />
 
