@@ -57,7 +57,9 @@ export default function EditInventory({
     }
 
     return (
-        <div>
+        <div
+            className="scrollable-view overflow-auto h-[calc(100vh-4rem)]"
+        >
             <Subtitle
                 text="editare stoc"
                 centered={true}

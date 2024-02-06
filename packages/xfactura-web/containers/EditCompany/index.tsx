@@ -57,7 +57,9 @@ export default function EditCompany({
     }
 
     return (
-        <div>
+        <div
+            className="scrollable-view overflow-auto h-[calc(100vh-4rem)]"
+        >
             <Subtitle
                 text="editare companie"
                 centered={true}
