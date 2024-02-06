@@ -16,6 +16,10 @@ import useStore, {
     useVolatileStore,
 } from '@/store';
 
+import {
+    generateEinvoice,
+} from '@/logic/einvoice';
+
 
 
 export default function EditInvoice({
@@ -27,6 +31,8 @@ export default function EditInvoice({
         invoices,
         addInvoice,
         removeInvoice,
+
+        generateEinvoiceLocally,
     } = useStore();
 
     const {
@@ -103,7 +109,14 @@ export default function EditInvoice({
                         products: data,
                     });
                 }}
-                generateEinvoice={() => {
+                generateEinvoice={(
+                    setLoadingEInvoice,
+                ) => {
+                    generateEinvoice(
+                        setLoadingEInvoice,
+                        invoiceItem,
+                        generateEinvoiceLocally,
+                    );
                 }}
             />
 
