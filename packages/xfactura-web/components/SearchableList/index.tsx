@@ -97,7 +97,7 @@ export default function SearchableList<T extends object>({
 
             <div
                 // FIX scroll
-                className="h-[350px] mt-8 flex flex-col overflow-auto"
+                className="h-[350px] mt-8 flex flex-col overflow-auto scrollable-view"
             >
                 {filteredData.length === 0 ? (
                     <>

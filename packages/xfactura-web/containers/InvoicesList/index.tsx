@@ -1,4 +1,5 @@
 import SearchableList from '@/components/SearchableList';
+import TooltipQuestion from '@/components/TooltipQuestion';
 
 import useStore, {
     useVolatileStore,
@@ -30,7 +31,31 @@ export default function InvoicesList({
                 setMenuView('edit-invoice');
             }}
             getItemID={(invoice) => invoice.id}
-            getItemName={(invoice) => invoice.metadata.number}
+            getItemName={(invoice) => {
+                return (
+                    <>
+                        <div>
+                            {new Date(invoice.metadata.dueDate).toLocaleDateString()} · {invoice.metadata.number}
+                        </div>
+
+                        <TooltipQuestion
+                            content={(
+                                <div
+                                    className="text-left"
+                                >
+                                    <div>
+                                        {invoice.seller.name}
+                                    </div>
+
+                                    <div>
+                                        {invoice.buyer.name}
+                                    </div>
+                                </div>
+                            )}
+                        />
+                    </>
+                );
+            }}
             checkItemFilter={(invoice, search) => {
                 return (
                     invoice.buyer.name.toLowerCase().includes(search.toLowerCase()) ||

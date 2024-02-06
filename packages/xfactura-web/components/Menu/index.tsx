@@ -77,8 +77,32 @@ export default function Menu() {
 
     /** Keybinds */
     useEffect(() => {
+        const isEventWithinScrollableDiv = (event: Event) => {
+            try {
+                // HACK
+                let current = event.target as any;
+
+                while (current) {
+                    if (current.classList?.contains('scrollable-view')) {
+                        return true;
+                    }
+                    current = current.parentNode;
+                }
+
+                return false;
+            } catch (error) {
+                return false;
+            }
+        };
+
         const handleScroll = (event: Event) => {
             if (showMenu) {
+                const isScrollableDiv = isEventWithinScrollableDiv(event);
+                if (isScrollableDiv) {
+                    return;
+                }
+
+                // Prevent scroll otherwise.
                 event.preventDefault();
                 event.stopPropagation();
             }

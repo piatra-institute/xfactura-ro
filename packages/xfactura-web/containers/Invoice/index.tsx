@@ -134,8 +134,8 @@ export default function Home() {
 
         addInvoice({
             id: uuid(),
-            buyer: invoice.buyer,
             seller: invoice.seller,
+            buyer: invoice.buyer,
             metadata: newInvoice.metadata,
             products: invoice.lines,
         });
