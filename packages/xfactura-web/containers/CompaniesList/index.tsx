@@ -30,7 +30,23 @@ export default function CompaniesList({
                 setMenuView('edit-company');
             }}
             getItemID={(company) => company.vatNumber}
-            getItemName={(company) => company.name}
+            getItemName={(company) => {
+                return (
+                    <>
+                        <div
+                            className="select-all"
+                        >
+                            {company.vatNumber}
+                        </div>
+
+                        <div
+                            className="select-all"
+                        >
+                            {company.name}
+                        </div>
+                    </>
+                );
+            }}
             checkItemFilter={(company, search) => {
                 return (
                     company.vatNumber.toLowerCase().includes(search.toLowerCase()) ||

@@ -73,13 +73,14 @@ export interface Company {
 
 export interface Inventory {
     id: string;
+    belongsTo: string;
     name: string;
     price: number;
+    leftInStock: number;
     unit: string;
+    currency: string;
     vatRate: number;
     vatIncluded: boolean;
-    belongsTo: string;
-    leftInStock: number;
     history: InventoryHistory[];
 }
 

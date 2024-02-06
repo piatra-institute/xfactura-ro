@@ -40,6 +40,7 @@ export default function InventoryList({
                 const newInventory = {
                     ...emptyInventory,
                     id: uuid(),
+                    name: 'stoc nou',
                 };
 
                 addInventory(newInventory);
@@ -48,7 +49,23 @@ export default function InventoryList({
             }}
             addNewItemText="adaugă stoc nou"
             getItemID={(inventory) => inventory.id}
-            getItemName={(inventory) => inventory.name}
+            getItemName={(inventory) => {
+                return (
+                    <>
+                        <div
+                            className="select-all"
+                        >
+                            {inventory.name || 'stoc nou'} ({inventory.leftInStock} {inventory.unit})
+                        </div>
+
+                        <div
+                            className="select-all"
+                        >
+                            {inventory.price} {inventory.currency}
+                        </div>
+                    </>
+                );
+            }}
             checkItemFilter={(inventory, search) => {
                 return (
                     inventory.name.toLowerCase().includes(search.toLowerCase()) ||

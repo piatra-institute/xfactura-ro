@@ -39,7 +39,7 @@ export default function SearchableList<T extends object>({
     data: T[];
     editItem: (item: T) => void;
     getItemID: (item: T) => string;
-    getItemName: (item: T) => string;
+    getItemName: (item: T) => string | React.ReactNode;
     checkItemFilter: (item: T, search: string) => boolean;
     back: () => void;
     addNewItem?: () => void;
@@ -114,17 +114,7 @@ export default function SearchableList<T extends object>({
                                     <div
                                         className="flex justify-between items-center w-full gap-2"
                                     >
-                                        <div
-                                            className="select-all"
-                                        >
-                                            {getItemID(item)}
-                                        </div>
-
-                                        <div
-                                            className="select-all"
-                                        >
-                                            {getItemName(item)}
-                                        </div>
+                                        {getItemName(item)}
                                     </div>
 
                                     <button

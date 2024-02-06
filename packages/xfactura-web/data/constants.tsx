@@ -53,14 +53,15 @@ export const emptyMetadata: Metadata = {
 
 export const emptyInventory: Inventory = {
     id: '',
-    unit: 'buc',
     belongsTo: '',
-    history: [],
-    leftInStock: 0,
     name: '',
     price: 1,
+    leftInStock: 0,
+    unit: 'buc',
+    currency: 'RON',
     vatRate: 19,
     vatIncluded: false,
+    history: [],
 };
 
 
