@@ -5,6 +5,8 @@ import {
     useEffect,
 } from 'react';
 
+import { v4 as uuid } from 'uuid';
+
 import {
     company,
     emptyInvoiceLine,
@@ -61,6 +63,8 @@ export default function Home() {
 
         lastInvoiceSeries,
         setLastInvoiceSeries,
+
+        addInvoice,
     } = useStore();
 
     const [
@@ -128,6 +132,13 @@ export default function Home() {
             ],
         };
 
+        addInvoice({
+            id: uuid(),
+            buyer: invoice.buyer,
+            seller: invoice.seller,
+            metadata: newInvoice.metadata,
+            products: invoice.lines,
+        });
 
         const filename = `efactura-${newInvoice.metadata.number}-${newInvoice.seller.name}-${newInvoice.buyer.name}.xml`;
 
@@ -169,9 +180,17 @@ export default function Home() {
             ...company,
         });
 
-        setNewInvoiceMetadata({
-            ...emptyMetadata,
-        });
+        const seriesData = seriesParser(lastInvoiceSeries);
+        if (seriesData) {
+            setNewInvoiceMetadata({
+                ...newInvoice.metadata,
+                number: seriesData.nextSeries,
+            });
+        } else {
+            setNewInvoiceMetadata({
+                ...emptyMetadata,
+            });
+        }
 
         setNewInvoiceLines([{
             ...emptyInvoiceLine,
