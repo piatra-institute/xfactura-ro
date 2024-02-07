@@ -111,6 +111,11 @@ export default function Menu() {
 
         const handleEscape = (event: KeyboardEvent) => {
             if (event.key === 'Escape') {
+                if (menuView !== 'general') {
+                    setMenuView('general');
+                    return;
+                }
+
                 setShowMenu(false);
             }
         }
@@ -131,6 +136,8 @@ export default function Menu() {
     }, [
         showMenu,
         setShowMenu,
+        menuView,
+        setMenuView,
     ]);
 
     /** User */

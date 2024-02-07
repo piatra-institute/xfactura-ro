@@ -61,7 +61,7 @@ export default function LineMenu({
                 <div
                     className={styleTrim(`
                         z-30 absolute top-[40px] left-0 w-[220px] border
-                        backdrop-blur-md shadow-2xl p-4
+                        backdrop-blur-xl bg-black/60 shadow-2xl p-4
                         lg:right-0 lg:left-auto lg:top-[80px]
                     `)}
                 >
