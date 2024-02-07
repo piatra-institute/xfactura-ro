@@ -38,6 +38,7 @@ import {
 import {
     uploadFile,
     uploadAudio,
+    uploadText,
 } from '@/logic/requests';
 
 import {
@@ -106,6 +107,15 @@ export default function Home() {
     ) => {
         setShowLoading(true);
         const response = await uploadAudio(blob);
+        setShowLoading(false);
+        handleExtractedData(response);
+    }
+
+    const extractInvoiceFromText = async (
+        text: string,
+    ) => {
+        setShowLoading(true);
+        const response = await uploadText(text);
         setShowLoading(false);
         handleExtractedData(response);
     }
@@ -277,7 +287,9 @@ export default function Home() {
                     />
 
                     {showText && (
-                        <Text />
+                        <Text
+                            extractInvoiceFromText={extractInvoiceFromText}
+                        />
                     )}
 
                     {showCamera && (

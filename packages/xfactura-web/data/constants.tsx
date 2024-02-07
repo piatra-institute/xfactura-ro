@@ -129,11 +129,12 @@ export const ENVIRONMENT = {
 };
 
 
-export const COMPANY_DETAILS_API = `${ENVIRONMENT.X_DOMAIN}/api/company_details`;
-export const EINVOICE_API = `${ENVIRONMENT.X_DOMAIN}/api/einvoice`;
+export const COMPANY_DETAILS_API = ENVIRONMENT.X_DOMAIN + '/api/company_details';
+export const EINVOICE_API = ENVIRONMENT.X_DOMAIN + '/api/einvoice';
 
-export const UPLOAD_AUDIO_API = `${ENVIRONMENT.AI_DOMAIN}/upload_audio`;
-export const UPLOAD_FILE_API = `${ENVIRONMENT.AI_DOMAIN}/upload_file`;
+export const UPLOAD_AUDIO_API = ENVIRONMENT.AI_DOMAIN + '/upload_audio';
+export const UPLOAD_FILE_API = ENVIRONMENT.AI_DOMAIN + '/upload_file';
+export const UPLOAD_TEXT_API = ENVIRONMENT.AI_DOMAIN + '/upload_text';
 
 
 export const smartActsLabels = {

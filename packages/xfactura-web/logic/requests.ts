@@ -4,6 +4,7 @@ import {
     EINVOICE_API,
     UPLOAD_AUDIO_API,
     UPLOAD_FILE_API,
+    UPLOAD_TEXT_API,
 } from '../data';
 
 import {
@@ -112,6 +113,30 @@ export const uploadFile = async (
     return fetch(UPLOAD_FILE_API, {
         method: 'POST',
         body: formData,
+    })
+        .then((response) => {
+            return response.json();
+        })
+        .catch((error) => {
+            logger('error', error);
+        });
+}
+
+export const uploadText = async (
+    text: string,
+) => {
+    if (!ENVIRONMENT.AI_DOMAIN) {
+        return;
+    }
+
+    return fetch(UPLOAD_TEXT_API, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            text,
+        }),
     })
         .then((response) => {
             return response.json();

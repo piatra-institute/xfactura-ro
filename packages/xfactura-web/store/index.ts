@@ -50,6 +50,8 @@ export interface State {
         inventory: Record<string, Inventory>;
     }) => void;
     clearStore: () => void;
+
+    intelligentActs: (data: any) => void;
 }
 
 
@@ -144,6 +146,12 @@ const useStore = create<State>()(
                 invoices: {},
                 inventory: {},
             })),
+
+            intelligentActs: (data) => set(() => {
+                const store = useStore.getState();
+                const volatileStore = useVolatileStore.getState();
+                // ACT
+            }),
         }),
     ),
         {
