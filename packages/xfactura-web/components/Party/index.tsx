@@ -100,11 +100,14 @@ export default function Party({
                 return;
             }
 
+            if (verifyPartyData(data)) {
+                return;
+            }
+
             const vatNumber = verifyInputVatNumber(value);
 
             setLoadingVatNumber(true);
             const request: any = await getCompanyDetails(vatNumber);
-            console.log('request');
             setLoadingVatNumber(false);
             if (request && request.status) {
                 if (usingLocalData) {
@@ -183,24 +186,33 @@ export default function Party({
     // #region effects
     /** Add company */
     useEffect(() => {
-        if (verifyPartyData(data)) {
+        if (
+            verifyPartyData(data)
+            && !companies[data.vatNumber]
+        ) {
             addCompany(
                 data,
             );
         }
     }, [
         data,
+        companies,
         addCompany,
     ]);
 
     /** Default seller */
     useEffect(() => {
-        if (kind === 'seller' && verifyPartyData(data)) {
+        if (
+            kind === 'seller'
+            && verifyPartyData(data)
+            && defaultSeller !== data.vatNumber
+        ) {
             setDefaultSeller(data.vatNumber);
         }
     }, [
         kind,
         data,
+        defaultSeller,
         setDefaultSeller,
     ]);
 
@@ -216,7 +228,14 @@ export default function Party({
                 return;
             }
 
-            if (verifyPartyData(defaultData)) {
+            if (
+                verifyPartyData(defaultData)
+                && defaultData.vatNumber !== data.vatNumber
+                && defaultData.address !== data.address
+                && defaultData.city !== data.city
+                && defaultData.county !== data.county
+                && defaultData.country !== data.country
+            ) {
                 setParty(defaultData);
             }
         }
@@ -225,6 +244,7 @@ export default function Party({
         usingLocalStorage,
         defaultSeller,
         companies,
+        data,
         setParty,
     ]);
 

@@ -27,6 +27,8 @@ export default function EditCompany({
         companies,
         addCompany,
         removeCompany,
+
+        defaultSeller,
     } = useStore();
 
     const {
@@ -58,7 +60,7 @@ export default function EditCompany({
 
     return (
         <div
-            className="scrollable-view overflow-auto h-[calc(100vh-4rem)]"
+            className="scrollable-view overflow-auto h-[calc(100vh-4rem)] w-[350px] p-2 grid place-content-center"
         >
             <Subtitle
                 text="editare companie"
@@ -66,7 +68,7 @@ export default function EditCompany({
             />
 
             <Party
-                kind="seller"
+                kind={defaultSeller === company.vatNumber ? 'seller' : 'buyer'}
                 title=""
                 data={company}
                 setParty={setCompany}

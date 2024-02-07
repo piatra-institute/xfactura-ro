@@ -77,7 +77,9 @@ const useStore = create<State>()(
             addCompany: (company: Company) => set((state) => ({
                 companies: {
                     ...state.companies,
-                    [company.vatNumber]: company,
+                    [company.vatNumber]: {
+                        ...company,
+                    },
                 },
             })),
             removeCompany: (id: string) => set((state) => {
@@ -93,7 +95,9 @@ const useStore = create<State>()(
             addInvoice: (invoice: Record<string, any>) => set((state) => ({
                 invoices: {
                     ...state.invoices,
-                    [invoice.id]: invoice,
+                    [invoice.id]: {
+                        ...invoice,
+                    },
                 },
             })),
             removeInvoice: (id: string) => set((state) => {
@@ -109,7 +113,9 @@ const useStore = create<State>()(
             addInventory: (inventory: Record<string, any>) => set((state) => ({
                 inventory: {
                     ...state.inventory,
-                    [inventory.id]: inventory,
+                    [inventory.id]: {
+                        ...inventory,
+                    },
                 },
             })),
             removeInventory: (id: string) => set((state) => {
