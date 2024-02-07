@@ -3,15 +3,22 @@ import 'react-html5-camera-photo/build/css/index.css';
 
 import LinkButton from '@/components/LinkButton';
 
+import {
+    useVolatileStore,
+} from '@/store';
+
 
 
 export default function CameraContainer({
     extractInvoiceFromCamera,
-    back,
 } : {
     extractInvoiceFromCamera: (dataUri: string) => void;
-    back: () => void;
 }) {
+    const {
+        setShowCamera,
+    } = useVolatileStore();
+
+
     return (
         <div
             className="h-full bg-black fixed top-0 left-0 right-0 bottom-0 z-50 items-center grid gap-4"
@@ -21,7 +28,9 @@ export default function CameraContainer({
             >
                 <LinkButton
                     text="anulare"
-                    onClick={() => back()}
+                    onClick={() => {
+                        setShowCamera(false);
+                    }}
                 />
             </div>
 

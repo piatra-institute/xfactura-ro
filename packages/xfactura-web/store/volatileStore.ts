@@ -33,6 +33,9 @@ export interface VolatileState {
     hasMediaDevices: boolean;
     setHasMediaDevices: (hasMediaDevices: boolean) => void;
 
+    showText: boolean;
+    setShowText: (showText: boolean) => void;
+
     showCamera: boolean;
     setShowCamera: (showCamera: boolean) => void;
 
@@ -59,6 +62,7 @@ export interface VolatileState {
 export const initialVolatileState = {
     showLoading: false,
     hasMediaDevices: true,
+    showText: false,
     showCamera: false,
     showMicrophone: false,
     newInvoice: {
@@ -85,6 +89,9 @@ const useVolatileStore = create<VolatileState>()(
 
             hasMediaDevices: initialVolatileState.hasMediaDevices,
             setHasMediaDevices: (hasMediaDevices: boolean) => set({ hasMediaDevices }),
+
+            showText: initialVolatileState.showText,
+            setShowText: (showText: boolean) => set({ showText }),
 
             showCamera: initialVolatileState.showCamera,
             setShowCamera: (showCamera: boolean) => set({ showCamera }),

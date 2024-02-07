@@ -12,6 +12,7 @@ import {
 
 import {
     uploadIcon,
+    chatIcon,
     photoIcon,
     microphoneIcon,
 } from '@/data/icons';
@@ -20,21 +21,26 @@ import LinkButton from '@/components/LinkButton';
 import Tooltip from '@/components/Tooltip';
 import ActsModal from '@/components/ActsModal';
 
+import {
+    useVolatileStore,
+} from '@/store';
+
 
 
 export default function Extractors({
-    hasMediaDevices,
-    setShowCamera,
-    setShowMicrophone,
     extractInvoiceFromFile,
 } : {
-    hasMediaDevices: boolean;
-    setShowCamera: (value: boolean) => void;
-    setShowMicrophone: (value: boolean) => void;
     extractInvoiceFromFile: (file: File) => void;
 }) {
     const configInput = useRef<HTMLInputElement | null>(null);
 
+
+    const {
+        hasMediaDevices,
+        setShowText,
+        setShowCamera,
+        setShowMicrophone,
+    } = useVolatileStore();
 
     const [
         showActsModal,
@@ -87,6 +93,9 @@ export default function Extractors({
         switch (actsModalType) {
             case 'upload':
                 triggerReadInput();
+                break;
+            case 'text':
+                setShowText(true);
                 break;
             case 'camera':
                 if (kind === 'local') {
@@ -155,6 +164,29 @@ export default function Extractors({
                                 setActsModalDescription(extractorDescriptions.upload);
                             }}
                             icon={uploadIcon}
+                        />
+                    </div>
+                </Tooltip>
+            </div>
+
+            <div
+                className="mb-4"
+            >
+                <Tooltip
+                    content={extractorDescriptions.text}
+                >
+                    <div
+                        className="flex items-center gap-1"
+                    >
+                        <LinkButton
+                            text={extractorTitles.text}
+                            onClick={() => {
+                                setShowActsModal(true);
+                                setActsModalType('text');
+                                setActsModalTitle(extractorTitles.text);
+                                setActsModalDescription(extractorDescriptions.text);
+                            }}
+                            icon={chatIcon}
                         />
                     </div>
                 </Tooltip>

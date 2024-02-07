@@ -145,6 +145,7 @@ export const smartActsLabels = {
 
 export const extractorTitles = {
     'upload': 'încărcare',
+    'text': 'text',
     'camera': 'fotografiere',
     'record': 'înregistrare',
 };
@@ -157,6 +158,13 @@ export const extractorDescriptions = {
             {acceptedInvoiceFiles.replace(/\./g, ' ')}
             <br />
             pentru a detecta automat datele
+        </>
+    ),
+    'text': (
+        <>
+            scrie text pentru a da comenzi către xfactura.ro
+            <br />
+            &quot;factură de la CUI ... către CUI ... număr ... dată ... produs unu ... preț ...&quot;
         </>
     ),
     'camera': (

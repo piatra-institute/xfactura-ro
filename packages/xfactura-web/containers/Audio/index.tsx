@@ -7,17 +7,21 @@ import {
     closeIcon,
 } from '@/data/icons';
 
+import {
+    useVolatileStore,
+} from '@/store';
+
 
 
 export default function Audio({
-    setShowMicrophone,
     extractInvoiceFromAudio,
-    hide,
 } : {
-    setShowMicrophone: (value: boolean) => void;
     extractInvoiceFromAudio: (blob: Blob) => void;
-    hide: () => void;
 }) {
+    const {
+        setShowMicrophone,
+    } = useVolatileStore();
+
     const recorderControls = useAudioRecorder();
 
 
@@ -43,7 +47,7 @@ export default function Audio({
                         recorderControls.stopRecording();
                     }
 
-                    hide();
+                    setShowMicrophone(false);
                 }}
                 className="cursor-pointer scale-75"
             >

@@ -15,6 +15,7 @@ import Spinner from '@/components/Spinner';
 
 import Title from '@/containers/Title';
 import Extractors from '@/containers/Extractors';
+import Text from '@/containers/Text';
 import Camera from '@/containers/Camera';
 import Audio from '@/containers/Audio';
 
@@ -64,14 +65,12 @@ export default function Home() {
         showLoading,
         setShowLoading,
 
-        hasMediaDevices,
         setHasMediaDevices,
 
+        showText,
         showCamera,
         setShowCamera,
-
         showMicrophone,
-        setShowMicrophone,
 
         newInvoice,
         setNewInvoiceSeller,
@@ -274,24 +273,22 @@ export default function Home() {
                     <Title />
 
                     <Extractors
-                        hasMediaDevices={hasMediaDevices}
-                        setShowCamera={setShowCamera}
-                        setShowMicrophone={setShowMicrophone}
                         extractInvoiceFromFile={extractInvoiceFromFile}
                     />
+
+                    {showText && (
+                        <Text />
+                    )}
 
                     {showCamera && (
                         <Camera
                             extractInvoiceFromCamera={extractInvoiceFromCamera}
-                            back={() => setShowCamera(false)}
                         />
                     )}
 
                     {showMicrophone && (
                         <Audio
-                            setShowMicrophone={setShowMicrophone}
                             extractInvoiceFromAudio={extractInvoiceFromAudio}
-                            hide={() => setShowMicrophone(false)}
                         />
                     )}
                 </div>
