@@ -68,7 +68,7 @@ export default function InvoicesList({
                                     <div
                                         className="mt-2"
                                     >
-                                        {formatNumber(
+                                        total {formatNumber(
                                             invoiceTotal(invoice),
                                             invoice.metadata.currency,
                                         )}

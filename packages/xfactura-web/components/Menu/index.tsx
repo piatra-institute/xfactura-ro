@@ -7,11 +7,11 @@ import Image from 'next/image';
 
 import LinkButton from '@/components/LinkButton';
 
-import CompaniesList from '@/containers/CompaniesList';
+import ListCompanies from '@/containers/ListCompanies';
 import EditCompany from '@/containers/EditCompany';
-import InventoryList from '@/containers/InventoryList';
+import ListInventory from '@/containers/ListInventory';
 import EditInventory from '@/containers/EditInventory';
-import InvoicesList from '@/containers/InvoicesList';
+import ListInvoices from '@/containers/ListInvoices';
 import EditInvoice from '@/containers/EditInvoice';
 import About from '@/containers/About';
 import AI from '@/containers/AI';
@@ -152,7 +152,7 @@ export default function Menu() {
     switch (menuView) {
         case 'companies':
             viewElement = (
-                <CompaniesList
+                <ListCompanies
                     back={() => setMenuView('general')}
                 />
             );
@@ -166,7 +166,7 @@ export default function Menu() {
             break;
         case 'inventory':
             viewElement = (
-                <InventoryList
+                <ListInventory
                     back={() => setMenuView('general')}
                 />
             );
@@ -180,7 +180,7 @@ export default function Menu() {
             break;
         case 'invoices':
             viewElement = (
-                <InvoicesList
+                <ListInvoices
                     back={() => setMenuView('general')}
                 />
             );

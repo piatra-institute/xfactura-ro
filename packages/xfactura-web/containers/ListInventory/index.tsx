@@ -5,10 +5,15 @@ import {
 } from '@/data';
 
 import SearchableList from '@/components/SearchableList';
+import TooltipQuestion from '@/components/TooltipQuestion';
 
 import useStore, {
     useVolatileStore,
 } from '@/store';
+
+import {
+    formatNumber,
+} from '@/logic/utilities';
 
 
 
@@ -59,9 +64,25 @@ export default function InventoryList({
                         </div>
 
                         <div
-                            className="select-all text-right"
+                            className="select-all text-right flex gap-2"
                         >
-                            {inventory.price} {inventory.currency}
+                            <div>
+                                {formatNumber(
+                                    inventory.price,
+                                    inventory.currency,
+                                )}
+                            </div>
+
+                            <TooltipQuestion
+                                content={(
+                                    <div>
+                                        valoare {formatNumber(
+                                            inventory.price * inventory.leftInStock,
+                                            inventory.currency,
+                                        )}
+                                    </div>
+                                )}
+                            />
                         </div>
                     </>
                 );

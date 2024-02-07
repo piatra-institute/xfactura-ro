@@ -81,7 +81,7 @@ export default function EditInventory({
             />
 
             <Deleter
-                title="ștergere"
+                title="ștergere stoc"
                 atDelete={() => {
                     removeInventory(inventoryItem.id);
                     setMenuView('inventory');
