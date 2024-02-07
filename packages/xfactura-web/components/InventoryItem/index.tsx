@@ -1,9 +1,13 @@
+import { v4 as uuid } from 'uuid';
+
 import {
     Inventory,
 } from '@/data';
 
 import Input from '@/components/Input';
 import Toggle from '@/components/Toggle';
+import LinkButton from '@/components/LinkButton';
+import InventoryHistoryLine from '@/components/InventoryHistoryLine';
 
 import {
     formatNumber,
@@ -176,6 +180,66 @@ export default function InventoryItem({
                     }}
                 />
             </div>
+
+
+            {history.map((line, index) => {
+                return (
+                    <InventoryHistoryLine
+                        key={line.id}
+                        data={line}
+                        atChange={(updatedLine) => {
+                            const newHistory = history.map((historyLine, i) => {
+                                if (i === index) {
+                                    return updatedLine;
+                                }
+
+                                return historyLine;
+                            });
+
+                            atChange({
+                                ...data,
+                                history: newHistory,
+                            });
+                        }}
+                        remove={() => {
+                            const newHistory = history.filter((_, i) => i !== index);
+
+                            atChange({
+                                ...data,
+                                history: newHistory,
+                            });
+                        }}
+                    />
+                );
+            })}
+
+            <div
+                className="mt-8 mb-12"
+            >
+            <LinkButton
+                text="adaugă achiziție"
+                onClick={() => {
+                    const newLine = {
+                        id: uuid(),
+                        date: Date.now(),
+                        supplier: '',
+                        invoice: '',
+                        acquisitionPrice: 0,
+                        quantity: 0,
+                        vatIncluded: false,
+                    };
+
+                    atChange({
+                        ...data,
+                        history: [
+                            ...history,
+                            newLine,
+                        ],
+                    });
+                }}
+            />
+            </div>
+
 
             <Input
                 text="valoare"

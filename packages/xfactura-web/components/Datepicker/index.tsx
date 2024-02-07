@@ -142,9 +142,11 @@ const customTheme: CustomFlowbiteTheme = {
 export default function CustomDatepicker({
     text,
     atSelect,
+    defaultValue,
 }: {
     text: string;
     atSelect: (timestamp: number) => void;
+    defaultValue?: number;
 }) {
     return (
         <div
@@ -168,6 +170,7 @@ export default function CustomDatepicker({
                     labelClearButton='resetare'
                     icon={undefined}
                     name={text}
+                    defaultDate={defaultValue ? new Date(defaultValue) : undefined}
                 />
             </Flowbite>
         </div>

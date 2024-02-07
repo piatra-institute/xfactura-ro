@@ -85,9 +85,13 @@ export interface Inventory {
 }
 
 export interface InventoryHistory {
+    id: string;
     date: number;
+    supplier: string;
+    invoice: string;
     acquisitionPrice: number;
     quantity: number;
+    vatIncluded: boolean;
 }
 
 

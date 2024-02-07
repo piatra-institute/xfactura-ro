@@ -52,11 +52,13 @@ export default function Metadata({
             <Datepicker
                 text="dată emitere"
                 atSelect={(value) => updateDate('issueDate', value)}
+                defaultValue={metadata.issueDate}
             />
 
             <Datepicker
                 text="dată scadență"
                 atSelect={(value) => updateDate('dueDate', value)}
+                defaultValue={metadata.dueDate}
             />
         </div>
     );
