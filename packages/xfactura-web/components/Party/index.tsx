@@ -218,26 +218,17 @@ export default function Party({
 
     /** Seller */
     useEffect(() => {
-        if (
-            kind === 'seller'
-            && usingLocalStorage
-            && defaultSeller
-        ) {
-            const defaultData = companies[defaultSeller];
-            if (!defaultData) {
-                return;
-            }
+        if (kind !== 'seller' || !usingLocalStorage || !defaultSeller) {
+            return;
+        }
 
-            if (
-                verifyPartyData(defaultData)
-                && defaultData.vatNumber !== data.vatNumber
-                && defaultData.address !== data.address
-                && defaultData.city !== data.city
-                && defaultData.county !== data.county
-                && defaultData.country !== data.country
-            ) {
-                setParty(defaultData);
-            }
+        const defaultSellerData = companies[defaultSeller];
+        if (!defaultSellerData) {
+            return;
+        }
+
+        if (verifyPartyData(defaultSellerData) && !data.vatNumber) {
+            setParty(defaultSellerData);
         }
     }, [
         kind,
