@@ -134,7 +134,9 @@ export default function Home() {
 
         // Run only once.
         // eslint-disable-next-line
-    }, []);
+    }, [
+        lastInvoiceSeries,
+    ]);
     // #endregion effects
 
 
