@@ -1,3 +1,9 @@
+import {
+    logger,
+} from '@/logic/utilities';
+
+
+
 export const seriesParser = (
     series: string,
 ) => {
@@ -34,7 +40,7 @@ export const seriesParser = (
             nextSeries,
         };
     } catch (error) {
-        console.log(error);
+        logger('error', error);
 
         return;
     }

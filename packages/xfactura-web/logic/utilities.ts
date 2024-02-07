@@ -106,7 +106,10 @@ export const logger = (
 }
 
 
-export function debounce(callback: any, delay = 2000) {
+export function debounce(
+    callback: any,
+    delay = 2000,
+) {
     let timer: any;
 
     return (...args: any) => {

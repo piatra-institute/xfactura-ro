@@ -1,4 +1,8 @@
 import {
+    Invoice,
+} from '@/data';
+
+import {
     normalizeUserCountry,
     normalizeUserCounty,
     normalizeUserCity,
@@ -77,4 +81,22 @@ export const generateEinvoice = async (
     }
 
     return invoice;
+}
+
+
+export const invoiceTotal = (
+    invoice: Invoice,
+) => {
+    const total = invoice.products.reduce(
+        (accumulator, product) => {
+            if (product.vatIncluded) {
+                return accumulator + product.quantity * product.price;
+            }
+
+            return accumulator + product.quantity * product.price * (1 + product.vatRate / 100);
+        },
+        0,
+    );
+
+    return total;
 }

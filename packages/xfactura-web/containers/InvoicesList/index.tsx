@@ -5,6 +5,14 @@ import useStore, {
     useVolatileStore,
 } from '@/store';
 
+import {
+    invoiceTotal,
+} from '@/logic/einvoice';
+
+import {
+    formatNumber,
+} from '@/logic/utilities';
+
 
 
 export default function InvoicesList({
@@ -40,17 +48,32 @@ export default function InvoicesList({
 
                         <TooltipQuestion
                             content={(
-                                <div
-                                    className="text-left"
-                                >
-                                    <div>
-                                        {invoice.seller.name}
+                                <>
+                                    <div
+                                        className="text-left flex gap-2 items-center"
+                                    >
+                                        <div>
+                                            {invoice.seller.name}
+                                        </div>
+
+                                        <div>
+                                            »
+                                        </div>
+
+                                        <div>
+                                            {invoice.buyer.name}
+                                        </div>
                                     </div>
 
-                                    <div>
-                                        {invoice.buyer.name}
+                                    <div
+                                        className="mt-2"
+                                    >
+                                        {formatNumber(
+                                            invoiceTotal(invoice),
+                                            invoice.metadata.currency,
+                                        )}
                                     </div>
-                                </div>
+                                </>
                             )}
                         />
                     </>
