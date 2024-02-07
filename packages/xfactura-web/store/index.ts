@@ -49,7 +49,7 @@ export interface State {
         invoices: Record<string, Invoice>;
         inventory: Record<string, Inventory>;
     }) => void;
-    obliterate: () => void;
+    clearStore: () => void;
 }
 
 
@@ -132,7 +132,7 @@ const useStore = create<State>()(
                 invoices: data.invoices,
                 inventory: data.inventory,
             })),
-            obliterate: () => set(() => ({
+            clearStore: () => set(() => ({
                 user: null,
                 usingLocalStorage: false,
                 generateEinvoiceLocally: false,

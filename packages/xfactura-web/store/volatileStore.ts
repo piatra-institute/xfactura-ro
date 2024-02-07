@@ -51,34 +51,48 @@ export interface VolatileState {
     setMenuView: (view: MenuView) => void;
     editID: string;
     setEditID: (id: string) => void;
+
+    clearVolatileStore: () => void;
 }
+
+
+export const initialVolatileState = {
+    showLoading: false,
+    hasMediaDevices: true,
+    showCamera: false,
+    showMicrophone: false,
+    newInvoice: {
+        id: '',
+        seller: {...company},
+        buyer: {...company},
+        metadata: {...emptyMetadata},
+        products: [
+            {...emptyInvoiceLine},
+        ],
+    },
+    showMenu: true,
+    menuView: 'general',
+    editID: '',
+};
 
 
 const useVolatileStore = create<VolatileState>()(
     devtools(
     immer(
         (set) => ({
-            showLoading: false,
+            showLoading: initialVolatileState.showLoading,
             setShowLoading: (showLoading: boolean) => set({ showLoading }),
 
-            hasMediaDevices: true,
+            hasMediaDevices: initialVolatileState.hasMediaDevices,
             setHasMediaDevices: (hasMediaDevices: boolean) => set({ hasMediaDevices }),
 
-            showCamera: false,
+            showCamera: initialVolatileState.showCamera,
             setShowCamera: (showCamera: boolean) => set({ showCamera }),
 
-            showMicrophone: false,
+            showMicrophone: initialVolatileState.showMicrophone,
             setShowMicrophone: (showMicrophone: boolean) => set({ showMicrophone }),
 
-            newInvoice: {
-                id: '',
-                seller: {...company},
-                buyer: {...company},
-                metadata: {...emptyMetadata},
-                products: [
-                    {...emptyInvoiceLine},
-                ],
-            },
+            newInvoice: initialVolatileState.newInvoice,
             setNewInvoiceSeller: (seller: Company) => set((state) => {
                 state.newInvoice.seller = seller;
             }),
@@ -92,12 +106,16 @@ const useVolatileStore = create<VolatileState>()(
                 state.newInvoice.products = lines;
             }),
 
-            showMenu: true,
+            showMenu: initialVolatileState.showMenu,
             setShowMenu: (showMenu: boolean) => set({ showMenu }),
-            menuView: 'general',
+            menuView: initialVolatileState.menuView as MenuView,
             setMenuView: (menuView: MenuView) => set({ menuView }),
-            editID: '',
+            editID: initialVolatileState.editID,
             setEditID: (editID: string) => set({ editID }),
+
+            clearVolatileStore: () => set(() => ({
+                ...initialVolatileState,
+            })),
         }),
     ),
     ),

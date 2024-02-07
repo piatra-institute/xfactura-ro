@@ -22,7 +22,9 @@ import {
     defocus,
 } from '@/logic/utilities';
 
-import useStore from '@/store';
+import useStore, {
+    useVolatileStore,
+} from '@/store';
 
 
 
@@ -57,8 +59,13 @@ export default function Settings({
         inventory,
 
         loadData,
-        obliterate,
+
+        clearStore,
     } = useStore();
+
+    const {
+        clearVolatileStore,
+    } = useVolatileStore();
 
 
     const exportData = () => {
@@ -260,7 +267,8 @@ export default function Settings({
                 <Deleter
                     title="ștergere totală"
                     atDelete={() => {
-                        obliterate();
+                        clearStore();
+                        clearVolatileStore();
 
                         reload();
                     }}
