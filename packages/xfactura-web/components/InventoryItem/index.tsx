@@ -34,6 +34,28 @@ export default function InventoryItem({
     } = data;
 
 
+    const computeGross = () => {
+        if (!price || history.length === 0) {
+            return '';
+        }
+
+        const acquisitionPrice = history[history.length - 1].acquisitionPrice;
+
+        if (!acquisitionPrice) {
+            return '';
+        }
+
+        const value = price - acquisitionPrice;
+        if (value < 0) {
+            return '';
+        }
+
+        return formatNumber(
+            price - acquisitionPrice,
+            currency,
+        );
+    }
+
     const computeValueWithoutVAT = () => {
         if (!price || !leftInStock) {
             return '';
@@ -240,6 +262,13 @@ export default function InventoryItem({
             />
             </div>
 
+
+            <Input
+                text="adaos brut"
+                value={computeGross()}
+                setValue={(_) => {}}
+                disabled={true}
+            />
 
             <Input
                 text="valoare"
