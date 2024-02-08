@@ -12,6 +12,10 @@ import MenuBack from '@/components/MenuBack';
 import PureButton from '@/components/PureButton';
 import Deleter from '@/components/Deleter';
 
+import {
+    seriesParser,
+} from '@/logic/series';
+
 import useStore, {
     useVolatileStore,
 } from '@/store';
@@ -31,6 +35,8 @@ export default function EditInvoice({
         invoices,
         addInvoice,
         removeInvoice,
+        lastInvoiceSeries,
+        setLastInvoiceSeries,
 
         generateEinvoiceLocally,
     } = useStore();
@@ -131,6 +137,11 @@ export default function EditInvoice({
             <Deleter
                 title="ștergere"
                 atDelete={() => {
+                    const seriesData = seriesParser(invoiceItem.metadata.number);
+                    if (seriesData && lastInvoiceSeries === invoiceItem.metadata.number) {
+                        setLastInvoiceSeries(seriesData.previousSeries);
+                    }
+
                     removeInvoice(invoiceItem.id);
                     setMenuView('invoices');
                 }}

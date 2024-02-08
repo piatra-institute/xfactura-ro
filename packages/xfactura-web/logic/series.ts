@@ -26,16 +26,29 @@ export const seriesParser = (
             return;
         }
 
+        const formatSeries = (
+            value: number,
+        ) => {
+            const numberString = value
+                .toString()
+                .padStart(seriesNumberString.length, '0');
+            const series = seriesLabelUnclean + numberString;
+
+            return series;
+        }
+
+        const previousSeriesNumber = seriesNumber > 0 ? seriesNumber - 1 : 0;
+        const previousSeries = formatSeries(previousSeriesNumber);
+
         const nextSeriesNumber = seriesNumber + 1;
-        const nextSeriesNumberString = nextSeriesNumber
-            .toString()
-            .padStart(seriesNumberString.length, '0');
-        const nextSeries = seriesLabelUnclean + nextSeriesNumberString;
+        const nextSeries = formatSeries(nextSeriesNumber);
 
         return {
             seriesLabel,
             seriesNumberString,
             seriesNumber,
+            previousSeriesNumber,
+            previousSeries,
             nextSeriesNumber,
             nextSeries,
         };
