@@ -68,6 +68,7 @@ export interface Company {
     city: string;
     county: string;
     country: string;
+    contact?: string;
 }
 
 

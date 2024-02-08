@@ -30,7 +30,7 @@ export default function Input({
     asGrid,
 }: {
     text: string;
-    value: string;
+    value: string | undefined;
     setValue: (value: string) => void;
     width?: number;
     type?: string;
@@ -61,7 +61,7 @@ export default function Input({
                     ${focusStyle}
                 `)}
                 name={text}
-                value={value}
+                value={value || ''}
                 onChange={(event) => {
                     setValue(event.target.value);
                 }}

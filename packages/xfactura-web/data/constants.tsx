@@ -22,6 +22,7 @@ export const companyText = {
     county: 'județ',
     city: 'localitate',
     address: 'adresă',
+    contact: 'contact',
 } as const;
 
 export const companyFields = [
@@ -31,6 +32,7 @@ export const companyFields = [
     'county',
     'city',
     'address',
+    'contact',
 ] as const;
 
 
