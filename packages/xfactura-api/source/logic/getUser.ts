@@ -3,8 +3,17 @@ import type {
 } from 'express';
 
 import {
+    eq,
+} from 'drizzle-orm';
+
+import {
     google,
 } from 'googleapis';
+
+import database from '../database';
+import {
+    users,
+} from '../database/schema/users';
 
 import {
     getAuthCookies,
@@ -12,7 +21,7 @@ import {
 
 
 
-const getUser = async (
+export const getTokensUser = async (
     request: Request,
 ) => {
     const tokens = getAuthCookies(request);
@@ -48,4 +57,10 @@ const getUser = async (
 }
 
 
-export default getUser;
+export const getDatabaseUser = async (
+    user: any,
+) => {
+    return await database.query.users.findFirst({
+        where: eq(users.email, user.email),
+    });
+}

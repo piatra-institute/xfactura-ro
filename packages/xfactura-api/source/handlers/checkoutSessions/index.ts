@@ -3,18 +3,16 @@ import type {
     Response,
 } from 'express';
 
-import {
-    eq,
-} from 'drizzle-orm';
-
 import Stripe from 'stripe';
 
-import database from '../../database';
 import {
-    users,
-} from '../../database/schema/users';
+    getTokensUser,
+    getDatabaseUser,
+} from '../../logic/getUser';
 
-import getUser from '../../logic/getUser';
+import {
+    updateUserPayments,
+} from '../../logic/updateUser';
 
 import {
     logger,
@@ -24,11 +22,6 @@ import {
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '');
 
-const intelligentActsMap = {
-    '300': 300,
-    '1000': 1000,
-    '5000': 5000,
-} as const;
 
 
 export default async function handler(
@@ -36,8 +29,8 @@ export default async function handler(
     response: Response,
 ) {
     try {
-        const user = await getUser(request);
-        if (!user) {
+        const tokensUser = await getTokensUser(request);
+        if (!tokensUser) {
             logger('warn', 'User not found');
 
             response.status(400).json({
@@ -46,9 +39,7 @@ export default async function handler(
             return;
         }
 
-        const databaseUser = await database.query.users.findFirst({
-            where: eq(users.email, user.email),
-        });
+        const databaseUser = await getDatabaseUser(tokensUser);
         if (!databaseUser) {
             logger('warn', 'User not found in database');
 
@@ -89,20 +80,10 @@ export default async function handler(
                         return_url: `${request.headers.origin}/plata?sid={CHECKOUT_SESSION_ID}`,
                     });
 
-                    const intelligentActs = databaseUser.intelligentActs
-                        + intelligentActsMap[request.body.productType as keyof typeof intelligentActsMap];
-
-                    await database.update(users).set({
-                        intelligentActs,
-                        payments: JSON.stringify([
-                            ...JSON.parse(databaseUser.payments || '[]'),
-                            {
-                                amount: request.body.productType,
-                                sessionID: session.id,
-                            },
-                        ]),
-                    }).where(
-                        eq(users.email, user.email),
+                    await updateUserPayments(
+                        databaseUser,
+                        request.body.productType,
+                        session.id,
                     );
 
                     response.send({

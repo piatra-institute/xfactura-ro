@@ -4,15 +4,9 @@ import type {
 } from 'express';
 
 import {
-    eq,
-} from 'drizzle-orm';
-
-import getUser from '../../logic/getUser';
-
-import database from '../../database';
-import {
-    users,
-} from '../../database/schema/users';
+    getTokensUser,
+    getDatabaseUser,
+} from '../../logic/getUser';
 
 import {
     logger,
@@ -25,8 +19,8 @@ export default async function handler(
     response: Response,
 ) {
     try {
-        const user = await getUser(request);
-        if (!user) {
+        const tokensUser = await getTokensUser(request);
+        if (!tokensUser) {
             logger('warn', 'User not found');
 
             response.status(404).json({
@@ -35,9 +29,7 @@ export default async function handler(
             return;
         }
 
-        const databaseUser = await database.query.users.findFirst({
-            where: eq(users.email, user.email),
-        });
+        const databaseUser = await getDatabaseUser(tokensUser);
         if (!databaseUser) {
             logger('warn', 'Database user not found');
 
