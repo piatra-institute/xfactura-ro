@@ -3,7 +3,16 @@ import type {
     Response,
 } from 'express';
 
+import {
+    eq,
+} from 'drizzle-orm';
+
 import Stripe from 'stripe';
+
+import database from '../../database';
+import {
+    users,
+} from '../../database/schema/users';
 
 import getUser from '../../logic/getUser';
 
@@ -21,18 +30,30 @@ export default async function handler(
     response: Response,
 ) {
     try {
+        const user = await getUser(request);
+        if (!user) {
+            logger('warn', 'User not found');
+
+            response.status(400).json({
+                status: false,
+            });
+            return;
+        }
+
+        const databaseUser = await database.query.users.findFirst({
+            where: eq(users.email, user.email),
+        });
+        if (!databaseUser) {
+            logger('warn', 'User not found in database');
+
+            response.status(400).json({
+                status: false,
+            });
+            return;
+        }
+
         switch (request.method) {
             case 'POST':
-                const user = await getUser(request);
-                if (!user) {
-                    logger('warn', 'User not found');
-
-                    response.status(200).json({
-                        status: false,
-                    });
-                    return;
-                }
-
                 try {
                     let priceID = '';
                     switch (request.body.productType) {
@@ -60,6 +81,18 @@ export default async function handler(
                         mode: 'payment',
                         return_url: `${request.headers.origin}/plata?sid={CHECKOUT_SESSION_ID}`,
                     });
+
+                    await database.update(users).set({
+                        payments: JSON.stringify([
+                            ...JSON.parse(databaseUser.payments || '[]'),
+                            {
+                                amount: request.body.productType,
+                                sessionID: session.id,
+                            },
+                        ]),
+                    }).where(
+                        eq(users.email, user.email),
+                    );
 
                     response.send({
                         status: true,
