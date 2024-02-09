@@ -3,7 +3,16 @@ import type {
     Response,
 } from 'express';
 
+import {
+    eq,
+} from 'drizzle-orm';
+
 import getUser from '../../logic/getUser';
+
+import database from '../../database';
+import {
+    users,
+} from '../../database/schema/users';
 
 import {
     logger,
@@ -20,7 +29,19 @@ export default async function handler(
         if (!user) {
             logger('warn', 'User not found');
 
-            response.status(200).json({
+            response.status(404).json({
+                status: false,
+            });
+            return;
+        }
+
+        const databaseUser = await database.query.users.findFirst({
+            where: eq(users.email, user.email),
+        });
+        if (!databaseUser) {
+            logger('warn', 'Database user not found');
+
+            response.status(404).json({
                 status: false,
             });
             return;
@@ -29,7 +50,7 @@ export default async function handler(
         response.json({
             status: true,
             data: {
-                email: user.email,
+                ...databaseUser,
             },
         });
     } catch (error) {

@@ -24,6 +24,12 @@ import {
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '');
 
+const intelligentActsMap = {
+    '300': 300,
+    '1000': 1000,
+    '5000': 5000,
+} as const;
+
 
 export default async function handler(
     request: Request,
@@ -56,6 +62,7 @@ export default async function handler(
             case 'POST':
                 try {
                     let priceID = '';
+
                     switch (request.body.productType) {
                         case '300':
                             priceID = process.env.STRIPE_PRICE_300 || '';
@@ -82,7 +89,11 @@ export default async function handler(
                         return_url: `${request.headers.origin}/plata?sid={CHECKOUT_SESSION_ID}`,
                     });
 
+                    const intelligentActs = databaseUser.intelligentActs
+                        + intelligentActsMap[request.body.productType as keyof typeof intelligentActsMap];
+
                     await database.update(users).set({
+                        intelligentActs,
                         payments: JSON.stringify([
                             ...JSON.parse(databaseUser.payments || '[]'),
                             {
@@ -96,7 +107,9 @@ export default async function handler(
 
                     response.send({
                         status: true,
-                        clientSecret: session.client_secret,
+                        data: {
+                            clientSecret: session.client_secret,
+                        },
                     });
                 } catch (err: any) {
                     response.status(err.statusCode || 500).json(err.message);
@@ -110,7 +123,9 @@ export default async function handler(
 
                     response.send({
                         status: session.status,
-                        customer_email: (session as any).customer_details.email,
+                        data: {
+                            customerEmail: (session as any).customer_details.email,
+                        },
                     });
                 } catch (error: any) {
                     logger('error', error);
