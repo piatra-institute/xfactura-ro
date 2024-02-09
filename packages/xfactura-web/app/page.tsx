@@ -45,6 +45,10 @@ import {
     logicCamera,
 } from '@/logic/camera';
 
+import {
+    getUser,
+} from '@/logic/requests';
+
 import useStore, {
     useVolatileStore,
 } from '@/store';
@@ -59,6 +63,8 @@ export default function Home() {
 
     // #region state
     const {
+        setUser,
+
         generateEinvoiceLocally,
     } = useStore();
 
@@ -201,6 +207,22 @@ export default function Home() {
 
 
     // #region effects
+    useEffect(() => {
+        const loadUser = async () => {
+            const request = await getUser();
+            if (!request.status) {
+                setUser(null);
+                return;
+            }
+
+            setUser(request.data);
+        }
+
+        loadUser();
+    }, [
+        setUser,
+    ]);
+
     /** web container */
     useEffect(() => {
         if (mounted.current) {

@@ -282,13 +282,15 @@ export default function Menu() {
                             <div
                                 className="flex flex-row items-center justify-center gap-2 mt-2"
                             >
-                                <Image
-                                    src={user.picture || ''}
-                                    alt={user.name}
-                                    width={30}
-                                    height={30}
-                                    className="rounded-full"
-                                />
+                                {user.picture && (
+                                    <Image
+                                        src={user.picture}
+                                        alt={user.name}
+                                        width={30}
+                                        height={30}
+                                        className="rounded-full"
+                                    />
+                                )}
 
                                 <div
                                     className="text-xs font-bold"

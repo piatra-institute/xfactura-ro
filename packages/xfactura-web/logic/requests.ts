@@ -48,6 +48,21 @@ export const getCompanyDetails = async (
     }
 }
 
+export const getUser = async () => {
+    if (!ENVIRONMENT.API_DOMAIN) {
+        return;
+    }
+
+    return fetch(ENVIRONMENT.API_DOMAIN + '/get-user', {
+        method: 'POST',
+        credentials: 'include',
+    })
+        .then((response) => response.json())
+        .catch((error) => {
+            logger('error', error);
+        });
+}
+
 
 export const getEInvoice = async (
     data: any,
