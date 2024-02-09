@@ -30,6 +30,7 @@ export default function ActsModal({
     const {
         user,
         usingLocalStorage,
+        smartActs,
     } = useStore();
 
     const [
@@ -58,13 +59,33 @@ export default function ActsModal({
     useEffect(() => {
         if (user) {
             setLoggedIn(true);
-        }
 
-        // if (smartActs) {
-        //     setSmartActsLeft(true);
-        // }
+            if (user.intelligentActs > 0) {
+                setSmartActsLeft(true);
+            }
+        }
     }, [
         user,
+    ]);
+
+    useEffect(() => {
+        if (smartActs === 'unspecified') {
+            return;
+        }
+
+        if (smartActs === 'local') {
+            action('local');
+            return;
+        }
+
+        if (smartActs === 'cloud' && smartActsLeft) {
+            action('cloud');
+            return;
+        }
+    }, [
+        action,
+        smartActs,
+        smartActsLeft,
     ]);
     // #endregion effects
 

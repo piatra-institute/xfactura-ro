@@ -27,6 +27,8 @@ import {
     styleTrim,
 } from '@/logic/utilities';
 
+import useStore from '@/store';
+
 
 
 const stripePromise = loadStripe(ENVIRONMENT.STRIPE_KEY, {
@@ -39,6 +41,11 @@ export default function BuyScreen({
 } : {
     setShowBuyScreen: React.Dispatch<React.SetStateAction<boolean>>;
 }) {
+    const {
+        user,
+    } = useStore();
+
+
     const [
         loading,
         setLoading,
@@ -137,6 +144,13 @@ export default function BuyScreen({
                 <Subtitle
                     text={"cumpărare acte inteligente"}
                 />
+                {user && (
+                    <div
+                        className="text-center"
+                    >
+                        {user.intelligentActs} acte inteligente disponibile
+                    </div>
+                )}
             </div>
 
             <div

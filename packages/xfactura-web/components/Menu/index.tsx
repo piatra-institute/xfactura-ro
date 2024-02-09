@@ -255,7 +255,7 @@ export default function Menu() {
                     </li>
                     <li className="m-4">
                         <LinkButton
-                            text={user ? `acte inteligente (${user.intelligentActs || 0})` : 'acte inteligente'}
+                            text={user ? `acte inteligente [${user.intelligentActs || 0}]` : 'acte inteligente'}
                             onClick={() => setMenuView('ai')}
                         />
                     </li>
