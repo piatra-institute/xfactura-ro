@@ -4,8 +4,19 @@ import type {
 } from 'express';
 
 import {
+    eq,
+} from 'drizzle-orm';
+
+import {
     jwtDecode,
 } from 'jwt-decode';
+
+import { v4 as uuid } from 'uuid';
+
+import database from '../../database';
+import {
+    users,
+} from '../../database/schema/users';
 
 import googleClient from '../../services/google';
 
@@ -44,6 +55,20 @@ export default async function handler(
             accessToken: tokens.access_token,
             refreshToken: tokens.refresh_token,
         });
+
+        const databaseUser = await database.query.users.findFirst({
+            where: eq(users.email, email),
+        });
+        if (!databaseUser) {
+            await database.insert(users).values({
+                id: uuid(),
+                createdAt: new Date().toISOString(),
+                email,
+                name,
+                payments: JSON.stringify([]),
+                intelligentActs: 0,
+            });
+        }
 
         response.json({
             status: true,
