@@ -1,3 +1,5 @@
+'use client';
+
 import React, {
     useEffect,
     useState,
@@ -9,7 +11,7 @@ import {
 
 import Spinner from '@/components/Spinner';
 
-import '../app/globals.css';
+import '@/app/globals.css';
 
 
 
