@@ -10,6 +10,8 @@ import {
 import fonts from '@/logic/fonts';
 import getUser from '@/logic/getUser';
 
+import useStore from '@/store';
+
 import './globals.css';
 
 
@@ -66,7 +68,10 @@ export default async function RootLayout({
 }: {
     children: React.ReactNode,
 }) {
-    const _ = await getUser();
+    const userRequest = await getUser();
+    if (!userRequest || !userRequest.status) {
+
+    }
 
     return (
         <html

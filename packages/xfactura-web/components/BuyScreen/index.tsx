@@ -49,6 +49,7 @@ export default function BuyScreen({
     ) => {
         fetch(ENVIRONMENT.API_DOMAIN + '/stripe-checkout-sessions', {
             method: 'POST',
+            credentials: 'include',
             headers: {
                 'Content-Type': 'application/json',
             },
