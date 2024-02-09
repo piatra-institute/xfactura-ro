@@ -11,6 +11,7 @@ import {
     EmbeddedCheckout,
 } from '@stripe/react-stripe-js';
 
+import Spinner from '@/components/Spinner';
 import LinkButton from '@/components/LinkButton';
 import Subtitle from '@/components/Subtitle';
 
@@ -39,6 +40,11 @@ export default function BuyScreen({
     setShowBuyScreen: React.Dispatch<React.SetStateAction<boolean>>;
 }) {
     const [
+        loading,
+        setLoading,
+    ] = useState(false);
+
+    const [
         clientSecret,
         setClientSecret,
     ] = useState('');
@@ -47,6 +53,8 @@ export default function BuyScreen({
     const buy = (
         productType: '300' | '1000' | '5000',
     ) => {
+        setLoading(true);
+
         fetch(ENVIRONMENT.API_DOMAIN + '/stripe-checkout-sessions', {
             method: 'POST',
             credentials: 'include',
@@ -57,8 +65,19 @@ export default function BuyScreen({
                 productType,
             }),
         })
-            .then((res) => res.json())
-            .then((data) => setClientSecret(data.clientSecret));
+            .then((response) => response.json())
+            .then((response) => {
+                setLoading(false);
+
+                if (response.status) {
+                    setClientSecret(response.data.clientSecret);
+                }
+            })
+            .catch((error) => {
+                setLoading(false);
+
+                console.log(error);
+            });
     }
 
 
@@ -72,6 +91,15 @@ export default function BuyScreen({
         />
     );
 
+    if (loading) {
+        return (
+            <div
+                className="h-full flex items-center justify-center"
+            >
+                <Spinner />
+            </div>
+        );
+    }
 
     if (clientSecret) {
         return (

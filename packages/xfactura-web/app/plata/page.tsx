@@ -30,9 +30,12 @@ export default function Payment() {
             credentials: 'include',
         })
             .then((res) => res.json())
-            .then((data) => {
-                setStatus(data.status);
-                setCustomerEmail(data.customer_email);
+            .then((response) => {
+                setStatus(response.status);
+
+                if (response.status) {
+                    setCustomerEmail(response.data.customerEmail);
+                }
             });
     }, []);
 
