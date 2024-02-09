@@ -66,6 +66,7 @@ export default async function handler(
                 createdAt: new Date().toISOString(),
                 email,
                 name,
+                picture,
                 payments: JSON.stringify([]),
                 intelligentActs: 0,
             });

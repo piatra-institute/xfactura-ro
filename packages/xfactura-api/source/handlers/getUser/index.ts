@@ -43,6 +43,7 @@ export default async function handler(
             status: true,
             data: {
                 ...databaseUser,
+                payments: JSON.parse(databaseUser.payments),
             },
         });
     } catch (error) {

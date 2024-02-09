@@ -12,8 +12,9 @@ export const users = sqliteTable(
     {
         id: text('id').notNull().primaryKey(),
         createdAt: text('created_at').notNull(),
-        name: text('name').notNull(),
         email: text('email').notNull(),
+        name: text('name').notNull(),
+        picture: text('picture').notNull(),
         payments: text('payments').notNull(),
         intelligentActs: integer('intelligent_acts').notNull(),
     },
