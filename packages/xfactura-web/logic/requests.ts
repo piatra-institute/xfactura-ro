@@ -104,6 +104,7 @@ export const uploadAudio = async (
 
     return fetch(UPLOAD_AUDIO_API, {
         method: 'POST',
+        credentials: 'include',
         body: formData,
     })
         .then((response) => {
@@ -127,6 +128,7 @@ export const uploadFile = async (
 
     return fetch(UPLOAD_FILE_API, {
         method: 'POST',
+        credentials: 'include',
         body: formData,
     })
         .then((response) => {
@@ -146,6 +148,7 @@ export const uploadText = async (
 
     return fetch(UPLOAD_TEXT_API, {
         method: 'POST',
+        credentials: 'include',
         headers: {
             'Content-Type': 'application/json',
         },
