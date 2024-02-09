@@ -12,4 +12,5 @@ SIZE_30_MB = 30 * 1000 * 1000
 ENVIRONMENT = {
     'FLASK_SECRET': os.getenv('FLASK_SECRET'),
     'OPENAI_SECRET': os.getenv('OPENAI_SECRET'),
+    'API_DOMAIN': os.getenv('API_DOMAIN'),
 }
