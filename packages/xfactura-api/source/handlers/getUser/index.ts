@@ -19,7 +19,7 @@ export default async function handler(
     response: Response,
 ) {
     try {
-        const tokensUser = await getTokensUser(request);
+        const tokensUser = await getTokensUser(request, response);
         if (!tokensUser) {
             logger('warn', 'User not found');
 

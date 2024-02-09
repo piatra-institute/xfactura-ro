@@ -18,7 +18,7 @@ import {
     users,
 } from '../../database/schema/users';
 
-import googleClient from '../../services/google';
+import newGoogleClient from '../../services/google';
 
 import {
     logger,
@@ -35,6 +35,7 @@ export default async function handler(
     response: Response,
 ) {
     try {
+        const googleClient = newGoogleClient();
         const { tokens } = await googleClient.getToken(request.body.code);
         const decoded: any = jwtDecode(tokens.id_token || '');
 

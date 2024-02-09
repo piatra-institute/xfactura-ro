@@ -15,6 +15,8 @@ import {
     searchFile,
 } from '../../utilities/google';
 
+import newGoogleClient from '../../services/google';
+
 import {
     logger,
 } from '../../utilities';
@@ -39,16 +41,15 @@ const googleUploadDatabase = async (
         fileStream.push(null);
 
 
-        const oauth2Client = new google.auth.OAuth2();
-        oauth2Client.setCredentials({
+        const googleClient = newGoogleClient();
+        googleClient.setCredentials({
             access_token,
             refresh_token,
         });
 
-
         const googleDrive = google.drive({
             version: 'v3',
-            auth: oauth2Client,
+            auth: googleClient,
         });
 
         const fileID = await searchFile(googleDrive, fileName);

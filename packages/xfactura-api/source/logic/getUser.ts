@@ -1,36 +1,37 @@
 import type {
     Request,
+    Response,
 } from 'express';
 
 import {
     eq,
 } from 'drizzle-orm';
 
-import {
-    google,
-} from 'googleapis';
-
 import database from '../database';
 import {
     users,
 } from '../database/schema/users';
 
+import newGoogleClient from '../services/google';
+
 import {
     getAuthCookies,
+    setAuthCookies,
 } from '../utilities/cookies';
 
 
 
 export const getTokensUser = async (
     request: Request,
+    response: Response,
 ) => {
     const tokens = getAuthCookies(request);
     if (!tokens.accessToken || !tokens.refreshToken) {
         return;
     }
 
-    const oauth2Client = new google.auth.OAuth2();
-    oauth2Client.setCredentials({
+    const googleClient = newGoogleClient();
+    googleClient.setCredentials({
         access_token: tokens.accessToken,
         refresh_token: tokens.refreshToken,
     });
@@ -38,16 +39,25 @@ export const getTokensUser = async (
     let result: any = null;
 
     try {
-        result = await oauth2Client.getTokenInfo(tokens.accessToken);
+        result = await googleClient.getTokenInfo(tokens.accessToken);
     } catch (error) {
         result = await new Promise((resolve, _reject) => {
-            oauth2Client.refreshAccessToken(async (error, tokens) => {
-                if (error) {
+            googleClient.refreshAccessToken(async (error, tokens) => {
+                if (error
+                    || !tokens
+                    || !tokens.access_token
+                    || !tokens.refresh_token
+                ) {
                     resolve(null);
                     return;
                 }
 
-                const data = await oauth2Client.getTokenInfo(tokens?.access_token || '');
+                setAuthCookies(response, {
+                    accessToken: tokens.access_token,
+                    refreshToken: tokens.refresh_token,
+                });
+
+                const data = await googleClient.getTokenInfo(tokens.access_token);
                 resolve(data);
             });
         });
