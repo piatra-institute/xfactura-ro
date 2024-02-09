@@ -1,6 +1,10 @@
 import MenuBack from '@/components/MenuBack';
 import Subtitle from '@/components/Subtitle';
 
+import {
+    useVolatileStore,
+} from '@/store';
+
 
 
 export default function About({
@@ -8,6 +12,11 @@ export default function About({
 } : {
     back: () => void;
 }) {
+    const {
+        setMenuView,
+    } = useVolatileStore();
+
+
     return (
         <div
             className="max-w-xl p-4 text-left"
@@ -62,14 +71,18 @@ export default function About({
             </p>
 
             <p>
-                xfactura.ro poate fi susținut prin&nbsp;
-                <a
-                    href="https://buy.stripe.com/aEU5nj6Pma6Va6A3ch"
-                    target="_blank"
+                xfactura.ro poate fi susținut prin utilizarea&nbsp;
+                <span
+                    className="font-bold cursor-pointer"
+                    onClick={() => {
+                        setMenuView('ai');
+                    }}
                 >
-                    stripe
-                </a>
-                <br />
+                    actelor inteligente
+                </span>
+            </p>
+
+            <p>
                 pentru cereri de funcționalitate sau raportări de probleme&nbsp;
                 <a
                     href="mailto:contact@xfactura.ro?subject=xfactura.ro"
