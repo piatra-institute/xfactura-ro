@@ -9,6 +9,7 @@ import {
     googleLogin,
     googleUploadDatabase,
     checkoutSessions,
+    processIntelligentAct,
 } from './handlers';
 
 
@@ -39,6 +40,7 @@ app.post('/google-login', googleLogin);
 app.post('/google-upload-database', upload.single('file'), googleUploadDatabase);
 app.get('/stripe-checkout-sessions', checkoutSessions);
 app.post('/stripe-checkout-sessions', checkoutSessions);
+app.post('/process-intelligent-act', processIntelligentAct);
 
 app.listen(port, () => {
     console.log(`Server started on ${port}`);

@@ -37,6 +37,25 @@ export const updateUserPayments = async (
             },
         ]),
     }).where(
-        eq(users.email, databaseUser.email),
+        eq(users.id, databaseUser.id),
     );
+}
+
+
+export const decreaseIntelligentAct = async (
+    databaseUser: any,
+) => {
+    if (databaseUser.intelligentActs < 1) {
+        return false;
+    }
+
+    const intelligentActs = databaseUser.intelligentActs - 1;
+
+    await database.update(users).set({
+        intelligentActs,
+    }).where(
+        eq(users.id, databaseUser.id),
+    );
+
+    return true;
 }

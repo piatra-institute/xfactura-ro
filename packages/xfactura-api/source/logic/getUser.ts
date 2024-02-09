@@ -21,15 +21,13 @@ import {
 
 
 
-export const getTokensUser = async (
-    request: Request,
-    response: Response,
+export const getGoogleUser = async (
+    tokens: {
+        accessToken: string,
+        refreshToken: string,
+    },
+    response?: Response,
 ) => {
-    const tokens = getAuthCookies(request);
-    if (!tokens.accessToken || !tokens.refreshToken) {
-        return;
-    }
-
     const googleClient = newGoogleClient();
     googleClient.setCredentials({
         access_token: tokens.accessToken,
@@ -52,10 +50,12 @@ export const getTokensUser = async (
                     return;
                 }
 
-                setAuthCookies(response, {
-                    accessToken: tokens.access_token,
-                    refreshToken: tokens.refresh_token,
-                });
+                if (response) {
+                    setAuthCookies(response, {
+                        accessToken: tokens.access_token,
+                        refreshToken: tokens.refresh_token,
+                    });
+                }
 
                 const data = await googleClient.getTokenInfo(tokens.access_token);
                 resolve(data);
@@ -64,6 +64,21 @@ export const getTokensUser = async (
     }
 
     return result;
+}
+
+
+export const getTokensUser = async (
+    request: Request,
+    response: Response,
+) => {
+    const tokens = getAuthCookies(request);
+    if (!tokens.accessToken || !tokens.refreshToken) {
+        return;
+    }
+
+    const user = await getGoogleUser(tokens, response);
+
+    return user;
 }
 
 

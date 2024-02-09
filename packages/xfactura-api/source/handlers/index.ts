@@ -3,6 +3,7 @@ import logout from './logout';
 import googleUploadDatabase from './googleUploadDatabase';
 import checkoutSessions from './checkoutSessions';
 import googleLogin from './googleLogin';
+import processIntelligentAct from './processIntelligentAct';
 
 
 
@@ -12,4 +13,5 @@ export {
     googleUploadDatabase,
     checkoutSessions,
     googleLogin,
+    processIntelligentAct,
 };
