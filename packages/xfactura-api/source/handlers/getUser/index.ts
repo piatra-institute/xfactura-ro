@@ -3,17 +3,11 @@ import type {
     Response,
 } from 'express';
 
-import {
-    google,
-} from 'googleapis';
+import getUser from '../../logic/getUser';
 
 import {
     logger,
 } from '../../utilities';
-
-import {
-    getAuthCookies,
-} from '../../utilities/cookies';
 
 
 
@@ -22,40 +16,10 @@ export default async function handler(
     response: Response,
 ) {
     try {
-        const tokens = getAuthCookies(request);
+        const user = await getUser(request);
+        if (!user) {
+            logger('warn', 'User not found');
 
-        if (!tokens.accessToken || !tokens.refreshToken) {
-            response.status(200).json({
-                status: false,
-            });
-            return;
-        }
-
-        const oauth2Client = new google.auth.OAuth2();
-        oauth2Client.setCredentials({
-            access_token: tokens.accessToken,
-            refresh_token: tokens.refreshToken,
-        });
-
-        let result: any = null;
-
-        try {
-            result = await oauth2Client.getTokenInfo(tokens.accessToken);
-        } catch (error) {
-            result = await new Promise((resolve, _reject) => {
-                oauth2Client.refreshAccessToken(async (error, tokens) => {
-                    if (error) {
-                        resolve(null);
-                        return;
-                    }
-
-                    const data = await oauth2Client.getTokenInfo(tokens?.access_token || '');
-                    resolve(data);
-                });
-            });
-        }
-
-        if (!result) {
             response.status(200).json({
                 status: false,
             });
@@ -65,7 +29,7 @@ export default async function handler(
         response.json({
             status: true,
             data: {
-                email: result.email,
+                email: user.email,
             },
         });
     } catch (error) {

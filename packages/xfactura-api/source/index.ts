@@ -6,7 +6,7 @@ import multer from 'multer';
 import {
     getUser,
     logout,
-    gogoleLogin,
+    googleLogin,
     googleUploadDatabase,
     checkoutSessions,
 } from './handlers';
@@ -35,8 +35,9 @@ const upload = multer({ storage: storage });
 
 app.post('/get-user', getUser);
 app.post('/logout', logout);
-app.post('/google-login', gogoleLogin);
+app.post('/google-login', googleLogin);
 app.post('/google-upload-database', upload.single('file'), googleUploadDatabase);
+app.get('/stripe-checkout-sessions', checkoutSessions);
 app.post('/stripe-checkout-sessions', checkoutSessions);
 
 app.listen(port, () => {
