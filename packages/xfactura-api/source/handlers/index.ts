@@ -1,3 +1,4 @@
+import home from './home';
 import getUser from './getUser';
 import logout from './logout';
 import googleUploadDatabase from './googleUploadDatabase';
@@ -8,6 +9,7 @@ import processIntelligentAct from './processIntelligentAct';
 
 
 export {
+    home,
     getUser,
     logout,
     googleUploadDatabase,

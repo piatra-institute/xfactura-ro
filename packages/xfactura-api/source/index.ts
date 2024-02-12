@@ -4,6 +4,7 @@ import cookieParser from 'cookie-parser';
 import multer from 'multer';
 
 import {
+    home,
     getUser,
     logout,
     googleLogin,
@@ -34,6 +35,7 @@ app.all('*', function (req, res, next) {
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
+app.get('/', home);
 app.post('/get-user', getUser);
 app.post('/logout', logout);
 app.post('/google-login', googleLogin);
