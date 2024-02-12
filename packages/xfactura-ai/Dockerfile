@@ -12,3 +12,10 @@ RUN pipenv install --system --deploy
 EXPOSE 8080
 
 ENTRYPOINT ["python", "start.py"]
+
+
+### Build Command
+# > docker build -t xfactura-ro-ai .
+
+### Run Command
+# > docker run -d -p 8585:8080 xfactura-ro-ai
