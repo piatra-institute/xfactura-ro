@@ -61,12 +61,22 @@ export default function About({
             </p>
 
             <p>
+                xfactura.ro poate stoca datele în Google Drive pentru cont-urile logate folosind Google în conformitate cu politica de confidențialitate a&nbsp;
+                <a
+                    href="https://developers.google.com/terms/api-services-user-data-policy"
+                    target="_blank"
+                >
+                    Google
+                </a>
+            </p>
+
+            <p>
                 xfactura.ro poate fi rulat pe propriul calculator folosind&nbsp;
                 <a
                     href="https://github.com/piatra-institute/xfactura-ro/tree/main?tab=readme-ov-file#self-hosting"
                     target="_blank"
                 >
-                    docker
+                    Docker
                 </a>
             </p>
 
