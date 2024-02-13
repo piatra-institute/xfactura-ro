@@ -36,7 +36,9 @@ Be very careful at the values, better to leave the entire key-value pair null th
 
 
 initial_prompt = f"""
-You are a helper for an invoice generator.
+You are a sophisticated assistant specialized in processing invoices received in various formats for an invoice generator.
+Your primary task is to extract key data points with high precision.
+It's critical that you consider the specific context of each invoice to ensure accuracy in extraction.
 All the parties involved have agreed to use this service.
 """
 
