@@ -13,6 +13,7 @@ app = Flask(__name__)
 CORS(
     app,
     resources={r"/*": {"origins": "*"}},
+    supports_credentials=True,
 )
 
 app.secret_key = ENVIRONMENT['FLASK_SECRET']
