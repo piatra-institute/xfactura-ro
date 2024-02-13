@@ -16,6 +16,10 @@ import {
     logger,
 } from '../../utilities';
 
+import {
+    getAuthTokens,
+} from '../../utilities/cookies';
+
 
 
 export default async function handler(
@@ -23,9 +27,10 @@ export default async function handler(
     response: Response,
 ) {
     try {
-        const accessToken = request.headers['authorization']?.replace('Bearer ', '');
-        const refreshToken = (request.headers['authorization-refresh'] as string)?.replace('Bearer Refresh ', '');
-
+        const {
+            accessToken,
+            refreshToken,
+        } = getAuthTokens(request);
         if (!accessToken || !refreshToken) {
             response.status(401).json({
                 status: false,

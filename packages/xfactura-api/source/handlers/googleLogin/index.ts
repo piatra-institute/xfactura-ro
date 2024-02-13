@@ -40,7 +40,7 @@ export default async function handler(
         const decoded: any = jwtDecode(tokens.id_token || '');
 
         if (!tokens.access_token || !tokens.refresh_token) {
-            response.status(400).json({
+            response.status(200).json({
                 status: false,
             });
             return;
@@ -86,7 +86,7 @@ export default async function handler(
     } catch (error) {
         logger('error', error);
 
-        response.status(500).json({
+        response.status(400).json({
             status: false,
         });
     }

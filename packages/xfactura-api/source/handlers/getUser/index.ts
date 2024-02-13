@@ -23,7 +23,7 @@ export default async function handler(
         if (!tokensUser) {
             logger('warn', 'User not found');
 
-            response.status(404).json({
+            response.status(200).json({
                 status: false,
             });
             return;
@@ -33,7 +33,7 @@ export default async function handler(
         if (!databaseUser) {
             logger('warn', 'Database user not found');
 
-            response.status(404).json({
+            response.status(200).json({
                 status: false,
             });
             return;
@@ -49,7 +49,7 @@ export default async function handler(
     } catch (error) {
         logger('error', error);
 
-        response.status(500).json({
+        response.status(400).json({
             status: false,
         });
     }

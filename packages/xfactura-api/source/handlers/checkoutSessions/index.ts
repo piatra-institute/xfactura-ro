@@ -33,7 +33,7 @@ export default async function handler(
         if (!tokensUser) {
             logger('warn', 'User not found');
 
-            response.status(400).json({
+            response.status(200).json({
                 status: false,
             });
             return;
@@ -43,7 +43,7 @@ export default async function handler(
         if (!databaseUser) {
             logger('warn', 'User not found in database');
 
-            response.status(400).json({
+            response.status(200).json({
                 status: false,
             });
             return;
@@ -92,8 +92,10 @@ export default async function handler(
                             clientSecret: session.client_secret,
                         },
                     });
-                } catch (err: any) {
-                    response.status(err.statusCode || 500).json(err.message);
+                } catch (error: any) {
+                    logger('error', error);
+
+                    response.status(error.statusCode || 500).json(error.message);
                 }
                 break;
             case 'GET':
@@ -115,13 +117,14 @@ export default async function handler(
                 }
                 break;
             default:
+                logger('warn', 'Method Not Allowed');
                 response.setHeader('Allow', request.method || '');
                 response.status(405).end('Method Not Allowed');
         }
     } catch (error) {
         logger('error', error);
 
-        response.status(500).json({
+        response.status(400).json({
             status: false,
         });
     }
