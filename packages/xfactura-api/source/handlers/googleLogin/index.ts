@@ -60,24 +60,27 @@ export default async function handler(
         const databaseUser = await database.query.users.findFirst({
             where: eq(users.email, email),
         });
+        const newUser = {
+            id: uuid(),
+            createdAt: new Date().toISOString(),
+            email,
+            name,
+            picture,
+            payments: JSON.stringify([]),
+            intelligentActs: 0,
+        };
         if (!databaseUser) {
             await database.insert(users).values({
-                id: uuid(),
-                createdAt: new Date().toISOString(),
-                email,
-                name,
-                picture,
-                payments: JSON.stringify([]),
-                intelligentActs: 0,
+                ...newUser,
             });
         }
+
+        const user = databaseUser || newUser;
 
         response.json({
             status: true,
             data: {
-                email,
-                name,
-                picture,
+                ...user,
             },
         });
     } catch (error) {

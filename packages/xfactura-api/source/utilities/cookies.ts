@@ -22,12 +22,14 @@ export const setAuthCookies = (
         secure: true,
         sameSite: 'none',
         maxAge: ONE_YEAR,
+        domain: process.env.COOKIE_DOMAIN,
     });
     response.cookie(COOKIE_REFRESH_TOKEN, tokens.refreshToken, {
         httpOnly: true,
         secure: true,
         sameSite: 'none',
         maxAge: ONE_YEAR,
+        domain: process.env.COOKIE_DOMAIN,
     });
 }
 
