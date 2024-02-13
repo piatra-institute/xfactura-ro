@@ -76,16 +76,45 @@ def get_tokens():
     }
 
 
+def compose_api_headers(tokens: dict[str, str]) -> dict[str, str]:
+    access_token = tokens.get('access_token')
+    refresh_token = tokens.get('refresh_token')
+
+    if not access_token or not refresh_token:
+        return {
+            'Content-Type': 'application/json',
+        }
+
+    return {
+        'Authorization': f'Bearer {access_token}',
+        'Authorization-Refresh': f'Bearer Refresh {refresh_token}',
+        'Content-Type': 'application/json',
+    }
+
+
 def process_intelligent_act(
     tokens: dict[str, str],
-):
+) -> bool | None:
     response = requests.post(
         f'{ENVIRONMENT["API_DOMAIN"]}/process-intelligent-act',
-        headers={
-            'Authorization': f'Bearer {tokens["access_token"]}',
-            'Authorization-Refresh': f'Bearer Refresh {tokens["refresh_token"]}',
-            'Content-Type': 'application/json',
+        headers=compose_api_headers(tokens),
+    ).json()
+
+    return response.get('status') or False
+
+
+def store_prompt(
+    tokens: dict[str, str],
+    prompt: str,
+    data: dict[str, Any],
+) -> bool | None:
+    response = requests.post(
+        f'{ENVIRONMENT["API_DOMAIN"]}/store-prompt',
+        headers=compose_api_headers(tokens),
+        json={
+            'prompt': prompt,
+            'response': data,
         },
     ).json()
 
-    return response['status']
+    return response.get('status') or False

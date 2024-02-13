@@ -1,6 +1,6 @@
 from flask import jsonify, request
 
-from ..utils import get_tokens, process_intelligent_act, logger
+from ..utils import get_tokens, process_intelligent_act, store_prompt, logger
 from ..ai import text_to_invoice
 
 
@@ -19,15 +19,18 @@ def upload_text():
                 'status': False,
             })
 
-        text_data = text_to_invoice(request.json['text'])
-        if text_data is None:
+        text=request.json['text']
+        data = text_to_invoice(text)
+        if data is None:
             return jsonify({
                 'status': False,
             })
 
+        store_prompt(tokens, text, data)
+
         return jsonify({
             'status': True,
-            'data': text_data,
+            'data': data,
         })
     except Exception as error:
         logger('ERROR', error)
