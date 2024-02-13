@@ -88,8 +88,11 @@ const useStore = create<State>()(
                 const companies = { ...state.companies };
                 delete companies[id];
 
+                const defaultSeller = state.defaultSeller === id ? '' : state.defaultSeller;
+
                 return {
                     companies,
+                    defaultSeller,
                 };
             }),
 

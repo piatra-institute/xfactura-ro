@@ -188,7 +188,7 @@ export default function Party({
     useEffect(() => {
         if (
             verifyPartyData(data)
-            && !companies[data.vatNumber]
+            && !companies[normalizeVatNumber(data.vatNumber)]
         ) {
             addCompany(
                 data,
@@ -227,7 +227,13 @@ export default function Party({
             return;
         }
 
-        if (verifyPartyData(defaultSellerData) && !data.vatNumber) {
+        if (verifyPartyData(defaultSellerData)
+            && !data.vatNumber
+            && !data.name
+            && !data.county
+            && !data.city
+            && !data.address
+        ) {
             setParty(defaultSellerData);
         }
     }, [
