@@ -1,3 +1,17 @@
+export const downloadBlob = (
+    filename: string,
+    blob: Blob,
+) => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+}
+
+
 export function downloadTextFile(
     fileName: string,
     text: string,
@@ -12,13 +26,10 @@ export function downloadTextFile(
         },
     );
 
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    downloadBlob(
+        fileName,
+        blob,
+    );
 }
 
 

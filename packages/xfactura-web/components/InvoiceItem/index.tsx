@@ -15,6 +15,7 @@ import {
 import Party from '@/components/Party';
 import Lines from '@/components/Lines';
 import GenerateButton from '@/components/GenerateButton';
+import PureButton from '@/components/PureButton';
 
 import Metadata from '@/containers/Metadata';
 
@@ -23,6 +24,10 @@ import {
     checkValidLine,
     checkValidMetadata,
 } from '@/logic/validation';
+
+import {
+    generatePdf,
+} from '@/logic/pdf';
 
 
 
@@ -135,6 +140,13 @@ export default function InvoiceItem({
                 loadingEInvoice={loadingEInvoice}
                 validData={validData}
                 generateEinvoice={() => generateEinvoice(setLoadingEInvoice)}
+            />
+
+            <PureButton
+                text="exportare PDF"
+                atClick={() => {
+                    generatePdf(data);
+                }}
             />
         </>
     );
