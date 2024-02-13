@@ -69,7 +69,12 @@ export async function searchFile(
             return;
         }
 
-        return res.data.files[0].id;
+        const file = res.data.files[0];
+        if (!file) {
+            return;
+        }
+
+        return file.id;
     } catch (error) {
         logger('warn', error);
     }

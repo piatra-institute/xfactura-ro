@@ -15,12 +15,14 @@ export const logger = (
 
 
 export function createStreamFromObject(
-    obj: any,
+    data: any,
 ) {
     const readableStream = new Readable({
         objectMode: true,
         read() {
-            this.push(obj);
+            const buffer = Buffer.from(JSON.stringify(data));
+
+            this.push(buffer);
             this.push(null);
         },
     });
