@@ -4,16 +4,18 @@ import type {
 } from 'express';
 
 import {
-    decreaseIntelligentAct,
-} from '../../logic/updateUser';
-
-import {
     logger,
+    createStreamFromObject,
+    composeFilename,
 } from '../../utilities';
 
 import {
     guardAIRequest,
 } from '../../utilities/guards';
+
+import {
+    uploadFile,
+} from '../../utilities/google';
 
 
 
@@ -28,18 +30,33 @@ export default async function handler(
         }
 
         const {
-            databaseUser,
+            accessToken,
+            refreshToken,
         } = aiRequest;
 
-        const decreased = await decreaseIntelligentAct(databaseUser);
-        if (!decreased) {
-            logger('warn', 'Intelligent act not decreased');
-
-            response.status(402).json({
+        const {
+            prompt,
+            response: promptResponse,
+        } = request.body;
+        if (!prompt || !promptResponse) {
+            response.status(400).json({
                 status: false,
             });
             return;
         }
+
+        const data = {
+            prompt,
+            response: promptResponse,
+        };
+        const fileName = composeFilename('text');
+        const fileStream = createStreamFromObject(data);
+        await uploadFile(
+            fileName,
+            fileStream,
+            accessToken,
+            refreshToken,
+        );
 
         response.json({
             status: true,

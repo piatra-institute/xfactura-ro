@@ -11,6 +11,7 @@ import {
     googleUploadDatabase,
     checkoutSessions,
     processIntelligentAct,
+    storePrompt,
 } from './handlers';
 
 
@@ -43,6 +44,7 @@ app.post('/google-upload-database', upload.single('file'), googleUploadDatabase)
 app.get('/stripe-checkout-sessions', checkoutSessions);
 app.post('/stripe-checkout-sessions', checkoutSessions);
 app.post('/process-intelligent-act', processIntelligentAct);
+app.post('/store-prompt', storePrompt);
 
 app.listen(port, () => {
     console.log(`Server started on ${port}`);
