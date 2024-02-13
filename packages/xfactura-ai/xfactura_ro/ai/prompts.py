@@ -1,5 +1,5 @@
 json_invoice_prompt = f"""
-The JSON data will be in the following format:
+The JSON data will be in the following format and respect the rules:
 {{
     "invoice": {{
         "vatNumberSeller": string or null, may start with RO also called CUI, Cod Unic de Identificare, Unique Identification Code,
@@ -15,17 +15,17 @@ The JSON data will be in the following format:
         "cityBuyer": string or null,
         "addressBuyer": string or null,
         "invoiceNumber": string like "ABC00123" or null,
-        "currency": string like "RON" or null,
+        "currency": string like "RON", "EUR", "USD" or null, also if "leu" or "lei" or "euro" or "dollar" or "dolari", use the corresponding currency code,
         "issueDate": string like "year-month-day", be careful for words like "today" or "tomorrow", or null,
         "dueDate": string like "year-month-day", be careful for words like "today" or "tomorrow", or null,
         "products": [
             {{
-                "description": string or null,
+                "description": string or null, the name of the product, try to format it professionally, with adequate capitalization, do not change it if not sure,
                 "quantity": number or null,
                 "unit": string or null,
-                "price": number or null,
-                "vat": number or null,
-                "total": number or null
+                "price": number or null, be very careful at the decimal separator, it may be a comma or a dot,
+                "vat": number or null, the VAT percentage, it might not be present,
+                "total": number or null, be very careful at the decimal separator, it may be a comma or a dot,
             }}
         ]
     }}
