@@ -1,7 +1,7 @@
 from flask import jsonify
 
 from ..data import ALLOWED_FILE
-from ..utils import get_tokens, process_intelligent_act, get_file, logger
+from ..utils import get_tokens, process_intelligent_act, get_file, clean_file, logger
 from ..ai import image_to_invoice
 
 
@@ -27,6 +27,7 @@ def upload_file():
             })
 
         invoice_data = image_to_invoice(filepath)
+        clean_file(filepath)
         if invoice_data is None:
             return jsonify({
                 'status': False,

@@ -41,6 +41,16 @@ def get_file(allowlist: list[str]) -> str | None:
         return filepath
 
 
+def clean_file(filepath: str) -> None:
+    if not ENVIRONMENT['IN_PRODUCTION']:
+        return
+
+    try:
+        os.remove(filepath)
+    except Exception as error:
+        logger('ERROR', error)
+
+
 def extract_json_from_data(data: str) -> Any | None:
     try:
         data = re.sub(r'^```json', '', data)

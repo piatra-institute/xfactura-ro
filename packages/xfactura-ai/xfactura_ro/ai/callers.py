@@ -8,6 +8,11 @@ from .prompts import text_to_invoice_prompt, image_to_invoice_prompt
 
 
 
+TEXT_MODEL = 'gpt-4-turbo-preview'
+IMAGE_MODEL = 'gpt-4-vision-preview'
+AUDIO_MODEL = 'whisper-1'
+
+
 def transcribe_audio(audio_file: BufferedReader):
     transcript = client.audio.transcriptions.create(
         model='whisper-1',
@@ -18,7 +23,7 @@ def transcribe_audio(audio_file: BufferedReader):
 
 def text_to_invoice(data: str):
     response = client.chat.completions.create(
-        model="gpt-4-1106-preview",
+        model=TEXT_MODEL,
         messages=[
             {"role": "system", "content": text_to_invoice_prompt},
             {"role": "user", "content": data},
@@ -38,7 +43,7 @@ def image_to_invoice(image_path: str):
     base64_image = encode_image(image_path)
 
     response = client.chat.completions.create(
-        model="gpt-4-vision-preview",
+        model=IMAGE_MODEL,
         messages=[
             {
                 "role": "user",
