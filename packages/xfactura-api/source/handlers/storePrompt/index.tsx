@@ -56,6 +56,7 @@ export default async function handler(
             fileStream,
             accessToken,
             refreshToken,
+            'application/json',
         );
 
         response.json({

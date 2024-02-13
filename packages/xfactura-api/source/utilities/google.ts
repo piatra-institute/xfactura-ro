@@ -86,6 +86,7 @@ export async function uploadFile(
     fileStream: NodeJS.ReadableStream,
     access_token: string,
     refresh_token: string,
+    mimeType = 'application/octet-stream',
 ) {
     const googleClient = newGoogleClient();
     googleClient.setCredentials({
@@ -105,6 +106,7 @@ export async function uploadFile(
                 fileId: fileID,
                 media: {
                     body: fileStream,
+                    mimeType,
                 },
             },
         );
@@ -116,7 +118,7 @@ export async function uploadFile(
         {
             requestBody: {
                 name: fileName,
-                mimeType: 'application/octet-stream',
+                mimeType,
             },
             media: {
                 body: fileStream,
