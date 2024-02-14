@@ -3,6 +3,8 @@ import {
     PDFPage,
     PDFFont,
     rgb,
+    layoutMultilineText,
+    TextAlignment,
 } from 'pdf-lib';
 
 import fontkit from '@pdf-lib/fontkit';
@@ -21,6 +23,18 @@ import {
 
 
 
+function sliceText(
+    text: string,
+    sliceLength = 100,
+) {
+    let slicedText = [];
+    for (let i = 0; i < text.length; i += sliceLength) {
+        slicedText.push(text.slice(i, i + sliceLength));
+    }
+    return slicedText.join('\n');
+}
+
+
 const drawText = (
     page: PDFPage,
     text: string,
@@ -29,8 +43,17 @@ const drawText = (
     size = 10,
     font: PDFFont,
     color = rgb(0, 0, 0),
+    maxWidth = 300,
 ) => {
-    page.drawText(text, { x, y, size, font, color });
+    page.drawText(
+        text,
+        {
+            x, y, size, font, color,
+            maxWidth,
+            wordBreaks: [''],
+            lineHeight: size * 1.3,
+        },
+    );
 }
 
 
@@ -167,7 +190,7 @@ const drawInvoiceLines = async (
 
         let currentX = margin;
         line.forEach((text, index) => {
-            drawText(page, text, currentX, currentY, 10, font);
+            drawText(page, text, currentX, currentY, 10, font, rgb(0, 0, 0), columnWidths[index]);
             currentX += columnWidths[index] + 10;
         });
         currentY -= 20;
