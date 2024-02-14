@@ -116,19 +116,11 @@ export default function Party({
                 }
 
                 const {
-                    adresa_domiciliu_fiscal,
-                    adresa_sediu_social,
-                    date_generale,
+                    name,
+                    address,
+                    city,
+                    county,
                 } = request.data;
-
-                const name = date_generale.denumire;
-                const address = adresa_domiciliu_fiscal.ddenumire_Strada
-                    ? (adresa_domiciliu_fiscal.ddenumire_Strada + ' ' + adresa_domiciliu_fiscal.dnumar_Strada)
-                    : adresa_sediu_social.sdenumire_Strada
-                        ? (adresa_sediu_social.sdenumire_Strada + ' ' + adresa_sediu_social.snumar_Strada)
-                        : '';
-                const city = adresa_domiciliu_fiscal.ddenumire_Localitate || adresa_sediu_social.sdenumire_Localitate || '';
-                const county = adresa_domiciliu_fiscal.ddenumire_Judet || adresa_sediu_social.sdenumire_Judet || '';
 
                 setParty({
                     ...data,
