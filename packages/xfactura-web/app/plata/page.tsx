@@ -11,11 +11,15 @@ import {
 
 import Spinner from '@/components/Spinner';
 
+import {
+    logger,
+} from '@/logic/utilities';
+
 import '@/app/globals.css';
 
 
 
-export default function Payment() {
+export default function PaymentPage() {
     const [status, setStatus] = useState(null);
     const [customerEmail, setCustomerEmail] = useState('');
 
@@ -36,6 +40,9 @@ export default function Payment() {
                 if (response.status) {
                     setCustomerEmail(response.data.customerEmail);
                 }
+            })
+            .catch((error) => {
+                logger('error', error);
             });
     }, []);
 
