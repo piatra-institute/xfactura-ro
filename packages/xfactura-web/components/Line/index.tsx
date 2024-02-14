@@ -93,7 +93,7 @@ export default function Line({
             />
 
             <Input
-                text="preț"
+                text={data.vatIncluded ? 'preț cu TVA' : 'preț'}
                 value={data.price + ''}
                 setValue={(value) => updateLine(index, 'price', value)}
                 width={95}
