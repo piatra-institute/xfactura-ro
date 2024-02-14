@@ -64,22 +64,50 @@ const drawMetadata = async (
     doc.text('Factură', 250, 170);
 
     doc.setFont(font).setFontSize(10);
-
-    const x = 170;
-    const y1 = 200;
-    const y2 = 220;
-
-    doc.text('Număr', x, y1);
-    doc.text(data.metadata.number, x, y2);
-
-    doc.text('Emitere', x + 60, y1);
-    doc.text(new Date(data.metadata.issueDate).toLocaleDateString(), x + 60, y2);
-
-    doc.text('Scadență', x + 140, y1);
-    doc.text(new Date(data.metadata.dueDate).toLocaleDateString(), x + 140, y2);
-
-    doc.text('Moneda', x + 220, y1);
-    doc.text(data.metadata.currency, x + 220, y2);
+    autoTable(doc, {
+        startY: 190,
+        margin: { left: 210 },
+        tableWidth: 150,
+        styles: {
+            font,
+            fontSize: 8,
+        },
+        head: [],
+        body: [
+            [
+                {
+                    content: `Număr`,
+                },
+                {
+                    content: `${data.metadata.number}`,
+                },
+            ],
+            [
+                {
+                    content: `Emitere`,
+                },
+                {
+                    content: `${new Date(data.metadata.issueDate).toLocaleDateString()}`,
+                },
+            ],
+            [
+                {
+                    content: `Scadență`,
+                },
+                {
+                    content: `${new Date(data.metadata.dueDate).toLocaleDateString()}`,
+                },
+            ],
+            [
+                {
+                    content: `Moneda`,
+                },
+                {
+                    content: `${data.metadata.currency}`,
+                },
+            ],
+        ],
+    });
 }
 
 
@@ -130,7 +158,7 @@ export const generatePdf = async (
         body: [
             ...body,
         ],
-        startY: 250,
+        startY: 280,
         styles: {
             font: fontName,
         },
