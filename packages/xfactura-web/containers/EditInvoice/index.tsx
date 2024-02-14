@@ -136,6 +136,10 @@ export default function EditInvoice({
                 }}
             />
 
+            <div
+                className="h-8"
+            />
+
             <Deleter
                 title="ștergere"
                 atDelete={() => {

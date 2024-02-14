@@ -19,7 +19,7 @@ export default function PureButton({
 }) {
     return (
         <div
-            className="grid place-content-center p-8"
+            className="grid place-content-center p-4"
         >
             <button
                 onClick={() => atClick()}
