@@ -24,7 +24,8 @@ export default function GenerateButton({
             <button
                 onClick={() => generateEinvoice()}
                 className={styleTrim(`
-                    select-none bg-gray-800 disabled:bg-gray-600 hover:bg-gray-900 py-2 px-4
+                    select-none bg-gray-800 disabled:bg-gray-600 hover:bg-gray-900
+                    min-w-[200px] py-4 px-4
                     ${focusStyle}
                 `)}
                 disabled={loadingEInvoice || !validData}

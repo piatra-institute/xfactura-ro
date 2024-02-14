@@ -24,7 +24,8 @@ export default function PureButton({
             <button
                 onClick={() => atClick()}
                 className={styleTrim(`
-                    select-none bg-gray-800 disabled:bg-gray-600 hover:bg-gray-900 py-2 px-4
+                    select-none bg-gray-800 disabled:bg-gray-600 hover:bg-gray-900
+                    min-w-[200px] py-2 px-4
                     ${focusStyle}
                 `)}
                 disabled={disabled}
