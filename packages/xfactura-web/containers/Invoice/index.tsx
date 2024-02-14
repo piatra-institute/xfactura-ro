@@ -81,7 +81,7 @@ export default function Invoice() {
     const handleGenerateEinvoice = async (
         setLoadingEInvoice: (value: boolean) => void,
     ) => {
-        const invoice = await generateEinvoice(
+        await generateEinvoice(
             setLoadingEInvoice,
             setShowLoading,
             newInvoice,
@@ -90,16 +90,16 @@ export default function Invoice() {
 
         addInvoice({
             id: uuid(),
-            seller: invoice.seller,
-            buyer: invoice.buyer,
+            seller: newInvoice.seller,
+            buyer: newInvoice.buyer,
             metadata: newInvoice.metadata,
-            products: invoice.lines,
+            products: newInvoice.products,
         });
 
-        setLastInvoiceSeries(invoice.metadata.number);
+        setLastInvoiceSeries(newInvoice.metadata.number);
 
-        addCompany(invoice.seller);
-        addCompany(invoice.buyer);
+        addCompany(newInvoice.seller);
+        addCompany(newInvoice.buyer);
     }
 
     const resetInvoice = () => {

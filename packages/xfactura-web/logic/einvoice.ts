@@ -25,7 +25,7 @@ import {
 export const generateEinvoice = async (
     setLoadingEInvoice: (value: boolean) => void,
     setShowLoading: (value: boolean) => void,
-    newInvoice: any,
+    newInvoice: Invoice,
     generateEinvoiceLocally: boolean,
 ) => {
     setShowLoading(true);
@@ -52,7 +52,14 @@ export const generateEinvoice = async (
             city: normalizeUserCity(newInvoice.buyer.city, newInvoice.buyer.county),
         },
         lines: [
-            ...newInvoice.products,
+            ...newInvoice.products.map(product => {
+                return {
+                    ...product,
+                    price: product.vatIncluded
+                        ? product.price / (1 + product.vatRate / 100)
+                        : product.price,
+                };
+            }),
         ],
     };
 
