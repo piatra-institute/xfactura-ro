@@ -70,6 +70,7 @@ export interface Company {
     county: string;
     country: string;
     contact?: string;
+    IBAN?: string;
 }
 
 
