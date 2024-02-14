@@ -32,11 +32,32 @@ const drawSeller = async (
 ) => {
     doc.setFont(font).setFontSize(12);
     doc.text('Furnizor', 50, 50);
-    doc.setFontSize(10);
-    doc.text(data.seller.name, 50, 70);
-    doc.text(data.seller.vatNumber, 50, 90);
-    doc.text(data.seller.address, 50, 110);
-    doc.text(`${data.seller.city}, ${data.seller.county}, ${data.seller.country}`, 50, 130);
+
+    autoTable(doc, {
+        startY: 60,
+        margin: { left: 45 },
+        tableWidth: 200,
+        styles: {
+            font,
+            fontSize: 10,
+        },
+        theme: 'plain',
+        head: [],
+        body: [
+            {
+                content: data.seller.name,
+            },
+            {
+                content: data.seller.vatNumber,
+            },
+            {
+                content: data.seller.address,
+            },
+            {
+                content: `${data.seller.city}, ${data.seller.county}, ${data.seller.country}`,
+            },
+        ],
+    });
 }
 
 
@@ -46,12 +67,33 @@ const drawBuyer = async (
     font: string,
 ) => {
     doc.setFont(font).setFontSize(12);
-    doc.text('Cumpărător', 300, 50);
-    doc.setFontSize(10);
-    doc.text(data.buyer.name, 300, 70);
-    doc.text(data.buyer.vatNumber, 300, 90);
-    doc.text(data.buyer.address, 300, 110);
-    doc.text(`${data.buyer.city}, ${data.buyer.county}, ${data.buyer.country}`, 300, 130);
+    doc.text('Cumpărător', 350, 50);
+
+    autoTable(doc, {
+        startY: 60,
+        margin: { left: 345 },
+        tableWidth: 200,
+        styles: {
+            font,
+            fontSize: 10,
+        },
+        theme: 'plain',
+        head: [],
+        body: [
+            {
+                content: data.buyer.name,
+            },
+            {
+                content: data.buyer.vatNumber,
+            },
+            {
+                content: data.buyer.address,
+            },
+            {
+                content: `${data.buyer.city}, ${data.buyer.county}, ${data.buyer.country}`,
+            },
+        ],
+    });
 }
 
 
@@ -61,13 +103,13 @@ const drawMetadata = async (
     font: string,
 ) => {
     doc.setFont(font).setFontSize(20);
-    doc.text('Factură', 250, 170);
+    doc.text('Factură', 260, 180);
 
     doc.setFont(font).setFontSize(10);
     autoTable(doc, {
-        startY: 190,
-        margin: { left: 210 },
-        tableWidth: 150,
+        startY: 195,
+        margin: { left: 230 },
+        tableWidth: 130,
         styles: {
             font,
             fontSize: 8,
@@ -80,6 +122,9 @@ const drawMetadata = async (
                 },
                 {
                     content: `${data.metadata.number}`,
+                    styles: {
+                        halign: 'right',
+                    },
                 },
             ],
             [
@@ -88,6 +133,9 @@ const drawMetadata = async (
                 },
                 {
                     content: `${new Date(data.metadata.issueDate).toLocaleDateString()}`,
+                    styles: {
+                        halign: 'right',
+                    },
                 },
             ],
             [
@@ -96,6 +144,9 @@ const drawMetadata = async (
                 },
                 {
                     content: `${new Date(data.metadata.dueDate).toLocaleDateString()}`,
+                    styles: {
+                        halign: 'right',
+                    },
                 },
             ],
             [
@@ -104,6 +155,9 @@ const drawMetadata = async (
                 },
                 {
                     content: `${data.metadata.currency}`,
+                    styles: {
+                        halign: 'right',
+                    },
                 },
             ],
         ],
@@ -158,7 +212,7 @@ export const generatePdf = async (
         body: [
             ...body,
         ],
-        startY: 280,
+        startY: 290,
         styles: {
             font: fontName,
         },
