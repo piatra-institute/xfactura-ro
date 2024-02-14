@@ -98,10 +98,33 @@ export default async function handler(
         }
 
         const entity = result.found[0];
-        map[vatNumber] = entity;
+
+        const {
+            adresa_domiciliu_fiscal,
+            adresa_sediu_social,
+            date_generale,
+        } = entity;
+
+        const name = date_generale.denumire;
+        const address = adresa_domiciliu_fiscal.ddenumire_Strada
+            ? (adresa_domiciliu_fiscal.ddenumire_Strada + ' ' + adresa_domiciliu_fiscal.dnumar_Strada)
+            : adresa_sediu_social.sdenumire_Strada
+                ? (adresa_sediu_social.sdenumire_Strada + ' ' + adresa_sediu_social.snumar_Strada)
+                : '';
+        const city = adresa_domiciliu_fiscal.ddenumire_Localitate || adresa_sediu_social.sdenumire_Localitate || '';
+        const county = adresa_domiciliu_fiscal.ddenumire_Judet || adresa_sediu_social.sdenumire_Judet || '';
+        const parsedEntity = {
+            name,
+            address,
+            city,
+            county,
+        };
+
+        map[vatNumber] = parsedEntity;
+
         res.status(200).json({
             status: true,
-            data: entity,
+            data: parsedEntity,
         });
     } catch (error) {
         logger('error', error);
