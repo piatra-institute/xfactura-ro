@@ -16,7 +16,7 @@ import {
 export const getCompanyDetails = async (
     vatNumber: string,
 ) => {
-    if (!ENVIRONMENT.X_DOMAIN) {
+    if (!ENVIRONMENT.API_DOMAIN) {
         return;
     }
 
@@ -27,8 +27,6 @@ export const getCompanyDetails = async (
     try {
         const request = await fetch(COMPANY_DETAILS_API, {
             method: 'POST',
-            mode: 'no-cors',
-            credentials: 'omit',
             headers: {
                 'Content-Type': 'application/json',
             },
