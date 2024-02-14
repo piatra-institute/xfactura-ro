@@ -13,6 +13,8 @@ export const company = {
     city: '',
     county: '',
     country: 'România',
+    contact: '',
+    IBAN: '',
 };
 
 export const companyText = {
@@ -23,6 +25,7 @@ export const companyText = {
     city: 'localitate',
     address: 'adresă',
     contact: 'contact',
+    IBAN: 'IBAN',
 } as const;
 
 export const companyFields = [
@@ -33,6 +36,7 @@ export const companyFields = [
     'city',
     'address',
     'contact',
+    'IBAN',
 ] as const;
 
 
