@@ -143,7 +143,7 @@ export default function InvoiceItem({
             />
 
             <PureButton
-                text="export .pdf"
+                text="export pdf"
                 atClick={() => {
                     generatePdf(data);
                 }}

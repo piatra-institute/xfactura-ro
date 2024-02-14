@@ -1,8 +1,11 @@
 import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
+import autoTable, {
+    RowInput,
+} from 'jspdf-autotable';
 
 import {
     Invoice,
+    Company,
 } from '@/data';
 
 import {
@@ -25,6 +28,39 @@ function arrayBufferToBase64(
 }
 
 
+const composeCompanyTableBody = (
+    data: Company,
+) => {
+    const body: RowInput[] = [
+        {
+            content: data.name,
+        },
+        {
+            content: data.vatNumber,
+        },
+        {
+            content: data.address,
+        },
+        {
+            content: `${data.city}, ${data.county}, ${data.country}`,
+        },
+    ];
+
+    if (data.contact) {
+        body.push({
+            content: data.contact,
+        });
+    }
+    if (data.IBAN) {
+        body.push({
+            content: data.IBAN,
+        });
+    }
+
+    return body;
+}
+
+
 const drawSeller = async (
     doc: jsPDF,
     data: Invoice,
@@ -34,29 +70,17 @@ const drawSeller = async (
     doc.text('Furnizor', 50, 50);
 
     autoTable(doc, {
-        startY: 60,
-        margin: { left: 45 },
+        startY: 57,
+        margin: { left: 47 },
         tableWidth: 200,
         styles: {
             font,
             fontSize: 10,
+            cellPadding: 3,
         },
         theme: 'plain',
         head: [],
-        body: [
-            {
-                content: data.seller.name,
-            },
-            {
-                content: data.seller.vatNumber,
-            },
-            {
-                content: data.seller.address,
-            },
-            {
-                content: `${data.seller.city}, ${data.seller.county}, ${data.seller.country}`,
-            },
-        ],
+        body: composeCompanyTableBody(data.seller),
     });
 }
 
@@ -67,32 +91,20 @@ const drawBuyer = async (
     font: string,
 ) => {
     doc.setFont(font).setFontSize(12);
-    doc.text('Cumpărător', 350, 50);
+    doc.text('Cumpărător', 390, 50);
 
     autoTable(doc, {
-        startY: 60,
-        margin: { left: 345 },
+        startY: 57,
+        margin: { left: 387 },
         tableWidth: 200,
         styles: {
             font,
             fontSize: 10,
+            cellPadding: 3,
         },
         theme: 'plain',
         head: [],
-        body: [
-            {
-                content: data.buyer.name,
-            },
-            {
-                content: data.buyer.vatNumber,
-            },
-            {
-                content: data.buyer.address,
-            },
-            {
-                content: `${data.buyer.city}, ${data.buyer.county}, ${data.buyer.country}`,
-            },
-        ],
+        body: composeCompanyTableBody(data.buyer),
     });
 }
 
@@ -202,9 +214,9 @@ export const generatePdf = async (
         return [
             product.name,
             product.quantity,
-            formatNumber(product.price).replace(' RON', ''),
-            product.vatRate,
-            formatNumber(productTotal).replace(' RON', ''),
+            formatNumber(product.price).replace('RON', '').trim(),
+            formatNumber(product.price * product.vatRate / 100).replace('RON', '').trim(),
+            formatNumber(productTotal).replace('RON', '').trim(),
         ];
     });
     autoTable(doc, {
@@ -220,13 +232,26 @@ export const generatePdf = async (
             fillColor: [190, 190, 190],
             textColor: [0, 0, 0],
             font: fontName,
+            halign: 'center',
         },
         columnStyles: {
             0: {
-                cellWidth: 250,
+                cellWidth: 220,
             },
             1: {
                 cellWidth: 60,
+                halign: 'center',
+            },
+            2: {
+                cellWidth: 90,
+                halign: 'right',
+            },
+            3: {
+                cellWidth: 70,
+                halign: 'right',
+            },
+            4: {
+                halign: 'right',
             },
         },
     });
