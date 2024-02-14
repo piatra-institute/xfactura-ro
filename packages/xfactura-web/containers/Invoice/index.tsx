@@ -1,6 +1,7 @@
 'use client';
 
 import {
+    useRef,
     useEffect,
 } from 'react';
 
@@ -30,7 +31,12 @@ import useStore, {
 
 
 
-export default function Home() {
+export default function Invoice() {
+    // #region references
+    const metadataNumberSet = useRef(false);
+    // #endregion references
+
+
     // #region state
     const {
         generateEinvoiceLocally,
@@ -48,6 +54,8 @@ export default function Home() {
         setNewInvoiceBuyer,
         setNewInvoiceMetadata,
         setNewInvoiceLines,
+
+        setShowLoading,
     } = useVolatileStore();
     // #endregion state
 
@@ -75,6 +83,7 @@ export default function Home() {
     ) => {
         const invoice = await generateEinvoice(
             setLoadingEInvoice,
+            setShowLoading,
             newInvoice,
             generateEinvoiceLocally,
         );
@@ -131,10 +140,16 @@ export default function Home() {
             return;
         }
 
+        if (metadataNumberSet.current) {
+            // Do not update after einvoice generation.
+            return;
+        }
+
         setNewInvoiceMetadata({
             ...newInvoice.metadata,
             number: seriesData.nextSeries,
         });
+        metadataNumberSet.current = true;
 
         // Run only once.
         // eslint-disable-next-line

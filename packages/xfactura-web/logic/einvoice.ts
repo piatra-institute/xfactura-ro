@@ -24,9 +24,11 @@ import {
 
 export const generateEinvoice = async (
     setLoadingEInvoice: (value: boolean) => void,
+    setShowLoading: (value: boolean) => void,
     newInvoice: any,
     generateEinvoiceLocally: boolean,
 ) => {
+    setShowLoading(true);
     setLoadingEInvoice(true);
 
     const invoice = {
@@ -61,6 +63,7 @@ export const generateEinvoice = async (
         await webContainerRunner.startNodePHPServer(
             (value) => {
                 setLoadingEInvoice(false);
+                setShowLoading(false);
 
                 downloadTextFile(
                     filename,
@@ -71,6 +74,7 @@ export const generateEinvoice = async (
     } else {
         const response = await getEInvoice(invoice);
         setLoadingEInvoice(false);
+        setShowLoading(false);
 
         if (response && response.status) {
             downloadTextFile(

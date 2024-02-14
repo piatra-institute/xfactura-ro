@@ -44,6 +44,7 @@ export default function EditInvoice({
     const {
         editID,
         setMenuView,
+        setShowLoading,
     } = useVolatileStore();
 
     const [
@@ -120,6 +121,7 @@ export default function EditInvoice({
                 ) => {
                     generateEinvoice(
                         setLoadingEInvoice,
+                        setShowLoading,
                         invoiceItem,
                         generateEinvoiceLocally,
                     );
