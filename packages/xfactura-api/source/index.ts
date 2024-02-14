@@ -6,6 +6,7 @@ import multer from 'multer';
 import {
     home,
     getUser,
+    companyDetails,
     logout,
     googleLogin,
     googleUploadDatabase,
@@ -38,6 +39,7 @@ const upload = multer({ storage: storage });
 
 app.get('/', home);
 app.post('/get-user', getUser);
+app.post('/company-details', companyDetails);
 app.post('/logout', logout);
 app.post('/google-login', googleLogin);
 app.post('/google-upload-database', upload.single('file'), googleUploadDatabase);
