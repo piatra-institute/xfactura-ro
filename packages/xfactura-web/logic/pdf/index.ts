@@ -1,21 +1,9 @@
-import {
-    PDFDocument,
-    PDFPage,
-    PDFFont,
-    rgb,
-    layoutMultilineText,
-    TextAlignment,
-} from 'pdf-lib';
-
-import fontkit from '@pdf-lib/fontkit';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 import {
     Invoice,
 } from '@/data';
-
-import {
-    downloadBlob,
-} from '@/logic/utilities';
 
 import {
     formatNumber,
@@ -23,208 +11,145 @@ import {
 
 
 
-function sliceText(
-    text: string,
-    sliceLength = 100,
+function arrayBufferToBase64(
+    buffer: ArrayBuffer,
 ) {
-    let slicedText = [];
-    for (let i = 0; i < text.length; i += sliceLength) {
-        slicedText.push(text.slice(i, i + sliceLength));
+    let binary = '';
+    const bytes = new Uint8Array(buffer);
+
+    for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
     }
-    return slicedText.join('\n');
-}
 
-
-const drawText = (
-    page: PDFPage,
-    text: string,
-    x: number,
-    y: number,
-    size = 10,
-    font: PDFFont,
-    color = rgb(0, 0, 0),
-    maxWidth = 300,
-) => {
-    page.drawText(
-        text,
-        {
-            x, y, size, font, color,
-            maxWidth,
-            wordBreaks: [''],
-            lineHeight: size * 1.3,
-        },
-    );
+    return btoa(binary);
 }
 
 
 const drawSeller = async (
+    doc: jsPDF,
     data: Invoice,
-    page: PDFPage,
-    font: PDFFont,
-    margin: number,
-    currentY: number,
+    font: string,
 ) => {
-    drawText(page, `Furnizor`, margin, currentY, 12, font);
-    currentY -= 20;
-    drawText(page, `${data.seller.name}`, margin, currentY, 10, font);
-    currentY -= 20;
-    drawText(page, `${data.seller.vatNumber}`, margin, currentY, 10, font);
-    currentY -= 20;
-    drawText(page, `${data.seller.address}`, margin, currentY, 10, font);
-    currentY -= 15;
-    drawText(page, `${data.seller.city}, ${data.seller.county}, ${data.seller.country}`, margin, currentY, 10, font);
-    currentY -= 20;
-
-    if (data.seller.contact) {
-        drawText(page, `${data.seller.contact}`, margin, currentY, 10, font);
-        currentY -= 20;
-    } else {
-        currentY -= 5;
-    }
-
-    return currentY;
+    doc.setFont(font).setFontSize(12);
+    doc.text('Furnizor', 50, 50);
+    doc.setFontSize(10);
+    doc.text(data.seller.name, 50, 70);
+    doc.text(data.seller.vatNumber, 50, 90);
+    doc.text(data.seller.address, 50, 110);
+    doc.text(`${data.seller.city}, ${data.seller.county}, ${data.seller.country}`, 50, 130);
 }
 
 
 const drawBuyer = async (
+    doc: jsPDF,
     data: Invoice,
-    page: PDFPage,
-    font: PDFFont,
-    margin: number,
-    currentY: number,
+    font: string,
 ) => {
-    const currentX = margin + 250;
-
-    drawText(page, `Cumpărător`, currentX, currentY, 12, font);
-    currentY -= 20;
-    drawText(page, `${data.buyer.name}`, currentX, currentY, 10, font);
-    currentY -= 20;
-    drawText(page, `${data.buyer.vatNumber}`, currentX, currentY, 10, font);
-    currentY -= 20;
-    drawText(page, `${data.buyer.address}`, currentX, currentY, 10, font);
-    currentY -= 15;
-    drawText(page, `${data.buyer.city}, ${data.buyer.county}, ${data.buyer.country}`, currentX, currentY, 10, font);
-    currentY -= 30;
-
-    if (data.buyer.contact) {
-        drawText(page, `${data.buyer.contact}`, margin, currentY, 10, font);
-        currentY -= 20;
-    } else {
-        currentY -= 5;
-    }
-
-    return currentY;
+    doc.setFont(font).setFontSize(12);
+    doc.text('Cumpărător', 300, 50);
+    doc.setFontSize(10);
+    doc.text(data.buyer.name, 300, 70);
+    doc.text(data.buyer.vatNumber, 300, 90);
+    doc.text(data.buyer.address, 300, 110);
+    doc.text(`${data.buyer.city}, ${data.buyer.county}, ${data.buyer.country}`, 300, 130);
 }
 
 
 const drawMetadata = async (
+    doc: jsPDF,
     data: Invoice,
-    page: PDFPage,
-    font: PDFFont,
-    margin: number,
-    currentY: number,
+    font: string,
 ) => {
-    const currentX = margin + 100;
+    doc.setFont(font).setFontSize(20);
+    doc.text('Factură', 250, 170);
 
-    currentY -= 20;
+    doc.setFont(font).setFontSize(10);
 
-    drawText(page, `Număr`, currentX, currentY, 12, font);
-    drawText(page, `Emitere`, currentX + 80, currentY, 12, font);
-    drawText(page, `Scadență`, currentX + 150, currentY, 12, font);
-    drawText(page, `Moneda`, currentX + 240, currentY, 12, font);
-    currentY -= 20;
-    drawText(page, `${data.metadata.number}`, currentX, currentY, 10, font);
-    drawText(page, `${new Date(data.metadata.issueDate).toLocaleDateString()}`, currentX + 80, currentY, 10, font);
-    drawText(page, `${new Date(data.metadata.dueDate).toLocaleDateString()}`, currentX + 150, currentY, 10, font);
-    drawText(page, `${data.metadata.currency}`, currentX + 240, currentY, 10, font);
-    currentY -= 20;
+    const x = 170;
+    const y1 = 200;
+    const y2 = 220;
 
-    currentY -= 50;
+    doc.text('Număr', x, y1);
+    doc.text(data.metadata.number, x, y2);
 
-    return currentY;
-}
+    doc.text('Emitere', x + 60, y1);
+    doc.text(new Date(data.metadata.issueDate).toLocaleDateString(), x + 60, y2);
 
+    doc.text('Scadență', x + 140, y1);
+    doc.text(new Date(data.metadata.dueDate).toLocaleDateString(), x + 140, y2);
 
-const drawInvoiceHeaders = async (
-    data: Invoice,
-    page: PDFPage,
-    font: PDFFont,
-    margin: number,
-    currentY: number,
-) => {
-    const headers = ["Nume", "Cantitate", "Preț", "TVA", "Total"];
-    const columnWidths = [100, 70, 70, 70, 70];
-
-    let currentX = margin;
-    headers.forEach((header, index) => {
-        drawText(page, header, currentX, currentY, 12, font, rgb(0, 0.53, 0.71));
-        currentX += columnWidths[index] + 10; // Adding some space between columns
-    });
-    currentY -= 20;
-
-    return currentY;
-}
-
-
-const drawInvoiceLines = async (
-    data: Invoice,
-    page: PDFPage,
-    font: PDFFont,
-    margin: number,
-    currentY: number,
-) => {
-    const columnWidths = [100, 70, 70, 70, 70];
-
-    data.products.forEach((product) => {
-        const productTotal = product.vatIncluded
-            ? product.price * product.quantity
-            : product.price * product.quantity * (1 + product.vatRate / 100);
-
-        const line = [
-            product.name,
-            product.quantity.toString(),
-            formatNumber(product.price),
-            formatNumber(product.price * product.vatRate / 100),
-            formatNumber(productTotal),
-        ];
-
-        let currentX = margin;
-        line.forEach((text, index) => {
-            drawText(page, text, currentX, currentY, 10, font, rgb(0, 0, 0), columnWidths[index]);
-            currentX += columnWidths[index] + 10;
-        });
-        currentY -= 20;
-    });
-
-    return currentY;
+    doc.text('Moneda', x + 220, y1);
+    doc.text(data.metadata.currency, x + 220, y2);
 }
 
 
 export const generatePdf = async (
     data: Invoice,
 ) => {
-    const pdfDoc = await PDFDocument.create();
+    const doc = new jsPDF({
+        orientation: 'portrait',
+        unit: 'pt',
+        format: 'a4',
+    });
 
-    pdfDoc.registerFontkit(fontkit);
-    const fontBytes = await fetch('/assets/NotoSans-Regular.ttf').then((res) => res.arrayBuffer());
-    const font = await pdfDoc.embedFont(fontBytes);
 
-    const A4 = [595, 842] as [number, number];
-    const page = pdfDoc.addPage(A4);
+    const fontName = 'NotoSans-Regular';
+    const fontFile = fontName + '.ttf';
+    const fontBytes = await fetch(`/assets/${fontFile}`)
+        .then((res) => res.arrayBuffer())
+        .catch((_) => {});
+    if (!fontBytes) {
+        return;
+    }
+    doc.addFileToVFS(fontFile, arrayBufferToBase64(fontBytes));
+    doc.addFont(fontFile, fontName, 'normal');
+    doc.setFont(fontName);
 
-    const margin = 50;
-    const initialY = 800;
-    let currentY = initialY;
 
-    currentY = await drawSeller(data, page, font, margin, initialY);
-    currentY = await drawBuyer(data, page, font, margin, initialY);
+    await drawSeller(doc, data, fontName);
+    await drawBuyer(doc, data, fontName);
+    await drawMetadata(doc, data, fontName);
 
-    currentY = await drawMetadata(data, page, font, margin, currentY);
-    currentY = await drawInvoiceHeaders(data, page, font, margin, currentY);
-    currentY = await drawInvoiceLines(data, page, font, margin, currentY);
 
-    const pdfBytes = await pdfDoc.save();
-    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-    const filename = `xfactura_${data.metadata.number}.pdf`;
-    downloadBlob(filename, blob);
+    const headers = ['Nume', 'Cantitate', 'Preț', 'TVA', 'Total'];
+    const body = data.products.map((product) => {
+        const productTotal = product.vatIncluded
+            ? product.price * product.quantity
+            : product.price * product.quantity * (1 + product.vatRate / 100);
+
+        return [
+            product.name,
+            product.quantity,
+            formatNumber(product.price).replace(' RON', ''),
+            product.vatRate,
+            formatNumber(productTotal).replace(' RON', ''),
+        ];
+    });
+    autoTable(doc, {
+        head: [headers],
+        body: [
+            ...body,
+        ],
+        startY: 250,
+        styles: {
+            font: fontName,
+        },
+        headStyles: {
+            fillColor: [190, 190, 190],
+            textColor: [0, 0, 0],
+            font: fontName,
+        },
+        columnStyles: {
+            0: {
+                cellWidth: 250,
+            },
+            1: {
+                cellWidth: 60,
+            },
+        },
+    });
+
+
+    const filename = `xfactura_${data.metadata.number}_${data.buyer.name.replace(/\s/, '')}.pdf`;
+    doc.save(filename);
 }
