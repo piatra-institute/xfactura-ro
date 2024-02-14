@@ -14,6 +14,11 @@ import {
 
 import useVolatileStore from './volatileStore';
 
+import {
+    normalizeVatNumber,
+    verifyPartyData,
+} from '@/logic/validation';
+
 
 
 export interface State {
@@ -34,6 +39,7 @@ export interface State {
 
     companies: Record<string, Company>;
     addCompany: (company: Company) => void;
+    editCompany: (company: Company) => void;
     removeCompany: (id: string) => void;
 
     invoices: Record<string, Invoice>;
@@ -76,14 +82,44 @@ const useStore = create<State>()(
             toggleStoreGoogleDrive: () => set((state) => ({ storeGoogleDrive: !state.storeGoogleDrive })),
 
             companies: {},
-            addCompany: (company: Company) => set((state) => ({
-                companies: {
-                    ...state.companies,
-                    [company.vatNumber]: {
-                        ...company,
+            addCompany: (company: Company) => set((state) => {
+                const validData = verifyPartyData(company);
+                if (!validData) {
+                    return;
+                }
+                const vatNumber = normalizeVatNumber(company.vatNumber);
+                if (state.companies[vatNumber]) {
+                    return;
+                }
+
+                return {
+                    companies: {
+                        ...state.companies,
+                        [company.vatNumber]: {
+                            ...company,
+                        },
                     },
-                },
-            })),
+                };
+            }),
+            editCompany: (company: Company) => set((state) => {
+                const validData = verifyPartyData(company);
+                if (!validData) {
+                    return;
+                }
+                const vatNumber = normalizeVatNumber(company.vatNumber);
+                if (!state.companies[vatNumber]) {
+                    return;
+                }
+
+                return {
+                    companies: {
+                        ...state.companies,
+                        [company.vatNumber]: {
+                            ...company,
+                        },
+                    },
+                };
+            }),
             removeCompany: (id: string) => set((state) => {
                 const companies = { ...state.companies };
                 delete companies[id];

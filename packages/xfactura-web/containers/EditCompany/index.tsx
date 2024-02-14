@@ -25,7 +25,7 @@ export default function EditCompany({
 }) {
     const {
         companies,
-        addCompany,
+        editCompany,
         removeCompany,
 
         defaultSeller,
@@ -78,7 +78,7 @@ export default function EditCompany({
             <PureButton
                 text="salvare"
                 atClick={() => {
-                    addCompany(company);
+                    editCompany(company);
                     setMenuView('companies');
                 }}
             />

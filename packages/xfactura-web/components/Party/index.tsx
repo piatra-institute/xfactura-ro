@@ -47,7 +47,9 @@ export default function Party({
     setParty: (company: Company) => void;
     styleless?: boolean;
 }) {
+    // #region references
     const mountedTime = useRef(Date.now());
+    // #endregion references
 
 
     // #region state
@@ -56,7 +58,6 @@ export default function Party({
         companies,
         defaultSeller,
         setDefaultSeller,
-        addCompany,
     } = useStore();
 
     const [
@@ -184,22 +185,6 @@ export default function Party({
 
 
     // #region effects
-    /** Add company */
-    useEffect(() => {
-        if (
-            verifyPartyData(data)
-            && !companies[normalizeVatNumber(data.vatNumber)]
-        ) {
-            addCompany(
-                data,
-            );
-        }
-    }, [
-        data,
-        companies,
-        addCompany,
-    ]);
-
     /** Default seller */
     useEffect(() => {
         if (

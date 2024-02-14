@@ -39,6 +39,7 @@ export default function Home() {
         setLastInvoiceSeries,
 
         addInvoice,
+        addCompany,
     } = useStore();
 
     const {
@@ -87,6 +88,9 @@ export default function Home() {
         });
 
         setLastInvoiceSeries(invoice.metadata.number);
+
+        addCompany(invoice.seller);
+        addCompany(invoice.buyer);
     }
 
     const resetInvoice = () => {
@@ -140,6 +144,7 @@ export default function Home() {
     // #endregion effects
 
 
+    // #region render
     return (
         <>
             <InvoiceItem
@@ -166,4 +171,5 @@ export default function Home() {
             />
         </>
     );
+    // #endregion render
 }
