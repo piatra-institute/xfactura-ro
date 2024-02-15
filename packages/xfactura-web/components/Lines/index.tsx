@@ -24,14 +24,14 @@ export default function Lines({
     addNewLine: () => void;
     currency: string;
 }) {
-    const updateLine = (
+    const updateLineItem = (
         index: number,
         type: string,
         value: string | boolean,
     ) => {
         const newLines = data.map((line, idx) => {
             if (idx === index) {
-                const parsedValue = typeof value === 'number' &&
+                const parsedValue = typeof value === 'string' &&
                     (type === 'price' || type === 'quantity' || type === 'vatRate')
                     ? parseFloat(value)
                     : value;
@@ -45,6 +45,21 @@ export default function Lines({
             return {
                 ...line,
             };
+        });
+
+        setLines(newLines);
+    }
+
+    const updateLine = (
+        index: number,
+        lineData: InvoiceLine,
+    ) => {
+        const newLines = data.map((line, idx) => {
+            if (idx === index) {
+                return lineData;
+            }
+
+            return line;
         });
 
         setLines(newLines);
@@ -134,6 +149,7 @@ export default function Lines({
                             data={line}
                             index={index}
                             updateLine={updateLine}
+                            updateLineItem={updateLineItem}
                             removeLine={removeLine}
                             currency={currency}
                         />

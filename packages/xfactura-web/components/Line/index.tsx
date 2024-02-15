@@ -1,3 +1,8 @@
+import {
+    useState,
+    useEffect,
+} from 'react';
+
 import Input from '@/components/Input';
 import LineMenu from '@/components/LineMenu';
 
@@ -11,6 +16,8 @@ import {
     formatNumber,
 } from '@/logic/utilities';
 
+import useStore from '@/store';
+
 
 
 export default function Line({
@@ -18,14 +25,26 @@ export default function Line({
     index,
     currency,
     updateLine,
+    updateLineItem,
     removeLine,
 }: {
     data: InvoiceLine;
     index: number;
     currency: string;
-    updateLine: (index: number, type: string, value: string | boolean) => void;
+    updateLine: (index: number, lineData: InvoiceLine) => void;
+    updateLineItem: (index: number, type: string, value: string | boolean) => void;
     removeLine: (index: number) => void;
 }) {
+    const {
+        inventory,
+    } = useStore();
+
+    const [
+        multipleChoicesName,
+        setMultipleChoicesName,
+    ] = useState<string[]>([]);
+
+
     const computeTotal = () => {
         const {
             price,
@@ -63,6 +82,29 @@ export default function Line({
     }
 
 
+    useEffect(() => {
+        if (data.name.length < 2) {
+            setMultipleChoicesName([]);
+            return;
+        }
+
+        const name = data.name.toLowerCase();
+        const choices = Object.keys(inventory)
+            .filter(key => inventory[key].name.toLowerCase().includes(name))
+            .map(key => inventory[key].name);
+
+        if (choices.length === 1 && choices[0] === data.name) {
+            setMultipleChoicesName([]);
+            return;
+        }
+
+        setMultipleChoicesName(choices);
+    }, [
+        inventory,
+        data.name,
+    ]);
+
+
     return (
         <li
             className="grid gap-1 mb-10 items-center lg:flex lg:gap-12 lg:mb-4"
@@ -76,14 +118,30 @@ export default function Line({
             <Input
                 text="denumire"
                 value={data.name}
-                setValue={(value) => updateLine(index, 'name', value)}
+                setValue={(value) => updateLineItem(index, 'name', value)}
                 asGrid={true}
+                multipleChoices={multipleChoicesName}
+                atChoice={(value) => {
+                    const item = Object.values(inventory).find(item => item.name === value);
+                    if (item) {
+                        updateLine(
+                            index,
+                            {
+                                ...data,
+                                name: item.name,
+                                price: item.price,
+                                vatRate: item.vatRate,
+                            },
+                        );
+                    }
+                    setMultipleChoicesName([]);
+                }}
             />
 
             <Input
                 text="cantitate"
                 value={data.quantity + ''}
-                setValue={(value) => updateLine(index, 'quantity', value)}
+                setValue={(value) => updateLineItem(index, 'quantity', value)}
                 width={70}
                 type="number"
                 inputProps={{
@@ -95,7 +153,7 @@ export default function Line({
             <Input
                 text={data.vatIncluded ? 'preț cu TVA' : 'preț'}
                 value={data.price + ''}
-                setValue={(value) => updateLine(index, 'price', value)}
+                setValue={(value) => updateLineItem(index, 'price', value)}
                 width={95}
                 type="number"
                 inputProps={{
@@ -107,7 +165,7 @@ export default function Line({
             <Input
                 text="TVA %"
                 value={data.vatRate + ''}
-                setValue={(value) => updateLine(index, 'vatRate', value)}
+                setValue={(value) => updateLineItem(index, 'vatRate', value)}
                 width={65}
                 type="number"
                 inputProps={{
@@ -128,7 +186,7 @@ export default function Line({
             <LineMenu
                 data={data}
                 index={index}
-                updateLine={updateLine}
+                updateLine={updateLineItem}
                 removeLine={removeLine}
             />
         </li>

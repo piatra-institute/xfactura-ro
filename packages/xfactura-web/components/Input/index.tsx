@@ -68,7 +68,12 @@ export default function Input({
                     setMultipleIndex((multipleIndex + 1) % multipleChoices.length);
                 }
                 if (event.key === 'ArrowUp') {
-                    setMultipleIndex((multipleIndex - 1 + multipleChoices.length) % multipleChoices.length);
+                    event.preventDefault();
+                    if (multipleIndex === 0) {
+                        setMultipleIndex(-1);
+                    } else {
+                        setMultipleIndex((multipleIndex - 1 + multipleChoices.length) % multipleChoices.length);
+                    }
                 }
                 if (event.key === 'Enter') {
                     atChoice?.(multipleChoices[multipleIndex]);
@@ -172,9 +177,9 @@ export default function Input({
                             max-h-[150px] overflow-y-auto
                         `)}
                     >
-                        {multipleChoices.map(choice => (
+                        {multipleChoices.map((choice, index) => (
                             <div
-                                key={choice}
+                                key={choice + index}
                                 className={styleTrim(`
                                     ${multipleIndex === multipleChoices.indexOf(choice) ? 'bg-gray-600' : ''}
                                     p-2 -mx-2 text-left
@@ -182,7 +187,7 @@ export default function Input({
                             >
                                 <button
                                     className="cursor-pointer text-left"
-                                    onClick={() => {
+                                    onMouseDown={() => {
                                         atChoice?.(choice);
                                     }}
                                 >
