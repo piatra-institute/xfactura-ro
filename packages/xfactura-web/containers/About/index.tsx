@@ -19,7 +19,7 @@ export default function About({
 
     return (
         <div
-            className="max-w-xl p-4 text-left"
+            className="scrollable-view max-w-xl h-full overflow-scroll flex flex-col md:justify-center p-4 text-left"
         >
             <Subtitle
                 text="despre xfactura.ro"
@@ -50,6 +50,8 @@ export default function About({
                 >
                     localStorage
                 </a>
+                <br />
+                xfactura.ro nu partajează date despre utilizatori cu instrumente terțe, inclusiv cu modele neuronale
                 <br />
                 datele pot fi exportate și importate în format&nbsp;
                 <a
