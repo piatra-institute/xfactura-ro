@@ -191,10 +191,12 @@ export default function Party({
         ) {
             setDefaultSeller(data.vatNumber);
         }
+
+        // FORCE: defaultSeller in the dependency array causes infinite loop
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [
         kind,
         data,
-        defaultSeller,
         setDefaultSeller,
     ]);
 
@@ -242,6 +244,7 @@ export default function Party({
         usingLocalData,
     ]);
 
+    /** Multiple choices */
     useEffect(() => {
         if (!data.name && data.name.length < 3) {
             setMultipleChoicesName([]);
