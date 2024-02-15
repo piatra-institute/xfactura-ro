@@ -11,7 +11,7 @@ setup()
 
 app = Flask(
     __name__,
-    template_folder='../html/',
+    template_folder='./html/',
 )
 CORS(
     app,
