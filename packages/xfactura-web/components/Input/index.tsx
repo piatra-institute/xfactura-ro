@@ -56,6 +56,7 @@ export default function Input({
     ] = useState(-1);
 
 
+    // #region effects
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
             if (!multipleChoices) {
@@ -87,6 +88,18 @@ export default function Input({
         multipleChoices,
         atChoice,
     ]);
+
+    useEffect(() => {
+        if (multipleChoices && multipleChoices.length > 0) {
+            setShowMultiple(true);
+        } else {
+            setShowMultiple(false);
+            setMultipleIndex(-1);
+        }
+    }, [
+        multipleChoices,
+    ]);
+    // #endregion effects
 
 
     return (
@@ -139,7 +152,7 @@ export default function Input({
                         setMultipleIndex(-1);
                     }}
                     onKeyDown={() => {
-                        if (multipleChoices) {
+                        if (multipleChoices && multipleChoices.length > 0) {
                             setShowMultiple(true);
                         } else {
                             setShowMultiple(false);

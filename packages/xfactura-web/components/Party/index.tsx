@@ -246,7 +246,7 @@ export default function Party({
 
     /** Multiple choices */
     useEffect(() => {
-        if (!data.name && data.name.length < 3) {
+        if (data.name.length < 3) {
             setMultipleChoicesName([]);
             return;
         }
