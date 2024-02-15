@@ -129,7 +129,7 @@ export default async function handler(
                         return;
                     }
 
-                    const successfulPayment = session.status === 'complete';
+                    const successfulPayment = session.status === 'complete' || session.status === 'open';
 
                     const payments = parseUserPayments(databaseUser);
                     const payment = payments.find((payment) => payment.sessionID === session.id);
