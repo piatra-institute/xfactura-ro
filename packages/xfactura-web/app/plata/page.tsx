@@ -57,11 +57,7 @@ export default function PaymentPage() {
         <section
             className="flex flex-col items-center justify-center w-full h-screen px-4 text-center"
         >
-            {status !== 'complete' ? (
-                <p>
-                    plata a eșuat
-                </p>
-            ) : (
+            {status ? (
                 <p
                     className="text-center"
                 >
@@ -72,6 +68,10 @@ export default function PaymentPage() {
                     >
                         {customerEmail}
                     </span>
+                </p>
+            ) : (
+                <p>
+                    plata a eșuat
                 </p>
             )}
 
