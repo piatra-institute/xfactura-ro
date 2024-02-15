@@ -58,8 +58,11 @@ export default function EditInventory({
 
     return (
         <div
-            className="scrollable-view overflow-auto h-[calc(100vh-4rem)] w-[350px] p-2"
+            className="scrollable-view overflow-auto h-screen w-full p-2 py-5 md:p-6"
         >
+            <div
+                className="w-full px-2 md:w-[350px] md:px-0 m-auto"
+            >
             <Subtitle
                 text="editare stoc"
                 centered={true}
@@ -93,6 +96,7 @@ export default function EditInventory({
                     setMenuView('inventory');
                 }}
             />
+            </div>
         </div>
     );
 }

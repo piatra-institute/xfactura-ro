@@ -116,7 +116,7 @@ export default function InventoryItem({
                 setValue={(name) => {
                     atChange({
                         ...data,
-                        name: name.trim(),
+                        name,
                     });
                 }}
             />
