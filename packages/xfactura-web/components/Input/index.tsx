@@ -161,7 +161,7 @@ export default function Input({
                                 key={choice}
                                 className={styleTrim(`
                                     ${multipleIndex === multipleChoices.indexOf(choice) ? 'bg-gray-600' : ''}
-                                    p-2 -mx-2
+                                    p-2 -mx-2 text-left
                                 `)}
                             >
                                 <button
