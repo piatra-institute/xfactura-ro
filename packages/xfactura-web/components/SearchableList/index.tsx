@@ -87,8 +87,9 @@ export default function SearchableList<T extends object>({
                 setValue={(value) => {
                     setSearch(value);
                 }}
+                width="100%"
                 inputProps={{
-                    placeholder: "căutare",
+                    placeholder: 'căutare',
                     style: {
                         width: '100%',
                     },

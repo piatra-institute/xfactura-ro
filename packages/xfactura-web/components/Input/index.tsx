@@ -36,13 +36,13 @@ export default function Input({
     text: string;
     value: string | undefined;
     setValue: (value: string) => void;
-    width?: number;
+    width?: number | string;
     type?: string;
     disabled?: boolean;
     loading?: boolean;
-    inputProps?: InputProps;
     asGrid?: boolean;
     multipleChoices?: string[];
+    inputProps?: InputProps;
     atChoice?: (choice: string) => void;
 }) {
     const [
@@ -106,6 +106,9 @@ export default function Input({
 
             <div
                 className="relative w-[200px]"
+                style={{
+                    width,
+                }}
             >
                 <input
                     className={styleTrim(`
@@ -165,7 +168,7 @@ export default function Input({
                                 `)}
                             >
                                 <button
-                                    className="cursor-pointer"
+                                    className="cursor-pointer text-left"
                                     onClick={() => {
                                         atChoice?.(choice);
                                     }}
