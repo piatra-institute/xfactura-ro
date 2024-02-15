@@ -22,6 +22,8 @@ const app = express();
 
 app.use(express.json());
 app.use(cookieParser());
+app.use(express.static('public'));
+app.use('/favicon.ico', express.static('favicon.ico'));
 
 app.all('*', function (req, res, next) {
     const origin = req.get('origin');
