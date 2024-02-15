@@ -69,6 +69,11 @@ export default function Party({
         usingLocalData,
         setUsingLocalData,
     ] = useState(false);
+
+    const [
+        multipleChoicesName,
+        setMultipleChoicesName,
+    ] = useState<string[]>();
     // #endregion state
 
 
@@ -236,6 +241,28 @@ export default function Party({
         checkVatNumber,
         usingLocalData,
     ]);
+
+    useEffect(() => {
+        if (!data.name) {
+            setMultipleChoicesName([]);
+            return;
+        }
+
+        const name = data.name.toLowerCase();
+        const choices = Object.keys(companies)
+            .filter(key => companies[key].name.toLowerCase().includes(name))
+            .map(key => companies[key].name);
+
+        if (choices.length === 1 && choices[0] === data.name) {
+            setMultipleChoicesName([]);
+            return;
+        }
+
+        setMultipleChoicesName(choices);
+    }, [
+        data.name,
+        companies,
+    ]);
     // #endregion effects
 
 
@@ -259,6 +286,32 @@ export default function Party({
                     //         </div>
                     //     );
                     // }
+
+                    if (field === 'name') {
+                        return (
+                            <div
+                                key={kind + field}
+                            >
+                                <Input
+                                    text={companyText[field]}
+                                    value={data[field]}
+                                    setValue={updateParty(field)}
+                                    multipleChoices={multipleChoicesName}
+                                    atChoice={(choice) => {
+                                        const companyData = Object.values(companies)
+                                            .find(company => company.name === choice);
+                                        if (!companyData) {
+                                            return;
+                                        }
+
+                                        setParty(companyData);
+                                        setUsingLocalData(true);
+                                        setMultipleChoicesName([]);
+                                    }}
+                                />
+                            </div>
+                        );
+                    }
 
                     return (
                         <div

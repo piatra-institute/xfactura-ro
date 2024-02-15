@@ -1,6 +1,8 @@
 import {
     DetailedHTMLProps,
     InputHTMLAttributes,
+    useState,
+    useEffect,
 } from 'react';
 
 import {
@@ -28,6 +30,8 @@ export default function Input({
     loading,
     inputProps,
     asGrid,
+    multipleChoices,
+    atChoice,
 }: {
     text: string;
     value: string | undefined;
@@ -38,7 +42,53 @@ export default function Input({
     loading?: boolean;
     inputProps?: InputProps;
     asGrid?: boolean;
+    multipleChoices?: string[];
+    atChoice?: (choice: string) => void;
 }) {
+    const [
+        showMultiple,
+        setShowMultiple,
+    ] = useState(false);
+
+    const [
+        multipleIndex,
+        setMultipleIndex,
+    ] = useState(-1);
+
+
+    useEffect(() => {
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (!multipleChoices) {
+                return;
+            }
+
+            if (showMultiple) {
+                if (event.key === 'ArrowDown') {
+                    setMultipleIndex((multipleIndex + 1) % multipleChoices.length);
+                }
+                if (event.key === 'ArrowUp') {
+                    setMultipleIndex((multipleIndex - 1 + multipleChoices.length) % multipleChoices.length);
+                }
+                if (event.key === 'Enter') {
+                    atChoice?.(multipleChoices[multipleIndex]);
+                    setShowMultiple(false);
+                }
+            }
+        }
+
+        window.addEventListener('keydown', handleKeyDown);
+
+        return () => {
+            window.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [
+        showMultiple,
+        multipleIndex,
+        multipleChoices,
+        atChoice,
+    ]);
+
+
     return (
         <div
             className={styleTrim(`
@@ -54,28 +104,79 @@ export default function Input({
                 </div>
             )}
 
-            <input
-                className={styleTrim(`
-                    bg-gray-800 w-[200px] p-2 border-none rounded-none text-white
-                    disabled:bg-gray-600
-                    ${focusStyle}
-                `)}
-                name={text}
-                value={value || ''}
-                onChange={(event) => {
-                    setValue(event.target.value);
-                }}
-                type={type}
-                disabled={disabled}
-                spellCheck={false}
-                autoCapitalize="off"
-                autoCorrect="off"
-                autoComplete="off"
-                style={{
-                    width,
-                }}
-                {...inputProps}
-            />
+            <div
+                className="relative w-[200px]"
+            >
+                <input
+                    className={styleTrim(`
+                        bg-gray-800 w-[200px] p-2 border-none rounded-none text-white
+                        disabled:bg-gray-600
+                        ${focusStyle}
+                    `)}
+                    name={text}
+                    value={value || ''}
+                    type={type}
+                    disabled={disabled}
+                    spellCheck={false}
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    autoComplete="off"
+                    style={{
+                        width,
+                    }}
+                    {...inputProps}
+                    onChange={(event) => {
+                        setValue(event.target.value);
+                    }}
+                    onFocus={() => {
+                        setShowMultiple(true);
+                    }}
+                    onBlur={() => {
+                        setShowMultiple(false);
+                        setMultipleIndex(-1);
+                    }}
+                    onKeyDown={() => {
+                        if (multipleChoices) {
+                            setShowMultiple(true);
+                        } else {
+                            setShowMultiple(false);
+                            setMultipleIndex(-1);
+                        }
+                    }}
+                />
+
+                {showMultiple
+                && multipleChoices
+                && multipleChoices.length > 0
+                && (
+                    <div
+                        className={styleTrim(`
+                            absolute z-40 bg-gray-800 top-[40px] -left-[2px] w-[204px] p-2
+                            border-white border-x-2 border-b-2 rounded-none text-white
+                            max-h-[150px] overflow-y-auto
+                        `)}
+                    >
+                        {multipleChoices.map(choice => (
+                            <div
+                                key={choice}
+                                className={styleTrim(`
+                                    ${multipleIndex === multipleChoices.indexOf(choice) ? 'bg-gray-600' : ''}
+                                    p-2 -mx-2
+                                `)}
+                            >
+                                <button
+                                    className="cursor-pointer"
+                                    onClick={() => {
+                                        atChoice?.(choice);
+                                    }}
+                                >
+                                    {choice}
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
 
             {loading && (
                 <Spinner
