@@ -3,7 +3,7 @@ import type {
     Response,
 } from 'express';
 
-import Stripe from 'stripe';
+import stripe from '../../services/stripe';
 
 import {
     getTokensUser,
@@ -18,9 +18,9 @@ import {
     logger,
 } from '../../utilities';
 
-
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '');
+import {
+    parseUserPayments,
+} from '../../utilities/database';
 
 
 
@@ -52,9 +52,17 @@ export default async function handler(
         switch (request.method) {
             case 'POST':
                 try {
+                    const {
+                        productType,
+                    } = request.body;
+
+                    if (!productType) {
+                        throw new Error('Invalid product type');
+                    }
+
                     let priceID = '';
 
-                    switch (request.body.productType) {
+                    switch (productType) {
                         case '300':
                             priceID = process.env.STRIPE_PRICE_300 || '';
                             break;
@@ -78,13 +86,11 @@ export default async function handler(
                         ],
                         mode: 'payment',
                         return_url: `${request.headers.origin}/plata?sid={CHECKOUT_SESSION_ID}`,
+                        metadata: {
+                            userID: databaseUser.id,
+                            productType,
+                        },
                     });
-
-                    await updateUserPayments(
-                        databaseUser,
-                        request.body.productType,
-                        session.id,
-                    );
 
                     response.send({
                         status: true,
@@ -104,8 +110,39 @@ export default async function handler(
                         (request as any).query.sid,
                     );
 
+                    const sessionMetadata = session.metadata;
+                    if (!sessionMetadata) {
+                        response.send({
+                            status: false,
+                        });
+                        return;
+                    }
+
+                    const {
+                        userID,
+                        productType,
+                    } = sessionMetadata;
+                    if (userID !== databaseUser.id) {
+                        response.send({
+                            status: false,
+                        });
+                        return;
+                    }
+
+                    const successfulPayment = session.status === 'complete';
+
+                    const payments = parseUserPayments(databaseUser);
+                    const payment = payments.find((payment) => payment.sessionID === session.id);
+                    if (successfulPayment && !payment) {
+                        await updateUserPayments(
+                            databaseUser,
+                            productType as any,
+                            session.id,
+                        );
+                    }
+
                     response.send({
-                        status: session.status,
+                        status: successfulPayment,
                         data: {
                             customerEmail: (session as any).customer_details.email,
                         },

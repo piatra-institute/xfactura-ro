@@ -7,6 +7,14 @@ import {
     users,
 } from '../database/schema/users';
 
+import {
+    UserPayment,
+} from '../data';
+
+import {
+    parseUserPayments,
+} from '../utilities/database';
+
 
 
 const intelligentActsMap = {
@@ -27,14 +35,16 @@ export const updateUserPayments = async (
     const intelligentActs = databaseUser.intelligentActs
         + intelligentActsMap[productType];
 
+    const payment: UserPayment = {
+        productType,
+        sessionID,
+    };
+
     await database.update(users).set({
         intelligentActs,
         payments: JSON.stringify([
-            ...JSON.parse(databaseUser.payments || '[]'),
-            {
-                amount: productType,
-                sessionID,
-            },
+            ...parseUserPayments(databaseUser),
+            payment,
         ]),
     }).where(
         eq(users.id, databaseUser.id),
