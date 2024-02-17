@@ -55,6 +55,18 @@ export const updateUserPayments = async (
 export const decreaseIntelligentAct = async (
     databaseUser: any,
 ) => {
+    if (databaseUser.freeIntelligentActs > 0) {
+        const freeIntelligentActs = databaseUser.freeIntelligentActs - 1;
+
+        await database.update(users).set({
+            freeIntelligentActs,
+        }).where(
+            eq(users.id, databaseUser.id),
+        );
+
+        return true;
+    }
+
     if (databaseUser.intelligentActs < 1) {
         return false;
     }

@@ -11,12 +11,14 @@ import {
     jwtDecode,
 } from 'jwt-decode';
 
-import { v4 as uuid } from 'uuid';
-
 import database from '../../database';
 import {
     users,
 } from '../../database/schema/users';
+
+import {
+    NewUser,
+} from '../../models/user';
 
 import newGoogleClient from '../../services/google';
 
@@ -60,15 +62,11 @@ export default async function handler(
         const databaseUser = await database.query.users.findFirst({
             where: eq(users.email, email),
         });
-        const newUser = {
-            id: uuid(),
-            createdAt: new Date().toISOString(),
+        const newUser = NewUser(
             email,
             name,
             picture,
-            payments: JSON.stringify([]),
-            intelligentActs: 0,
-        };
+        );
         if (!databaseUser) {
             await database.insert(users).values({
                 ...newUser,

@@ -17,6 +17,7 @@ export const users = sqliteTable(
         picture: text('picture').notNull(),
         payments: text('payments').notNull(),
         intelligentActs: integer('intelligent_acts').notNull(),
+        freeIntelligentActs: integer('free_intelligent_acts').notNull(),
     },
     (users) => ({
         emailIdx: uniqueIndex('emailIdx').on(users.email),
