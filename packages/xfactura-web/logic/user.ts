@@ -2,6 +2,8 @@ import { googleLogout } from '@react-oauth/google';
 
 import {
     ENVIRONMENT,
+
+    User,
 } from '@/data';
 
 import useStore from '@/store';
@@ -25,4 +27,11 @@ export const useLogout = () => {
 
         setUser(null);
     }
+}
+
+
+export const computeTotalIntelligentActs = (
+    user: User,
+) => {
+    return (user.intelligentActs || 0) + (user.freeIntelligentActs || 0);
 }

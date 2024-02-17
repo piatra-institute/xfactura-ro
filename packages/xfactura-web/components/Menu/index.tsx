@@ -19,6 +19,7 @@ import Settings from '@/containers/Settings';
 
 import {
     useLogout,
+    computeTotalIntelligentActs,
 } from '@/logic/user';
 
 import {
@@ -255,7 +256,7 @@ export default function Menu() {
                     </li>
                     <li className="m-4">
                         <LinkButton
-                            text={user ? `acte inteligente [${user.intelligentActs || 0}]` : 'acte inteligente'}
+                            text={user ? `acte inteligente [${computeTotalIntelligentActs(user)}]` : 'acte inteligente'}
                             onClick={() => setMenuView('ai')}
                         />
                     </li>

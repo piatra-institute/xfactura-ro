@@ -24,6 +24,10 @@ import {
 } from '@/data/styles';
 
 import {
+    computeTotalIntelligentActs,
+} from '@/logic/user';
+
+import {
     styleTrim,
 } from '@/logic/utilities';
 
@@ -148,7 +152,7 @@ export default function BuyScreen({
                     <div
                         className="text-center"
                     >
-                        {user.intelligentActs} acte inteligente disponibile
+                        {computeTotalIntelligentActs(user)} acte inteligente disponibile
                     </div>
                 )}
             </div>

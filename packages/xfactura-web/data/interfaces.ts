@@ -59,6 +59,7 @@ export interface User {
     name: string;
     picture: string;
     intelligentActs: number;
+    freeIntelligentActs: number;
 }
 
 
