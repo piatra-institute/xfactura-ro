@@ -3,6 +3,10 @@ import type {
     Response,
 } from 'express';
 
+import {
+    ENVIRONMENT,
+} from '../data';
+
 
 
 const ONE_YEAR = 365 * 24 * 60 * 60 * 1000;
@@ -24,14 +28,14 @@ export const setAuthCookies = (
         secure: true,
         sameSite: 'none',
         maxAge: ONE_YEAR,
-        domain: process.env.COOKIE_DOMAIN,
+        domain: ENVIRONMENT.COOKIE_DOMAIN,
     });
     response.cookie(COOKIE_REFRESH_TOKEN, tokens.refreshToken, {
         httpOnly: true,
         secure: true,
         sameSite: 'none',
         maxAge: ONE_YEAR,
-        domain: process.env.COOKIE_DOMAIN,
+        domain: ENVIRONMENT.COOKIE_DOMAIN,
     });
 }
 
@@ -39,8 +43,14 @@ export const setAuthCookies = (
 export const clearAuthCookies = (
     response: Response,
 ) => {
-    response.clearCookie(COOKIE_ACCESS_TOKEN);
-    response.clearCookie(COOKIE_REFRESH_TOKEN);
+    response.clearCookie(COOKIE_ACCESS_TOKEN, {
+        path: '/',
+        domain: ENVIRONMENT.COOKIE_DOMAIN,
+    });
+    response.clearCookie(COOKIE_REFRESH_TOKEN, {
+        path: '/',
+        domain: ENVIRONMENT.COOKIE_DOMAIN,
+    });
 }
 
 
