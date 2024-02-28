@@ -32,7 +32,7 @@ export default function Metadata({
             />
 
             <Input
-                text="număr factură"
+                text="număr"
                 value={metadata.number}
                 setValue={(value) => updateMetadata('number', value)}
                 inputProps={{
@@ -50,13 +50,13 @@ export default function Metadata({
             />
 
             <Datepicker
-                text="dată emitere"
+                text="emitere"
                 atSelect={(value) => updateDate('issueDate', value)}
                 defaultValue={metadata.issueDate}
             />
 
             <Datepicker
-                text="dată scadență"
+                text="scadență"
                 atSelect={(value) => updateDate('dueDate', value)}
                 defaultValue={metadata.dueDate}
             />
