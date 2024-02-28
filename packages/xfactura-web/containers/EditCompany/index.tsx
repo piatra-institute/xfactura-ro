@@ -73,6 +73,7 @@ export default function EditCompany({
                 data={company}
                 setParty={setCompany}
                 styleless={true}
+                editing={true}
             />
 
             <PureButton

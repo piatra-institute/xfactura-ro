@@ -34,6 +34,10 @@ export interface State {
     setSmartActs: (smartActs: string) => void;
     defaultSeller: string;
     setDefaultSeller: (defaultSeller: string) => void;
+    expandedSeller: boolean;
+    toggleExpandedSeller: () => void;
+    expandedBuyer: boolean;
+    toggleExpandedBuyer: () => void;
     storeGoogleDrive: boolean;
     toggleStoreGoogleDrive: () => void;
 
@@ -78,6 +82,10 @@ const useStore = create<State>()(
             setSmartActs: (smartActs: string) => set({ smartActs }),
             defaultSeller: '',
             setDefaultSeller: (defaultSeller: string) => set({ defaultSeller }),
+            expandedSeller: false,
+            toggleExpandedSeller: () => set((state) => ({ expandedSeller: !state.expandedSeller })),
+            expandedBuyer: false,
+            toggleExpandedBuyer: () => set((state) => ({ expandedBuyer: !state.expandedBuyer })),
             storeGoogleDrive: false,
             toggleStoreGoogleDrive: () => set((state) => ({ storeGoogleDrive: !state.storeGoogleDrive })),
 

@@ -14,8 +14,14 @@ import {
     companyFields,
 } from '@/data';
 
+import {
+    collapseIcon,
+    expandIcon,
+} from '@/data/icons';
+
 import Subtitle from '@/components/Subtitle';
 import Input from '@/components/Input';
+import LinkButton from '@/components/LinkButton';
 
 import {
     getCompanyDetails,
@@ -40,12 +46,14 @@ export default function Party({
     data,
     setParty,
     styleless,
+    editing,
 }: {
     kind: 'seller' | 'buyer';
     title: string;
     data: Company;
     setParty: (company: Company) => void;
     styleless?: boolean;
+    editing?: boolean;
 }) {
     // #region references
     const mountedTime = useRef(Date.now());
@@ -58,6 +66,10 @@ export default function Party({
         companies,
         defaultSeller,
         setDefaultSeller,
+        expandedBuyer,
+        toggleExpandedBuyer,
+        expandedSeller,
+        toggleExpandedSeller,
     } = useStore();
 
     const [
@@ -270,9 +282,13 @@ export default function Party({
 
 
     // #region render
+    const expanded = kind === 'seller'
+        ? expandedSeller
+        : expandedBuyer;
+
     return (
         <div
-            className={styleless ? '' : 'max-w-[400px] md:w-1/2 min-h-[300px] p-4 md:p-8'}
+            className={styleless ? '' : 'max-w-[400px] md:w-1/2 min-h-[150px] p-4 md:p-8'}
         >
             <Subtitle
                 text={title}
@@ -280,16 +296,6 @@ export default function Party({
 
             <div>
                 {companyFields.map(field => {
-                    // if (field === 'county') {
-                    //     return (
-                    //         <div
-                    //             key={kind + field}
-                    //         >
-                    //             TODO dropdown
-                    //         </div>
-                    //     );
-                    // }
-
                     if (field === 'name') {
                         return (
                             <div
@@ -316,6 +322,10 @@ export default function Party({
                         );
                     }
 
+                    if (!editing && !expanded && field !== 'vatNumber') {
+                        return null;
+                    }
+
                     return (
                         <div
                             key={kind + field}
@@ -330,6 +340,19 @@ export default function Party({
                     );
                 })}
             </div>
+
+            {!editing && (
+                <LinkButton
+                    text={expanded ? collapseIcon : expandIcon}
+                    onClick={() => {
+                        const expander = kind === 'seller'
+                            ? toggleExpandedSeller
+                            : toggleExpandedBuyer;
+
+                        expander();
+                    }}
+                />
+            )}
         </div>
     );
     // #endregion render

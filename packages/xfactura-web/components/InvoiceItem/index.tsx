@@ -99,7 +99,7 @@ export default function InvoiceItem({
     return (
         <>
             <div
-                className="grid items-center justify-center md:flex m-auto"
+                className="grid items-center justify-center md:flex md:items-start m-auto"
             >
                 <Party
                     kind="seller"
