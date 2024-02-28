@@ -6,6 +6,10 @@ import PureButton from '@/components/PureButton';
 import LinkButton from '@/components/LinkButton';
 
 import {
+    extractorInvoiceText,
+} from '@/data/constants';
+
+import {
     focusStyle,
 } from '@/data/styles';
 
@@ -41,6 +45,7 @@ export default function Text({
         >
             <textarea
                 value={text}
+                placeholder={extractorInvoiceText}
                 onChange={(event) => {
                     setText(event.target.value);
                 }}
@@ -48,7 +53,7 @@ export default function Text({
             />
 
             <div
-                className="flex gap-8"
+                className="flex flex-col md:flex-row gap-2 md:gap-8"
             >
                 <PureButton
                     text="generare"

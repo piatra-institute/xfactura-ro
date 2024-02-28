@@ -165,6 +165,8 @@ export const extractorTitles = {
     'record': 'înregistrare',
 };
 
+export const extractorInvoiceText = `factură de la CUI/nume companie ... către CUI/nume companie ... număr ... dată ... produs unu ... preț ...`;
+
 export const extractorDescriptions = {
     'upload': (
         <>
@@ -179,7 +181,7 @@ export const extractorDescriptions = {
         <>
             scrie text pentru a da comenzi către xfactura.ro
             <br />
-            &quot;factură de la CUI/nume companie ... către CUI/nume companie ... număr ... dată ... produs unu ... preț ...&quot;
+            &quot;{extractorInvoiceText}&quot;
         </>
     ),
     'camera': (
@@ -193,7 +195,7 @@ export const extractorDescriptions = {
         <>
             folosește microfonul pentru a dicta factura
             <br />
-            &quot;factură de la CUI/nume companie ... către CUI/nume companie ... număr ... dată ... produs unu ... preț ...&quot;
+            &quot;{extractorInvoiceText}&quot;
         </>
     ),
 };

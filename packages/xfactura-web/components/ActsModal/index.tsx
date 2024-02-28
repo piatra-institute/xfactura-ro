@@ -15,6 +15,10 @@ import {
     useUnscrollable,
 } from '@/logic/hooks';
 
+import {
+    styleTrim,
+} from '@/logic/utilities';
+
 
 
 export default function ActsModal({
@@ -236,12 +240,12 @@ export default function ActsModal({
 
     return (
         <div
-            className={`
+            className={styleTrim(`
                 w-full h-full
                 backdrop-blur-md
-                fixed top-0 right-0 bottom-0 z-30
+                fixed top-0 right-0 bottom-0 z-30 p-4
                 grid items-center justify-center place-content-center gap-12
-            `}
+            `)}
         >
             {screen}
         </div>
