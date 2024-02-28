@@ -50,14 +50,18 @@ export const microphoneIcon = (
 
 export const closeIcon = (
     <svg
-        xmlns="http://www.w3.org/2000/svg" x="0px" y="0px" width="100" height="100" viewBox="0 0 50 50"
+        xmlns="http://www.w3.org/2000/svg"
+        x="0px" y="0px" width="100" height="100" viewBox="0 0 50 50"
         style={{
             filter: 'invert(1)', width: '25px', height: '25px',
         }}
     >
         <path
-            d="M 7.71875 6.28125 L 6.28125 7.71875 L 23.5625 25 L 6.28125 42.28125 L 7.71875 43.71875 L 25 26.4375 L 42.28125 43.71875 L 43.71875 42.28125 L 26.4375 25 L 43.71875 7.71875 L 42.28125 6.28125 L 25 23.5625 Z"
-        />
+            d="M 9.15625 6.3125 L 6.3125 9.15625 L 22.15625 25 L 6.21875 40.96875 L 9.03125 43.78125 L 25 27.84375 L 40.9375 43.78125 L 43.78125 40.9375 L 27.84375 25 L 43.6875 9.15625 L 40.84375 6.3125 L 25 22.15625 Z"
+            stroke="#000"
+            strokeWidth={2}
+        >
+        </path>
     </svg>
 );
 
@@ -79,6 +83,8 @@ export const arrowDownIcon = (
 export const closeMenuIcon = (
     <path
         d="M 7.71875 6.28125 L 6.28125 7.71875 L 23.5625 25 L 6.28125 42.28125 L 7.71875 43.71875 L 25 26.4375 L 42.28125 43.71875 L 43.71875 42.28125 L 26.4375 25 L 43.71875 7.71875 L 42.28125 6.28125 L 25 23.5625 Z"
+        stroke="#000"
+        strokeWidth={2}
     >
     </path>
 );
@@ -87,6 +93,8 @@ export const closeMenuIcon = (
 export const hamburgerMenuIcon = (
     <path
         d="M 0 9 L 0 11 L 50 11 L 50 9 Z M 0 24 L 0 26 L 50 26 L 50 24 Z M 0 39 L 0 41 L 50 41 L 50 39 Z"
+        stroke="#000"
+        strokeWidth={2}
     >
     </path>
 );

@@ -24,7 +24,6 @@ import {
 
 import {
     styleTrim,
-    defocus,
 } from '@/logic/utilities';
 
 import useStore, {

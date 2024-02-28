@@ -8,6 +8,10 @@ import {
 } from '@/data/icons';
 
 import {
+    focusStyle,
+} from '@/data/styles';
+
+import {
     useVolatileStore,
 } from '@/store';
 
@@ -23,7 +27,6 @@ export default function Audio({
     } = useVolatileStore();
 
     const recorderControls = useAudioRecorder();
-
 
     return (
         <div
@@ -41,7 +44,7 @@ export default function Audio({
                 }}
             />
 
-            <div
+            <button
                 onClick={() => {
                     if (recorderControls.isRecording) {
                         recorderControls.stopRecording();
@@ -49,10 +52,14 @@ export default function Audio({
 
                     setShowMicrophone(false);
                 }}
-                className="cursor-pointer scale-75"
+                className={focusStyle}
             >
-                {closeIcon}
-            </div>
+                <div
+                    className="scale-75 p-1"
+                >
+                    {closeIcon}
+                </div>
+            </button>
         </div>
     );
 }
