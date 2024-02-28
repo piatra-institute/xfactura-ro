@@ -151,7 +151,7 @@ export default function Line({
 
     return (
         <li
-            className="grid gap-1 mb-10 items-center lg:flex lg:gap-12 lg:mb-4"
+            className="grid gap-1 mb-8 items-center lg:flex lg:gap-12 lg:mb-4"
         >
             <div
                 className="select-none text-center text-gray-500 text-sm lg:mt-11"

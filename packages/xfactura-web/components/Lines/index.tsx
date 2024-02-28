@@ -160,10 +160,10 @@ export default function Lines({
             </ul>
 
             <div
-                className="grid md:place-content-center p-2 md:p-8"
+                className="grid mb-6 md:mb-0 md:place-content-center p-2 md:p-8"
             >
                 <LinkButton
-                    text="adăugare produs"
+                    text="adăugare produs/serviciu"
                     onClick={() => addNewLine()}
                 />
             </div>
