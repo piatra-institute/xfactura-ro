@@ -207,6 +207,7 @@ export default function Home() {
 
 
     // #region effects
+    /** Load user */
     useEffect(() => {
         const loadUser = async () => {
             const request = await getUser();
@@ -290,6 +291,7 @@ export default function Home() {
     // #endregion effects
 
 
+    // #region render
     return (
         <>
             {showLoading && (
@@ -331,4 +333,5 @@ export default function Home() {
             </div>
         </>
     );
+    // #endregion render
 }
