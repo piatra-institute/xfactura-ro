@@ -3,7 +3,9 @@ import {
     useEffect,
 } from 'react';
 
-import Input from '@/components/Input';
+import Input, {
+    MultipleChoice,
+} from '@/components/Input';
 import LineMenu from '@/components/LineMenu';
 
 import {
@@ -46,7 +48,7 @@ export default function Line({
     const [
         multipleChoicesName,
         setMultipleChoicesName,
-    ] = useState<string[]>([]);
+    ] = useState<MultipleChoice[]>([]);
 
 
     const computeTotal = () => {
@@ -99,9 +101,22 @@ export default function Line({
                     inventory[key].name.toLowerCase().trim()
                 ).includes(name)
             )
-            .map(key => inventory[key].name);
+            .map(key => {
+                const {
+                    id,
+                    name,
+                    leftInStock,
+                    unit,
+                } = inventory[key];
 
-        if (choices.length === 1 && choices[0] === data.name) {
+                return {
+                    id,
+                    name,
+                    show: `${name} (${leftInStock} ${unit})`,
+                };
+            });
+
+        if (choices.length === 1 && choices[0].name === data.name) {
             setMultipleChoicesName([]);
             return;
         }
@@ -130,7 +145,11 @@ export default function Line({
                 asGrid={true}
                 multipleChoices={multipleChoicesName}
                 atChoice={(value) => {
-                    const item = Object.values(inventory).find(item => item.name === value);
+                    if (typeof value == 'string') {
+                        return;
+                    }
+
+                    const item = inventory[value.id];
                     if (item) {
                         updateLine(
                             index,

@@ -19,6 +19,12 @@ import {
 
 export type InputProps = DetailedHTMLProps<InputHTMLAttributes<HTMLInputElement>, HTMLInputElement>;
 
+export interface MultipleChoice {
+    id: string;
+    name: string;
+    show?: string;
+}
+
 
 export default function Input({
     text,
@@ -41,10 +47,11 @@ export default function Input({
     disabled?: boolean;
     loading?: boolean;
     asGrid?: boolean;
-    multipleChoices?: string[];
+    multipleChoices?: (string | MultipleChoice)[];
     inputProps?: InputProps;
-    atChoice?: (choice: string) => void;
+    atChoice?: (choice: string | MultipleChoice) => void;
 }) {
+    // #region state
     const [
         showMultiple,
         setShowMultiple,
@@ -54,6 +61,31 @@ export default function Input({
         multipleIndex,
         setMultipleIndex,
     ] = useState(-1);
+    // #endregion state
+
+
+    // #region handlers
+    const computeChoiceKey = (
+        choice: string | MultipleChoice,
+        index: number,
+    ) => {
+        if (typeof choice === 'string') {
+            return choice + index;
+        }
+
+        return choice.id + index;
+    }
+
+    const renderChoice = (
+        choice: string | MultipleChoice,
+    ) => {
+        if (typeof choice === 'string') {
+            return choice;
+        }
+
+        return choice.show || choice.name;
+    }
+    // #endregion handlers
 
 
     // #region effects
@@ -179,7 +211,7 @@ export default function Input({
                     >
                         {multipleChoices.map((choice, index) => (
                             <div
-                                key={choice + index}
+                                key={computeChoiceKey(choice, index)}
                                 className={styleTrim(`
                                     ${multipleIndex === multipleChoices.indexOf(choice) ? 'bg-gray-600' : ''}
                                     p-2 -mx-2 text-left
@@ -191,7 +223,7 @@ export default function Input({
                                         atChoice?.(choice);
                                     }}
                                 >
-                                    {choice}
+                                    {renderChoice(choice)}
                                 </button>
                             </div>
                         ))}
