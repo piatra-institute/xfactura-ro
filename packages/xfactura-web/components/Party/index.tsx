@@ -20,14 +20,21 @@ import {
 } from '@/data/icons';
 
 import Subtitle from '@/components/Subtitle';
-import Input from '@/components/Input';
+import Input, {
+    MultipleChoice,
+} from '@/components/Input';
 import LinkButton from '@/components/LinkButton';
 
 import {
     getCompanyDetails,
 } from '@/logic/requests';
 
+import fuzzySearch, {
+    companySearcher,
+} from '@/logic/searchers';
+
 import {
+    normalizeDiacritics,
     normalizePartyName,
     normalizePartyCity,
     normalizePartyCounty,
@@ -85,7 +92,7 @@ export default function Party({
     const [
         multipleChoicesName,
         setMultipleChoicesName,
-    ] = useState<string[]>();
+    ] = useState<MultipleChoice[]>();
     // #endregion state
 
 
@@ -263,12 +270,41 @@ export default function Party({
             return;
         }
 
-        const name = data.name.toLowerCase();
-        const choices = Object.keys(companies)
-            .filter(key => companies[key].name.toLowerCase().includes(name))
-            .map(key => companies[key].name);
+        const name = normalizeDiacritics(data.name.toLowerCase().trim());
 
-        if (choices.length === 1 && choices[0] === data.name) {
+        companySearcher.indexEntities(
+            Object.values(companies),
+            (entity) => entity.vatNumber,
+            (entity) => [entity.name],
+        );
+        const result = companySearcher.getMatches(new fuzzySearch.Query(
+            name,
+            10,
+            0.2,
+        ));
+        if (
+            result.matches.length === 0
+            || result.matches.some(match => match.quality === 1)
+        ) {
+            setMultipleChoicesName([]);
+            return;
+        }
+
+        const choices = result.matches.map((match) => {
+            const {
+                vatNumber,
+                name,
+                city,
+            } = companies[match.entity.vatNumber];
+
+            return {
+                id: vatNumber,
+                name,
+                show: `${name} (${vatNumber} ${city})`,
+            };
+        });
+
+        if (choices.length === 1 && choices[0].name === data.name) {
             setMultipleChoicesName([]);
             return;
         }
@@ -307,8 +343,11 @@ export default function Party({
                                     setValue={updateParty(field)}
                                     multipleChoices={multipleChoicesName}
                                     atChoice={(choice) => {
-                                        const companyData = Object.values(companies)
-                                            .find(company => company.name === choice);
+                                        if (typeof choice === 'string') {
+                                            return;
+                                        }
+
+                                        const companyData = companies[choice.id];
                                         if (!companyData) {
                                             return;
                                         }

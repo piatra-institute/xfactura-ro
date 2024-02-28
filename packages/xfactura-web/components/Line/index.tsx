@@ -113,7 +113,10 @@ export default function Line({
             0.2,
         ));
 
-        if (result.matches.length === 0) {
+        if (
+            result.matches.length === 0
+            || result.matches.some(match => match.quality === 1)
+        ) {
             setMultipleChoicesName([]);
             return;
         }
