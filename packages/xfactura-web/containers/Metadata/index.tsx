@@ -25,7 +25,7 @@ export default function Metadata({
 }) {
     return (
         <div
-            className="grid place-content-center p-8 max-w-[500px] mx-auto"
+            className="max-w-[500px] mx-auto grid md:place-content-center p-4"
         >
             <Subtitle
                 text="metadata"

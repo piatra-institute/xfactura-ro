@@ -134,7 +134,7 @@ export default function Lines({
             </div>
 
             <ul
-                className="grid place-content-center"
+                className="grid md:place-content-center p-2"
             >
                 {data.length === 0 && (
                     <div>
@@ -158,7 +158,7 @@ export default function Lines({
             </ul>
 
             <div
-                className="grid place-content-center p-8"
+                className="grid md:place-content-center p-2 md:p-8"
             >
                 <LinkButton
                     text="adăugare produs"
@@ -167,9 +167,9 @@ export default function Lines({
             </div>
 
             <div
-                className="grid place-content-center p-8"
+                className="grid md:place-content-center p-2 md:p-8"
             >
-                <div className="flex justify-between m-2 min-w-[250px]">
+                <div className="flex justify-between my-2 min-w-[250px]">
                     <div>
                         total fără TVA
                     </div>
@@ -179,7 +179,7 @@ export default function Lines({
                     </div>
                 </div>
 
-                <div className="flex justify-between m-2 min-w-[250px]">
+                <div className="flex justify-between my-2 min-w-[250px]">
                     <div>
                         total TVA
                     </div>
@@ -189,7 +189,7 @@ export default function Lines({
                     </div>
                 </div>
 
-                <div className="flex justify-between m-2 min-w-[250px]">
+                <div className="flex justify-between my-2 min-w-[250px]">
                     <div>
                         total
                     </div>

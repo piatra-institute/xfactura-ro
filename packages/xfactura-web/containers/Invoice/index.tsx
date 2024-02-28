@@ -182,7 +182,7 @@ export default function Invoice() {
             </div>
 
             <div
-                className="mb-8"
+                className="mb-4 md:mb-8"
             />
         </>
     );
