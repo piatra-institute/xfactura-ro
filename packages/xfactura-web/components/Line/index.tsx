@@ -18,6 +18,10 @@ import {
     formatNumber,
 } from '@/logic/utilities';
 
+import fuzzySearch, {
+    inventorySearcher,
+} from '@/logic/searchers';
+
 import {
     normalizeDiacritics,
 } from '@/logic/validation';
@@ -88,6 +92,8 @@ export default function Line({
     }
 
 
+    // #region effects
+    /** Inventory search */
     useEffect(() => {
         if (data.name.length < 2) {
             setMultipleChoicesName([]);
@@ -95,26 +101,37 @@ export default function Line({
         }
 
         const name = normalizeDiacritics(data.name.toLowerCase().trim());
-        const choices = Object.keys(inventory)
-            .filter(key =>
-                normalizeDiacritics(
-                    inventory[key].name.toLowerCase().trim()
-                ).includes(name)
-            )
-            .map(key => {
-                const {
-                    id,
-                    name,
-                    leftInStock,
-                    unit,
-                } = inventory[key];
 
-                return {
-                    id,
-                    name,
-                    show: `${name} (${leftInStock} ${unit})`,
-                };
-            });
+        inventorySearcher.indexEntities(
+            Object.values(inventory),
+            (entity) => entity.id,
+            (entity) => [entity.name],
+        );
+        const result = inventorySearcher.getMatches(new fuzzySearch.Query(
+            name,
+            Infinity,
+            0.2,
+        ));
+
+        if (result.matches.length === 0) {
+            setMultipleChoicesName([]);
+            return;
+        }
+
+        const choices = result.matches.map((match) => {
+            const {
+                id,
+                name,
+                leftInStock,
+                unit,
+            } = inventory[match.entity.id];
+
+            return {
+                id,
+                name,
+                show: `${name} (${leftInStock} ${unit})`,
+            };
+        });
 
         if (choices.length === 1 && choices[0].name === data.name) {
             setMultipleChoicesName([]);
@@ -126,6 +143,7 @@ export default function Line({
         inventory,
         data.name,
     ]);
+    // #endregion effects
 
 
     return (
