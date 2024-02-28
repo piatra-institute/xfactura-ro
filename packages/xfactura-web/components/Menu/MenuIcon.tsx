@@ -8,6 +8,7 @@ import {
 } from '@/data/icons';
 
 import {
+    defocus,
     styleTrim,
 } from '@/logic/utilities';
 
@@ -23,12 +24,13 @@ const MenuIcon = ({
     <button
         className={styleTrim(`
             z-50 fixed top-[4px] left-0
-            m-4 cursor-pointer
+            m-3 cursor-pointer
             ${focusStyle}
         `)}
         onClick={(event) => {
             event.stopPropagation();
             event.preventDefault();
+            defocus();
 
             atClick();
         }}
@@ -38,6 +40,7 @@ const MenuIcon = ({
             x="0px" y="0px" width="100" height="100" viewBox="0 0 50 50"
             style={{
                 filter: 'invert(1)', width: '25px', height: '25px',
+                margin: '0.2rem',
             }}
         >
             {show ? (
