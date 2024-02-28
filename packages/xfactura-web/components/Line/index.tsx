@@ -16,6 +16,10 @@ import {
     formatNumber,
 } from '@/logic/utilities';
 
+import {
+    normalizeDiacritics,
+} from '@/logic/validation';
+
 import useStore from '@/store';
 
 
@@ -88,9 +92,13 @@ export default function Line({
             return;
         }
 
-        const name = data.name.toLowerCase();
+        const name = normalizeDiacritics(data.name.toLowerCase().trim());
         const choices = Object.keys(inventory)
-            .filter(key => inventory[key].name.toLowerCase().includes(name))
+            .filter(key =>
+                normalizeDiacritics(
+                    inventory[key].name.toLowerCase().trim()
+                ).includes(name)
+            )
             .map(key => inventory[key].name);
 
         if (choices.length === 1 && choices[0] === data.name) {

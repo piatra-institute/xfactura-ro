@@ -12,6 +12,10 @@ import {
 export const normalizeDiacritics = (
     value: string,
 ) => {
+    if (!value) {
+        return '';
+    }
+
     return value
         .replace(/ă/g, 'a')
         .replace(/â/g, 'a')
@@ -26,6 +30,10 @@ export const normalizeDiacritics = (
 export const normalizeCountyString = (
     value: string,
 ) => {
+    if (!value) {
+        return '';
+    }
+
     const normalizedValue = value
         .trim()
         .toLowerCase()
