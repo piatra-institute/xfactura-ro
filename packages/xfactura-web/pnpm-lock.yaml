@@ -5,6 +5,9 @@ settings:
   excludeLinksFromLockfile: false
 
 dependencies:
+  '@m31coding/fuzzy-search':
+    specifier: ^1.0.1
+    version: 1.0.1
   '@pdf-lib/standard-fonts':
     specifier: ^1.0.0
     version: 1.0.0
@@ -693,6 +696,10 @@ packages:
     dependencies:
       jsbi: 4.3.0
       tslib: 2.6.2
+    dev: false
+
+  /@m31coding/fuzzy-search@1.0.1:
+    resolution: {integrity: sha512-OcLVLGDd3SrA+J1pOY/eFrjR525RZp59OZjkivtXndX0g+SaQksxIBlYhCu+i82AeLhJKz7a2bseGe+7lbdIoA==}
     dev: false
 
   /@mdx-js/esbuild@2.3.0(esbuild@0.19.11):
