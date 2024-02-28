@@ -302,7 +302,7 @@ export default function Home() {
 
             <div>
                 <div
-                    className="m-4 pb-4"
+                    className="m-4 md:pb-4"
                 >
                     <Title />
 

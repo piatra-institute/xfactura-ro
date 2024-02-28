@@ -33,15 +33,17 @@ export const ExtractorButton = ({
     handleClickExtractor,
     configInput,
     handleReadInput,
+    last,
 } : {
     type: ExtractorType;
     handleClickExtractor: (type: ExtractorType) => void;
     configInput?: React.MutableRefObject<HTMLInputElement | null>;
     handleReadInput?: () => void;
+    last?: boolean;
 }) => {
     return (
         <div
-            className="mb-4"
+            className={last ? '' : 'mb-4'}
         >
             {handleReadInput
             && configInput
@@ -230,6 +232,7 @@ export default function Extractors({
                     <ExtractorButton
                         type={'record'}
                         handleClickExtractor={handleClickExtractor}
+                        last={true}
                     />
                 </>
             )}
