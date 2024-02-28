@@ -51,7 +51,7 @@ export default function LoginScreen({
         })
             .then(async (response) => {
                 const request = await response.json();
-                if (!request.status) {
+                if (!request || !request.status) {
                     return;
                 }
 

@@ -210,7 +210,7 @@ export default function Home() {
     useEffect(() => {
         const loadUser = async () => {
             const request = await getUser();
-            if (!request.status) {
+            if (!request || !request.status) {
                 setUser(null);
                 return;
             }
