@@ -12,7 +12,9 @@ import {
 import LinkButton from '@/components/LinkButton';
 import Subtitle from '@/components/Subtitle';
 
-import useStore from '@/store';
+import useStore, {
+    useVolatileStore,
+} from '@/store';
 
 
 
@@ -23,9 +25,15 @@ export default function LoginScreen({
     atLoginSuccess: () => void;
     back: () => void,
 }) {
+    // #region state
     const {
         setUser,
     } = useStore();
+
+    const {
+        setShowLoading,
+    } = useVolatileStore();
+    // #endregion state
 
 
     // #region handlers
@@ -40,6 +48,8 @@ export default function LoginScreen({
     const googleSuccessLogin = (
         codeResponse: Omit<GoogleCodeResponse, 'error' | 'error_description' | 'error_uri'>,
     ) => {
+        setShowLoading(true);
+
         fetch(ENVIRONMENT.API_DOMAIN + '/google-login', {
             method: 'POST',
             credentials: 'include',
@@ -51,6 +61,8 @@ export default function LoginScreen({
         })
             .then(async (response) => {
                 const request = await response.json();
+                setShowLoading(false);
+
                 if (!request || !request.status) {
                     return;
                 }
@@ -58,6 +70,8 @@ export default function LoginScreen({
                 loginSuccess(request.data);
             })
             .catch((error) => {
+                setShowLoading(false);
+
                 console.log('error', error);
             });
     }
@@ -81,6 +95,7 @@ export default function LoginScreen({
     // #endregion handlers
 
 
+    // #region render
     return (
         <>
             <div
@@ -116,4 +131,5 @@ export default function LoginScreen({
             />
         </>
     );
+    // #endregion render
 }

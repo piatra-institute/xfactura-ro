@@ -11,6 +11,10 @@ import LoginScreen from '@/components/LoginScreen';
 
 import useStore from '@/store';
 
+import {
+    useUnscrollable,
+} from '@/logic/hooks';
+
 
 
 export default function ActsModal({
@@ -56,6 +60,8 @@ export default function ActsModal({
 
 
     // #region effects
+    useUnscrollable();
+
     useEffect(() => {
         if (user) {
             setLoggedIn(true);
