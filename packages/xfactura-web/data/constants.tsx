@@ -4,6 +4,13 @@ import {
     Inventory,
 } from './interfaces';
 
+import {
+    uploadIcon,
+    chatIcon,
+    photoIcon,
+    microphoneIcon,
+} from '@/data/icons';
+
 
 
 export const company = {
@@ -172,7 +179,7 @@ export const extractorDescriptions = {
         <>
             scrie text pentru a da comenzi către xfactura.ro
             <br />
-            &quot;factură de la CUI ... către CUI ... număr ... dată ... produs unu ... preț ...&quot;
+            &quot;factură de la CUI/nume companie ... către CUI/nume companie ... număr ... dată ... produs unu ... preț ...&quot;
         </>
     ),
     'camera': (
@@ -186,7 +193,14 @@ export const extractorDescriptions = {
         <>
             folosește microfonul pentru a dicta factura
             <br />
-            &quot;factură de la CUI ... către CUI ... număr ... dată ... produs unu ... preț ...&quot;
+            &quot;factură de la CUI/nume companie ... către CUI/nume companie ... număr ... dată ... produs unu ... preț ...&quot;
         </>
     ),
+};
+
+export const extractorIcons = {
+    'upload': uploadIcon,
+    'text': chatIcon,
+    'camera': photoIcon,
+    'record': microphoneIcon,
 };

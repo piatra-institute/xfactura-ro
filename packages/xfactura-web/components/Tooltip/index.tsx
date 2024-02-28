@@ -16,8 +16,8 @@ const theme: FlowbiteTooltipTheme = {
         "base": "absolute z-10 h-2 w-2 rotate-45",
         "style": {
             "dark": "bg-gray-800 dark:bg-gray-700",
-            "light": "bg-white",
-            "auto": "bg-white dark:bg-gray-700"
+            "light": "bg-gray-800",
+            "auto": "bg-gray-800 dark:bg-gray-700"
         },
         "placement": "-4px"
     },
@@ -25,8 +25,8 @@ const theme: FlowbiteTooltipTheme = {
     "hidden": "invisible opacity-0",
     "style": {
         "dark": "bg-gray-800 text-white dark:bg-gray-700",
-        "light": "border border-gray-200 bg-white text-gray-900",
-        "auto": "border border-gray-200 bg-white text-gray-900 dark:border-none dark:bg-gray-700 dark:text-white"
+        "light": "border border-gray-200 bg-gray-800 text-white",
+        "auto": "border border-gray-200 bg-gray-800 text-white dark:border-none dark:bg-gray-700 dark:text-white"
     },
     "content": "relative z-20"
 }
@@ -46,6 +46,7 @@ export default function CustomTooltip({
             style="dark"
             placement="bottom"
             trigger="hover"
+            className="hidden md:flex"
         >
             {children}
         </Tooltip>
