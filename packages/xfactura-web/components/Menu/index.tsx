@@ -322,7 +322,7 @@ export default function Menu() {
                 <div
                     className={styleTrim(`
                         ${showBgBlack ? 'bg-black': 'animate-fadeIn backdrop-blur-md'}
-                        fixed z-40 top-0 h-screen right-0 left-0 botom-0
+                        fixed z-40 top-0 h-screen right-0 left-0 bottom-0
                         grid place-items-center text-center
                     `)}
                 >

@@ -155,7 +155,7 @@ export default function Input({
             )}
 
             <div
-                className="relative w-[200px]"
+                className="relative md:w-[200px]"
                 style={{
                     width,
                 }}
