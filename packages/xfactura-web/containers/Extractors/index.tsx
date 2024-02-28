@@ -43,7 +43,7 @@ export const ExtractorButton = ({
 }) => {
     return (
         <div
-            className={last ? '' : 'mb-4'}
+            className={last ? 'md:mb-4' : 'mb-4'}
         >
             {handleReadInput
             && configInput
