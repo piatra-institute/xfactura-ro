@@ -137,7 +137,9 @@ export default function Lines({
                 className="grid md:place-content-center p-2"
             >
                 {data.length === 0 && (
-                    <div>
+                    <div
+                        className="text-center"
+                    >
                         niciun produs
                     </div>
                 )}
