@@ -47,6 +47,13 @@ export const companyFields = [
     'IBAN',
 ] as const;
 
+export const companyPlaceholder = {
+    'vatNumber': 'RO12345678',
+    'name': 'Companie SRL',
+    'address': 'Strada nr. 1',
+    'contact': 'telefon, email'
+} as const;
+
 
 export const emptyInvoiceLine: InvoiceLine = {
     name: '',

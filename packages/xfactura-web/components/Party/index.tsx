@@ -12,6 +12,7 @@ import {
     Company,
     companyText,
     companyFields,
+    companyPlaceholder,
 } from '@/data';
 
 import {
@@ -358,6 +359,9 @@ export default function Party({
                                         setUsingLocalData(true);
                                         setMultipleChoicesName([]);
                                     }}
+                                    inputProps={{
+                                        placeholder: companyPlaceholder.name,
+                                    }}
                                 />
                             </div>
                         );
@@ -376,6 +380,9 @@ export default function Party({
                                 value={data[field]}
                                 setValue={updateParty(field)}
                                 loading={field === 'vatNumber' && loadingVatNumber}
+                                inputProps={{
+                                    placeholder: (companyPlaceholder as any)[field] || '',
+                                }}
                             />
                         </div>
                     );
