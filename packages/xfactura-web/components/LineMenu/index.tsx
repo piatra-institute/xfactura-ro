@@ -82,9 +82,12 @@ export default function LineMenu({
                         >
                             <LinkButton
                                 text="discount"
-                                onClick={() => updateLine(index, 'allowance', {
-                                    ...emptyInvoiceLineAllowance,
-                                })}
+                                onClick={() => {
+                                    setShow(false);
+                                    updateLine(index, 'allowance', {
+                                        ...emptyInvoiceLineAllowance,
+                                    });
+                                }}
                             />
                         </div>
                     )}

@@ -8,10 +8,15 @@ import Input, {
 } from '@/components/Input';
 import LineMenu from '@/components/LineMenu';
 import Toggle from '@/components/Toggle';
+import LinkButton from '@/components/LinkButton';
 
 import {
     InvoiceLine,
 } from '@/data';
+
+import {
+    computeAllowance,
+} from '@/logic/financial';
 
 import {
     toFixed,
@@ -72,7 +77,7 @@ export default function Line({
             return '0';
         }
 
-        const allowance = data.allowance ? (data.allowance.amount || 0) : 0;
+        const allowance = computeAllowance(data);
         // const priceInUnits = price * 100;
         // const valueInUnits = priceInUnits * quantity;
         const value = financial(price * quantity - allowance);
@@ -280,6 +285,11 @@ export default function Line({
                         ...data.allowance,
                         fixedAmount: !data.allowance!.fixedAmount,
                     })}
+                />
+
+                <LinkButton
+                    text="eliminare discount"
+                    onClick={() => updateLineItem(index, 'allowance', null)}
                 />
             </div>
         )}

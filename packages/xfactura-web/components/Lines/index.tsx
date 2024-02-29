@@ -7,6 +7,10 @@ import {
 } from '@/data';
 
 import {
+    computeAllowance,
+} from '@/logic/financial';
+
+import {
     formatNumber,
     financial,
 } from '@/logic/utilities';
@@ -72,7 +76,11 @@ export default function Lines({
         setLines(newLines);
     }
 
-    const quantityPrice = (line: InvoiceLine) => financial(line.price * line.quantity);
+    const quantityPrice = (line: InvoiceLine) => {
+        const allowance = computeAllowance(line);
+
+        return financial(line.price * line.quantity - allowance);
+    };
     const vatValue = (line: InvoiceLine) => financial(quantityPrice(line) / (1 + line.vatRate / 100));
 
     const computeWithoutVAT = () => {
