@@ -72,9 +72,10 @@ export default function Line({
             return '0';
         }
 
+        const allowance = data.allowance ? (data.allowance.amount || 0) : 0;
         // const priceInUnits = price * 100;
         // const valueInUnits = priceInUnits * quantity;
-        const value = financial(price * quantity);
+        const value = financial(price * quantity - allowance);
 
         if (vatIncluded) {
             return toFixed(value);
