@@ -55,7 +55,7 @@ foreach ($data->lines as $line) {
         ->setVatRate($line->vatRate)
         ->setQuantity($line->quantity);
 
-    if (isset($line['allowance'])) {
+    if (isset($line->allowance)) {
         $allowance = new AllowanceOrCharge();
         $allowance
             ->setAmount($line->allowance->amount)
