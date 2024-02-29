@@ -27,7 +27,7 @@ export default function Lines({
     const updateLineItem = (
         index: number,
         type: string,
-        value: string | boolean,
+        value: string | boolean | any,
     ) => {
         const newLines = data.map((line, idx) => {
             if (idx === index) {

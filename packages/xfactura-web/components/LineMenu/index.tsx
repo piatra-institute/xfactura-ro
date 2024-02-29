@@ -15,7 +15,12 @@ import {
     expandIcon,
 } from '@/data/icons';
 
+import {
+    emptyInvoiceLineAllowance,
+} from '@/data/constants';
+
 import Toggle from '@/components/Toggle';
+import LinkButton from '@/components/LinkButton';
 import Deleter from '@/components/Deleter';
 
 import {
@@ -32,7 +37,7 @@ export default function LineMenu({
 }: {
     data: InvoiceLine;
     index: number;
-    updateLine: (index: number, type: string, value: string | boolean) => void;
+    updateLine: (index: number, type: string, value: string | boolean | any) => void;
     removeLine: (index: number) => void;
 }) {
     const [
@@ -70,6 +75,19 @@ export default function LineMenu({
                         value={data.vatIncluded}
                         toggle={() => updateLine(index, 'vatIncluded', !data.vatIncluded)}
                     />
+
+                    {!data.allowance && (
+                        <div
+                            className="mt-4 mb-2"
+                        >
+                            <LinkButton
+                                text="discount"
+                                onClick={() => updateLine(index, 'allowance', {
+                                    ...emptyInvoiceLineAllowance,
+                                })}
+                            />
+                        </div>
+                    )}
 
                     <div
                         className="mt-4 mb-2"

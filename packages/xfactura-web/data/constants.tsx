@@ -1,5 +1,6 @@
 import {
     InvoiceLine,
+    InvoiceLineAllowance,
     Metadata,
     Inventory,
 } from './interfaces';
@@ -53,6 +54,12 @@ export const emptyInvoiceLine: InvoiceLine = {
     quantity: 1,
     vatRate: 19,
     vatIncluded: false,
+};
+
+export const emptyInvoiceLineAllowance: InvoiceLineAllowance = {
+    amount: 0,
+    fixedAmount: true,
+    reason: 'Discount',
 };
 
 

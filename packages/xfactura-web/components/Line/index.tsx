@@ -7,6 +7,7 @@ import Input, {
     MultipleChoice,
 } from '@/components/Input';
 import LineMenu from '@/components/LineMenu';
+import Toggle from '@/components/Toggle';
 
 import {
     InvoiceLine,
@@ -42,7 +43,7 @@ export default function Line({
     index: number;
     currency: string;
     updateLine: (index: number, lineData: InvoiceLine) => void;
-    updateLineItem: (index: number, type: string, value: string | boolean) => void;
+    updateLineItem: (index: number, type: string, value: string | boolean | any) => void;
     removeLine: (index: number) => void;
 }) {
     const {
@@ -150,8 +151,9 @@ export default function Line({
 
 
     return (
+        <>
         <li
-            className="grid gap-1 mb-8 items-center lg:flex lg:gap-12 lg:mb-4"
+            className="mb-8 grid gap-1 items-center lg:flex lg:gap-12 lg:mb-4"
         >
             <div
                 className="select-none text-center text-gray-500 text-sm lg:mt-11"
@@ -238,5 +240,48 @@ export default function Line({
                 removeLine={removeLine}
             />
         </li>
+
+        {data.allowance && (
+            <div
+                className="mb-8 grid gap-1 items-center lg:flex lg:gap-12 lg:mb-4"
+            >
+                <Input
+                    text="nume"
+                    value={data.allowance.reason}
+                    setValue={(value) => updateLineItem(index, 'allowance', {
+                        ...data.allowance,
+                        reason: value,
+                    })}
+                    width={150}
+                    inputProps={{
+                        placeholder: 'discount',
+                    }}
+                />
+
+                <Input
+                    text="valoare"
+                    value={data.allowance.amount + ''}
+                    setValue={(value) => updateLineItem(index, 'allowance', {
+                        ...data.allowance,
+                        amount: parseFloat(value),
+                    })}
+                    width={150}
+                    type="number"
+                    inputProps={{
+                        min: 0,
+                    }}
+                />
+
+                <Toggle
+                    text="procentaj"
+                    value={!data.allowance.fixedAmount}
+                    toggle={() => updateLineItem(index, 'allowance', {
+                        ...data.allowance,
+                        fixedAmount: !data.allowance!.fixedAmount,
+                    })}
+                />
+            </div>
+        )}
+        </>
     );
 }

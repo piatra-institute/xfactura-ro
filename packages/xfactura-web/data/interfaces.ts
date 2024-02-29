@@ -1,9 +1,16 @@
+export type InvoiceLineAllowance = {
+    amount: number;
+    reason: string;
+    fixedAmount: boolean;
+}
+
 export type InvoiceLine = {
     name: string;
     price: number;
     vatRate: number;
     vatIncluded: boolean;
     quantity: number;
+    allowance?: InvoiceLineAllowance;
 }
 
 
