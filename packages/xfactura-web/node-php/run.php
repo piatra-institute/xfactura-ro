@@ -4,6 +4,7 @@ require __DIR__ . '/vendor/autoload.php';
 
 use Einvoicing\Invoice;
 use Einvoicing\InvoiceLine;
+use Einvoicing\AllowanceOrCharge;
 use Einvoicing\Party;
 use Einvoicing\Presets;
 use Einvoicing\Writers\UblWriter;
@@ -53,6 +54,20 @@ foreach ($data->lines as $line) {
         ->setPrice($line->price)
         ->setVatRate($line->vatRate)
         ->setQuantity($line->quantity);
+
+    if (isset($line['allowance'])) {
+        $allowance = new AllowanceOrCharge();
+        $allowance
+            ->setAmount($line->allowance->amount)
+            ->setReason($line->allowance->reason);
+        if ($line->allowance->fixedAmount) {
+            $allowance->markAsFixedAmount();
+        } else {
+            $allowance->markAsPercentage();
+        }
+        $invoiceLine->addAllowance($allowance);
+    }
+
     $invoice->addLine($invoiceLine);
 }
 
