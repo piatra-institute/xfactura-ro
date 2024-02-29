@@ -221,7 +221,7 @@ export default function Menu() {
         case 'general':
             viewElement = (
                 <div
-                    className="max-w-xl p-4 grid place-items-center"
+                    className="max-w-xl m-auto p-4 grid place-items-center"
                 >
                 <ul>
                     <li className="m-4">

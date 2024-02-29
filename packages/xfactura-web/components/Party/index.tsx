@@ -324,13 +324,15 @@ export default function Party({
 
     return (
         <div
-            className={styleless ? '' : 'max-w-[400px] md:w-1/2 min-h-[150px] p-2 md:p-8'}
+            className={styleless ? '' : 'max-w-[400px] md:w-1/2 min-h-[150px] mx-auto p-2 md:p-8'}
         >
             <Subtitle
                 text={title}
             />
 
-            <div>
+            <div
+                className="min-w-[280px]"
+            >
                 {companyFields.map(field => {
                     if (field === 'name') {
                         return (
