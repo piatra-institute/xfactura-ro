@@ -25,20 +25,7 @@ export interface MultipleChoice {
     show?: string;
 }
 
-
-export default function Input({
-    text,
-    value,
-    setValue,
-    width,
-    type,
-    disabled,
-    loading,
-    inputProps,
-    asGrid,
-    multipleChoices,
-    atChoice,
-}: {
+export interface InputProperties {
     text: string;
     value: string | undefined;
     setValue: (value: string) => void;
@@ -48,10 +35,39 @@ export default function Input({
     loading?: boolean;
     asGrid?: boolean;
     multipleChoices?: (string | MultipleChoice)[];
+    multipleChoiceFocusable?: boolean;
     inputProps?: InputProps;
     atChoice?: (choice: string | MultipleChoice) => void;
-}) {
+}
+
+
+export default function Input(
+    properties: InputProperties,
+) {
+    // #region properties
+    const {
+        text,
+        value,
+        setValue,
+        width,
+        type,
+        disabled,
+        loading,
+        inputProps,
+        asGrid,
+        multipleChoices,
+        multipleChoiceFocusable,
+        atChoice,
+    } = properties;
+    // #endregion properties
+
+
     // #region state
+    const [
+        focusedInput,
+        setFocusedInput,
+    ] = useState(multipleChoiceFocusable ? false : true);
+
     const [
         showMultiple,
         setShowMultiple,
@@ -85,6 +101,16 @@ export default function Input({
 
         return choice.show || choice.name;
     }
+
+    const isActiveChoice = (
+        choice: string | MultipleChoice,
+    ) => {
+        if (typeof choice === 'string') {
+            return choice === value;
+        }
+
+        return choice.show === value;
+    }
     // #endregion handlers
 
 
@@ -95,7 +121,7 @@ export default function Input({
                 return;
             }
 
-            if (showMultiple) {
+            if (showMultiple && focusedInput) {
                 if (event.key === 'ArrowDown') {
                     setMultipleIndex((multipleIndex + 1) % multipleChoices.length);
                 }
@@ -123,6 +149,7 @@ export default function Input({
         showMultiple,
         multipleIndex,
         multipleChoices,
+        focusedInput,
         atChoice,
     ]);
 
@@ -139,6 +166,7 @@ export default function Input({
     // #endregion effects
 
 
+    // #region render
     return (
         <div
             className={styleTrim(`
@@ -183,22 +211,39 @@ export default function Input({
                     }}
                     onFocus={() => {
                         setShowMultiple(true);
+
+                        if (multipleChoiceFocusable) {
+                            setFocusedInput(true);
+                        }
                     }}
                     onBlur={() => {
                         setShowMultiple(false);
                         setMultipleIndex(-1);
+
+                        if (multipleChoiceFocusable) {
+                            setTimeout(() => {
+                                setFocusedInput(false);
+                            }, 10);
+                        }
                     }}
-                    onKeyDown={() => {
+                    onKeyDown={(event) => {
                         if (multipleChoices && multipleChoices.length > 0) {
                             setShowMultiple(true);
                         } else {
                             setShowMultiple(false);
                             setMultipleIndex(-1);
                         }
+
+                        if (multipleChoiceFocusable && event.key === 'Enter') {
+                            setTimeout(() => {
+                                setFocusedInput(false);
+                            }, 10);
+                        }
                     }}
                 />
 
                 {showMultiple
+                && focusedInput
                 && multipleChoices
                 && multipleChoices.length > 0
                 && (
@@ -213,12 +258,16 @@ export default function Input({
                             <div
                                 key={computeChoiceKey(choice, index)}
                                 className={styleTrim(`
-                                    ${multipleIndex === multipleChoices.indexOf(choice) ? 'bg-gray-600' : ''}
+                                    ${
+                                        multipleIndex === multipleChoices.indexOf(choice)
+                                            ? 'bg-gray-500'
+                                            : isActiveChoice(choice) ? 'bg-gray-600' : ''
+                                    }
                                     p-2 -mx-2 text-left
                                 `)}
                             >
                                 <button
-                                    className="cursor-pointer text-left"
+                                    className="cursor-pointer text-left hover:bg-gray-500 w-[calc(100%+1rem)] p-2 -m-2"
                                     onMouseDown={() => {
                                         atChoice?.(choice);
                                     }}
@@ -243,4 +292,5 @@ export default function Input({
             )}
         </div>
     );
+    // #endregion render
 }

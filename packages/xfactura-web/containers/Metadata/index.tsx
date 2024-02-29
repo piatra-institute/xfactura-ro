@@ -47,6 +47,13 @@ export default function Metadata({
                 inputProps={{
                     placeholder: 'RON | EUR | USD',
                 }}
+                multipleChoices={['RON', 'EUR', 'USD']}
+                atChoice={(value) => {
+                    if (typeof value === 'string') {
+                        updateMetadata('currency', value);
+                    }
+                }}
+                multipleChoiceFocusable={true}
             />
 
             <Datepicker

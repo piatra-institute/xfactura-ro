@@ -74,7 +74,7 @@ export default function SearchableList<T extends object>({
 
     return (
         <div
-            className="md:w-[350px]"
+            className="w-full p-4 md:w-[350px]"
         >
             <Subtitle
                 text={name}
@@ -97,7 +97,7 @@ export default function SearchableList<T extends object>({
             />
 
             <div
-                className="h-[350px] mt-8 flex flex-col overflow-auto scrollable-view"
+                className="md:h-[350px] mt-8 flex flex-col overflow-auto scrollable-view"
             >
                 {filteredData.length === 0 ? (
                     <>

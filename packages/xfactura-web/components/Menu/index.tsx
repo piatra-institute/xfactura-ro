@@ -86,6 +86,9 @@ export default function Menu() {
 
                 while (current) {
                     if (current.classList?.contains('scrollable-view')) {
+                        // if (current.clientHeight > current.scrollHeight) {
+                        //     return false;
+                        // }
                         return true;
                     }
                     current = current.parentNode;
@@ -95,12 +98,13 @@ export default function Menu() {
             } catch (error) {
                 return false;
             }
-        };
+        }
 
         const handleScroll = (event: Event) => {
             if (showMenu) {
                 const isScrollableDiv = isEventWithinScrollableDiv(event);
                 if (isScrollableDiv) {
+                    event.stopPropagation();
                     return;
                 }
 
@@ -108,7 +112,7 @@ export default function Menu() {
                 event.preventDefault();
                 event.stopPropagation();
             }
-        };
+        }
 
         const handleEscape = (event: KeyboardEvent) => {
             if (event.key === 'Escape') {
@@ -217,7 +221,7 @@ export default function Menu() {
         case 'general':
             viewElement = (
                 <div
-                    className="max-w-xl p-4"
+                    className="max-w-xl p-4 grid place-items-center"
                 >
                 <ul>
                     <li className="m-4">
@@ -323,7 +327,8 @@ export default function Menu() {
                     className={styleTrim(`
                         ${showBgBlack ? 'bg-black': 'animate-fadeIn backdrop-blur-md'}
                         fixed z-40 top-0 h-screen right-0 left-0 bottom-0
-                        grid place-items-center text-center
+                        text-center
+                        grid md:place-items-center
                     `)}
                 >
                     {viewElement}

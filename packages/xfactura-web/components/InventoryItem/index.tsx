@@ -152,7 +152,7 @@ export default function InventoryItem({
             />
 
             <Input
-                text="UM"
+                text="unitate"
                 value={unit}
                 setValue={(unit) => {
                     atChange({

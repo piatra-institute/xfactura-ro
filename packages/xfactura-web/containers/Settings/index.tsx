@@ -156,14 +156,16 @@ export default function Settings({
 
 
     return (
-        <div>
+        <div
+            className="p-4"
+        >
             <Subtitle
                 text="setări"
                 centered={true}
             />
 
             <div
-                className="grid gap-4 min-w-[300px]"
+                className="grid gap-4 md:min-w-[300px]"
             >
                 <Toggle
                     text="stocare date locale"
