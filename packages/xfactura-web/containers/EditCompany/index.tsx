@@ -60,21 +60,25 @@ export default function EditCompany({
 
     return (
         <div
-            className="scrollable-view overflow-auto h-[calc(100vh-4rem)] w-[350px] p-2 grid place-content-center"
+            className="scrollable-view overflow-auto p-2 grid md:place-content-center"
         >
             <Subtitle
                 text="editare companie"
                 centered={true}
             />
 
-            <Party
-                kind={defaultSeller === company.vatNumber ? 'seller' : 'buyer'}
-                title=""
-                data={company}
-                setParty={setCompany}
-                styleless={true}
-                editing={true}
-            />
+            <div
+                className="p-2"
+            >
+                <Party
+                    kind={defaultSeller === company.vatNumber ? 'seller' : 'buyer'}
+                    title=""
+                    data={company}
+                    setParty={setCompany}
+                    styleless={true}
+                    editing={true}
+                />
+            </div>
 
             <PureButton
                 text="salvare"

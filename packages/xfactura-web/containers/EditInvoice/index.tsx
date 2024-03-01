@@ -71,93 +71,97 @@ export default function EditInvoice({
 
     return (
         <div
-            className="scrollable-view overflow-auto h-[calc(100vh-4rem)]"
+            className="scrollable-view overflow-auto h-screen w-full p-2"
         >
-            <Subtitle
-                text="editare factură"
-                centered={true}
-            />
-
-            <InvoiceItem
-                data={invoiceItem}
-                updateSeller={(data) => {
-                    setInvoiceItem({
-                        ...invoiceItem,
-                        seller: data,
-                    });
-                }}
-                updateBuyer={(data) => {
-                    setInvoiceItem({
-                        ...invoiceItem,
-                        buyer: data,
-                    });
-                }}
-                updateMetadata={(key, value) => {
-                    setInvoiceItem({
-                        ...invoiceItem,
-                        metadata: {
-                            ...invoiceItem.metadata,
-                            [key]: value,
-                        },
-                    });
-                }}
-                updateDate={(key, value) => {
-                    setInvoiceItem({
-                        ...invoiceItem,
-                        metadata: {
-                            ...invoiceItem.metadata,
-                            [key]: value,
-                        },
-                    });
-                }}
-                updateProducts={(data) => {
-                    setInvoiceItem({
-                        ...invoiceItem,
-                        products: data,
-                    });
-                }}
-                generateEinvoice={(
-                    setLoadingEInvoice,
-                ) => {
-                    generateEinvoice(
-                        setLoadingEInvoice,
-                        setShowLoading,
-                        invoiceItem,
-                        generateEinvoiceLocally,
-                    );
-                }}
-            />
-
-            <PureButton
-                text="salvare"
-                atClick={() => {
-                    addInvoice(invoiceItem);
-                    setMenuView('invoices');
-                }}
-            />
-
             <div
-                className="h-8"
-            />
+                className="w-full px-2 md:px-0 m-auto"
+            >
+                <Subtitle
+                    text="editare factură"
+                    centered={true}
+                />
 
-            <Deleter
-                title="ștergere"
-                atDelete={() => {
-                    const seriesData = seriesParser(invoiceItem.metadata.number);
-                    if (seriesData && lastInvoiceSeries === invoiceItem.metadata.number) {
-                        setLastInvoiceSeries(seriesData.previousSeries);
-                    }
+                <InvoiceItem
+                    data={invoiceItem}
+                    updateSeller={(data) => {
+                        setInvoiceItem({
+                            ...invoiceItem,
+                            seller: data,
+                        });
+                    }}
+                    updateBuyer={(data) => {
+                        setInvoiceItem({
+                            ...invoiceItem,
+                            buyer: data,
+                        });
+                    }}
+                    updateMetadata={(key, value) => {
+                        setInvoiceItem({
+                            ...invoiceItem,
+                            metadata: {
+                                ...invoiceItem.metadata,
+                                [key]: value,
+                            },
+                        });
+                    }}
+                    updateDate={(key, value) => {
+                        setInvoiceItem({
+                            ...invoiceItem,
+                            metadata: {
+                                ...invoiceItem.metadata,
+                                [key]: value,
+                            },
+                        });
+                    }}
+                    updateProducts={(data) => {
+                        setInvoiceItem({
+                            ...invoiceItem,
+                            products: data,
+                        });
+                    }}
+                    generateEinvoice={(
+                        setLoadingEInvoice,
+                    ) => {
+                        generateEinvoice(
+                            setLoadingEInvoice,
+                            setShowLoading,
+                            invoiceItem,
+                            generateEinvoiceLocally,
+                        );
+                    }}
+                />
 
-                    removeInvoice(invoiceItem.id);
-                    setMenuView('invoices');
-                }}
-            />
+                <PureButton
+                    text="salvare"
+                    atClick={() => {
+                        addInvoice(invoiceItem);
+                        setMenuView('invoices');
+                    }}
+                />
 
-            <MenuBack
-                back={() => {
-                    setMenuView('invoices');
-                }}
-            />
+                <div
+                    className="h-8"
+                />
+
+                <Deleter
+                    title="ștergere"
+                    atDelete={() => {
+                        const seriesData = seriesParser(invoiceItem.metadata.number);
+                        if (seriesData && lastInvoiceSeries === invoiceItem.metadata.number) {
+                            setLastInvoiceSeries(seriesData.previousSeries);
+                        }
+
+                        removeInvoice(invoiceItem.id);
+                        setMenuView('invoices');
+                    }}
+                />
+
+                <MenuBack
+                    back={() => {
+                        setMenuView('invoices');
+                    }}
+                />
+            </div>
         </div>
     );
 }

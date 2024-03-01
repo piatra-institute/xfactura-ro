@@ -74,27 +74,31 @@ export default function SearchableList<T extends object>({
 
     return (
         <div
-            className="w-full p-4 md:w-[350px]"
+            className="w-full p-2 md:w-[350px]"
         >
             <Subtitle
                 text={name}
                 centered={true}
             />
 
-            <Input
-                text=""
-                value={search}
-                setValue={(value) => {
-                    setSearch(value);
-                }}
-                width="100%"
-                inputProps={{
-                    placeholder: 'căutare',
-                    style: {
-                        width: '100%',
-                    },
-                }}
-            />
+            <div
+                className="p-2"
+            >
+                <Input
+                    text=""
+                    value={search}
+                    setValue={(value) => {
+                        setSearch(value);
+                    }}
+                    width="100%"
+                    inputProps={{
+                        placeholder: 'căutare',
+                        style: {
+                            width: '100%',
+                        },
+                    }}
+                />
+            </div>
 
             <div
                 className="md:h-[350px] mt-8 flex flex-col overflow-auto scrollable-view"

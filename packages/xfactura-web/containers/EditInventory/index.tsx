@@ -58,44 +58,44 @@ export default function EditInventory({
 
     return (
         <div
-            className="scrollable-view overflow-auto h-screen w-full p-2 py-5 md:p-6"
+            className="scrollable-view overflow-auto h-screen w-full p-2"
         >
             <div
                 className="w-full px-2 md:w-[350px] md:px-0 m-auto"
             >
-            <Subtitle
-                text="editare stoc"
-                centered={true}
-            />
+                <Subtitle
+                    text="editare stoc"
+                    centered={true}
+                />
 
-            <InventoryItem
-                data={inventoryItem}
-                atChange={(newInventoryItem) => {
-                    setInventoryItem(newInventoryItem);
-                }}
-            />
+                <InventoryItem
+                    data={inventoryItem}
+                    atChange={(newInventoryItem) => {
+                        setInventoryItem(newInventoryItem);
+                    }}
+                />
 
-            <PureButton
-                text="salvare"
-                atClick={() => {
-                    addInventory(inventoryItem);
-                    setMenuView('inventory');
-                }}
-            />
+                <PureButton
+                    text="salvare"
+                    atClick={() => {
+                        addInventory(inventoryItem);
+                        setMenuView('inventory');
+                    }}
+                />
 
-            <Deleter
-                title="ștergere stoc"
-                atDelete={() => {
-                    removeInventory(inventoryItem.id);
-                    setMenuView('inventory');
-                }}
-            />
+                <Deleter
+                    title="ștergere stoc"
+                    atDelete={() => {
+                        removeInventory(inventoryItem.id);
+                        setMenuView('inventory');
+                    }}
+                />
 
-            <MenuBack
-                back={() => {
-                    setMenuView('inventory');
-                }}
-            />
+                <MenuBack
+                    back={() => {
+                        setMenuView('inventory');
+                    }}
+                />
             </div>
         </div>
     );

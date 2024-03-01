@@ -64,6 +64,7 @@ export default function Party({
     editing?: boolean;
 }) {
     // #region references
+    const titleRef = useRef<HTMLDivElement | null>(null);
     const mountedTime = useRef(Date.now());
     // #endregion references
 
@@ -325,14 +326,18 @@ export default function Party({
 
     return (
         <div
-            className={styleless ? '' : 'max-w-[400px] md:w-1/2 min-h-[150px] mx-auto md:mx-0 p-2 md:p-8'}
+            className={styleless ? '' : 'md:w-1/2 min-h-[150px] p-2 md:p-8 md:max-w-[360px]'}
         >
+            <div
+                className="mb-4"
+                ref={titleRef}
+            />
             <Subtitle
                 text={title}
             />
 
             <div
-                className="min-w-[280px]"
+                className={styleless ? '' : 'min-w-[280px] flex flex-col justify-between md:block'}
             >
                 {companyFields.map(field => {
                     if (field === 'name') {
@@ -398,6 +403,10 @@ export default function Party({
                             : toggleExpandedBuyer;
 
                         expander();
+
+                        if (titleRef.current) {
+                            titleRef.current.scrollIntoView({ behavior: 'smooth' });
+                        }
                     }}
                 />
             )}
