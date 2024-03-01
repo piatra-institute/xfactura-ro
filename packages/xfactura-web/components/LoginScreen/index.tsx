@@ -9,6 +9,10 @@ import {
     ENVIRONMENT,
 } from '@/data';
 
+import {
+    googleIcon,
+} from '@/data/icons';
+
 import LinkButton from '@/components/LinkButton';
 import Subtitle from '@/components/Subtitle';
 
@@ -111,7 +115,7 @@ export default function LoginScreen({
                 onClick={() => {
                     googleLogin();
                 }}
-                icon="/assets/google-logo.png"
+                icon={googleIcon}
             />
 
             {/* <LinkButton
@@ -119,7 +123,7 @@ export default function LoginScreen({
                 onClick={() => {
                     appleSuccessLogin();
                 }}
-                icon="/assets/apple-logo.png"
+                icon={appleIcon}
             /> */}
 
             <LinkButton
