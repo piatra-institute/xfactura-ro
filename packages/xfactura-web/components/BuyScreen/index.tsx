@@ -115,7 +115,7 @@ export default function BuyScreen({
     if (clientSecret) {
         return (
             <div
-                className="h-full min-h-[500px] min-w-[420px] overflow-scroll"
+                className="h-full min-h-[500px] md:min-w-[420px] overflow-scroll"
             >
                 <EmbeddedCheckoutProvider
                     stripe={stripePromise}
