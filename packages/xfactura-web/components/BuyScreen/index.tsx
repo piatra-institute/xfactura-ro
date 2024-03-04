@@ -143,7 +143,7 @@ export default function BuyScreen({
     return (
         <>
             <div
-                className="m-auto"
+                className="md:m-auto"
             >
                 <Subtitle
                     text={"cumpărare acte inteligente"}
@@ -168,7 +168,7 @@ export default function BuyScreen({
             </div>
 
             <div
-                className="w-[300px] m-auto flex flex-col gap-8 justify-center items-center"
+                className="md:w-[300px] my-4 mx-auto md:m-auto flex flex-col gap-8 justify-center items-center"
             >
                 <button
                     className={buyButtonStyle}

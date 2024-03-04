@@ -17,9 +17,7 @@ export default function AI({
     return (
         <div
             className={`
-                w-full h-full
-                fixed top-0 right-0 bottom-0 z-30
-                grid items-center justify-center place-content-center gap-12
+                scrollable-view max-w-xl h-full overflow-scroll flex flex-col md:justify-center p-4
             `}
         >
             {user ? (
