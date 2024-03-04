@@ -202,6 +202,7 @@ export default function Line({
                 type="number"
                 inputProps={{
                     min: 0,
+                    inputMode: 'decimal',
                 }}
                 asGrid={true}
             />
@@ -214,6 +215,7 @@ export default function Line({
                 type="number"
                 inputProps={{
                     min: 0,
+                    inputMode: 'decimal',
                 }}
                 asGrid={true}
             />
@@ -226,6 +228,7 @@ export default function Line({
                 type="number"
                 inputProps={{
                     min: 0,
+                    inputMode: 'decimal',
                 }}
                 asGrid={true}
             />

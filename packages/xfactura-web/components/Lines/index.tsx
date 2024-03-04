@@ -37,7 +37,7 @@ export default function Lines({
             if (idx === index) {
                 const parsedValue = typeof value === 'string' &&
                     (type === 'price' || type === 'quantity' || type === 'vatRate')
-                    ? parseFloat(value)
+                    ? parseFloat(value.replace(',', '.'))
                     : value;
 
                 return {

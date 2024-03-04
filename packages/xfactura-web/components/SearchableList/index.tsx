@@ -93,9 +93,7 @@ export default function SearchableList<T extends object>({
                     width="100%"
                     inputProps={{
                         placeholder: 'căutare',
-                        style: {
-                            width: '100%',
-                        },
+                        inputMode: 'search',
                     }}
                 />
             </div>

@@ -12,6 +12,10 @@ import {
 import Spinner from '@/components/Spinner';
 
 import {
+    useResponsiveWidth,
+} from '@/logic/hooks';
+
+import {
     styleTrim,
 } from '@/logic/utilities';
 
@@ -59,6 +63,8 @@ export default function Input(
         multipleChoiceFocusable,
         atChoice,
     } = properties;
+
+    const responsiveWidth = useResponsiveWidth(width);
     // #endregion properties
 
 
@@ -183,14 +189,16 @@ export default function Input(
             )}
 
             <div
-                className="relative md:w-[200px]"
+                className={styleTrim(`
+                    relative w-[220px] md:w-[200px]
+                `)}
                 style={{
-                    width,
+                    width: responsiveWidth,
                 }}
             >
                 <input
                     className={styleTrim(`
-                        bg-gray-800 w-[200px] p-2 border-none rounded-none text-white
+                        bg-gray-800 w-full p-2 border-none rounded-none text-white
                         disabled:bg-gray-600
                         ${focusStyle}
                     `)}
@@ -202,9 +210,7 @@ export default function Input(
                     autoCapitalize="off"
                     autoCorrect="off"
                     autoComplete="off"
-                    style={{
-                        width,
-                    }}
+                    lang="ro-Ro"
                     {...inputProps}
                     onChange={(event) => {
                         setValue(event.target.value);
@@ -249,7 +255,7 @@ export default function Input(
                 && (
                     <div
                         className={styleTrim(`
-                            absolute z-40 bg-gray-800 top-[40px] -left-[2px] w-[204px] p-2
+                            absolute z-40 bg-gray-800 top-[40px] -left-[2px] w-[calc(100%+4px)] p-2
                             border-white border-x-2 border-b-2 rounded-none text-white
                             max-h-[150px] overflow-y-auto
                         `)}

@@ -1,4 +1,5 @@
 import {
+    useState,
     useEffect,
 } from 'react';
 
@@ -21,4 +22,31 @@ export const useUnscrollable = () => {
             window.removeEventListener('touchmove', handleScroll);
         };
     }, []);
+}
+
+
+export const useResponsiveWidth = (
+    width: string | number | undefined,
+) => {
+    const [windowWidth, setWindowWidth] = useState(
+        typeof window === 'undefined' ? 0 : window.innerWidth,
+    );
+
+    useEffect(() => {
+        const handleResize = () => {
+            setWindowWidth(window.innerWidth);
+        };
+
+        window.addEventListener('resize', handleResize);
+
+        return () => {
+            window.removeEventListener('resize', handleResize);
+        };
+    }, []);
+
+    if (typeof width === 'string') {
+        return width;
+    }
+
+    return windowWidth <= 768 ? undefined : width;
 }

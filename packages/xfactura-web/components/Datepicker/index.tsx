@@ -1,3 +1,7 @@
+import {
+    useRef,
+} from 'react';
+
 import type { CustomFlowbiteTheme } from 'flowbite-react';
 import { Flowbite, Datepicker } from 'flowbite-react';
 
@@ -22,7 +26,7 @@ const customTheme: CustomFlowbiteTheme = {
                 "svg": "h-5 w-5 text-gray-500 dark:text-gray-400"
             },
             "input": {
-                "base": `w-[200px] h-[40px] rounded-none border-none ${focusStyle} disabled:cursor-not-allowed disabled:opacity-50`,
+                "base": `w-[220px] md:w-[200px] h-[40px] rounded-none border-none ${focusStyle} disabled:cursor-not-allowed disabled:opacity-50`,
                 "sizes": {
                     "sm": "p-2",
                     "md": "p-2",
@@ -135,7 +139,7 @@ const customTheme: CustomFlowbiteTheme = {
                 }
             }
         }
-    }
+    },
 };
 
 
@@ -148,9 +152,12 @@ export default function CustomDatepicker({
     atSelect: (timestamp: number) => void;
     defaultValue?: number;
 }) {
+    const ref = useRef<HTMLDivElement | null>(null);
+
     return (
         <div
             className="flex items-center justify-between my-2 gap-4"
+            ref={ref}
         >
             <div
                 className="select-none"
@@ -160,6 +167,13 @@ export default function CustomDatepicker({
 
             <Flowbite theme={{ theme: customTheme }}>
                 <Datepicker
+                    onClick={(_) => {
+                        if (ref.current && window.innerWidth < 768) {
+                            ref.current.scrollIntoView({
+                                behavior: 'smooth',
+                            });
+                        }
+                    }}
                     onSelectedDateChanged={(date) => {
                         const timestamp = new Date(date).getTime();
                         atSelect(timestamp);
