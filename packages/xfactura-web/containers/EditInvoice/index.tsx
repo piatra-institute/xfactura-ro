@@ -71,10 +71,10 @@ export default function EditInvoice({
 
     return (
         <div
-            className="scrollable-view overflow-auto h-full w-full p-2"
+            className="scrollable-view overflow-auto h-full w-full"
         >
             <div
-                className="w-full px-2 md:px-0 m-auto"
+                className="w-full md:px-0 m-auto"
             >
                 <Subtitle
                     text="editare factură"
