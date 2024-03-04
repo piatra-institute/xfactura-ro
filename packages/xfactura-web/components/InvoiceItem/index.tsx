@@ -33,6 +33,7 @@ import {
 
 export default function InvoiceItem({
     data,
+    editing,
     updateSeller,
     updateBuyer,
     updateMetadata,
@@ -41,6 +42,7 @@ export default function InvoiceItem({
     generateEinvoice,
 }: {
     data: Invoice;
+    editing?: boolean;
     updateSeller: (data: Company) => void;
     updateBuyer: (data: Company) => void;
     updateMetadata: (
@@ -106,6 +108,7 @@ export default function InvoiceItem({
                     title="furnizor"
                     data={data.seller}
                     setParty={updateSeller}
+                    editing={editing}
                 />
 
                 <Party
@@ -113,6 +116,7 @@ export default function InvoiceItem({
                     title="cumpărător"
                     data={data.buyer}
                     setParty={updateBuyer}
+                    editing={editing}
                 />
             </div>
 

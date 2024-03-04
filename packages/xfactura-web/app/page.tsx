@@ -74,6 +74,7 @@ export default function Home() {
 
         setHasMediaDevices,
 
+        showMenu,
         showText,
         showCamera,
         setShowCamera,
@@ -265,6 +266,7 @@ export default function Home() {
         // eslint-disable-next-line
     }, []);
 
+    /** Prevent page close */
     useEffect(() => {
         if (newInvoice.buyer.name === ''
             || newInvoice.products.every((product) => product.name === '')
@@ -287,6 +289,17 @@ export default function Home() {
     }, [
         newInvoice.buyer.name,
         newInvoice.products,
+    ]);
+
+    /** Prevent scroll */
+    useEffect(() => {
+        if (showMenu) {
+            document.body.style.overflow = 'hidden';
+        } else {
+            document.body.style.overflow = 'auto';
+        }
+    }, [
+        showMenu,
     ]);
     // #endregion effects
 

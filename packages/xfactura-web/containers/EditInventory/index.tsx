@@ -58,7 +58,7 @@ export default function EditInventory({
 
     return (
         <div
-            className="scrollable-view overflow-auto h-screen w-full p-2"
+            className="scrollable-view overflow-auto h-full w-full p-2"
         >
             <div
                 className="w-full px-2 md:w-[350px] md:px-0 m-auto"

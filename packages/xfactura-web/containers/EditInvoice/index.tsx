@@ -71,7 +71,7 @@ export default function EditInvoice({
 
     return (
         <div
-            className="scrollable-view overflow-auto h-screen w-full p-2"
+            className="scrollable-view overflow-auto h-full w-full p-2"
         >
             <div
                 className="w-full px-2 md:px-0 m-auto"
@@ -82,6 +82,7 @@ export default function EditInvoice({
                 />
 
                 <InvoiceItem
+                    editing={true}
                     data={invoiceItem}
                     updateSeller={(data) => {
                         setInvoiceItem({
