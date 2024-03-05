@@ -13,6 +13,7 @@ import {
     companyText,
     companyFields,
     companyPlaceholder,
+    countyMap,
 } from '@/data';
 
 import {
@@ -32,6 +33,9 @@ import {
 
 import fuzzySearch, {
     companySearcher,
+    countySearcher,
+    citySearcher,
+    cityDataFetcher,
 } from '@/logic/searchers';
 
 import {
@@ -94,6 +98,16 @@ export default function Party({
     const [
         multipleChoicesName,
         setMultipleChoicesName,
+    ] = useState<MultipleChoice[]>();
+
+    const [
+        multipleChoicesCounty,
+        setMultipleChoicesCounty,
+    ] = useState<MultipleChoice[]>();
+
+    const [
+        multipleChoicesCity,
+        setMultipleChoicesCity,
     ] = useState<MultipleChoice[]>();
     // #endregion state
 
@@ -316,6 +330,100 @@ export default function Party({
         data.name,
         companies,
     ]);
+
+    useEffect(() => {
+        if (data.county.length < 2) {
+            setMultipleChoicesCounty([]);
+            return;
+        }
+
+        const county = normalizeDiacritics(data.county.toLowerCase().trim());
+
+        countySearcher.indexEntities(
+            Object.keys(countyMap),
+            (entity) => entity,
+            (entity) => [entity],
+        );
+        const result = countySearcher.getMatches(new fuzzySearch.Query(
+            county,
+            10,
+            0.2,
+        ));
+        if (
+            result.matches.length === 0
+            || result.matches.some(match => match.quality === 1)
+        ) {
+            setMultipleChoicesCounty([]);
+            return;
+        }
+
+        const choices = result.matches.map((match) => {
+            return {
+                id: match.entity,
+                name: match.entity,
+            };
+        });
+
+        if (choices.length === 1 && choices[0].name === data.county) {
+            setMultipleChoicesCounty([]);
+            return;
+        }
+
+        setMultipleChoicesCounty(choices);
+    }, [
+        data.county,
+    ]);
+
+    useEffect(() => {
+        if (!data.county || data.city.length < 2) {
+            setMultipleChoicesCity([]);
+            return;
+        }
+
+        const city = normalizeDiacritics(data.city.toLowerCase().trim());
+        const cityData: string[] = cityDataFetcher.getByCounty(
+            normalizeDiacritics(data.county.toLowerCase().trim()),
+        );
+        if (cityData.length === 0) {
+            setMultipleChoicesCity([]);
+            return;
+        }
+
+        citySearcher.indexEntities(
+            cityData,
+            (entity) => entity,
+            (entity) => [entity],
+        );
+        const result = citySearcher.getMatches(new fuzzySearch.Query(
+            city,
+            10,
+            0.2,
+        ));
+        if (
+            result.matches.length === 0
+            || result.matches.some(match => match.quality === 1)
+        ) {
+            setMultipleChoicesCity([]);
+            return;
+        }
+
+        const choices = result.matches.map((match) => {
+            return {
+                id: match.entity,
+                name: match.entity,
+            };
+        });
+
+        if (choices.length === 1 && choices[0].name === data.city) {
+            setMultipleChoicesCity([]);
+            return;
+        }
+
+        setMultipleChoicesCity(choices);
+    }, [
+        data.county,
+        data.city,
+    ]);
     // #endregion effects
 
 
@@ -339,59 +447,121 @@ export default function Party({
             <div
                 className={styleless ? '' : 'min-w-[280px] flex flex-col justify-between md:block'}
             >
-                {companyFields.map(field => {
-                    if (field === 'name') {
-                        return (
-                            <div
-                                key={kind + field}
-                            >
-                                <Input
-                                    text={companyText[field]}
-                                    value={data[field]}
-                                    setValue={updateParty(field)}
-                                    multipleChoices={multipleChoicesName}
-                                    atChoice={(choice) => {
-                                        if (typeof choice === 'string') {
-                                            return;
-                                        }
+                <Input
+                    text={companyText.vatNumber}
+                    value={data.vatNumber}
+                    setValue={updateParty('vatNumber')}
+                    loading={loadingVatNumber}
+                    inputProps={{
+                        placeholder: companyPlaceholder.vatNumber,
+                    }}
+                />
 
-                                        const companyData = companies[choice.id];
-                                        if (!companyData) {
-                                            return;
-                                        }
+                <Input
+                    text={companyText.name}
+                    value={data.name}
+                    setValue={updateParty('name')}
+                    multipleChoices={multipleChoicesName}
+                    atChoice={(choice) => {
+                        if (typeof choice === 'string') {
+                            return;
+                        }
 
-                                        setParty(companyData);
-                                        setUsingLocalData(true);
-                                        setMultipleChoicesName([]);
-                                    }}
-                                    inputProps={{
-                                        placeholder: companyPlaceholder.name,
-                                    }}
-                                />
-                            </div>
-                        );
-                    }
+                        const companyData = companies[choice.id];
+                        if (!companyData) {
+                            return;
+                        }
 
-                    if (!editing && !expanded && field !== 'vatNumber') {
-                        return null;
-                    }
+                        setParty(companyData);
+                        setUsingLocalData(true);
+                        setMultipleChoicesName([]);
+                    }}
+                    inputProps={{
+                        placeholder: companyPlaceholder.name,
+                    }}
+                />
 
-                    return (
-                        <div
-                            key={kind + field}
-                        >
-                            <Input
-                                text={companyText[field]}
-                                value={data[field]}
-                                setValue={updateParty(field)}
-                                loading={field === 'vatNumber' && loadingVatNumber}
-                                inputProps={{
-                                    placeholder: (companyPlaceholder as any)[field] || '',
-                                }}
-                            />
-                        </div>
-                    );
-                })}
+                {!editing
+                && !expanded
+                && (
+                    <>
+                        <Input
+                            text={companyText.country}
+                            value={data.country}
+                            setValue={updateParty('country')}
+                            loading={loadingVatNumber}
+                            inputProps={{
+                            }}
+                        />
+
+                        <Input
+                            text={companyText.county}
+                            value={data.county}
+                            setValue={updateParty('county')}
+                            loading={loadingVatNumber}
+                            multipleChoices={multipleChoicesCounty}
+                            multipleChoiceFocusable={true}
+                            atChoice={(choice) => {
+                                if (typeof choice === 'string') {
+                                    return;
+                                }
+
+                                setParty({
+                                    ...data,
+                                    county: choice.name,
+                                });
+                                setMultipleChoicesCounty([]);
+                            }}
+                        />
+
+                        <Input
+                            text={companyText.city}
+                            value={data.city}
+                            setValue={updateParty('city')}
+                            loading={loadingVatNumber}
+                            multipleChoices={multipleChoicesCity}
+                            multipleChoiceFocusable={true}
+                            atChoice={(choice) => {
+                                if (typeof choice === 'string') {
+                                    return;
+                                }
+
+                                setParty({
+                                    ...data,
+                                    city: choice.name,
+                                });
+                                setMultipleChoicesCity([]);
+                            }}
+                        />
+
+                        <Input
+                            text={companyText.address}
+                            value={data.address}
+                            setValue={updateParty('address')}
+                            loading={loadingVatNumber}
+                            inputProps={{
+                                placeholder: companyPlaceholder.address,
+                            }}
+                        />
+
+                        <Input
+                            text={companyText.contact}
+                            value={data.contact}
+                            setValue={updateParty('contact')}
+                            loading={loadingVatNumber}
+                            inputProps={{
+                                placeholder: companyPlaceholder.contact,
+                            }}
+                        />
+
+                        <Input
+                            text={companyText.IBAN}
+                            value={data.IBAN}
+                            setValue={updateParty('IBAN')}
+                            loading={loadingVatNumber}
+                        />
+                    </>
+                )}
             </div>
 
             {!editing && (
