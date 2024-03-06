@@ -19,7 +19,7 @@ export default function About({
 
     return (
         <div
-            className="scrollable-view max-w-xl h-full overflow-scroll flex flex-col md:justify-center p-4 text-left"
+            className="scrollable-view max-w-xl h-full overflow-scroll flex flex-col md:justify-center py-2 px-4 text-left"
         >
             <Subtitle
                 text="despre xfactura.ro"
@@ -106,6 +106,7 @@ export default function About({
 
             <MenuBack
                 back={back}
+                bottomSpace={true}
             />
         </div>
     );
