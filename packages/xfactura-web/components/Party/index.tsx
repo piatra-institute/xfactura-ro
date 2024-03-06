@@ -428,9 +428,11 @@ export default function Party({
 
 
     // #region render
-    const expanded = kind === 'seller'
-        ? expandedSeller
-        : expandedBuyer;
+    const expanded = editing
+        ? true
+        : kind === 'seller'
+            ? expandedSeller
+            : expandedBuyer;
 
     return (
         <div
@@ -482,8 +484,7 @@ export default function Party({
                     }}
                 />
 
-                {(!editing || !expanded)
-                && (
+                {expanded && (
                     <>
                         <Input
                             text={companyText.country}
