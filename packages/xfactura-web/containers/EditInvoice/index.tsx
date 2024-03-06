@@ -71,7 +71,7 @@ export default function EditInvoice({
 
     return (
         <div
-            className="scrollable-view overflow-auto h-full w-full"
+            className="scrollable-view overflow-auto h-full w-full py-2"
         >
             <div
                 className="w-full md:px-0 m-auto"
@@ -161,6 +161,7 @@ export default function EditInvoice({
                     back={() => {
                         setMenuView('invoices');
                     }}
+                    bottomSpace={true}
                 />
             </div>
         </div>

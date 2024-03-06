@@ -100,6 +100,7 @@ export default function EditCompany({
                 back={() => {
                     setMenuView('companies');
                 }}
+                bottomSpace={true}
             />
         </div>
     );

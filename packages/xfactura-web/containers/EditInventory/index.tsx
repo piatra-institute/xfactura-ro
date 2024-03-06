@@ -95,6 +95,7 @@ export default function EditInventory({
                     back={() => {
                         setMenuView('inventory');
                     }}
+                    bottomSpace={true}
                 />
             </div>
         </div>

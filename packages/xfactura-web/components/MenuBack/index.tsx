@@ -12,7 +12,7 @@ export default function MenuBack({
     return (
         <div
             className={
-                `mt-8 flex justify-center font-bold ${bottomSpace ? 'mb-8 md:mb-0' : ''}`
+                `mt-8 flex justify-center font-bold ${bottomSpace ? 'mb-8' : ''}`
             }
         >
             <LinkButton

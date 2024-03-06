@@ -482,8 +482,7 @@ export default function Party({
                     }}
                 />
 
-                {!editing
-                && !expanded
+                {(!editing || !expanded)
                 && (
                     <>
                         <Input
