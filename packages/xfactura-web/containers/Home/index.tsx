@@ -2,6 +2,7 @@
 
 import {
     useRef,
+    useState,
     useEffect,
 } from 'react';
 
@@ -67,7 +68,13 @@ export default function Home({
 
 
     // #region state
+    const [
+        contextUser,
+        setContextUser,
+    ] = useState(user);
+
     const {
+        user: storeUser,
         setUser,
 
         generateEinvoiceLocally,
@@ -221,6 +228,12 @@ export default function Home({
         setUser,
     ]);
 
+    useEffect(() => {
+        setContextUser(storeUser);
+    }, [
+        storeUser,
+    ]);
+
     /** web container */
     useEffect(() => {
         if (mounted.current) {
@@ -303,7 +316,12 @@ export default function Home({
     // #region render
     return (
         <UserContext.Provider
-            value={user}
+            value={{
+                user: contextUser,
+                logoutContextUser: () => {
+                    setContextUser(null);
+                },
+            }}
         >
             {showLoading && (
                 <Spinner />

@@ -41,7 +41,9 @@ import MenuIcon from './MenuIcon';
 
 export default function Menu() {
     // #region context
-    const user = useContext(UserContext);
+    const {
+        user,
+    } = useContext(UserContext);
     // #endregion context
 
 
@@ -54,17 +56,10 @@ export default function Menu() {
         setMenuView,
     } = useVolatileStore();
 
-
-    const [
-        showUser,
-        setShowUser,
-    ] = useState(!!user);
-
     const [
         showBgBlack,
         setShowBgBlack,
     ] = useState(true);
-
 
     const logout = useLogout();
     // #endregion state
@@ -150,11 +145,6 @@ export default function Menu() {
         menuView,
         setMenuView,
     ]);
-
-    /** User */
-    useEffect(() => {
-        setShowUser(true);
-    }, []);
     // #endregion effects
 
 
@@ -277,12 +267,11 @@ export default function Menu() {
                         />
                     </li>
 
-                    {showUser && user && (
+                    {user && (
                         <li
                             className="m-4 mt-8 cursor-pointer"
                             onClick={() => {
                                 logout();
-                                setShowUser(false);
                             }}
                         >
                             <LinkButton

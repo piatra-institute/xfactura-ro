@@ -6,4 +6,12 @@ import {
 
 
 
-export const UserContext = React.createContext<User | null>(null);
+export interface IUserContext {
+    user: User | null;
+    logoutContextUser: () => void;
+}
+
+export const UserContext = React.createContext<IUserContext>({
+    user: null,
+    logoutContextUser: () => {},
+});

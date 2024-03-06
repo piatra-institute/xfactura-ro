@@ -1,3 +1,7 @@
+import {
+    useContext,
+} from 'react';
+
 import { googleLogout } from '@react-oauth/google';
 
 import {
@@ -8,24 +12,35 @@ import {
 
 import useStore from '@/store';
 
+import {
+    UserContext,
+} from '@/logic/context';
+
 
 
 export const useLogout = () => {
+    const {
+        logoutContextUser,
+    } = useContext(UserContext);
+
     const {
         setUser,
     } = useStore();
 
     return async () => {
-        await fetch(ENVIRONMENT.API_DOMAIN + '/logout', {
-            method: 'POST',
-            credentials: 'include',
-        }).catch((error) => {
-            console.error(error);
-        });
+        try {
+            logoutContextUser();
+            setUser(null);
+            googleLogout();
 
-        googleLogout();
-
-        setUser(null);
+            await fetch(ENVIRONMENT.API_DOMAIN + '/logout', {
+                method: 'POST',
+                credentials: 'include',
+            }).catch((error) => {
+                console.error(error);
+            });
+        } catch (_) {
+        }
     }
 }
 
