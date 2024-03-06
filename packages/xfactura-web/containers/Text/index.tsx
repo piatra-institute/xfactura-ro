@@ -60,6 +60,7 @@ export default function Text({
                     atClick={() => {
                         extractInvoiceFromText(text);
                     }}
+                    disabled={!text.trim()}
                 />
 
                 <LinkButton
