@@ -1,4 +1,5 @@
 import {
+    useContext,
     useState,
     useEffect,
 } from 'react';
@@ -26,20 +27,25 @@ import {
     styleTrim,
 } from '@/logic/utilities';
 
-import useStore, {
+import {
     useVolatileStore,
 } from '@/store';
+
+import {
+    UserContext,
+} from '@/logic/context';
 
 import MenuIcon from './MenuIcon';
 
 
 
 export default function Menu() {
-    // #region state
-    const {
-        user,
-    } = useStore();
+    // #region context
+    const user = useContext(UserContext);
+    // #endregion context
 
+
+    // #region state
     const {
         showMenu,
         setShowMenu,
@@ -52,7 +58,7 @@ export default function Menu() {
     const [
         showUser,
         setShowUser,
-    ] = useState(false);
+    ] = useState(!!user);
 
     const [
         showBgBlack,
@@ -271,7 +277,7 @@ export default function Menu() {
                         />
                     </li>
 
-                    {showUser && user ? (
+                    {showUser && user && (
                         <li
                             className="m-4 mt-8 cursor-pointer"
                             onClick={() => {
@@ -304,10 +310,6 @@ export default function Menu() {
                                 </div>
                             </div>
                         </li>
-                    ) : (
-                        <li
-                            className={showBgBlack ? 'h-[102px]' : ''}
-                        />
                     )}
                 </ul>
                 </div>

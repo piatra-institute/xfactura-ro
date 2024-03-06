@@ -61,12 +61,19 @@ export type ExtractedResponse = {
 }
 
 
+export interface Payment {
+    productType: string;
+    session: string;
+}
+
+
 export interface User {
     email: string;
     name: string;
     picture: string;
     intelligentActs: number;
     freeIntelligentActs: number;
+    payments: Payment[];
 }
 
 

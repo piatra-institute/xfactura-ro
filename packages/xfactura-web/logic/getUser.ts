@@ -11,27 +11,37 @@ const getCookie = async (name: string) => {
 }
 
 const getUser = async () => {
-    const cookie_XFCT_AT = await getCookie('XFCT_AT');
-    const cookie_XFCT_RT = await getCookie('XFCT_RT');
+    try {
+        const cookie_XFCT_AT = await getCookie('XFCT_AT');
+        const cookie_XFCT_RT = await getCookie('XFCT_RT');
 
-    const response = await fetch(
-        ENVIRONMENT.API_DOMAIN + '/get-user',
-        {
-            method: 'POST',
-            // cache: 'no-cache',
-            headers: {
-                Cookie: `XFCT_AT=${cookie_XFCT_AT};XFCT_RT=${cookie_XFCT_RT};`
+        if (!cookie_XFCT_AT || !cookie_XFCT_RT) {
+            return;
+        }
+
+        const response = await fetch(
+            ENVIRONMENT.API_DOMAIN + '/get-user',
+            {
+                method: 'POST',
+                headers: {
+                    Cookie: `XFCT_AT=${cookie_XFCT_AT};XFCT_RT=${cookie_XFCT_RT};`
+                },
             },
-        },
-    ).catch((error) => {
-        console.error(error);
-    });
-    if (!response) {
+        ).catch((error) => {
+            console.error(error);
+        });
+        if (!response) {
+            return;
+        }
+        const request = await response.json();
+        if (!request || !request.status) {
+            return;
+        }
+
+        return request.data;
+    } catch (error) {
         return;
     }
-    const data = await response.json();
-
-    return data;
 }
 
 
