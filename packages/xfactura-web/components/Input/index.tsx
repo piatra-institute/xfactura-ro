@@ -38,6 +38,7 @@ export interface InputProperties {
     width?: number | string;
     type?: string;
     disabled?: boolean;
+    forcedValue?: string;
     loading?: boolean;
     asGrid?: boolean;
     multipleChoices?: (string | MultipleChoice)[];
@@ -58,6 +59,7 @@ export default function Input(
         width,
         type,
         disabled,
+        forcedValue,
         loading,
         inputProps,
         asGrid,
@@ -87,6 +89,11 @@ export default function Input(
         multipleIndex,
         setMultipleIndex,
     ] = useState(-1);
+
+    const [
+        typedValue,
+        setTypedValue,
+    ] = useState(value || '');
     // #endregion state
 
 
@@ -125,10 +132,12 @@ export default function Input(
 
 
     // #region effects
+    /** Mounted */
     useEffect(() => {
         setMounted(true);
     }, []);
 
+    /** Handle keys */
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
             if (!multipleChoices) {
@@ -167,6 +176,7 @@ export default function Input(
         atChoice,
     ]);
 
+    /** Multiple choices */
     useEffect(() => {
         if (multipleChoices && multipleChoices.length > 0) {
             setShowMultiple(true);
@@ -215,7 +225,7 @@ export default function Input(
                         ${focusStyle}
                     `)}
                     name={text}
-                    value={value || ''}
+                    value={forcedValue || typedValue}
                     type={type}
                     disabled={disabled}
                     spellCheck={false}
@@ -225,7 +235,10 @@ export default function Input(
                     lang="ro-Ro"
                     {...inputProps}
                     onChange={(event) => {
-                        setValue(event.target.value);
+                        const value = event.target.value;
+
+                        setTypedValue(value);
+                        setValue(value);
                     }}
                     onFocus={() => {
                         setShowMultiple(true);

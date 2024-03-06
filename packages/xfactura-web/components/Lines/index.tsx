@@ -28,6 +28,7 @@ export default function Lines({
     addNewLine: () => void;
     currency: string;
 }) {
+    // #region handlers
     const updateLineItem = (
         index: number,
         type: string,
@@ -127,8 +128,10 @@ export default function Lines({
             currency,
         );
     }
+    // #endregion handlers
 
 
+    // #region render
     return (
         <div
             className="p-2 md:p-8"
@@ -210,4 +213,5 @@ export default function Lines({
             </div>
         </div>
     );
+    // #endregion render
 }

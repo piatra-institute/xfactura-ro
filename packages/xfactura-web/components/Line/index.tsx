@@ -241,6 +241,7 @@ export default function Line({
             <Input
                 text="total"
                 value={computeTotal()}
+                forcedValue={computeTotal()}
                 setValue={(_value) => {}}
                 width={140}
                 disabled={true}

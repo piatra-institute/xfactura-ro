@@ -62,6 +62,10 @@ export const formatNumber = (
     value: number,
     currency = 'RON',
 ) => {
+    if (isNaN(value)) {
+        return '';
+    }
+
     const properties = {
         currencySign: 'accounting',
         style: 'currency',
