@@ -31,10 +31,14 @@ export default function AI({
                     }}
                 />
             ) : (
-                <LoginScreen
-                    atLoginSuccess={() => {}}
-                    back={() => back()}
-                />
+                <div
+                    className="flex flex-col items-center justify-center m-auto gap-12"
+                >
+                    <LoginScreen
+                        atLoginSuccess={() => {}}
+                        back={() => back()}
+                    />
+                </div>
             )}
         </div>
     );
