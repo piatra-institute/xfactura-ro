@@ -225,7 +225,10 @@ export default function Input(
                         ${focusStyle}
                     `)}
                     name={text}
-                    value={forcedValue || typedValue}
+                    value={type === 'number'
+                        ? forcedValue || typedValue
+                        : value
+                    }
                     type={type}
                     disabled={disabled}
                     spellCheck={false}
