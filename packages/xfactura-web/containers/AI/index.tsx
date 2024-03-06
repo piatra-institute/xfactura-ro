@@ -21,7 +21,7 @@ export default function AI({
     return (
         <div
             className={styleTrim(`
-                scrollable-view max-w-xl h-full overflow-scroll flex flex-col md:justify-center p-4
+                scrollable-view max-w-xl h-full overflow-scroll flex flex-col md:justify-center p-2
             `)}
         >
             {user ? (
