@@ -461,6 +461,7 @@ export default function Party({
                     text={companyText.name}
                     value={data.name}
                     setValue={updateParty('name')}
+                    multipleChoiceFocusable={true}
                     multipleChoices={multipleChoicesName}
                     atChoice={(choice) => {
                         if (typeof choice === 'string') {
@@ -489,16 +490,12 @@ export default function Party({
                             text={companyText.country}
                             value={data.country}
                             setValue={updateParty('country')}
-                            loading={loadingVatNumber}
-                            inputProps={{
-                            }}
                         />
 
                         <Input
                             text={companyText.county}
                             value={data.county}
                             setValue={updateParty('county')}
-                            loading={loadingVatNumber}
                             multipleChoices={multipleChoicesCounty}
                             multipleChoiceFocusable={true}
                             atChoice={(choice) => {
@@ -518,7 +515,6 @@ export default function Party({
                             text={companyText.city}
                             value={data.city}
                             setValue={updateParty('city')}
-                            loading={loadingVatNumber}
                             multipleChoices={multipleChoicesCity}
                             multipleChoiceFocusable={true}
                             atChoice={(choice) => {
@@ -538,7 +534,6 @@ export default function Party({
                             text={companyText.address}
                             value={data.address}
                             setValue={updateParty('address')}
-                            loading={loadingVatNumber}
                             inputProps={{
                                 placeholder: companyPlaceholder.address,
                             }}
@@ -548,7 +543,6 @@ export default function Party({
                             text={companyText.contact}
                             value={data.contact}
                             setValue={updateParty('contact')}
-                            loading={loadingVatNumber}
                             inputProps={{
                                 placeholder: companyPlaceholder.contact,
                             }}
@@ -558,7 +552,6 @@ export default function Party({
                             text={companyText.IBAN}
                             value={data.IBAN}
                             setValue={updateParty('IBAN')}
-                            loading={loadingVatNumber}
                         />
                     </>
                 )}

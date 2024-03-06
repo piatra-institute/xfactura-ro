@@ -28,12 +28,15 @@ export const useUnscrollable = () => {
 export const useResponsiveWidth = (
     width: string | number | undefined,
 ) => {
-    const [windowWidth, setWindowWidth] = useState(0);
+    const [windowWidth, setWindowWidth] = useState(
+        typeof window !== 'undefined' ? window.innerWidth : 0,
+    );
+
+    const handleResize = () => {
+        setWindowWidth(window.innerWidth);
+    };
 
     useEffect(() => {
-        const handleResize = () => {
-            setWindowWidth(window.innerWidth);
-        };
         handleResize();
 
         window.addEventListener('resize', handleResize);

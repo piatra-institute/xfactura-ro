@@ -3,6 +3,10 @@ import LoginScreen from '@/components/LoginScreen';
 
 import useStore from '@/store';
 
+import {
+    styleTrim,
+} from '@/logic/utilities';
+
 
 
 export default function AI({
@@ -16,9 +20,9 @@ export default function AI({
 
     return (
         <div
-            className={`
+            className={styleTrim(`
                 scrollable-view max-w-xl h-full overflow-scroll flex flex-col md:justify-center p-4
-            `}
+            `)}
         >
             {user ? (
                 <BuyScreen

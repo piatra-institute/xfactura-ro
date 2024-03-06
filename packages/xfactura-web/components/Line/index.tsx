@@ -51,6 +51,7 @@ export default function Line({
     updateLineItem: (index: number, type: string, value: string | boolean | any) => void;
     removeLine: (index: number) => void;
 }) {
+    // #region state
     const {
         inventory,
     } = useStore();
@@ -59,8 +60,10 @@ export default function Line({
         multipleChoicesName,
         setMultipleChoicesName,
     ] = useState<MultipleChoice[]>([]);
+    // #endregion state
 
 
+    // #region handlers
     const computeTotal = () => {
         const {
             price,
@@ -97,6 +100,7 @@ export default function Line({
             currency,
         );
     }
+    // #endregion handlers
 
 
     // #region effects
@@ -156,6 +160,7 @@ export default function Line({
     // #endregion effects
 
 
+    // #region render
     return (
         <>
         <li
@@ -278,6 +283,7 @@ export default function Line({
                     type="number"
                     inputProps={{
                         min: 0,
+                        inputMode: 'decimal',
                     }}
                 />
 
@@ -298,4 +304,5 @@ export default function Line({
         )}
         </>
     );
+    // #endregion render
 }

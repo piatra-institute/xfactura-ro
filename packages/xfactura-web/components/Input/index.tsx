@@ -1,3 +1,5 @@
+'use client';
+
 import {
     DetailedHTMLProps,
     InputHTMLAttributes,
@@ -69,6 +71,8 @@ export default function Input(
 
 
     // #region state
+    const [mounted, setMounted] = useState(false);
+
     const [
         focusedInput,
         setFocusedInput,
@@ -122,6 +126,10 @@ export default function Input(
 
     // #region effects
     useEffect(() => {
+        setMounted(true);
+    }, []);
+
+    useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
             if (!multipleChoices) {
                 return;
@@ -173,6 +181,10 @@ export default function Input(
 
 
     // #region render
+    if (!mounted) {
+        return;
+    }
+
     return (
         <div
             className={styleTrim(`
