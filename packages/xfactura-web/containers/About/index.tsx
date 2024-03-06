@@ -19,7 +19,7 @@ export default function About({
 
     return (
         <div
-            className="scrollable-view max-w-xl h-full overflow-scroll flex flex-col md:justify-center py-2 px-4 text-left"
+            className="scrollable-view max-w-xl h-full overflow-scroll flex flex-col md:justify-center py-2 px-4 text-left text-sm md:text-base"
         >
             <Subtitle
                 text="despre xfactura.ro"
