@@ -329,7 +329,9 @@ export default function Home({
 
             <Menu />
 
-            <div>
+            <div
+                className="max-w-sm md:max-w-none mx-auto"
+            >
                 <div
                     className="m-4 md:pb-4"
                 >
