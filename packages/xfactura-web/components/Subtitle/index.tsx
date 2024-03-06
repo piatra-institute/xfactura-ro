@@ -14,7 +14,7 @@ export default function Subtitle({
     return (
         <h2
             className={styleTrim(`
-                select-none text-xl mt-2 mb-4
+                select-none text-xl mt-2 mb-8 md:mb-4
                 ${centered ? 'text-center' : 'text-center md:text-left'}
             `)}
         >

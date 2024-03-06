@@ -143,14 +143,14 @@ export default function BuyScreen({
     return (
         <>
             <div
-                className="md:m-auto"
+                className="md:mx-auto"
             >
                 <Subtitle
                     text={"cumpărare acte inteligente"}
                 />
                 {user && (
                     <div
-                        className="text-center"
+                        className="text-center mb-4"
                     >
                         {computeTotalIntelligentActs(user)} acte inteligente disponibile
                     </div>
@@ -160,15 +160,19 @@ export default function BuyScreen({
             <div
                 className="max-w-[400px]"
             >
-                actele inteligente sunt folosite pentru procesarea documentelor în cloud-ul xfactura.ro
-                <br />
-                datele nu sunt stocate
-                <br />
-                1 act inteligent = 1 document procesat
+                <p
+                    className="text-center leading-normal"
+                >
+                    actele inteligente sunt folosite pentru procesarea documentelor în cloud-ul xfactura.ro
+                    <br />
+                    datele nu sunt stocate
+                    <br />
+                    1 act inteligent = 1 document procesat
+                </p>
             </div>
 
             <div
-                className="md:w-[300px] my-4 mx-auto md:m-auto flex flex-col gap-8 justify-center items-center"
+                className="md:w-[300px] my-4 mx-auto md:mx-auto md:my-8 flex flex-col gap-8 justify-center items-center"
             >
                 <button
                     className={buyButtonStyle}
