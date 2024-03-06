@@ -258,6 +258,11 @@ export default function Input(
                             }, 10);
                         }
                     }}
+                    onWheel={(event) => {
+                        (event.target as any).blur();
+                        event.preventDefault();
+                        event.stopPropagation();
+                    }}
                 />
 
                 {showMultiple
