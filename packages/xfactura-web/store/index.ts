@@ -183,7 +183,7 @@ const useStore = create<State>()(
             })),
             clearStore: () => set(() => ({
                 user: null,
-                usingLocalStorage: false,
+                usingLocalStorage: true,
                 generateEinvoiceLocally: false,
                 lastInvoiceSeries: '',
                 smartActs: 'unspecified',

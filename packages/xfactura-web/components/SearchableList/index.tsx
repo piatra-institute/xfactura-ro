@@ -82,7 +82,7 @@ export default function SearchableList<T extends object>({
             />
 
             <div
-                className="p-2"
+                className="p-2 min-h-[72px]"
             >
                 <Input
                     text=""
