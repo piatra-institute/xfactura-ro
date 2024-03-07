@@ -147,6 +147,7 @@ export default function BuyScreen({
             >
                 <Subtitle
                     text={"cumpărare acte inteligente"}
+                    centered={true}
                 />
                 {user && (
                     <div

@@ -16,6 +16,10 @@ import {
 } from '@/logic/hooks';
 
 import {
+    computeTotalIntelligentActs,
+} from '@/logic/user';
+
+import {
     styleTrim,
 } from '@/logic/utilities';
 
@@ -127,6 +131,18 @@ export default function ActsModal({
                     datele nu sunt stocate nici local, nici în cloud
                 </div>
             )}
+
+            {user && (
+                <div>
+                    {computeTotalIntelligentActs(user)} acte inteligente rămase
+                    <LinkButton
+                        text="cumpără acte inteligente"
+                        onClick={() => {
+                            setShowBuyScreen(true);
+                        }}
+                    />
+                </div>
+            )}
         </div>
 
         <div
@@ -229,9 +245,13 @@ export default function ActsModal({
     );
 
     const buyScreen = (
-        <BuyScreen
-            setShowBuyScreen={setShowBuyScreen}
-        />
+        <div
+            className="text-center"
+        >
+            <BuyScreen
+                setShowBuyScreen={setShowBuyScreen}
+            />
+        </div>
     );
 
     const screen = showLoginScreen ? loginScreen

@@ -61,7 +61,7 @@ export default function EditInventory({
             className="scrollable-view overflow-auto h-full w-full p-2"
         >
             <div
-                className="w-full px-2 md:w-[350px] md:px-0 m-auto"
+                className="w-full px-2 md:w-[400px] md:px-0 m-auto"
             >
                 <Subtitle
                     text="editare stoc"
