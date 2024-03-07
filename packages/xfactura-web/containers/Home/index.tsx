@@ -304,8 +304,10 @@ export default function Home({
     useEffect(() => {
         if (showMenu) {
             document.body.style.overflow = 'hidden';
+            document.body.style.touchAction = 'none';
         } else {
             document.body.style.overflow = 'auto';
+            document.body.style.touchAction = 'auto';
         }
     }, [
         showMenu,

@@ -275,9 +275,11 @@ export default function Input(
                         }
                     }}
                     onWheel={(event) => {
-                        (event.target as any).blur();
-                        event.preventDefault();
-                        event.stopPropagation();
+                        try {
+                            (event.target as any).blur();
+                        } catch (error) {
+                            return;
+                        }
                     }}
                 />
 
