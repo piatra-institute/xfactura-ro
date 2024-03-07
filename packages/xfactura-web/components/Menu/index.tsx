@@ -51,6 +51,7 @@ export default function Menu() {
     const {
         showMenu,
         setShowMenu,
+        setShowActsModal,
 
         menuView,
         setMenuView,
@@ -310,7 +311,10 @@ export default function Menu() {
         <>
             <MenuIcon
                 show={showMenu}
-                atClick={() => setShowMenu(!showMenu)}
+                atClick={() => {
+                    setShowMenu(!showMenu);
+                    setShowActsModal(false);
+                }}
             />
 
             {showMenu && (

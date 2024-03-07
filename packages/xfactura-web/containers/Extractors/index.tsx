@@ -90,12 +90,11 @@ export default function Extractors({
         setShowText,
         setShowCamera,
         setShowMicrophone,
-    } = useVolatileStore();
 
-    const [
         showActsModal,
         setShowActsModal,
-    ] = useState(false);
+    } = useVolatileStore();
+
     const [
         actsModalType,
         setActsModalType,
@@ -197,6 +196,7 @@ export default function Extractors({
         };
     }, [
         showActsModal,
+        setShowActsModal,
     ]);
     // #endregion effects
 

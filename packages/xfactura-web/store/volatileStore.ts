@@ -42,6 +42,9 @@ export interface VolatileState {
     showMicrophone: boolean;
     setShowMicrophone: (showMicrophone: boolean) => void;
 
+    showActsModal: boolean;
+    setShowActsModal: (show: boolean) => void;
+
     newInvoice: Invoice;
     setNewInvoiceSeller: (seller: Company) => void;
     setNewInvoiceBuyer: (seller: Company) => void;
@@ -65,6 +68,7 @@ export const initialVolatileState = {
     showText: false,
     showCamera: false,
     showMicrophone: false,
+    showActsModal: false,
     newInvoice: {
         id: '',
         seller: {...company},
@@ -98,6 +102,9 @@ const useVolatileStore = create<VolatileState>()(
 
             showMicrophone: initialVolatileState.showMicrophone,
             setShowMicrophone: (showMicrophone: boolean) => set({ showMicrophone }),
+
+            showActsModal: initialVolatileState.showActsModal,
+            setShowActsModal: (showActsModal: boolean) => set({ showActsModal }),
 
             newInvoice: initialVolatileState.newInvoice,
             setNewInvoiceSeller: (seller: Company) => set((state) => {
