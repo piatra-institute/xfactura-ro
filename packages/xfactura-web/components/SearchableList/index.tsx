@@ -74,7 +74,7 @@ export default function SearchableList<T extends object>({
 
     return (
         <div
-            className="w-full p-2 md:w-[350px]"
+            className="w-full mx-auto p-2 sm:w-[400px]"
         >
             <Subtitle
                 text={name}
