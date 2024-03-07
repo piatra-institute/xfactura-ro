@@ -267,7 +267,7 @@ export default function Settings({
                 />
 
                 <Deleter
-                    title="ștergere totală"
+                    title="ștergere date locale"
                     atDelete={() => {
                         clearStore();
                         clearVolatileStore();
