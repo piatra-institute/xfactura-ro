@@ -114,7 +114,7 @@ export default function SearchableList<T extends object>({
                                     className="flex justify-between items-center w-full gap-4 p-2 mb-2"
                                 >
                                     <div
-                                        className="flex justify-between items-center w-full gap-2"
+                                        className="flex justify-between items-center w-full gap-4"
                                     >
                                         {getItemName(item)}
                                     </div>

@@ -40,7 +40,7 @@ export default function CompaniesList({
                         </div>
 
                         <div
-                            className="select-all text-right"
+                            className="select-all text-right text-sm"
                         >
                             {company.name}
                         </div>
