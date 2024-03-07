@@ -2,6 +2,7 @@ import { drizzle } from 'drizzle-orm/libsql';
 import { createClient } from '@libsql/client';
 
 import * as schemaUsers from './schema/users';
+import * as schemaCompanyDetails from './schema/companyDetails';
 
 
 
@@ -13,6 +14,7 @@ const client = createClient({
 const database = drizzle(client, {
     schema: {
         ...schemaUsers,
+        ...schemaCompanyDetails,
     },
 });
 
