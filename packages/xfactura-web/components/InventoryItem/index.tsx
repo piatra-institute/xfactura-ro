@@ -109,7 +109,9 @@ export default function InventoryItem({
 
 
     return (
-        <div>
+        <div
+            className="xxs:w-[400px] mx-auto"
+        >
             <Input
                 text="nume"
                 value={name}

@@ -75,12 +75,20 @@ export default function EditInventory({
                     }}
                 />
 
+                <div
+                    className="h-6"
+                />
+
                 <PureButton
                     text="salvare"
                     atClick={() => {
                         addInventory(inventoryItem);
                         setMenuView('inventory');
                     }}
+                />
+
+                <div
+                    className="h-6"
                 />
 
                 <Deleter
