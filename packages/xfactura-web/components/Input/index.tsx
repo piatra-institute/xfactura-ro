@@ -128,6 +128,21 @@ export default function Input(
 
         return choice.show === value;
     }
+
+    const resolveValue = () => {
+        if (type === 'number' && forcedValue) {
+            return forcedValue;
+        }
+
+        if (
+            type === 'number'
+            && (typedValue.endsWith('.') || typedValue.endsWith(','))
+        ) {
+            return typedValue;
+        }
+
+        return value;
+    }
     // #endregion handlers
 
 
@@ -225,10 +240,7 @@ export default function Input(
                         ${focusStyle}
                     `)}
                     name={text}
-                    value={type === 'number'
-                        ? forcedValue || typedValue
-                        : value
-                    }
+                    value={resolveValue()}
                     type={type}
                     disabled={disabled}
                     spellCheck={false}
