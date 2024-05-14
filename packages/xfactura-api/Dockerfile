@@ -27,3 +27,4 @@ CMD [ "pnpm", "start" ]
 
 ### Run Command
 # > docker run -d -p 8484:8080 xfactura-ro-api
+# > docker run --env-file ./.env -d -p 8484:8080 xfactura-ro-api
