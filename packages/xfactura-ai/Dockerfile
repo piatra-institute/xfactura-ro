@@ -19,3 +19,4 @@ ENTRYPOINT ["python", "start.py"]
 
 ### Run Command
 # > docker run -d -p 8585:8080 xfactura-ro-ai
+# > docker run --env-file ./.env -d -p 8585:8080 xfactura-ro-ai
