@@ -33,7 +33,7 @@ $seller
     ->setCity($data->seller->city)
     ->setSubdivision($data->seller->subdivision)
     ->setCountry($data->seller->country);
-if ($data->seller->vatRegistered) {
+if ($data->seller->vatPayer) {
     $seller->setVatNumber($data->seller->vatNumber);
 } else {
     $seller->setCompanyId($seller_identifier);
@@ -50,7 +50,7 @@ $buyer
     ->setCity($data->buyer->city)
     ->setSubdivision($data->buyer->subdivision)
     ->setCountry($data->buyer->country);
-if ($data->buyer->vatRegistered) {
+if ($data->buyer->vatPayer) {
     $buyer->setVatNumber($data->buyer->vatNumber);
 } else {
     $buyer->setCompanyId($buyer_identifier);
