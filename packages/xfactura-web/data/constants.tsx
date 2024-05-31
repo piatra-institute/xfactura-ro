@@ -3,6 +3,7 @@ import {
     InvoiceLineAllowance,
     Metadata,
     Inventory,
+    Company,
 } from './interfaces';
 
 import {
@@ -14,8 +15,9 @@ import {
 
 
 
-export const company = {
+export const company: Company = {
     vatNumber: '',
+    vatPayer: true,
     name: '',
     address: '',
     city: '',
@@ -27,6 +29,7 @@ export const company = {
 
 export const companyText = {
     vatNumber: 'CUI',
+    vatPayer: 'plătitor de TVA',
     name: 'nume',
     country: 'țară',
     county: 'județ',
@@ -38,6 +41,7 @@ export const companyText = {
 
 export const companyFields = [
     'vatNumber',
+    'vatPayer',
     'name',
     'country',
     'county',
@@ -49,6 +53,7 @@ export const companyFields = [
 
 export const companyPlaceholder = {
     'vatNumber': 'RO12345678',
+    'vatNumberNonPayer': '12345678',
     'name': 'Companie SRL',
     'address': 'Strada nr. 1',
     'contact': 'telefon, email'

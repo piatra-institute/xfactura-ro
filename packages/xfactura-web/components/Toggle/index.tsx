@@ -7,14 +7,19 @@ const Toggle = ({
     value,
     toggle,
     tooltip,
+    style,
 }: {
     text: string;
     value: boolean;
     toggle: () => void;
     tooltip?: React.ReactNode;
+    style?: React.CSSProperties;
 }) => {
     return (
-        <div className="flex gap-6 justify-between my-2">
+        <div
+            className="flex gap-6 justify-between my-2"
+            style={style}
+        >
             <div
                 className="flex items-center gap-2"
             >

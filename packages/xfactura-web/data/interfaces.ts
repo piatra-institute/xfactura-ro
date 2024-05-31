@@ -79,6 +79,7 @@ export interface User {
 
 export interface Company {
     vatNumber: string;
+    vatPayer: boolean;
     name: string;
     address: string;
     city: string;

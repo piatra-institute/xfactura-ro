@@ -26,6 +26,7 @@ import Input, {
     MultipleChoice,
 } from '@/components/Input';
 import LinkButton from '@/components/LinkButton';
+import Toggle from '@/components/Toggle';
 
 import {
     getCompanyDetails,
@@ -455,7 +456,7 @@ export default function Party({
                     setValue={updateParty('vatNumber')}
                     loading={loadingVatNumber}
                     inputProps={{
-                        placeholder: companyPlaceholder.vatNumber,
+                        placeholder: data.vatPayer ? companyPlaceholder.vatNumber : companyPlaceholder.vatNumberNonPayer,
                     }}
                 />
 
@@ -552,6 +553,20 @@ export default function Party({
                             text={companyText.IBAN}
                             value={data.IBAN}
                             setValue={updateParty('IBAN')}
+                        />
+
+                        <Toggle
+                            text="plătitor de TVA"
+                            value={data.vatPayer}
+                            toggle={() => {
+                                setParty({
+                                    ...data,
+                                    vatPayer: !data.vatPayer,
+                                });
+                            }}
+                            style={{
+                                margin: '1rem 0',
+                            }}
                         />
                     </>
                 )}
