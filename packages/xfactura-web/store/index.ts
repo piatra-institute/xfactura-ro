@@ -95,7 +95,7 @@ const useStore = create<State>()(
                 if (!validData) {
                     return;
                 }
-                const vatNumber = normalizeVatNumber(company.vatNumber);
+                const vatNumber = normalizeVatNumber(company.vatNumber, company.vatPayer);
                 if (state.companies[vatNumber]) {
                     return;
                 }
@@ -114,7 +114,7 @@ const useStore = create<State>()(
                 if (!validData) {
                     return;
                 }
-                const vatNumber = normalizeVatNumber(company.vatNumber);
+                const vatNumber = normalizeVatNumber(company.vatNumber, company.vatPayer);
                 if (!state.companies[vatNumber]) {
                     return;
                 }

@@ -39,14 +39,16 @@ export const generateEinvoice = async (
         },
         seller: {
             ...newInvoice.seller,
-            vatNumber: normalizeVatNumber(newInvoice.seller.vatNumber),
+            vatNumber: normalizeVatNumber(newInvoice.seller.vatNumber, newInvoice.seller.vatPayer),
+            vatPayer: newInvoice.seller.vatPayer,
             country: normalizeUserCountry(newInvoice.seller.country),
             subdivision: normalizeUserCounty(newInvoice.seller.county, newInvoice.seller.country),
             city: normalizeUserCity(newInvoice.seller.city, newInvoice.seller.county),
         },
         buyer: {
             ...newInvoice.buyer,
-            vatNumber: normalizeVatNumber(newInvoice.buyer.vatNumber),
+            vatNumber: normalizeVatNumber(newInvoice.buyer.vatNumber, newInvoice.buyer.vatPayer),
+            vatPayer: newInvoice.buyer.vatPayer,
             country: normalizeUserCountry(newInvoice.buyer.country),
             subdivision: normalizeUserCounty(newInvoice.buyer.county, newInvoice.buyer.country),
             city: normalizeUserCity(newInvoice.buyer.city, newInvoice.buyer.county),

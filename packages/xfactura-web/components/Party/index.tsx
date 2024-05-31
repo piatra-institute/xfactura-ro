@@ -165,7 +165,7 @@ export default function Party({
 
                 setParty({
                     ...data,
-                    vatNumber: normalizeVatNumber(vatNumber),
+                    vatNumber: normalizeVatNumber(vatNumber, data.vatPayer),
                     name: name ? normalizePartyName(name) : data.name,
                     address: address ? address : data.address,
                     city: city ? normalizePartyCity(city) : data.city,
@@ -175,7 +175,7 @@ export default function Party({
             } else {
                 setParty({
                     ...data,
-                    vatNumber: normalizeVatNumber(vatNumber),
+                    vatNumber: normalizeVatNumber(vatNumber, data.vatPayer),
                 });
             }
         } catch (error) {

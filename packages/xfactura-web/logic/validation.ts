@@ -137,6 +137,7 @@ export const checkValidMetadata = (metadata: Metadata) => {
 
 export const normalizeVatNumber = (
     vatNumber: string | null | undefined,
+    vatPayer: boolean,
 ) => {
     if (!vatNumber) {
         return '';
@@ -150,7 +151,11 @@ export const normalizeVatNumber = (
         return value;
     }
 
-    return 'RO' + value;
+    if (vatPayer) {
+        return 'RO' + value;
+    }
+
+    return value;
 }
 
 
