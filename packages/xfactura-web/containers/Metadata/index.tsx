@@ -1,5 +1,5 @@
 import {
-    Metadata,
+    Metadata as IMetadata,
 } from '@/data';
 
 import Input from '@/components/Input';
@@ -13,9 +13,9 @@ export default function Metadata({
     updateMetadata,
     updateDate,
 } : {
-    metadata: Metadata;
+    metadata: IMetadata;
     updateMetadata: (
-        type: keyof Metadata,
+        type: keyof IMetadata,
         value: string | number,
     ) => void;
     updateDate: (

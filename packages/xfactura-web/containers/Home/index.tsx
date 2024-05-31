@@ -173,6 +173,7 @@ export default function Home({
 
             setNewInvoiceSeller({
                 vatNumber: verifyInputVatNumber(vatNumberSeller) || newInvoice.seller.vatNumber,
+                vatPayer: !!newInvoice.seller.vatPayer,
                 name: verifyInputUserName(nameSeller) || newInvoice.seller.name,
                 country: verifyInputUserCountry(countrySeller) || newInvoice.seller.country,
                 county: verifyInputUserCounty(countySeller) || newInvoice.seller.county,
@@ -182,6 +183,7 @@ export default function Home({
 
             setNewInvoiceBuyer({
                 vatNumber: verifyInputVatNumber(vatNumberBuyer) || newInvoice.buyer.vatNumber,
+                vatPayer: !!newInvoice.buyer.vatPayer,
                 name: verifyInputUserName(nameBuyer) || newInvoice.buyer.name,
                 country: verifyInputUserCountry(countryBuyer) || newInvoice.buyer.country,
                 county: verifyInputUserCounty(countyBuyer) || newInvoice.buyer.county,
