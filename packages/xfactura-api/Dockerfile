@@ -1,6 +1,10 @@
 FROM node:20-slim AS base
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
+# Skip corepack's package-manager signature check. npm rotated its signing keys and older
+# corepack rejects the new ones ("Cannot find matching keyid"), which would break `pnpm install`
+# at build (and any pnpm at runtime) on a rebuild. This makes both immune to that rotation.
+ENV COREPACK_INTEGRITY_KEYS=0
 RUN corepack enable
 COPY . /app
 WORKDIR /app
