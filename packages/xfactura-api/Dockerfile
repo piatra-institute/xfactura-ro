@@ -19,7 +19,12 @@ ENV PORT=8080
 COPY --from=prod-deps /app/node_modules /app/node_modules
 COPY --from=build /app/build /app/build
 EXPOSE 8000
-CMD [ "pnpm", "start" ]
+# Runtime needs only node. Invoking pnpm here runs corepack, which at container startup
+# tries to fetch+verify the latest pnpm and crashes on npm's rotated signing key
+# ("Cannot find matching keyid") — this took api.xfactura.ro down for 402 days (2026-06).
+# Running node directly avoids corepack entirely. (The live Deployment overrides command
+# to the same effect; this keeps it fixed across rebuilds.)
+CMD [ "node", "/app/build/index.js" ]
 
 
 ### Build Command
