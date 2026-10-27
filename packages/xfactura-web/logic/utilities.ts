@@ -66,7 +66,7 @@ export const formatNumber = (
         return '';
     }
 
-    const properties = {
+    const properties: Intl.NumberFormatOptions = {
         currencySign: 'accounting',
         style: 'currency',
         maximumFractionDigits: 2,

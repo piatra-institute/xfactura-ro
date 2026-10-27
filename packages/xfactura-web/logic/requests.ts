@@ -65,13 +65,8 @@ export const getUser = async () => {
 export const getEInvoice = async (
     data: any,
 ) => {
-    if (!ENVIRONMENT.X_DOMAIN) {
-        return;
-    }
-
     return fetch(EINVOICE_API, {
         method: 'POST',
-        mode: 'no-cors',
         credentials: 'omit',
         headers: {
             'Content-Type': 'application/json',

@@ -10,7 +10,7 @@ Host administrators can ultimately alter their own infrastructure; append-only a
 
 | Threat | Required controls and verification |
 |---|---|
-| Cross-company exposure or IDOR | Company-scoped commands, PostgreSQL RLS, object/export/job isolation, portfolio membership checks and adversarial authorization tests. |
+| Cross-company exposure or IDOR | Company-scoped commands and typed queries, company-consistent foreign keys, object/export/job isolation, membership checks before replay/execution and adversarial authorization tests. SQLite/Turso credentials stay in trusted backend processes. |
 | Malicious/compromised accountant | Least-privilege roles, explicit mandates, exact-version approvals, no evidence rewriting, recorded corrections, revocation and anomalous-activity audit. |
 | Prompt injection or compromised AI output | Documents are data; typed/schema-validated proposals; deterministic source authority/commands; no raw SQL, credential access or arbitrary tool execution. |
 | Malicious PDF/image/XML, XXE or expansion bombs | Isolated parsers/converters, disabled external entities/network fetches, resource/time/page/dimension limits, quarantine and fuzz tests. |
@@ -23,6 +23,14 @@ Host administrators can ultimately alter their own infrastructure; append-only a
 | Backup compromise or restore drift | Encrypted off-site copies, restricted deletion/access, key recovery, retention policy, restore drills and reconciliation of pending external attempts. |
 
 Implement concrete limits and negative cases before enabling each parser/integration; a future cloud/provider switch cannot bypass them. Default self-host file storage must reject traversal and use atomic immutable writes within the configured volume.
+
+## Delegated accounting access
+
+The implemented agent grants are company-scoped, expiring and revocable; their authority also depends on the delegating human's current membership and role. Grants cannot contain approval, membership-management or credential-management capabilities. Keep API credentials separate from Piatra/OpenAI/OpenRouter inference credentials. Store only token hashes; retain agent/delegator attribution without placing bearer credentials in audit events, command results or ordinary exports. Identical issuance retries can recover the credential through installation-secret derivation, but cannot revive expired/revoked authority.
+
+Recheck grants before cached command responses, source/export downloads and queued export processing/completion. Agent keys have separate idempotency namespaces from human commands. Exact action reviews preserve input/effect hashes, approval and execution lineage under database guards; changed accounting state blocks execution. Tests cover direct legacy-route bypasses, forbidden self-approval, role downgrade, revocation, tenant boundaries and restore/retry behavior.
+
+MCP accepts explicit accounting bearer credentials and requires authentication on every request. Browser cookies cannot authenticate MCP; invalid bearer headers cannot fall back to a browser session. Browser OAuth delegation is not yet implemented. Host validation admits the public hostname, local loopback for local installs and explicitly configured internal proxy hosts. A supplied Origin must match the public origin; session-cookie mutations still require it. Never use arbitrary forwarded headers to extend that allowlist. JSON requests are bounded to 15 MiB, decoded originals to 10 MiB and inline MCP source reads to 256 KiB.
 
 ## AI evidence egress
 

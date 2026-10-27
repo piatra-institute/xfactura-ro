@@ -1,13 +1,4 @@
-import { Inter } from 'next/font/google';
-
-
-
-const inter = Inter({
-    subsets: ['latin'],
-});
-
-
-const fonts = inter.className;
+const fonts = 'font-inter';
 
 
 export default fonts;

@@ -1,0 +1,57 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: packages/xfactura-api/Dockerfile
+    image: xfactura-api:local
+    environment: &accounting-environment
+      DATABASE_URL: ${DATABASE_URL:-file:.accounting/xfactura.db}
+      DATABASE_AUTH_TOKEN: ${DATABASE_AUTH_TOKEN:-}
+      ACCOUNTING_AUTH_SECRET: ${ACCOUNTING_AUTH_SECRET:?Run bun run setup first}
+      ACCOUNTING_PUBLIC_URL: ${ACCOUNTING_PUBLIC_URL:-http://localhost:3000}
+      ACCOUNTING_MCP_PROXY_HOSTS: ${ACCOUNTING_MCP_PROXY_HOSTS:-api}
+      ACCOUNTING_OBJECT_DIR: .accounting/objects
+      PORT: '8089'
+    volumes:
+      - accounting-data:/app/.accounting
+    command: ['sh', '-c', 'bun run db:migrate && exec bun packages/xfactura-api/source/index.ts']
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'bun',
+          '-e',
+          "const r=await fetch('http://127.0.0.1:8089/health');process.exit(r.ok&&(await r.json()).accounting?0:1)",
+        ]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+    restart: unless-stopped
+  worker:
+    image: xfactura-api:local
+    environment: *accounting-environment
+    volumes:
+      - accounting-data:/app/.accounting
+    command: ['bun', 'packages/xfactura-api/source/accounting/worker.ts']
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+  web:
+    build:
+      context: .
+      dockerfile: packages/xfactura-web/Dockerfile
+      args:
+        ACCOUNTING_API_URL: http://api:8089
+    environment:
+      PORT: '3000'
+      ACCOUNTING_API_URL: http://api:8089
+    ports:
+      - '127.0.0.1:${WEB_PORT:-3000}:3000'
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+volumes:
+  accounting-data:

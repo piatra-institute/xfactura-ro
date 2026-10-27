@@ -29,6 +29,16 @@ export default function LoginScreen({
     atLoginSuccess: () => void;
     back: () => void,
 }) {
+    if (!ENVIRONMENT.GOOGLE_LOGIN) {
+        return <>
+            <p>Conectarea Google nu este configurată în această instanță.</p>
+            <LinkButton text="înapoi" onClick={back} centered />
+        </>;
+    }
+    return <GoogleLoginScreen atLoginSuccess={atLoginSuccess} back={back} />;
+}
+
+function GoogleLoginScreen({ atLoginSuccess, back }: { atLoginSuccess: () => void; back: () => void }) {
     // #region state
     const {
         setUser,

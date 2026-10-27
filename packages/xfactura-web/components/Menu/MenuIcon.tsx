@@ -22,6 +22,7 @@ const MenuIcon = ({
     atClick: () => void;
 }) => (
     <button
+        aria-label={show ? 'Închide meniul' : 'Deschide meniul'}
         className={styleTrim(`
             z-50 fixed top-[4px] left-0
             m-3 cursor-pointer

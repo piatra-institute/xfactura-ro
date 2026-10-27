@@ -2,6 +2,8 @@
 @tailwind components;
 @tailwind utilities;
 
+.font-inter { font-family: 'Inter Variable', sans-serif; }
+
 
 
 @supports (-webkit-touch-callout: none) {

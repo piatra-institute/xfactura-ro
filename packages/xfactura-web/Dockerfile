@@ -1,34 +1,26 @@
-FROM node:20-alpine as builder
-
+FROM oven/bun:1.4.2 AS bun
+FROM node:24-bookworm-slim AS builder
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 WORKDIR /app
+COPY package.json bun.lock ./
+COPY packages/xfactura-api/package.json packages/xfactura-api/package.json
+COPY packages/xfactura-web/package.json packages/xfactura-web/package.json
+RUN bun install --frozen-lockfile
+COPY packages/xfactura-api packages/xfactura-api
+COPY packages/xfactura-web packages/xfactura-web
+COPY tsconfig.json LICENSE ./
+ARG ACCOUNTING_API_URL=http://api:8089
+ENV ACCOUNTING_API_URL=$ACCOUNTING_API_URL
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN bun run --cwd packages/xfactura-web build
 
-COPY .npmrc ./
-COPY package*.json ./
-
-RUN yarn install --frozen-lockfile
-
-COPY . .
-
-RUN yarn build
-
-
-
-FROM node:20-alpine as runner
-
+FROM node:24-bookworm-slim AS runner
+ENV NODE_ENV=production
+ENV PORT=3000
 WORKDIR /app
-
-COPY --from=builder /app/package*.json .
-COPY --from=builder /app/next.config.js ./
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/.next ./.next
-
+# Include public assets and the PHP/vendor files used by the existing XML endpoint.
+COPY --from=builder --chown=node:node /app /app
+USER node
+WORKDIR /app/packages/xfactura-web
 EXPOSE 3000
-
-CMD ["yarn", "start"]
-
-
-### Build Command
-# > docker build -t xfactura-ro .
-
-### Run Command
-# > docker run -d -p 8383:3000 -e NEXT_PUBLIC_IN_PRODUCTION=false -e NEXT_PUBLIC_X_DOMAIN=http://localhost:3000 xfactura-ro
+CMD ["node", "node_modules/next/dist/bin/next", "start"]

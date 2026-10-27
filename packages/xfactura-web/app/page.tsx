@@ -3,6 +3,7 @@
 import Home from '@/containers/Home';
 
 import getUser from '@/logic/getUser';
+import LegacyProviders from '@/components/LegacyProviders';
 
 
 
@@ -10,8 +11,6 @@ export default async function Page() {
     const user = await getUser();
 
     return (
-        <Home
-            user={user}
-        />
+        <LegacyProviders><Home user={user} /></LegacyProviders>
     );
 }

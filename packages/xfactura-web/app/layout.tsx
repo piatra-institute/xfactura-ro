@@ -1,11 +1,5 @@
-import { GoogleOAuthProvider } from '@react-oauth/google';
-
-import {
-    ENVIRONMENT,
-} from '@/data';
-
 import fonts from '@/logic/fonts';
-
+import '@fontsource-variable/inter';
 import './globals.css';
 
 import {
@@ -31,11 +25,7 @@ export default async function RootLayout({
             suppressHydrationWarning
         >
             <body className={fonts}>
-                <GoogleOAuthProvider
-                    clientId={ENVIRONMENT.GOOGLE_LOGIN}
-                >
-                    {children}
-                </GoogleOAuthProvider>
+                {children}
             </body>
         </html>
     );

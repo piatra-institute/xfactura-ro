@@ -1,41 +1,56 @@
 {
-    "name": "xfactura-api",
-    "version": "0.0.1",
-    "description": "xfactura API",
-    "private": true,
-    "license": "MPL-2.0",
-    "main": "index.js",
-    "type": "module",
-    "scripts": {
-        "clean": "rimraf ./build",
-        "build": "pnpm clean && node ./scripts/build.js",
-        "dev": "pnpm build && concurrently \"nodemon --env-file=.env ./build/index.js\" \"node ./scripts/watch.js\"",
-        "start": "node ./build/index.js",
-        "db.push": "drizzle-kit push:sqlite"
-    },
-    "dependencies": {
-        "@libsql/client": "0.4.0-pre.7",
-        "cookie-parser": "^1.4.6",
-        "drizzle-orm": "^0.29.3",
-        "esbuild": "^0.19.11",
-        "express": "^4.18.2",
-        "google-auth-library": "^9.5.0",
-        "googleapis": "^131.0.0",
-        "jwt-decode": "^4.0.0",
-        "multer": "1.4.5-lts.1",
-        "stripe": "^14.14.0",
-        "typescript": "^5.3.3",
-        "uuid": "^9.0.1"
-    },
-    "devDependencies": {
-        "@types/cookie-parser": "^1.4.6",
-        "@types/express": "^4.17.21",
-        "@types/multer": "^1.4.11",
-        "@types/uuid": "^9.0.8",
-        "concurrently": "^8.2.2",
-        "dotenv": "^16.3.2",
-        "drizzle-kit": "^0.20.13",
-        "nodemon": "^3.0.3",
-        "rimraf": "^5.0.5"
-    }
+  "name": "xfactura-api",
+  "version": "0.0.1",
+  "description": "xfactura API",
+  "private": true,
+  "license": "MPL-2.0",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "clean": "rimraf ./build",
+    "build": "bun build source/index.ts --target=bun --outdir build --packages=external",
+    "dev": "bun --watch source/index.ts",
+    "start": "bun source/index.ts",
+    "db.push": "drizzle-kit push:sqlite",
+    "db:generate": "drizzle-kit generate --config=drizzle.accounting.config.ts"
+  },
+  "dependencies": {
+    "@better-auth/drizzle-adapter": "1.7.13",
+    "@hono/node-server": "2.1.5",
+    "@libsql/client": "0.18.0",
+    "@modelcontextprotocol/hono": "2.0.2",
+    "@modelcontextprotocol/server": "2.4.0",
+    "better-auth": "1.7.13",
+    "cookie-parser": "^1.4.6",
+    "decimal.js": "10.6.0",
+    "drizzle-orm": "0.45.4",
+    "esbuild": "^0.19.11",
+    "express": "^4.18.2",
+    "google-auth-library": "^9.5.0",
+    "googleapis": "^131.0.0",
+    "hono": "4.13.14",
+    "jwt-decode": "^4.0.0",
+    "multer": "1.4.5-lts.1",
+    "saxes": "6.0.0",
+    "stripe": "^14.14.0",
+    "typescript": "6.0.3",
+    "uuid": "^9.0.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
+    "@types/cookie-parser": "^1.4.6",
+    "@types/express": "^4.17.21",
+    "@types/multer": "^1.4.11",
+    "@types/uuid": "^9.0.8",
+    "concurrently": "^8.2.2",
+    "dotenv": "^16.3.2",
+    "drizzle-kit": "0.31.11",
+    "nodemon": "^3.0.3",
+    "rimraf": "^5.0.5"
+  },
+  "exports": {
+    "./accounting": "./source/accounting/domain/index.ts",
+    "./accounting-types": "./source/accounting/contracts.ts"
+  }
 }

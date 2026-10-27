@@ -12,6 +12,14 @@ Evaluate entity form, accounting framework, tax regimes, dated VAT registrations
 
 Normal VAT registration, non-registration, and special EU VAT identification must be represented with their actual applicability and history. Do not encode them as one boolean or assume normal VAT and special identification form a cumulative ladder. See the official [D301](https://static.anaf.ro/static/10/Anaf/Declaratii_R/301.html) and [D390](https://static.anaf.ro/static/10/Anaf/Declaratii_R/390.html) technical resources.
 
+## Product scope and proof horizon
+
+The implementation roadmap covers both VAT and non-VAT SRLs, microenterprise and profit taxation, native payroll, inventory and manufacturing. The first verified fiscal years are 2025 and 2026. RO-SRV-01 is a narrow conformance fixture, not the product's scope or a reason to defer VAT.
+
+Add explicit RO-TAX-MICRO, RO-PAY, RO-STOCK and RO-PRODUCTION facets with their required inputs, accounting/fiscal outputs and interactions. These are committed roadmap work, not implemented claims. Company eligibility still requires complete obligation closure, including the interaction of payroll with microenterprise eligibility and stock/production with VAT and SAF-T.
+
+The first filing path produces a versioned official validation/signing/submission package and imports the actual external receipt. A direct ANAF connector is optional; the complete authorized handoff is required. Unpublished later annual packages remain gaps until checked.
+
 ## Draft profiles
 
 | ID | Coverage introduced | Reporting and claim boundary |

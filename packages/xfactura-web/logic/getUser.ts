@@ -7,7 +7,7 @@ import {
 
 
 const getCookie = async (name: string) => {
-    return cookies().get(name)?.value ?? '';
+    return (await cookies()).get(name)?.value ?? '';
 }
 
 const getUser = async () => {

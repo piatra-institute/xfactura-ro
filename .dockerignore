@@ -1,0 +1,14 @@
+.git
+chats
+**/node_modules
+**/.next
+**/.next-e2e
+.accounting
+.env
+.env.*
+**/.env
+**/.env.*
+test-results
+playwright-report
+**/*.tsbuildinfo
+.DS_Store

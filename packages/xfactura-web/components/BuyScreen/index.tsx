@@ -35,9 +35,9 @@ import useStore from '@/store';
 
 
 
-const stripePromise = loadStripe(ENVIRONMENT.STRIPE_KEY, {
+const stripePromise = ENVIRONMENT.STRIPE_KEY ? loadStripe(ENVIRONMENT.STRIPE_KEY, {
     locale: 'ro',
-});
+}) : null;
 
 
 export default function BuyScreen({

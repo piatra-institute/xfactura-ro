@@ -19,6 +19,8 @@ The initial commercial audience is companies below €1M annual turnover. Revenu
 
 Use an owner-first interface and accountant-first distribution. Recruit accounting partners for the parallel pilot, conformance cases, and company migrations; they are design and review partners, not merely a later sales channel.
 
+Treat the UI primarily as a verification and decision layer. External MCP clients and the built-in Piatra AI/BYOK agent use the same capability contract to collect evidence, prepare work and execute authorized versions. People inspect sources, exact effects and exceptions; routine operation should not require re-entering data into forms. Keep professional registers and manual fallbacks available. Initially, humans authorize postings and consequential actions; agents cannot approve their own work.
+
 Ship a minimal accountant portfolio by the first real-company pilot: company membership, reporting period, import freshness, bank differences, blocked closes, missing evidence, and rejected/pending filings. Each item opens the affected company's workbench with its own authorization check. Portfolio counts come from actual exception states; they do not invent an overall health confidence.
 
 The owner home prioritizes actions requiring a decision, reconciled money, receivables/payables, and obligations. Every review item shows the source, proposed accounting/fiscal treatment, reason, effect, and exact decision needed. Professional journals and registers remain available beneath this interface.

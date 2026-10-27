@@ -5,7 +5,8 @@ This is the working plan, not a claim that the proposed accounting capabilities 
 ## Product direction
 
 Build free, open Romanian accounting infrastructure that minimizes manual work and switching costs.
-Use an owner-first interface and accountant-first distribution.
+Use an owner-first verification interface and accountant-first distribution.
+Agents perform routine work through the shared API and MCP; the UI reviews evidence, decisions and results.
 Keep hosted accounting and self-hosting free; operate hosting as an explicitly budgeted subsidy.
 Fiscal correctness, critical updates, basic APIs, collaboration, and complete exports remain free.
 The €1M turnover target is marketing segmentation. Coverage is determined by versioned conformance profiles.
@@ -22,6 +23,8 @@ Details and product commitments live in [PRODUCT.md](PRODUCT.md).
 | [FISCAL_FIXTURES.md](FISCAL_FIXTURES.md) | Five review-required oracle candidates and deliberate defects. |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Domain records, source authority, invariants, migration, and interfaces. |
 | [AI.md](AI.md) | Providers, autonomy, permissions, and managed-AI deferral. |
+| [ACCOUNTING_ENGINE.md](ACCOUNTING_ENGINE.md) | Implemented general ledger, configuration and XML invoice contracts and limits. |
+| [AGENT_API.md](AGENT_API.md) | Implemented capabilities, scoped credentials, MCP and approval/recovery contracts. |
 | [GOVERNANCE.md](GOVERNANCE.md) | RFCs, fiscal interpretation, review, signing, and releases. |
 | [OPEN_SOURCE.md](OPEN_SOURCE.md) | Licensing direction, contribution rights, and open standards. |
 | [SECURITY.md](SECURITY.md) | Threat model, trust boundaries, and disclosure. |
@@ -46,12 +49,10 @@ The implementation and the Romanian Accounting Conformance specification are sep
 
 ## Coverage and adoption
 
-Start with domestic RON, non-VAT, profit-tax services bookkeeping.
-Add normal VAT, EUR/FX, EU services, assets, and annual coverage through independently reviewed profiles.
-Normal VAT and special EU VAT identification are separate branches.
-Evaluate D406 applicability for non-VAT companies too.
-Annual reporting and all other applicable obligations are prerequisites to replacing a company's accounting system.
-RO-SRV-01-SHADOW is the early workflow scope. RO-SRV-01-FULL-YEAR additionally requires complete obligation closure, fiscal-register/annual outputs, source continuity, authority and operational proof.
+Implement the accounting engine for VAT and non-VAT SRLs, covering both profit tax and microenterprise taxation. The first verified fiscal years are 2025 and 2026; earlier opening balances and tax vintages remain importable with their evidence. Accounting micro-entity size and microenterprise income taxation are separate classifications.
+Native payroll, inventory and manufacturing/production costing belong to the suite, with explicit conformance facets and independently tested interactions. They are planned engine modules rather than external-system requirements.
+RO-SRV-01 remains a useful narrow regression profile. It no longer restricts the product to non-VAT companies or defers normal VAT until after a non-VAT launch.
+Normal VAT and special EU VAT identification are separate branches. D406 applicability is independent of VAT registration. Annual reporting and complete obligation closure remain mandatory before a company-specific replacement claim.
 
 Use the same command API for owners, accountants, and agents.
 Offer a minimal accountant portfolio view showing real exceptions and reporting freshness.
@@ -60,24 +61,24 @@ Keep typed proposals, deterministic calculations, exact-version approvals, and t
 
 ## Delivery sequence
 
-| Milestone | Result |
+| Order | Result |
 |---|---|
-| A1 | Ledger/evidence/bank slice with idempotency, restart recovery, and company isolation. |
-| A1b | Difficult VAT fixture: partial payment, next-month credit note, bank fee, reports, close, and correction. |
-| A2 | RO-SRV-01 domestic non-VAT workflow and shadow close. |
-| A3 | RO-SRV-02 normal VAT, e-Factura, and applicable reporting. |
-| A4 | Real-company parallel pilot, migration proof, and two monthly closes. |
-| A5 | EUR/FX and reviewed EU B2B branches. |
-| A6 | Assets and separate accounting/fiscal depreciation. |
-| A7 | Complete profit-tax positions, annual reporting, and applicable owner distributions. |
-| A8 | Portfolio refinement; the minimal accountant portfolio ships by A4. |
-| B1 | Provider-key explanations, extraction, and typed proposals. |
-| B2 | Governed automation with measured outcomes and revocable policies. |
-| B3 | Managed AI only after measured usage economics justify it. |
+| 1 | General accounting foundation: sourced chart and analytical accounts, financial/fiscal years, general opening positions and proposals, dated registrations/policies/rule and obligation catalogues; preserve existing books. |
+| 2 | Document-to-ledger workflow for VAT and non-VAT: incoming/outgoing e-Factura, sales/purchases/credit notes, customer/supplier positions, bank/cash, fees, partial/grouped settlements, multiple accounts and CSV/MT940/camt imports. |
+| 3 | Complete VAT and FX: cash VAT, deduction/pro-rata/adjustments, registration transitions, EU/special identification, imports/exports, exchange-rate provenance and VAT reporting registers. |
+| 4 | Assets, separate accounting/fiscal depreciation, leasing, financing, owner loans and distributions. |
+| 5 | Native payroll, contracts, monthly calculations/postings, corrections and D112. |
+| 6 | Native inventory, valuation, stock movements, annual inventory and production costing/WIP. |
+| 7 | Micro/profit-tax positions, adjustments, loss vintages, credits, withholding, year close and controlled roll-forward. |
+| 8 | Complete statutory registers and filing outputs: applicable D100/D101/D112/D300/D301/D390/D394/D406 and conditional reports, annual statements and supporting package. Pin official schemas/validators; reconcile to approved source positions. |
+| 9 | Migration and exact-company/year replacement proof: signed continuity, independent oracles/mutations, real closes, annual reporting and recovery. |
 
-A4 is a parallel-accounting gate, not permission to skip annual obligations.
-A limited production replacement can launch when its exact company/profile combination satisfies every replacement gate.
-See [ROADMAP.md](ROADMAP.md) for the executable tickets and dependencies.
+The capability API and manual-credential MCP already exist and grow with each engine module. Deployment changes, browser OAuth delegation and a built-in Piatra AI/BYOK agent are deferred from this accounting critical path. Every new engine capability remains available to external agents through the shared API/MCP and reviewable through the existing UI.
+
+The first coding ticket generalizes accounts, years, opening positions and proposals, with populated-book upgrade tests and independent 2025/2026 VAT/non-VAT sales/purchase posting fixtures. These fixtures establish ledger mechanics; they do not establish complete VAT or tax-return coverage.
+
+Filing delivery initially means a validated official package for external signing/submission, followed by import and tracking of the actual receipt. Direct ANAF automation is an optional later adapter. An unsigned export, structural validator result or monthly close is never an accepted filing.
+See [ROADMAP.md](ROADMAP.md) for ordered tickets and proof gates, and [IMPLEMENTATION.md](IMPLEMENTATION.md) for what has actually passed.
 
 ## AI and infrastructure boundary
 
@@ -90,9 +91,9 @@ Use small IdentityProvider, AIProvider, ObjectStore, BankProvider, and TaxAuthor
 Piatra is an adapter; the accounting kernel has no Piatra-specific dependency.
 BillingProvider is a future paid-service boundary, not an early prerequisite.
 Defer prepaid wallets, retail tariff engines, and new billing gateway work.
-A future managed paid mode retains the previously selected company-prepaid direction only if approved at B3.
+A future managed paid mode requires a separate RFC justified by measured usage economics.
 
-The reference self-host deployment uses PostgreSQL and a local document volume.
+The reference self-host deployment uses local SQLite/libSQL and a local document volume. Accounting stays within the existing API package; Drizzle schemas generate migrations and typed queries implement operations. Turso is an optional libSQL configuration.
 S3-compatible storage remains available for hosted/multi-node operation.
 Self-hostability does not promise support for arbitrary deployment environments.
 

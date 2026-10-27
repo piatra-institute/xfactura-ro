@@ -2,26 +2,39 @@
 
 ## Sequencing
 
-Keep the current public invoicer available. Start with a real vertical slice and independently reviewed cases, then grow profile coverage. Profile definitions in [CONFORMANCE.md](CONFORMANCE.md) are draft planning targets, not claims that tests exist.
+Keep the public invoicer available. Agents perform routine work through the same typed command API used by the application. The UI primarily verifies evidence, exact effects, decisions and results; manual accounting remains available without a model. Every domain feature needs an API/tool capability and a corresponding review projection.
 
-| Milestone | Deliverable and exit condition |
+General-ledger primitives, bounded domestic service invoices/credits, purchase accruals and later invoices, native positions, RON bank/cash settlements and working VAT registers are implemented. Delivery is within step 2: unbilled sales, estimate adjustments, advances/prepayments and additional import formats remain next. These mechanics do not establish a complete Romanian accounting profile. [IMPLEMENTATION.md](IMPLEMENTATION.md) owns current status and executable proof. Profile definitions in [CONFORMANCE.md](CONFORMANCE.md) remain coverage targets until their independent gates pass.
+
+| Order | Deliverable and exit condition |
 |---|---|
-| A1 | Ledger/evidence/bank/kernel slice below; idempotency, company isolation and restart recovery pass. Tax-position contracts exist from the start. |
-| A1b | The difficult VAT/period-boundary fixture below forces the two-interpretation model and filing/correction contracts before broad feature expansion. |
-| A2 | RO-SRV-01-SHADOW domestic RON/non-VAT bookkeeping, fiscal-register contracts and obligation closure; applicable D406/annual work is identified, not assumed absent. |
-| A3 | RO-SRV-02 normal VAT, e-Factura, applicable D300/D394/D406 and complete profile interaction cases; official validation and independent fiscal outputs pass. |
-| A4 | Real-company parallel accounting, migration proof, two consecutive monthly closes and a minimal accountant portfolio. This is not yet a general replacement/annual-coverage claim. |
-| A5 | RO-SRV-03 EUR/FX plus RO-SRV-04 ordinary EU B2B, with separately validated normal/special-identification branches and applicable D390/D301. |
-| A6 | RO-SRV-05 assets, separate accounting/fiscal bases/depreciation, disposal and applicable D406-assets reporting. |
-| A7 | RO-SRV-06 full profit-tax position, adjustments, tax history/carry-forwards, D101 and annual statements; RO-OWN-01 distributions when needed. |
-| A8 | Refine portfolio workflows, migration efficiency and supported profile compositions using actual accounting-partner use. The minimal portfolio is already present at A4. |
-| B1 | Direct regular Piatra AI/OpenAI/OpenRouter keys for grounded explanation, extraction and typed proposals. No xFactura wallet dependency. |
-| B2 | Explicit reviewed policies, shadow comparison and revocable governed execution at the autonomy levels in AI.md. |
-| B3 | Consider managed AI only if measured demand/cost/support economics justify a new RFC. Defer wallet/billing implementation until that decision. |
+| 1 | General foundation: sourced/versioned chart and analytical accounts, financial years separate from the company and fiscal years, arbitrary balanced opening/general proposals, dated registrations, policies/rules and obligation catalogue. Preserve existing hashes and postings through generated Drizzle upgrades. |
+| 2 | Evidence to ledger: incoming/outgoing e-Factura XML/archives; VAT and non-VAT sales, purchases and linked credit notes; counterparty positions; partial/grouped settlements, bank fees, multiple accounts, cash and CSV/MT940/camt. Proof reconciles source totals, tax amounts, ledger and open items without duplicate recognition. |
+| 3 | VAT and FX: cash VAT, recoverability/pro-rata, adjustments, registration changes, EU/special-VAT branches, imports/exports and independent accounting/VAT/settlement rate dates. Prove VAT registers and their declaration mappings across transitions and periods. |
+| 4 | Assets and financing: acquisitions, depreciation, disposals, separate fiscal bases, leases, loans, interest, owner loans/dividends and withholding. Prove accounting/fiscal differences and settlement controls. |
+| 5 | Native payroll: contracts and effective changes, gross-to-net, employer costs, absence/leave, benefits, corrections, liabilities/payments and D112 mappings. Version every calculation input and rule; independently reconcile payroll to ledger and return. |
+| 6 | Native stock and production: warehouses, quantities/units, receipts/issues/transfers/returns, approved valuation policies, inventory counts, BOM/work orders, consumed materials/labor/overheads, finished goods and work in progress. Reconcile quantity/cost subledgers to the general ledger and reporting. |
+| 7 | Tax and year close: both microenterprise and profit-tax branches, fiscal adjustments, loss vintages, credits, payments, withholding, prescribed fiscal register, annual close and reviewed opening roll-forward. Execute FP-01–05 and independent regime/transition/mutation cases. |
+| 8 | Reporting and official packages: required journals/ledger/inventory/trial balances, applicable D100/D101/D112/D300/D301/D390/D394/D406 and conditional reports; annual statements and supporting documents. Pin schemas and official validator/PDF tools, reconcile content, export an exact signing/submission package and track imported receipts. |
+| 9 | Replacement proof: MIG-01 continuity and responsibility, independent fiscal review, quarterly/year-end reference outputs, real-company parallel closes, complete obligation closure and restore/replay. Approve only the exact covered company, interval and version combination. |
 
-A1b is a bounded architectural stress slice, not a claim of full RO-SRV-02 coverage. Its expected outputs and exact reporting dates/rates come from an independently reviewed fiscal package; A3 expands the full supported matrix.
+Run steps in this order, carrying forward existing evidence, API/MCP access, exact approvals and tests. Within a step, deliver bounded vertical workflows with explicit exclusions. Do not label a generic journal capability as complete support for payroll, stock, VAT or a declaration.
 
-A company can move from shadow use to replacement only after every applicable profile/obligation and annual reference gate is satisfied. A2/A3/A4 cannot skip D101/annual statements or other applicable work because those engineering milestones appear later. Annual coverage can be delivered earlier for a smaller profile if its reviewed proof is complete.
+Initial verification covers 2025 and 2026. Historical opening balances and tax vintages need retained authority; later annual formats remain pending until published and independently checked. Both VAT and non-VAT, micro/profit taxation, payroll and manufacturing remain committed scope, not unspecified future product ideas.
+
+The existing capability API and scoped-credential MCP are infrastructure already available to every new accounting module. Deployment, browser OAuth delegation, a built-in model agent and AI billing are outside this accounting sequence. The UI verifies actual evidence/effects; do not grow a second manual accounting application alongside the engine.
+
+Filing fulfillment initially uses external signing/submission of the validated official package and receipt import. Reserve explicit authorization for exact artifacts and keep prepared/validated/exported/submitted/accepted states distinct. Direct submission automation is not a prerequisite.
+
+## First coding ticket: general accounting foundation
+
+1. Source the general chart and represent postable accounts, groups and company analytical accounts; retain source/hash/version and avoid unsupported claims of a reviewed current consolidation.
+2. Separate financial/fiscal years from company identity. Require an explicit report year when several exist; never sum repeated annual opening balances.
+3. Generalize evidence-backed opening/general proposals and linked adjustments to arbitrary supported general-ledger accounts. Approval binds the full exact lines, dates, source and year.
+4. Preserve existing evidence, fact/proposal hashes, approved entries, idempotency and database guards through a populated-book upgrade, export and restore.
+5. Run independently specified sales/purchase posting fixtures for VAT and non-VAT in both 2025 and 2026, alongside stale approvals, closed periods, cross-company access and direct balanced-tampering failures.
+6. Expose configuration, proposals, exact posting effects and year reports through the shared API/MCP. Reuse the existing review screen.
+7. Add effective-dated policy/rule/obligation records and move to the document-to-ledger workflow. Independent fiscal review remains required before any conformance claim.
 
 ## Ticket A1: keep the first slice small
 
@@ -49,9 +62,9 @@ The oracle specifies complete amounts, source/rule versions, statement/control b
 
 ## Accountant adoption and pilot
 
-Recruit an accounting partner alongside A1/A2. Obtain consented opening balances, tax-history registers, representative statements, source documents and reference outputs. Publish only synthetic or explicitly cleared anonymized cases.
+Recruit an accounting partner alongside the accounting work. Obtain consented opening balances, tax-history registers, representative statements, source documents and reference outputs. Publish only synthetic or explicitly cleared anonymized cases.
 
-By A4, the accountant portfolio shows companies they may access, reporting periods, freshness, missing evidence, bank differences, blocked closes and pending/rejected filings. Every count drills into actual records; revoked membership removes access immediately. Full firm billing/staff orchestration is not required.
+By step 9, the accountant portfolio shows companies they may access, reporting periods, freshness, missing evidence, bank differences, blocked closes and pending/rejected filings. Every count drills into actual records; revoked membership removes access immediately. Full firm billing/staff orchestration is not required.
 
 Preserve the migration process in [ARCHITECTURE.md](ARCHITECTURE.md): reviewed opening position, separate tax-history evidence, control reconciliation, retained originals and explicit activation. Do not infer historical books from XML or require a legacy paid-AI conversion to migrate accounting.
 
@@ -59,16 +72,20 @@ Preserve the migration process in [ARCHITECTURE.md](ARCHITECTURE.md): reviewed o
 
 | Priority / ticket | Required proof | Delivery |
 |---|---|---|
-| P0 CONF-01 | Versioned ObligationClosure; foreign-service, VAT-transition, non-VAT D406 and unknown-fact cases fail closed. | A1–A2 |
-| P0 FISC-01 | Effective-dated legal/calendar/register authority; reviewed current-register output and changed-deadline tests. | A2, completed before replacement |
-| P0 FISC-02 | Separate adjustment, credit, payment and loss-vintage operations; FP-03/04/05 and corrected-return lineage. | A2–A7 |
-| P0 LEDGER-01 | Accrual, later-invoice and credit-note links; FP-01/02 without duplicate recognition across periods. | A1b–A2 |
-| P0 TEST-01 | Independent legal/expected oracles and deliberate fiscal/period mutation failures. | A1 onward |
-| P0 MIG-01 | Signed handover manifest, current-year/tax continuity, exact reconciliation and missing-history activation refusal. | A4 |
-| P0 FILING-01 | Distinct professional/action/submission authority, exact signing payload, pending/rejected receipts and replay safety. | A2–A4 |
-| P0 OPS-01 | Funded horizon, measured/stress cost ledger, admission thresholds and recovery proof. | Before hosted scale |
-| P1 UX-01 | Accountant portfolio counts drill into authorized, real company exceptions. | By A4 |
-| P1 CONF-02 | Independently proven VAT, currency, time, EU and asset compositions/transitions. | A3–A7 |
+| P0 GL-01 | General chart/years/openings/proposals, preserved upgrade and VAT/non-VAT 2025/2026 posting fixtures. | Step 1 |
+| P0 DOC-01 | Incoming/outgoing XML and settlements reconcile with evidence and open items; unsupported treatments block interpretation. | Step 2 |
+| P0 VAT-01 | Normal/special/cash VAT, deduction, corrections and dated regime/FX interactions. | Steps 2–3 |
+| P0 CONF-01 | Obligation closure; EU-service, VAT-transition, non-VAT D406 and unknown facts fail closed. | From step 1; full gate by step 9 |
+| P0 FISC-01 | Effective-dated legal/calendar/register authority and independently reviewed expected outputs. | Steps 1/7/8 |
+| P0 FISC-02 | Distinct adjustments, credits, losses and payments with immutable correction lineage. | Steps 4/7 |
+| P0 LEDGER-01 | Accrual/later-invoice/credit-note links; FP-01/02 avoid cross-period duplicate recognition. | Step 2 |
+| P0 PAY-01 | Native reviewed payroll and D112 content/validator proof. | Steps 5/8 |
+| P0 STOCK-01 | Native inventory and production subledgers reconcile quantities, valuation and GL. | Step 6 |
+| P0 TEST-01 | Independent legal/expected oracles and deliberate fiscal/period mutation failures. | Every step |
+| P0 FILING-01 | Exact official packages, external signing/submission handoff and imported pending/rejected/accepted receipts. | Step 8 |
+| P0 MIG-01 | Signed handover, current-year/tax continuity and exact controls; missing history blocks activation. | Step 9 |
+| P1 UX-01 | Accountant exception portfolio drills into authorized records and actual unresolved work. | Step 9 |
+| P1 CONF-02 | Independently prove combined VAT/currency/time/EU/asset/payroll/stock regimes. | Each affected step |
 
 These are planned work items, not created external tracker issues. [FISCAL_FIXTURES.md](FISCAL_FIXTURES.md) owns the candidate cases, [MIGRATION.md](MIGRATION.md) the handover proof, and [REGULATORY_BASELINE.md](REGULATORY_BASELINE.md) the dated authority.
 
@@ -84,6 +101,6 @@ These are planned work items, not created external tracker issues. [FISCAL_FIXTU
 
 Track executable work in one implementation tracker when tickets begin; keep this roadmap focused on delivery gates rather than appending dated status blocks.
 
-## Later scope
+## Work outside this sequence
 
-Micro/payroll/administrator remuneration, inventory/ecommerce/returns, additional VAT regimes, non-EU transactions, complex assets, manufacturing and other entity types each require new profiles, transition/interaction cases, migration inputs and fiscal releases. Their supported claims remain free to use, not paid product tiers.
+Browser OAuth delegation, the built-in Piatra AI/BYOK agent, direct ANAF submission automation, deployment expansion and managed-AI billing have separate backlog items. Existing operating/security requirements still apply to any live service. Fiscal completeness and the committed native accounting modules take priority.

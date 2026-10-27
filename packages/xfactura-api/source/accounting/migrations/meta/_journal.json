@@ -1,0 +1,118 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1793040837552,
+      "tag": "0000_accounting",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1793040841632,
+      "tag": "0001_posting_guards",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1793069327137,
+      "tag": "0002_purchase_corrections",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1793069460334,
+      "tag": "0003_correction_guards",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1793074132790,
+      "tag": "0004_agent_capabilities",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1793074530689,
+      "tag": "0005_agent_review_guards",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1793075405578,
+      "tag": "0006_agent_query_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1793082171233,
+      "tag": "0007_prepare_general_accounting",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1793082171709,
+      "tag": "0008_general_accounting",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1793082172223,
+      "tag": "0009_general_posting_guards",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1793083033302,
+      "tag": "0010_invoice_documents_and_policies",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1793083138760,
+      "tag": "0011_invoice_policy_guards",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1793085903199,
+      "tag": "0012_treasury_invoice_positions",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1793086207241,
+      "tag": "0013_treasury_posting_guards",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1793090649577,
+      "tag": "0014_accrual_positions",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1793090892564,
+      "tag": "0015_accrual_guards",
+      "breakpoints": true
+    }
+  ]
+}

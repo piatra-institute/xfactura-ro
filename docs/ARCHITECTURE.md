@@ -2,7 +2,7 @@
 
 ## Runtime and ports
 
-Use a TypeScript modular monolith with an API and separate worker process: Bun, Hono, PostgreSQL, Drizzle, Zod, and decimal arithmetic through `decimal.js`. Domain calculations depend on neither HTTP, React, provider SDKs, nor Piatra identity.
+Accounting is an internal module of the existing `xfactura-api` package, with Hono routes mounted in its Express server and a worker process from the same package. Use Bun, SQLite/libSQL, Drizzle, Zod and `decimal.js`. Local SQLite is the default; the existing libSQL configuration also accepts Turso. Domain calculations depend on neither HTTP, React, provider SDKs, nor Piatra identity. Shared contracts use explicit API-package exports, not separate accounting-core/server packages. [ADR 0008](adr/0008-existing-api-sqlite-drizzle.md) records this boundary.
 
 Retain Next.js and upgrade to a supported 16.x release, pinning tested dependencies and lockfiles. [Next.js support policy](https://nextjs.org/support-policy)
 
@@ -17,9 +17,17 @@ Implement small typed IdentityProvider, AIProvider, ObjectStore, BankProvider, a
 | TaxAuthorityConnector | Submission attempts, status, artifacts, and receipts; ANAF official integrations or explicit guided handoff. |
 | BillingProvider | Future paid operational mechanics; not a dependency of books, conformance, or provider-key AI. |
 
-PostgreSQL owns company data, permissions, books, tax positions, workflow state, and audit records. Use database-backed leases/jobs and a transactional outbox. Storage and worker adapters avoid dependencies on unimplemented shared data/work gateways.
+SQLite/libSQL owns company data, permissions, books, tax positions, workflow state, and audit records. Drizzle schemas own table definitions; generate migrations with Drizzle Kit. Use typed Drizzle queries for application operations. Custom SQL migrations are reserved for database invariants the schema API cannot express, including immutable posting guards. Use database-backed leases/jobs and a transactional outbox. Storage and worker adapters avoid dependencies on unimplemented shared data/work gateways.
 
 Hosted handoff is identity-only by default and creates an xFactura-local secure session; extend the Piatra adapter rather than implicitly minting/enabling AI credentials at sign-in. Standalone Better Auth uses invitation-based company access. Represent company membership, product action permission, professional/organizational authority and external submission mandate separately. Record evidence, scope, validity and verification for the appropriate preparer/reviewer, administrator and submitter. A UI role or owner login cannot substitute for a legally required professional qualification, management signature or qualified electronic-signature/representation procedure.
+
+## Implemented general accounting foundation
+
+Company identity no longer limits the general ledger to one year or four accounts. Separate financial/fiscal intervals are immutable, non-overlapping within their kind and company-scoped. The legacy company `year` remains the initial calendar year for old clients; general proposals and reports identify the financial year explicitly. Reports never add two annual opening positions together.
+
+General proposals contain explicit lines, purpose, source reference, financial year, evidence and optional correction/invoice interpretation links. Human approval binds the whole version/hash. Posting rechecks accounts, dates, exact lines, registration snapshots, balance and closed periods. Parsed invoice facts remain separate from their accounting treatment; XML acceptance, delivery and deductibility are distinct assertions.
+
+The sourced chart is a reference catalogue, not a signed current fiscal consolidation. Classes 8/9 remain catalogue references; general-ledger posting uses postable general-book accounts and company analytical accounts. Policy records and draft rule/obligation references do not by themselves implement applicability or autonomous execution. [ACCOUNTING_ENGINE.md](ACCOUNTING_ENGINE.md) owns exact scope, APIs and migration behavior.
 
 ## Two interpretation branches
 
@@ -59,6 +67,8 @@ Give fiscal operations explicit contracts: Recognize, Adjust, AllocateToPeriod, 
 
 A known accounting fact can be posted while a fiscal judgment remains pending only when that uncertainty cannot change the posting itself. If recoverability or another fiscal decision changes the recognized amount/basis, block the affected posting. Pending tax judgments block tax readiness, not an unrelated banking import.
 
+The implemented current-year purchase correction workflow is specified in [CORRECTIONS.md](CORRECTIONS.md). It preserves the original facts and postings, binds approval to the complete correction snapshot, and appends a balanced linked journal without reopening the original month. Fiscal interpretation remains a separate review.
+
 ## Evidence Authority Matrix
 
 Authority is fact-specific, dated and reviewable; there is no universal source ordering.
@@ -75,11 +85,11 @@ Record the disputed fact, all assertions, chosen authority, rationale, approver,
 
 ## Invariants and interface
 
-- Money crosses APIs as decimal strings and is stored as PostgreSQL `NUMERIC`. Define precision/rounding separately for quantity, rate, basis, tax, and totals.
+- Money crosses APIs as decimal strings. Posted RON amounts are stored as signed 64-bit integer bani through a bigint-mode libSQL client; never use SQLite REAL for financial values. Preserve decimal quantities/rates/bases separately and define their precision and rounding before adding the corresponding treatment.
 - Accounting dates are dates; audit timestamps are UTC. Deadlines use Europe/Bucharest and versioned calendars. RON is the ledger currency; retain original amounts and rate/date provenance.
 - Debits equal credits in RON. Balanced entries still require valid evidence and reviewed treatment; balancing is not proof of fiscal correctness.
 - Posting, numbering, outbox creation, locking, tax utilization and approvals use transactions. Recheck authorization when queued work executes.
-- Company IDs differ from CUIs and supplier/customer IDs. Scope queries, jobs, files, exports, credentials and audit views; enforce PostgreSQL row-level security.
+- Company IDs differ from CUIs and supplier/customer IDs. Authorize and scope queries, jobs, files, exports, credentials and audit views. Enforce company-consistent foreign keys and recheck permissions before idempotent replay and queued execution. SQLite has no PostgreSQL-style RLS; database credentials belong exclusively to trusted backend processes.
 - Posted records, prior approved tax-position versions and filing receipts remain immutable. Corrections link new records. Rules/policies are effective-dated and never silently rewrite history.
 - Closed periods reject mutations. Any legally permitted rectification/reopening is an explicit reviewed workflow retaining prior snapshots and artifacts, not a general-purpose unlock switch.
 - Rebuildable projections retain their source snapshot and versions. A changed ledger/tax position makes affected artifact approvals stale.
@@ -87,6 +97,12 @@ Record the disputed fact, all assertions, chosen authority, rationale, approver,
 - Approvals bind to exact hashes. Official artifacts retain a separate internal manifest containing `fiscal_package_id`, `rule_set_hash`, `software_version`, profiles, corpus and validator versions. Do not inject unsupported fields into official XML.
 
 Expose one versioned company-scoped REST/OpenAPI interface and shared contracts for facts, interpretations, tax positions, postings, reconciliation, reports, obligations, submissions, providers and jobs. Humans and agents use the same validated commands. Open Accounting IR/schema exports must remain independently implementable.
+
+The implemented capability catalogue and MCP adapter stay inside the existing API module. Each capability declares input/output schemas, permission, effect and approval requirement. Discovery intersects implemented definitions with live company membership and agent scope; it does not advertise planned fiscal support. [AGENT_API.md](AGENT_API.md) owns the wire contract and supported commands.
+
+An agent principal records both a grant ID and its human delegator. Expiry, revocation, scope and current membership are rechecked before execution, idempotent replay, downloads and queued export processing. Agents cannot approve proposals/actions, manage membership or issue credentials. Proposal execution uses its exact human approval; payment-match and close execution use an immutable, human-approved effect snapshot revalidated in the execution transaction. Existing explicit human match/close actions remain compatible. Accounting grants and provider inference keys are separate credentials.
+
+Reads use explicit libSQL read transactions bound to Drizzle query builders; the pinned Drizzle libSQL adapter otherwise opens write transactions even for reads. Concurrent reads therefore retain snapshots without acquiring the writer lock. Per-instance write transactions are queued so a concurrent local BEGIN does not block a transaction awaiting completion; SQLite still protects writes from other processes, which may return the existing retryable BUSY error. Model calls, MCP transport exchanges and human waits never hold database transactions. Audit events retain human/agent attribution and separate idempotency namespaces.
 
 Build a clause-to-control/test matrix for the relevant accounting-software requirements, including source traceability, period protection, reconstruction, preservation and operating documentation. Validate applicability and amendments rather than claiming certification from architectural design alone. [Romanian financial-accounting document norms, section F](https://legislatie.just.ro/Public/DetaliiDocumentAfis/173683)
 

@@ -206,7 +206,7 @@ export default function Home({
                         name: product.description || '',
                         quantity: product.quantity || 1,
                         price: product.price || 0,
-                        vatRate: product.vat || 19,
+                        vatRate: product.vat ?? 19,
                     })),
                 ].filter(line => line.name !== '');
 

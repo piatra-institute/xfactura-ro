@@ -28,3 +28,16 @@ Temporary Items
 
 
 chats
+
+# Accounting workspace
+node_modules/
+.env
+.env.*
+!.env.example
+.accounting/
+test-results/
+playwright-report/
+coverage/
+.impeccable/review/
+*.tsbuildinfo
+**/.next-e2e/

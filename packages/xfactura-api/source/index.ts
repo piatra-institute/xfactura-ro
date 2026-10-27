@@ -1,55 +1,59 @@
 import express from 'express';
 import cookieParser from 'cookie-parser';
-
 import multer from 'multer';
+import home from './handlers/home';
+import { mountAccounting } from './accounting';
 
-import {
-    home,
-    getUser,
-    companyDetails,
-    logout,
-    googleLogin,
-    googleUploadDatabase,
-    checkoutSessions,
-    processIntelligentAct,
-    storePrompt,
-} from './handlers';
-
-
-
-const port = process.env.PORT || 8089;
 const app = express();
-
+// Web Request handlers receive the original body, before Express's JSON parser.
+const accounting = process.env.ACCOUNTING_AUTH_SECRET ? await mountAccounting(app) : null;
+app.get('/health', async (_request, response) => {
+  try {
+    if (accounting) await accounting.client.execute('SELECT 1');
+    response.json({ status: 'ok', accounting: !!accounting });
+  } catch {
+    response.status(503).json({ status: 'unavailable' });
+  }
+});
 app.use(express.json());
 app.use(cookieParser());
 app.use(express.static('public'));
-app.use('/favicon.ico', express.static('favicon.ico'));
-
-app.all('*', function (req, res, next) {
-    const origin = req.get('origin');
-
-    res.header('Access-Control-Allow-Origin', origin);
-    res.header('Access-Control-Allow-Credentials', 'true');
-    res.header('Access-Control-Allow-Headers', 'Content-Type,Content-Length, Authorization, Accept,X-Requested-With');
-    res.header('Access-Control-Allow-Methods', 'PUT,POST,GET,DELETE,OPTIONS');
-
-    next();
-});
-
-const storage = multer.memoryStorage();
-const upload = multer({ storage: storage });
-
 app.get('/', home);
-app.post('/get-user', getUser);
-app.post('/company-details', companyDetails);
-app.post('/logout', logout);
-app.post('/google-login', googleLogin);
-app.post('/google-upload-database', upload.single('file'), googleUploadDatabase);
-app.get('/stripe-checkout-sessions', checkoutSessions);
-app.post('/stripe-checkout-sessions', checkoutSessions);
-app.post('/process-intelligent-act', processIntelligentAct);
-app.post('/store-prompt', storePrompt);
 
-app.listen(port, () => {
-    console.log(`Server started on ${port}`);
-});
+// Existing Turso/Google/Stripe deployments can retain the original endpoints.
+if (process.env.DATABASE_URL && process.env.STRIPE_SECRET_KEY) {
+  const handlers = await import('./handlers');
+  app.use((request, response, next) => {
+    const origin = request.get('origin');
+    const allowed = (process.env.LEGACY_ALLOWED_ORIGINS ?? 'https://xfactura.ro').split(',');
+    if (origin && allowed.includes(origin)) {
+      response.header('Access-Control-Allow-Origin', origin);
+      response.header('Access-Control-Allow-Credentials', 'true');
+      response.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      response.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+    }
+    if (request.method === 'OPTIONS') {
+      response.sendStatus(204);
+      return;
+    }
+    next();
+  });
+  const upload = multer({ storage: multer.memoryStorage() });
+  app.post('/get-user', handlers.getUser);
+  app.post('/company-details', handlers.companyDetails);
+  app.post('/logout', handlers.logout);
+  app.post('/google-login', handlers.googleLogin);
+  app.post('/google-upload-database', upload.single('file'), handlers.googleUploadDatabase);
+  app.get('/stripe-checkout-sessions', handlers.checkoutSessions);
+  app.post('/stripe-checkout-sessions', handlers.checkoutSessions);
+  app.post('/process-intelligent-act', handlers.processIntelligentAct);
+  app.post('/store-prompt', handlers.storePrompt);
+}
+const port = Number(process.env.PORT ?? 8089);
+const server = app.listen(port, '0.0.0.0', () => console.log(`xFactura API listening on ${port}.`));
+async function stop() {
+  server.close();
+  if (accounting) await accounting.close();
+}
+process.on('SIGINT', stop);
+process.on('SIGTERM', stop);

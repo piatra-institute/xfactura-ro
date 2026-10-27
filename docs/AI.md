@@ -2,6 +2,8 @@
 
 ## Initial provider path
 
+The capability API and MCP are implemented. The accounting-first sequence in [ROADMAP.md](ROADMAP.md) now takes priority; browser OAuth delegation and a built-in provider-key agent are deferred. [AGENT_API.md](AGENT_API.md) describes the implemented command/MCP surface and its current manual-credential connection path. The built-in accounting agent is not implemented yet. Agents may prepare work and execute exact human-approved versions; agent credentials never inherit the delegator's ability to approve.
+
 Company owners configure provider keys, models, permitted actions and spending controls. Self-hosted backends call Piatra AI with a regular user API key or connect directly to OpenAI/OpenRouter. Piatra's normal scopes, capabilities, limits and billing apply exactly as for other users.
 
 No hosted xFactura commerce relay, privileged service credential, prepaid xFactura balance, or paid AI is required for accounting. Hosted company-supplied keys use the same adapters and have no xFactura AI surcharge. Provider billing remains with the provider account.
@@ -37,11 +39,11 @@ Track proposed/executed outcomes, human corrections, policy exceptions, unexpect
 
 ## Managed AI is deferred
 
-B1 uses regular user/provider keys. B2 adds governed execution. B3 considers managed AI only after measured cost, support and usage show why provider keys or a simple allowance are insufficient.
+A later built-in agent uses regular user/provider keys; reviewed governed policies follow measured accounting correctness. Managed AI requires a separate RFC after measured cost, support and usage show why provider keys or a simple allowance are insufficient.
 
 A managed-AI RFC must show actual inference cost and distribution per company/action, operational/support overhead, funding, abuse limits, user demand, price transparency and failure handling. The previous prepaid-company direction is a candidate for that later decision, not a mandate to build a wallet now.
 
-Defer retail tariff engines, micro-unit wallets, reservation ledgers, chargebacks, new billing gateways and per-request billing APIs. Do not add them to A1–A8 or require them for provider-key AI. If charging is approved later, use a BillingProvider adapter and require proper idempotency, reconciliation/refund tests and a reviewed merchant setup.
+Defer retail tariff engines, micro-unit wallets, reservation ledgers, chargebacks, new billing gateways and per-request billing APIs. Do not require them for accounting or provider-key AI. If charging is approved later, use a BillingProvider adapter and require proper idempotency, reconciliation/refund tests and a reviewed merchant setup.
 
 Preserve existing purchase/action records and honor legacy commercial obligations through an explicit fulfillment/refund path before retiring a legacy paid endpoint. They must not become an accounting-migration prerequisite or be silently converted, duplicated or discarded.
 

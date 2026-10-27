@@ -2,13 +2,15 @@
 
 ## Supported reference deployment
 
-Provide one-command Docker Compose for web, API, worker and PostgreSQL. Default documents live in a shared local volume through ObjectStore. No Piatra account, service secret, S3 service or Garage container is required to operate the books.
+Provide one-command Docker Compose for web, API and worker, sharing the local SQLite/document volume. Turso can replace the local database through libSQL configuration. Default documents live in a shared local volume through ObjectStore. No Piatra account, service secret, S3 service or Garage container is required to operate the books.
 
 Local storage uses atomic durable writes, safe company/content addressing and integrity checks. Back up the database and document manifest/bytes coherently; a backup of one without the other is incomplete. Offer an S3/Garage adapter for hosted or multi-node operation.
 
 Self-hostable means the documented reference topology passes clean-room install, upgrade, export and restore tests. It does not promise commercial support for every operating system, storage driver, Kubernetes variant or custom fork. Publish the tested matrix and community-support boundary.
 
 Hosted identity uses the Piatra adapter; the reference self-host identity is standalone Better Auth. Both use product-local permissions. Regular Piatra/OpenAI/OpenRouter keys call those services directly when AI is enabled, as defined in [AI.md](AI.md).
+
+The current MCP endpoint shares the existing API and uses scoped accounting credentials. Configure the public URL consistently across web and API. If a reverse proxy rewrites Host, list its exact internal hostname in `ACCOUNTING_MCP_PROXY_HOSTS`; reference Compose sets `api`. Local installs admit loopback hostnames. Preserve Host/Origin checks and never trust arbitrary forwarded headers. [AGENT_API.md](AGENT_API.md) owns the connection procedure and unfinished browser OAuth boundary.
 
 ## Funded free hosting
 
