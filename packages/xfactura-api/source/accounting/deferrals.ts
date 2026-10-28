@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, exists, gt, lte, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { Commands, type Actor } from './commands';
 import {
@@ -8,6 +8,7 @@ import {
   deferralCreditInput,
   deferralDiscountInput,
   deferralScopeReductionInput,
+  deferralSupplementInput,
   idSchema,
   requireCondition,
 } from './domain';
@@ -15,6 +16,7 @@ import {
   deferralPostings,
   deferralReleases,
   deferralCancellations,
+  deferralSupplements,
   invoiceDocuments,
   invoicePostings,
   journals,
@@ -31,6 +33,7 @@ import { financialYearForDate } from './foundation';
 import { deferralControls } from './deferral-controls';
 import { interpretDeferralCredit } from './deferral-credits';
 import { interpretDeferralDiscount } from './deferral-discounts';
+import { attachDeferralSupplement } from './deferral-supplements';
 
 export const deferralReadInput = z.object({ id: idSchema, date: dateSchema }).strict();
 export const deferralPageInput = z
@@ -40,6 +43,7 @@ export const deferralPageInput = z
     onlyOpen: z.boolean().default(true),
     limit: z.number().int().min(1).max(100).default(25),
     cursor: idSchema.optional(),
+    parentDeferralId: idSchema.optional(),
   })
   .strict();
 export const deferralReconcileInput = z
@@ -48,6 +52,60 @@ export const deferralReconcileInput = z
 
 export class Deferrals {
   constructor(private readonly runner: Commands) {}
+  proposeSupplement(
+    actor: Actor,
+    key: string,
+    input: unknown,
+    revision?: { id: string; version: number },
+  ) {
+    const body = deferralSupplementInput.parse(input);
+    return this.runner.run(
+      actor,
+      key,
+      revision ? 'deferrals.reviseSupplement' : 'deferrals.proposeSupplement',
+      { body, revision: revision ?? null },
+      'write',
+      async (tx) => {
+        const [posted] = await tx
+          .select()
+          .from(invoicePostings)
+          .where(
+            and(
+              eq(invoicePostings.companyId, actor.companyId),
+              eq(invoicePostings.invoiceId, body.invoiceId),
+            ),
+          );
+        requireCondition(
+          !posted,
+          'INVOICE_ALREADY_POSTED',
+          'Factura este deja contabilizată.',
+          409,
+        );
+        const { parentDeferralId, changeBasis, ...invoiceInput } = body;
+        const interpreted = await interpretDeferralInvoice(tx, actor, invoiceInput);
+        const result = await attachDeferralSupplement(tx, actor, interpreted, {
+          parentDeferralId,
+          changeBasis,
+        });
+        await checkDeferralHorizon(tx, actor, result);
+        return retainGeneralProposal(
+          tx,
+          actor,
+          generalBody({
+            financialYearId: body.financialYearId,
+            evidenceId: result.invoice.evidenceId,
+            date: body.recognitionDate,
+            purpose: result.invoice.direction,
+            description: `Servicii suplimentare · ${result.invoice.body.number}`,
+            sourceReference: `invoice:${result.invoice.id}`,
+            lines: result.lines,
+            invoice: result.treatment,
+          }),
+          revision,
+        );
+      },
+    );
+  }
   proposeScopeReduction(
     actor: Actor,
     key: string,
@@ -323,6 +381,20 @@ export class Deferrals {
               lte(journals.date, body.date),
               body.direction ? eq(invoiceDocuments.direction, body.direction) : undefined,
               body.cursor ? gt(deferralPostings.deferralId, body.cursor) : undefined,
+              body.parentDeferralId
+                ? exists(
+                    tx
+                      .select({ id: deferralSupplements.deferralId })
+                      .from(deferralSupplements)
+                      .where(
+                        and(
+                          eq(deferralSupplements.companyId, actor.companyId),
+                          eq(deferralSupplements.deferralId, deferralPostings.deferralId),
+                          eq(deferralSupplements.parentDeferralId, body.parentDeferralId),
+                        ),
+                      ),
+                  )
+                : undefined,
               body.onlyOpen
                 ? sql`cast(replace(json_extract(${proposals.body}, '$.invoice.deferral.amount'),'.','') as integer)>(${used})+(${cancelled})`
                 : undefined,

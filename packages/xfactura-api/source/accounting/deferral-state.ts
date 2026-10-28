@@ -243,6 +243,7 @@ export function deferralView(state: DeferralState, date: string) {
     controlAccount: state.invoice.direction === 'purchase' ? ('471' as const) : ('472' as const),
     serviceFrom: state.treatment.serviceFrom,
     serviceTo: lastReschedule?.body.serviceTo ?? state.treatment.serviceTo,
+    ...(state.treatment.supplement ? { supplement: state.treatment.supplement } : {}),
     ...(state.treatment.schemaVersion === 2
       ? {
           allocation: {

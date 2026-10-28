@@ -147,6 +147,18 @@ export const capabilityPolicy = {
     effect: 'prepare',
     approval: 'none',
   },
+  'deferrals.proposeSupplement': {
+    permission: 'write',
+    agent: true,
+    effect: 'prepare',
+    approval: 'none',
+  },
+  'deferrals.reviseSupplement': {
+    permission: 'write',
+    agent: true,
+    effect: 'prepare',
+    approval: 'none',
+  },
   'deferrals.proposeCreditNote': {
     permission: 'write',
     agent: true,

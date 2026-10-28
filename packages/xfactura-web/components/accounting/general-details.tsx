@@ -37,6 +37,7 @@ export default function GeneralDetails({
     scopeReduction = cancellation?.schemaVersion === 2 ? cancellation : undefined,
     discount = invoice?.deferralDiscount,
     deferral = invoice?.deferral,
+    supplement = deferral?.supplement,
     service = body.accrual ?? body.unbilledSale,
     matchedServices = invoice?.accrualMatch?.allocations ?? invoice?.unbilledSaleMatch?.allocations;
   if (body.advancePayment || body.advanceRefund)
@@ -335,15 +336,17 @@ export default function GeneralDetails({
           {invoice.treatmentEvidenceId !== body.evidenceId ? (
             <div>
               <dt>
-                {deferral || invoice.advance
-                  ? 'Contract'
-                  : discount
-                    ? 'Acord de reducere'
-                    : cancellation
-                      ? 'Acord de anulare'
-                      : invoice.accrualMatch
-                        ? 'Document de primire'
-                        : 'Document pentru tratament'}
+                {supplement
+                  ? 'Acord suplimentar'
+                  : deferral || invoice.advance
+                    ? 'Contract'
+                    : discount
+                      ? 'Acord de reducere'
+                      : cancellation
+                        ? 'Acord de anulare'
+                        : invoice.accrualMatch
+                          ? 'Document de primire'
+                          : 'Document pentru tratament'}
               </dt>
               <dd>
                 <a href={`${path}/evidence/${invoice.treatmentEvidenceId}`} download>
@@ -354,6 +357,22 @@ export default function GeneralDetails({
           ) : null}
           {deferral ? (
             <>
+              {supplement ? (
+                <div>
+                  <dt>Factura contractului</dt>
+                  <dd>
+                    <button
+                      className="acc-secondary"
+                      onClick={() =>
+                        showJournal(supplement.parentJournalId, supplement.parentFinancialYearId)
+                      }
+                    >
+                      {state.invoiceLabels[supplement.parentInvoiceId]?.number ??
+                        'Factura contractului'}
+                    </button>
+                  </dd>
+                </div>
+              ) : null}
               <div>
                 <dt>
                   {deferral.schemaVersion === 2 ? 'Perioada serviciilor' : 'Perioada abonamentului'}

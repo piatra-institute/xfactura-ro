@@ -127,8 +127,12 @@ export async function interpretDeferralCredit(
         ...(state.treatment.method === 'actual_calendar_days'
           ? actualDaySchedule(
               remainingAmount,
-              'serviceFrom' in first ? first.serviceFrom : first.month,
-              'serviceTo' in last ? last.serviceTo : last.date,
+              'serviceFrom' in first && typeof first.serviceFrom === 'string'
+                ? first.serviceFrom
+                : first.month,
+              'serviceTo' in last && typeof last.serviceTo === 'string'
+                ? last.serviceTo
+                : last.date,
             ).schedule
           : allocationSchedule(remainingAmount, first.month, last.date)),
       ];

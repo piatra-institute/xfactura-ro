@@ -11,6 +11,7 @@ import {
   accrualAdjustmentSchema,
   unbilledSaleAdjustmentSchema,
   deferralRescheduleEffect,
+  deferralSupplementSchema,
 } from './domain';
 import { monthSchema } from './reviews';
 import { invoiceDocumentSchema } from './invoice-document';
@@ -292,6 +293,7 @@ export const deferralPositionOutput = z.object({
   controlAccount: z.enum(['471', '472']),
   serviceFrom: dateSchema,
   serviceTo: dateSchema,
+  supplement: deferralSupplementSchema.optional(),
   reschedule: z
     .object({
       id: idSchema,

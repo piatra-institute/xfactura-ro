@@ -126,6 +126,7 @@ import {
   deferralCreditInput,
   deferralDiscountInput,
   deferralScopeReductionInput,
+  deferralSupplementInput,
   deferralRescheduleInput,
   idSchema,
   inviteSchema,
@@ -469,6 +470,21 @@ export class Capabilities {
         proposalOutput,
         (actor, key, body) => service.deferrals.proposeInvoice(actor, key, body),
       ),
+      'deferrals.proposeSupplement': define(
+        'Prepare a separately invoiced addition of future services linked to a posted contract invoice. Retain a separate agreement, the same parties and service account, and additional_future_services. The new invoice owns its VAT tax point, position and equal-month or actual-day schedule; original amounts stay unchanged. Exact human approval is required before ledger.post.',
+        deferralSupplementInput,
+        proposalOutput,
+        (actor, key, body) => service.deferrals.proposeSupplement(actor, key, body),
+      ),
+      'deferrals.reviseSupplement': define(
+        'Revise an unposted supplemental service invoice or its parent link and invalidate its earlier approval. Obtain fresh human approval for the new exact version.',
+        deferralSupplementInput
+          .safeExtend({ id: idSchema, version: z.number().int().positive() })
+          .strict(),
+        proposalOutput,
+        (actor, key, { id, version, ...body }) =>
+          service.deferrals.proposeSupplement(actor, key, body, { id, version }),
+      ),
       'deferrals.proposeCreditNote': define(
         'Prepare an evidenced current-period cancellation of whole future subscription months using a linked credit note. Retain earned amounts; reduce 471/472, invoice position and original-rate VAT. Requires exact human approval before ledger.post.',
         deferralCreditInput,
@@ -547,13 +563,13 @@ export class Capabilities {
           service.deferrals.proposeRelease(actor, key, body, { id, version }),
       ),
       'deferrals.get': define(
-        'Read one subscription schedule, dated allocated/remaining amounts and due month references.',
+        'Read one service schedule, dated allocated/remaining amounts, due months and any supplemental-invoice parent link.',
         deferralReadInput,
         deferralPositionOutput,
         (actor, _, body) => service.deferrals.get(actor, body),
       ),
       'deferrals.list': define(
-        'Read bounded purchase/sale deferral positions, including carried prior-year schedules.',
+        'Read bounded purchase/sale service positions, optionally filtering open positions or direct supplements by parentDeferralId.',
         deferralPageInput,
         pageOutput(deferralPositionOutput),
         (actor, _, body) => service.deferrals.list(actor, body),

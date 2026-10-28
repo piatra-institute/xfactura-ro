@@ -1090,6 +1090,29 @@ export const deferralPostings = sqliteTable(
     }),
   ],
 );
+export const deferralSupplements = sqliteTable(
+  'acc_deferral_supplements',
+  {
+    companyId: companyId(),
+    deferralId: text('deferral_id').notNull(),
+    parentDeferralId: text('parent_deferral_id').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.deferralId] }),
+    index('deferral_supplement_parent').on(t.companyId, t.parentDeferralId, t.deferralId),
+    foreignKey({
+      columns: [t.companyId, t.deferralId],
+      foreignColumns: [deferralPostings.companyId, deferralPostings.deferralId],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.parentDeferralId],
+      foreignColumns: [deferralPostings.companyId, deferralPostings.deferralId],
+    }),
+    check('deferral_supplement_distinct', sql`${t.deferralId}<>${t.parentDeferralId}`),
+  ],
+);
 export const deferralReleases = sqliteTable(
   'acc_deferral_releases',
   {

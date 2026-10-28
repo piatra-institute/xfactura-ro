@@ -40,6 +40,7 @@ Discovery reports only implemented capabilities available to the current princip
 | `unbilledSales.proposeAdjustment`, `unbilledSales.reviseAdjustment`, `unbilledSales.adjustments` | Exact new-information changes/releases of an explicitly estimated unbilled remainder; retain originals, matches and signed history. |
 | `unbilledSales.get`, `unbilledSales.list`, `unbilledSales.reconcile` | Dated unbilled-service receivables and reconciliation to the selected year's 418 balance. |
 | `deferrals.proposeInvoice`, `deferrals.reviseInvoice` | Contract-backed 471/472 invoices with equal-month or actual-day allocations, including partial first/last months; separate invoice VAT. |
+| `deferrals.proposeSupplement`, `deferrals.reviseSupplement` | Separately invoiced additional future services, with an immutable parent link and independent amount, schedule, VAT and invoice position. |
 | `deferrals.proposeRelease`, `deferrals.reviseRelease` | Month-end expense/revenue allocations; exact human approval and `ledger.post`, without repeated VAT. |
 | `deferrals.proposeCreditNote`, `deferrals.reviseCreditNote` | A linked credit cancels whole future subscription months, preserving earned amounts and the original tax treatment. |
 | `deferrals.proposeScopeReduction`, `deferrals.reviseScopeReduction` | A linked credit cancels part of future service scope; preserve earned amounts, dates and method, and reallocate the reduced positive future value. |
@@ -113,6 +114,18 @@ For the 100.00 daily example, after January 27.11 an amendment effective 1 Febru
 
 `STALE_APPROVAL` requires a fresh review after any source/release/credit/registration change. `DEFERRAL_ALLOCATION_DUE` requires recognizing already-due benefits; `DEFERRAL_MONTH_ALLOCATED` rejects moving a recognized month. `DEFERRAL_RESCHEDULE_METHOD` requires retaining the original method. `CLOSED_PERIOD`, `DEFERRAL_EVENT_ORDER`, `DEFERRAL_VAT_TRANSITION` and `DEFERRAL_ALREADY_CANCELLED` require a separately supported resolution. Price/scope changes, nonuniform/milestone benefits, annual adjusting events and historical errors are not calendar amendments. Approval and rejection remain human-only, and no tool moves money.
 
+## Supplemental service invoices
+
+1. Identify a posted parent 471/472 invoice. Retain a separate agreement and another original invoice for additional future services. Preserve the parent; the new invoice carries only the additional amount.
+2. Invoke `deferrals.proposeSupplement` with the usual `proposeInvoice` fields plus `{parentDeferralId, changeBasis: "additional_future_services"}`. Choose the new invoice's documented equal-month/actual-day basis, service dates, service account and deduction. Its issue date is its own early-invoice tax point. Parties, direction, RON currency and service account must match the parent; a supplied original-invoice reference must match too.
+3. Inspect the additional invoice's exact value, VAT, benefit schedule, agreement and `deferral.supplement` parent identifiers/hash. Human `books.approve` then scoped `ledger.post` record the invoice and link atomically. `deferrals.reviseSupplement` adds `id`/`version`, invalidates the earlier approval and requires a fresh decision.
+4. Read the addition through `deferrals.get`. Use `deferrals.list` with `{date, parentDeferralId, onlyOpen, limit, cursor}` for direct posted additions. The optional `supplement` output retains parent deferral/invoice/journal/financial-year IDs and proposal hash. Each returned amount belongs to that invoice; the endpoint does not recursively aggregate contracts.
+5. Prepare and approve releases for every due invoice. Payments may explicitly allocate one bank movement across parent and addition. Existing credits, refunds and calendar reviews apply separately to the selected invoice. The additional invoice's VAT appears once in the working register, while its releases have none.
+
+Example: a 30.00 + 6.30 invoice for 1 February–15 March 2026 retains 43 days and allocates 19.53/10.47. The original 100.00 plan stays unchanged. A later credit of the original does not cancel an already posted addition; a credit of the addition changes only that invoice. Parent releases alone do not invalidate its independent approval. A full parent cancellation effective by the new invoice date blocks an unposted addition.
+
+`DEFERRAL_SUPPLEMENT_ORIGIN` requires matching parent, parties, direction, currency and service account; `DEFERRAL_SUPPLEMENT_EVIDENCE` requires a separately retained new agreement. `DEFERRAL_SUPPLEMENT_DOCUMENT` rejects advances, regularization patterns and conflicting references. `DEFERRAL_SUPPLEMENT_CANCELLED` requires resolving the cancelled parent or documenting a separate new contract. Regime changes, cash VAT, retroactive price corrections, replacements and nonuniform benefits need distinct treatments. Supplemental invoices do not authorize changes to the old billed value or movement of funds.
+
 ## Future-service scope reduction
 
 1. Retain the original 471/472 invoice, a linked CreditNote 381 and a separate new agreement reducing unprovided services. The remaining benefits must be documented as uniform over the same dates. Post due monthly allocations before changing future scope.
@@ -123,7 +136,7 @@ For the 100.00 daily example, after January 27.11 an amendment effective 1 Febru
 
 Example: after January 27.11 in the 59-day 100.00 plan, a 20.00 net credit leaves 52.89, allocated as February 34.44 and March 18.45. VAT 4.20 reverses once at the credit; the subsequent allocations repeat no VAT. Prior timing amendments are respected, including partial final months.
 
-The input is limited to domestic RON, full/no deduction, covered stable VAT rules and a current-period agreement. `DEFERRAL_CREDIT_AMOUNT` rejects a zero/complete/excess scope reduction; `DEFERRAL_CANCELLATION_EVIDENCE` requires separate evidence; `DEFERRAL_ALLOCATION_DUE` requires posting due benefits. Closed months, changed registrations and recognized target months fail closed. One full or partial scope cancellation is supported per source; subsequent scope/timing changes, additional charges, mid-month cutovers, nonuniform benefits and historical/annual corrections need distinct coverage. All approvals remain human-only.
+The input is limited to domestic RON, full/no deduction, covered stable VAT rules and a current-period agreement. `DEFERRAL_CREDIT_AMOUNT` rejects a zero/complete/excess scope reduction; `DEFERRAL_CANCELLATION_EVIDENCE` requires separate evidence; `DEFERRAL_ALLOCATION_DUE` requires posting due benefits. Closed months, changed registrations and recognized target months fail closed. One full or partial scope cancellation is supported per source; subsequent changes to that reduced balance, mid-month cutovers, nonuniform benefits and historical/annual corrections need distinct coverage. Separately invoiced additional services use the supplemental-invoice workflow. All approvals remain human-only.
 
 ## Bank-file workflow
 

@@ -37,6 +37,23 @@ export const deferralInput = z
       (value.method === 'equal_calendar_months' ? 'uniform_subscription' : 'uniform_service'),
     { message: 'Documentați baza corespunzătoare metodei de alocare.', path: ['basis'] },
   );
+export const deferralSupplementInput = deferralInput
+  .safeExtend({
+    parentDeferralId: idSchema,
+    changeBasis: z.literal('additional_future_services'),
+  })
+  .strict();
+export const deferralSupplementSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    changeBasis: z.literal('additional_future_services'),
+    parentDeferralId: idSchema,
+    parentInvoiceId: idSchema,
+    parentJournalId: idSchema,
+    parentFinancialYearId: idSchema,
+    parentProposalHash: z.string().regex(/^[a-f0-9]{64}$/),
+  })
+  .strict();
 export const deferralAllocationSchema = z
   .object({ month: dateSchema, date: dateSchema, amount: moneySchema })
   .strict();
@@ -61,6 +78,7 @@ const monthlyTreatmentSchema = z
     evidenceHash: z.string().regex(/^[a-f0-9]{64}$/),
     amount: moneySchema,
     schedule: z.array(deferralAllocationSchema).min(1).max(60),
+    supplement: deferralSupplementSchema.optional(),
   })
   .strict();
 const dailyTreatmentSchema = z
@@ -76,6 +94,7 @@ const dailyTreatmentSchema = z
     rounding: z.literal('cumulative_floor_bani'),
     serviceDays: z.number().int().min(1).max(1860),
     schedule: z.array(deferralDayAllocationSchema).min(1).max(60),
+    supplement: deferralSupplementSchema.optional(),
   })
   .strict();
 export const deferralTreatmentSchema = z.discriminatedUnion('schemaVersion', [
@@ -141,6 +160,7 @@ export function allocationSchedule(amount: string, from: string, to: string) {
   });
 }
 export type DeferralInput = z.infer<typeof deferralInput>;
+export type DeferralSupplementInput = z.infer<typeof deferralSupplementInput>;
 export type DeferralReleaseInput = z.infer<typeof deferralReleaseInput>;
 
 /** Actual inclusive service days; cumulative floor in bani keeps each period boundary within one ban. */

@@ -88,6 +88,7 @@ test('reviews a subscription schedule and next-year allocation, with a keyboard 
         'deferrals.proposeDiscount',
         'deferrals.proposeReschedule',
         'deferrals.proposeScopeReduction',
+        'deferrals.proposeSupplement',
       ],
       expiresAt: new Date(Date.now() + 3600000).toISOString(),
     });
@@ -618,6 +619,105 @@ test('reviews a subscription schedule and next-year allocation, with a keyboard 
   expect(await invoke('vat.summary', { financialYearId: nextYear.id })).toMatchObject({
     status: 'reconciled',
     totals: { inputTax: '0.70', outputTax: '0.00' },
+  });
+  const additionAgreement = await source(
+    'acord-servicii-suplimentare.txt',
+    'Signed agreement for separately invoiced additional uniform future services, original invoice and recognized services unchanged',
+  );
+  const additionXml = await source(
+    'servicii-suplimentare.xml',
+    invoiceXml({
+      number: 'ZILE-SUPLIMENT',
+      date: '2026-02-01',
+      net: '30.00',
+      tax: '6.30',
+      gross: '36.30',
+    }),
+  );
+  const additionInvoice = await invoke('invoices.import', { evidenceId: additionXml.id });
+  const addition = await invoke(
+    'deferrals.proposeSupplement',
+    {
+      financialYearId: nextYear.id,
+      parentDeferralId: dayRoot.id,
+      changeBasis: 'additional_future_services',
+      invoiceId: additionInvoice.id,
+      recognitionDate: '2026-02-01',
+      evidenceId: additionAgreement.id,
+      evidenceDate: '2026-02-01',
+      taxPointBasis: 'early_invoice',
+      account: '628',
+      deduction: 'full',
+      counterpartyVatCollection: 'no',
+      basis: 'uniform_service',
+      method: 'actual_calendar_days',
+      serviceFrom: '2026-02-01',
+      serviceTo: '2026-03-15',
+      reason:
+        'Servicii viitoare suplimentare, facturate separat și uniforme în perioada noului acord',
+    },
+    grant.token,
+  );
+  await page.reload();
+  const additionCard = page.locator('.acc-review');
+  await expect(additionCard.getByRole('heading')).toHaveText(
+    'Servicii suplimentare · ZILE-SUPLIMENT',
+  );
+  await expect(additionCard).toContainText('Acord suplimentar');
+  await expect(
+    additionCard.getByRole('table', { name: 'Plan de alocare', exact: true }),
+  ).toContainText('19,53');
+  await expect(
+    additionCard.getByRole('table', { name: 'Plan de alocare', exact: true }),
+  ).toContainText('10,47');
+  await page.screenshot({
+    path: info.outputPath(`supplement-${info.project.name}.png`),
+    fullPage: true,
+  });
+  await additionCard.getByRole('button', { name: 'ZILE-2026', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator(`#journal-${daySource.id}`)).toHaveAttribute('open', '');
+  await expect(page.locator(`#journal-${daySource.id}`).locator('summary')).toBeFocused();
+  await page.goto(`/contabilitate?company=${companyId}&financialYearId=${nextYear.id}`);
+  await additionCard.getByRole('button', { name: 'Aprobă această versiune', exact: true }).click();
+  await additionCard.getByRole('button', { name: 'Contabilizează', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('contabilizată');
+  await invoke('ledger.post', { id: addition.id, version: addition.version, hash: addition.hash });
+  for (const month of ['2026-02-01', '2026-03-01'])
+    await post(
+      await invoke(
+        'deferrals.proposeRelease',
+        { financialYearId: nextYear.id, deferralId: addition.id, month },
+        grant.token,
+      ),
+    );
+  expect(await invoke('deferrals.get', { id: dayRoot.id, date: '2026-04-30' })).toMatchObject({
+    amount: '100.00',
+    allocated: '80.00',
+    cancelled: '20.00',
+    remaining: '0.00',
+  });
+  expect(await invoke('deferrals.get', { id: addition.id, date: '2026-04-30' })).toMatchObject({
+    amount: '30.00',
+    allocated: '30.00',
+    remaining: '0.00',
+    supplement: { parentDeferralId: dayRoot.id },
+  });
+  expect(
+    (
+      await invoke('deferrals.list', {
+        date: '2026-04-30',
+        parentDeferralId: dayRoot.id,
+        onlyOpen: false,
+      })
+    ).items,
+  ).toHaveLength(1);
+  expect(
+    await invoke('deferrals.reconcile', { financialYearId: nextYear.id, date: '2026-04-30' }),
+  ).toMatchObject({ status: 'reconciled' });
+  expect(await invoke('vat.summary', { financialYearId: nextYear.id })).toMatchObject({
+    status: 'reconciled',
+    totals: { inputTax: '7.00', outputTax: '0.00' },
   });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   expect(errors).toEqual([]);

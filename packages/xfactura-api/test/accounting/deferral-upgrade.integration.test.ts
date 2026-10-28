@@ -33,6 +33,7 @@ test.each([
   { baseline: 30 },
   { baseline: 34 },
   { baseline: 35 },
+  { baseline: 36 },
 ])(
   'populated 00$baseline subscription books and a pending exact approval survive later migrations',
   async ({ baseline }) => {

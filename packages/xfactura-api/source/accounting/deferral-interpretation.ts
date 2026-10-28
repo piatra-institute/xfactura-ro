@@ -26,6 +26,7 @@ import {
   rescheduleContext,
   type DeferralState,
 } from './deferral-state';
+import { attachDeferralSupplement } from './deferral-supplements';
 
 export async function openMonth(tx: Transaction, companyId: string, date: string) {
   const [period] = await tx
@@ -197,7 +198,10 @@ export async function checkDeferralInvoicePosting(
     'MULTIPLE_ORIGINS',
     'Factura are un singur tratament de recunoaștere.',
   );
-  const expected = await interpretDeferralInvoice(tx, actor, invoiceRequest(body));
+  const interpreted = await interpretDeferralInvoice(tx, actor, invoiceRequest(body));
+  const expected = body.invoice.deferral.supplement
+    ? await attachDeferralSupplement(tx, actor, interpreted, body.invoice.deferral.supplement)
+    : interpreted;
   await checkDeferralHorizon(tx, actor, expected);
   await openMonth(tx, actor.companyId, body.date);
   requireCondition(
@@ -213,7 +217,16 @@ export async function checkDeferralInvoicePosting(
   return true;
 }
 export async function checkDeferralSource(tx: Transaction, actor: Actor, state: DeferralState) {
-  const expected = await interpretDeferralInvoice(tx, actor, invoiceRequest(state.body));
+  const interpreted = await interpretDeferralInvoice(tx, actor, invoiceRequest(state.body));
+  const expected = state.treatment.supplement
+    ? await attachDeferralSupplement(
+        tx,
+        actor,
+        interpreted,
+        state.treatment.supplement,
+        state.record,
+      )
+    : interpreted;
   requireCondition(
     canonical(expected.treatment) === canonical(state.interpretation) &&
       canonical(expected.lines) === canonical(state.body.lines),
