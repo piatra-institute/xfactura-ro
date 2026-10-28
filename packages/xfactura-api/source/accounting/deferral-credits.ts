@@ -14,7 +14,7 @@ import {
 } from './domain';
 import { interpretCreditNote } from './invoice-credits';
 import { checkDeferralSource } from './deferral-interpretation';
-import { loadDeferrals } from './deferral-state';
+import { deferralSchedule, loadDeferrals, rescheduleContext } from './deferral-state';
 import { evidence } from './schema';
 
 /** New cancellation of unprovided, complete future months; earned amounts stay intact. */
@@ -27,6 +27,12 @@ export async function interpretDeferralCredit(
   const [state] = await loadDeferrals(tx, actor.companyId, [result.original.proposal.id]);
   requireCondition(state, 'NOT_FOUND', 'Abonamentul original nu este disponibil.', 404);
   await checkDeferralSource(tx, actor, state);
+  requireCondition(
+    state.reschedules.every((row) => row.date <= input.recognitionDate),
+    'DEFERRAL_EVENT_ORDER',
+    'Data anulării nu poate preceda modificările planului.',
+    409,
+  );
   requireCondition(
     result.original.credits.every((row) => row.date <= input.recognitionDate),
     'DEFERRAL_EVENT_ORDER',
@@ -43,7 +49,7 @@ export async function interpretDeferralCredit(
     input.cancelFrom.endsWith('-01') &&
       input.cancelFrom >= input.recognitionDate &&
       input.cancelFrom >= result.invoice.body.issueDate &&
-      state.treatment.schedule.some((row) => row.month === input.cancelFrom),
+      deferralSchedule(state).some((row) => row.month === input.cancelFrom),
     'DEFERRAL_CANCELLATION_PERIOD',
     'Anularea acoperă numai luni calendaristice viitoare, de la prima zi a lunii.',
   );
@@ -81,7 +87,7 @@ export async function interpretDeferralCredit(
     'DEFERRAL_CANCELLATION_EVIDENCE',
     'Păstrați separat acordul care justifică anularea serviciilor viitoare.',
   );
-  const months = state.treatment.schedule.filter((row) => row.month >= input.cancelFrom),
+  const months = deferralSchedule(state).filter((row) => row.month >= input.cancelFrom),
     amount = months.reduce((sum, row) => sum + toBani(row.amount), 0n),
     creditAmount =
       state.invoice.direction === 'purchase'
@@ -110,6 +116,7 @@ export async function interpretDeferralCredit(
       priorStateHash: state.hash,
       evidenceHash: source.hash,
       months,
+      ...rescheduleContext(state),
     }),
   });
   return { ...result, treatment, state };

@@ -1,4 +1,4 @@
-import { and, eq, gte, lte } from 'drizzle-orm';
+import { and, eq, gte, lte, sql } from 'drizzle-orm';
 import { Commands, type Actor } from './commands';
 import { canonical, fromBani, requireCondition } from './domain';
 import type { Transaction } from './db';
@@ -8,9 +8,10 @@ import { accrualControls } from './accrual-controls';
 import { unbilledSaleControls } from './unbilled-sale-controls';
 import { deferralControls } from './deferral-controls';
 import { advanceControls } from './advance-controls';
-import { supersededDeferralReleaseIds } from './deferral-state';
+import { supersededDeferralReleaseIds, rescheduleReviewSuperseded } from './deferral-state';
 import {
   allocations,
+  actionReviews,
   companies,
   correctionOutcomes,
   journalLines,
@@ -138,6 +139,25 @@ export class Periods {
     lastDay.setUTCMonth(lastDay.getUTCMonth() + 1);
     lastDay.setUTCDate(0);
     const monthEnd = lastDay.toISOString().slice(0, 10);
+    const pendingSchedules = await tx
+      .select({ id: actionReviews.id })
+      .from(actionReviews)
+      .where(
+        and(
+          eq(actionReviews.companyId, actor.companyId),
+          eq(actionReviews.operation, 'deferrals.reschedule'),
+          sql`${actionReviews.executedAt} is null`,
+          sql`json_extract(${actionReviews.effect},'$.effectiveFrom')<=${monthEnd}`,
+          sql`not (${rescheduleReviewSuperseded(tx)})`,
+        ),
+      )
+      .limit(1);
+    requireCondition(
+      pendingSchedules.length === 0,
+      'DEFERRAL_RESCHEDULE_PENDING',
+      'Revizuiți modificările scadente ale planului de alocare înainte de închiderea lunii.',
+      409,
+    );
     requireCondition(
       monthEnd <= financialYear.to,
       'PERIOD_SCOPE',

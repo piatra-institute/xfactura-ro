@@ -19,7 +19,12 @@ import { evidence, periods } from './schema';
 import { interpretInvoice } from './invoice-postings';
 import { invoiceRule } from './accounting-catalogue';
 import { financialYearForDate, regimesAt } from './foundation';
-import { loadDeferrals, type DeferralState } from './deferral-state';
+import {
+  deferralSchedule,
+  loadDeferrals,
+  rescheduleContext,
+  type DeferralState,
+} from './deferral-state';
 
 export async function openMonth(tx: Transaction, companyId: string, date: string) {
   const [period] = await tx
@@ -179,7 +184,7 @@ export async function interpretDeferralRelease(
 ) {
   const [state] = await loadDeferrals(tx, actor.companyId, [input.deferralId]);
   requireCondition(state, 'NOT_FOUND', 'Alocarea pe perioade nu este disponibilă.', 404);
-  const allocation = state.treatment.schedule.find((row) => row.month === input.month);
+  const allocation = deferralSchedule(state).find((row) => row.month === input.month);
   requireCondition(allocation, 'DEFERRAL_MONTH', 'Luna nu aparține planului de alocare.');
   requireCondition(
     !state.cancellation || input.month < state.cancellation.record.fromMonth,
@@ -246,6 +251,7 @@ export async function interpretDeferralRelease(
       ]),
     ],
     ...(state.cancellation ? { cancellationJournalId: state.cancellation.record.journalId } : {}),
+    ...rescheduleContext(state),
   });
   const lines: PostingLine[] = [
     {

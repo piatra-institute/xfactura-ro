@@ -86,6 +86,7 @@ test('reviews a subscription schedule and next-year allocation, with a keyboard 
         'deferrals.proposeRelease',
         'deferrals.proposeCreditNote',
         'deferrals.proposeDiscount',
+        'deferrals.proposeReschedule',
       ],
       expiresAt: new Date(Date.now() + 3600000).toISOString(),
     });
@@ -209,6 +210,76 @@ test('reviews a subscription schedule and next-year allocation, with a keyboard 
     version: obsolete.version,
     hash: obsolete.hash,
   });
+  const calendarAgreement = await source(
+    'acord-calendar.txt',
+    'New agreement extends the remaining uniform subscription through April; price and VAT unchanged',
+  );
+  const calendarInput = {
+    financialYearId: nextYear.id,
+    deferralId: root.id,
+    date: '2026-02-01',
+    effectiveFrom: '2026-02-01',
+    serviceTo: '2026-04-30',
+    evidenceId: calendarAgreement.id,
+    evidenceDate: '2026-02-01',
+    method: 'equal_calendar_months',
+    priceUnchanged: true,
+    reason: 'Acord pentru prelungirea serviciilor viitoare până la sfârșitul lunii aprilie',
+  };
+  const calendar = await invoke('deferrals.proposeReschedule', calendarInput, grant.token);
+  await page.reload();
+  const calendarCard = page.locator('[data-review-kind="reschedule"]');
+  await expect(
+    calendarCard.getByRole('table', { name: 'Calendar de alocare' }).locator('tbody tr'),
+  ).toHaveCount(4);
+  await expect(calendarCard).toContainText('22,23');
+  await expect(calendarCard.getByRole('link', { name: 'acord-calendar.txt' })).toHaveAttribute(
+    'href',
+    `${base}/evidence/${calendarAgreement.id}`,
+  );
+  await page.screenshot({
+    path: info.outputPath(`subscription-calendar-${info.project.name}.png`),
+    fullPage: true,
+  });
+  await calendarCard.getByRole('button', { name: 'ABONAMENT-2026', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(original).toHaveAttribute('open', '');
+  await expect(original.locator('summary')).toBeFocused();
+  await page.goto(`/contabilitate?company=${companyId}&financialYearId=${nextYear.id}`);
+  await calendarCard.getByRole('button', { name: 'Aprobă acest plan', exact: true }).click();
+  await calendarCard.getByRole('button', { name: 'Aplică planul', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Calendarul de alocare a fost actualizat');
+  await expect(calendarCard).toHaveCount(0);
+  expect(await invoke('proposals.get', { id: obsolete.id })).toMatchObject({
+    superseded: true,
+    posted: false,
+  });
+  expect(await invoke('deferrals.get', { id: root.id, date: '2026-04-30' })).toMatchObject({
+    remaining: '66.67',
+    serviceTo: '2026-04-30',
+    reschedule: { id: calendar.id, version: 1 },
+  });
+  await page.getByRole('button', { name: 'Registre', exact: true }).click();
+  await page.getByText('Modificări ale calendarelor de alocare', { exact: true }).click();
+  await page.getByText('2026-02-01 · ABONAMENT-2026 · plan 1', { exact: true }).click();
+  await expect(page.getByRole('table', { name: 'Calendar de alocare' })).toContainText('22,23');
+  const declinedProof = await source(
+    'acord-retras.txt',
+    'An alternative extension was withdrawn by both parties before it was accepted',
+  );
+  await invoke(
+    'deferrals.proposeReschedule',
+    { ...calendarInput, serviceTo: '2026-05-31', evidenceId: declinedProof.id },
+    grant.token,
+  );
+  await page.goto(`/contabilitate?company=${companyId}&financialYearId=${nextYear.id}`);
+  await calendarCard.getByRole('button', { name: 'Respinge planul', exact: true }).click();
+  await calendarCard
+    .getByLabel('Motivul respingerii')
+    .fill('Acordul ulterior a fost retras de ambele părți');
+  await calendarCard.getByRole('button', { name: 'Confirmă respingerea', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Planul a fost respins');
+  await expect(calendarCard).toHaveCount(0);
   const discountAgreement = await source(
       'acord-reducere.txt',
       'Separately agreed commercial discount with subscription services and schedule unchanged',
@@ -273,7 +344,7 @@ test('reviews a subscription schedule and next-year allocation, with a keyboard 
   });
   const agreement = await source(
       'acord-anulare.txt',
-      'Written agreement cancels the unprovided February and March 2026 services',
+      'Written agreement cancels the unprovided February through April 2026 services',
     ),
     creditXml = await source(
       'anulare-abonament.xml',
@@ -299,7 +370,7 @@ test('reviews a subscription schedule and next-year allocation, with a keyboard 
       treatmentEvidenceId: agreement.id,
       kind: 'cancellation',
       periodBasis: 'current_period_event',
-      reason: 'Acord scris pentru anularea serviciilor neprestate din februarie și martie',
+      reason: 'Acord scris pentru anularea serviciilor neprestate din februarie până în aprilie',
       cancelFrom: '2026-02-01',
     },
     grant.token,
@@ -308,10 +379,13 @@ test('reviews a subscription schedule and next-year allocation, with a keyboard 
   const cancellationCard = page.locator('.acc-review').filter({ hasText: 'Anulare abonament' }),
     cancelledMonths = cancellationCard.getByRole('table', { name: 'Luni anulate', exact: true }),
     cancellationEffects = cancellationCard.getByRole('table', { name: 'Efect contabil propus' });
-  await expect(cancelledMonths.locator('tbody tr')).toHaveCount(2);
+  await expect(cancelledMonths.locator('tbody tr')).toHaveCount(3);
   await expect(cancelledMonths).toContainText('2026-02');
   await expect(cancelledMonths).toContainText('2026-03');
-  await expect(cancelledMonths).toContainText('33,34');
+  await expect(cancelledMonths).toContainText('22,23');
+  await expect(
+    cancellationCard.getByRole('link', { name: 'Acord · plan 1', exact: true }),
+  ).toHaveAttribute('href', `${base}/evidence/${calendarAgreement.id}`);
   await expect(cancellationCard).toContainText('Sumă deja recunoscută');
   await expect(cancellationCard).toContainText('33,33');
   await expect(cancellationCard).toContainText('66,67');

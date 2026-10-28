@@ -10,7 +10,7 @@ import {
   check,
   index,
 } from 'drizzle-orm/sqlite-core';
-import type { ProposalBody, StoredLine, Role } from './domain';
+import type { ProposalBody, StoredLine, Role, DeferralRescheduleEffect } from './domain';
 import type { InvoiceDocument } from './invoice-document';
 import type { ArchiveMember } from './invoice-archive';
 import type { StoredBankStatement, StoredBankEntry } from './bank-statement-document';
@@ -1120,6 +1120,44 @@ export const deferralCancellations = sqliteTable(
     check('deferral_cancellation_months', sql`${t.fromMonth}<=${t.toMonth}`),
   ],
 );
+export const deferralReschedules = sqliteTable(
+  'acc_deferral_reschedules',
+  {
+    companyId: companyId(),
+    id: text('id').notNull(),
+    deferralId: text('deferral_id').notNull(),
+    sequence: counter('sequence').notNull(),
+    date: text('date').notNull(),
+    evidenceId: text('evidence_id').notNull(),
+    body: text('body', { mode: 'json' }).$type<DeferralRescheduleEffect>().notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.id] }),
+    uniqueIndex('deferral_reschedule_sequence').on(t.companyId, t.deferralId, t.sequence),
+    foreignKey({
+      columns: [t.companyId, t.id],
+      foreignColumns: [actionReviews.companyId, actionReviews.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.deferralId],
+      foreignColumns: [deferralPostings.companyId, deferralPostings.deferralId],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.evidenceId],
+      foreignColumns: [evidence.companyId, evidence.id],
+    }),
+    check(
+      'deferral_reschedule_sequence_valid',
+      sql`typeof(${t.sequence})='integer' and ${t.sequence} between 1 and 1000`,
+    ),
+    check(
+      'deferral_reschedule_body',
+      sql`json_valid(${t.body}) and json_extract(${t.body},'$.kind')='deferrals.reschedule' and json_extract(${t.body},'$.schemaVersion')=1`,
+    ),
+  ],
+);
 export const advancePayments = sqliteTable(
   'acc_advance_payments',
   {
@@ -1329,7 +1367,9 @@ export const actionReviews = sqliteTable(
   {
     id: text('id').notNull(),
     companyId: companyId(),
-    operation: text('operation', { enum: ['bank.match', 'periods.close'] }).notNull(),
+    operation: text('operation', {
+      enum: ['bank.match', 'periods.close', 'deferrals.reschedule'],
+    }).notNull(),
     input: text('input', { mode: 'json' }).$type<unknown>().notNull(),
     effect: text('effect', { mode: 'json' }).$type<unknown>().notNull(),
     hash: text('hash').notNull(),

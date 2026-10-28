@@ -84,7 +84,8 @@
   opacity: 0.55;
 }
 .accounting input,
-.accounting select {
+.accounting select,
+.accounting textarea {
   display: block;
   width: 100%;
   min-height: 43px;
@@ -96,6 +97,11 @@
   font-size: 15px;
   margin-top: 6px;
   caret-color: var(--acc-accent);
+}
+.accounting textarea {
+  min-height: 86px;
+  resize: vertical;
+  font-family: inherit;
 }
 .accounting input::placeholder {
   color: #aaa;

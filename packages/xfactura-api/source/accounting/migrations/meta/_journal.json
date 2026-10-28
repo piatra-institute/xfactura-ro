@@ -218,6 +218,20 @@
       "when": 1793209016725,
       "tag": "0030_subscription_discounts",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1793211578333,
+      "tag": "0031_deferral_reschedules",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1793212020236,
+      "tag": "0032_deferral_reschedule_guards",
+      "breakpoints": true
     }
   ]
 }

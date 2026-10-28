@@ -1,12 +1,13 @@
 import { and, asc, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import { Commands, type Actor } from './commands';
-import { supersededDeferralReleaseIds } from './deferral-state';
+import { rescheduleReviewSuperseded, supersededDeferralReleaseIds } from './deferral-state';
 import {
   correctionBodySchema,
   fromBani,
   idSchema,
   proposalLines,
   requireCondition,
+  deferralRescheduleEffect,
   trialBalance,
 } from './domain';
 import {
@@ -29,6 +30,8 @@ import {
   invoiceArchiveEntries,
   bankStatementSources,
   bankStatementEntries,
+  actionReviews,
+  deferralReschedules,
   periods,
   proposals,
   statements,
@@ -171,6 +174,53 @@ export function overview(runner: Commands, actor: Actor, financialYearId?: strin
             ),
           )
       : [];
+    const scheduleReviews = await tx
+      .select()
+      .from(actionReviews)
+      .where(
+        and(
+          eq(actionReviews.companyId, actor.companyId),
+          eq(actionReviews.operation, 'deferrals.reschedule'),
+          sql`${actionReviews.executedAt} is null`,
+          sql`json_extract(${actionReviews.effect},'$.effectiveFrom')<=${financialYear.to}`,
+          sql`not (${rescheduleReviewSuperseded(tx)})`,
+        ),
+      )
+      .orderBy(asc(actionReviews.createdAt), asc(actionReviews.id));
+    const scheduleHistory = await tx
+      .select()
+      .from(deferralReschedules)
+      .where(
+        and(
+          eq(deferralReschedules.companyId, actor.companyId),
+          gte(deferralReschedules.date, financialYear.from),
+          lte(deferralReschedules.date, financialYear.to),
+        ),
+      )
+      .orderBy(asc(deferralReschedules.date), asc(deferralReschedules.sequence));
+    const scheduleIds = proposed.flatMap(({ body }) => {
+      if (!('schemaVersion' in body) || body.schemaVersion !== 2) return [];
+      const id =
+        body.deferralRelease?.rescheduleId ??
+        body.invoice?.deferralCredit?.rescheduleId ??
+        body.invoice?.deferralDiscount?.rescheduleId;
+      return id ? [id] : [];
+    });
+    const scheduleSources = scheduleIds.length
+      ? await tx
+          .select({
+            id: deferralReschedules.id,
+            evidenceId: deferralReschedules.evidenceId,
+            version: deferralReschedules.sequence,
+          })
+          .from(deferralReschedules)
+          .where(
+            and(
+              eq(deferralReschedules.companyId, actor.companyId),
+              inArray(deferralReschedules.id, [...new Set(scheduleIds)]),
+            ),
+          )
+      : [];
     const positions = await tx
       .select()
       .from(taxPositions)
@@ -228,8 +278,13 @@ export function overview(runner: Commands, actor: Actor, financialYearId?: strin
           )
       : [];
     const invoiceIds = [
-      ...new Set(
-        proposed.flatMap(({ body }) => [
+      ...new Set([
+        ...scheduleReviews.map((row) => deferralRescheduleEffect.parse(row.effect).sourceInvoiceId),
+        ...scheduleHistory.map((row) => row.body.sourceInvoiceId),
+        ...proposed.flatMap(({ body }) => [
+          ...('deferralRelease' in body && body.deferralRelease
+            ? [body.deferralRelease.sourceInvoiceId]
+            : []),
           ...('invoice' in body && body.invoice
             ? [
                 body.invoice.invoiceId,
@@ -242,7 +297,7 @@ export function overview(runner: Commands, actor: Actor, financialYearId?: strin
             ? body.settlement.allocations.map((item) => item.invoiceId)
             : []),
         ]),
-      ),
+      ]),
     ];
     const invoiceLabels = invoiceIds.length
       ? await tx
@@ -303,6 +358,12 @@ export function overview(runner: Commands, actor: Actor, financialYearId?: strin
         ]),
       ),
       role,
+      rescheduleReviews: scheduleReviews.map((row) => ({
+        ...row,
+        effect: deferralRescheduleEffect.parse(row.effect),
+      })),
+      reschedules: scheduleHistory,
+      rescheduleSources: Object.fromEntries(scheduleSources.map((row) => [row.id, row])),
       evidence: sources,
       taxPositions: positions,
       fiscalInterpretations: fiscal,

@@ -159,6 +159,12 @@ export const capabilityPolicy = {
     effect: 'prepare',
     approval: 'none',
   },
+  'deferrals.proposeReschedule': {
+    permission: 'write',
+    agent: true,
+    effect: 'prepare',
+    approval: 'none',
+  },
   'deferrals.reviseDiscount': {
     permission: 'write',
     agent: true,
@@ -265,6 +271,7 @@ export const capabilityPolicy = {
   'reviews.request': { permission: 'write', agent: true, effect: 'prepare', approval: 'none' },
   'reviews.list': { permission: 'read', agent: true, effect: 'read', approval: 'none' },
   'reviews.approve': { permission: 'review', agent: false, effect: 'authorize', approval: 'human' },
+  'reviews.reject': { permission: 'review', agent: false, effect: 'execute', approval: 'human' },
   'reviews.execute': {
     permission: 'review',
     agent: true,

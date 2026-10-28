@@ -9,6 +9,7 @@ import {
   openingSchema,
   purchaseSchema,
   accrualAdjustmentSchema,
+  deferralRescheduleEffect,
 } from './domain';
 import { monthSchema } from './reviews';
 import { invoiceDocumentSchema } from './invoice-document';
@@ -278,6 +279,16 @@ export const deferralPositionOutput = z.object({
   controlAccount: z.enum(['471', '472']),
   serviceFrom: dateSchema,
   serviceTo: dateSchema,
+  reschedule: z
+    .object({
+      id: idSchema,
+      version: z.number().int().positive(),
+      date: dateSchema,
+      effectiveFrom: dateSchema,
+      evidenceId: idSchema,
+      originalServiceTo: dateSchema,
+    })
+    .optional(),
   amount: decimalString,
   allocated: decimalString,
   cancelled: decimalString,
@@ -449,9 +460,10 @@ export const closeEffect = z.object({
 export const reviewOutput = z.object({
   id: idSchema,
   companyId: idSchema,
-  operation: z.enum(['bank.match', 'periods.close']),
+  operation: z.enum(['bank.match', 'periods.close', 'deferrals.reschedule']),
   input: z.json(),
-  effect: z.discriminatedUnion('kind', [matchEffect, closeEffect]),
+  effect: z.discriminatedUnion('kind', [matchEffect, closeEffect, deferralRescheduleEffect]),
+  superseded: z.boolean().optional(),
   hash: hashSchema,
   approvedBy: z.string().nullable(),
   approvedAt: z.string().nullable(),

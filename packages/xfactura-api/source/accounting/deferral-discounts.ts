@@ -12,7 +12,7 @@ import {
 } from './domain';
 import { interpretCreditNote } from './invoice-credits';
 import { checkDeferralSource, openMonth } from './deferral-interpretation';
-import { loadDeferrals } from './deferral-state';
+import { loadDeferrals, rescheduleContext } from './deferral-state';
 import { evidence } from './schema';
 
 /** A post-invoice commercial discount changes price, not the delivered services or their schedule. */
@@ -25,6 +25,12 @@ export async function interpretDeferralDiscount(
   const [state] = await loadDeferrals(tx, actor.companyId, [result.original.proposal.id]);
   requireCondition(state, 'NOT_FOUND', 'Abonamentul original nu este disponibil.', 404);
   await checkDeferralSource(tx, actor, state);
+  requireCondition(
+    state.reschedules.every((row) => row.date <= input.recognitionDate),
+    'DEFERRAL_EVENT_ORDER',
+    'Data reducerii nu poate preceda modificările planului.',
+    409,
+  );
   await openMonth(tx, actor.companyId, input.recognitionDate);
   requireCondition(
     input.recognitionDate >= result.invoice.body.issueDate,
@@ -74,6 +80,7 @@ export async function interpretDeferralDiscount(
       cancellationJournalId: state.cancellation?.record.journalId ?? null,
       evidenceHash: source.hash,
       ruleReference: 'OMFP1802:76(5)',
+      ...rescheduleContext(state),
     }),
   });
   return { ...result, treatment, state };

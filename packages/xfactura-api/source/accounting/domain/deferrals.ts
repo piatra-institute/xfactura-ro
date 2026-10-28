@@ -66,6 +66,8 @@ export const deferralReleaseSchema = z
     ruleHash: z.string().regex(/^[a-f0-9]{64}$/),
     registrationIds: z.array(idSchema).min(1).max(4),
     cancellationJournalId: idSchema.optional(),
+    rescheduleId: idSchema.optional(),
+    rescheduleVersion: z.number().int().positive().optional(),
   })
   .strict();
 
@@ -119,6 +121,8 @@ export const deferralCreditSchema = z
     priorStateHash: z.string().regex(/^[a-f0-9]{64}$/),
     evidenceHash: z.string().regex(/^[a-f0-9]{64}$/),
     months: z.array(deferralAllocationSchema).min(1).max(60),
+    rescheduleId: idSchema.optional(),
+    rescheduleVersion: z.number().int().positive().optional(),
   })
   .strict();
 export type DeferralCreditInput = z.infer<typeof deferralCreditInput>;
@@ -141,6 +145,51 @@ export const deferralDiscountSchema = z
     cancellationJournalId: idSchema.nullable(),
     evidenceHash: z.string().regex(/^[a-f0-9]{64}$/),
     ruleReference: z.literal('OMFP1802:76(5)'),
+    rescheduleId: idSchema.optional(),
+    rescheduleVersion: z.number().int().positive().optional(),
   })
   .strict();
 export type DeferralDiscountInput = z.infer<typeof deferralDiscountInput>;
+
+export const deferralRescheduleInput = z
+  .object({
+    financialYearId: idSchema,
+    deferralId: idSchema,
+    date: dateSchema,
+    effectiveFrom: dateSchema,
+    serviceTo: dateSchema,
+    evidenceId: idSchema,
+    evidenceDate: dateSchema,
+    method: z.literal('equal_calendar_months'),
+    priceUnchanged: z.literal(true),
+    reason: z.string().trim().min(10).max(1000),
+  })
+  .strict();
+export const deferralRescheduleEffect = deferralRescheduleInput
+  .extend({
+    kind: z.literal('deferrals.reschedule'),
+    schemaVersion: z.literal(1),
+    sequence: z.number().int().min(1).max(1000),
+    priorRescheduleId: idSchema.nullable(),
+    sourceInvoiceId: idSchema,
+    sourceJournalId: idSchema,
+    sourceFinancialYearId: idSchema,
+    sourceProposalHash: z.string().regex(/^[a-f0-9]{64}$/),
+    evidenceHash: z.string().regex(/^[a-f0-9]{64}$/),
+    direction: z.enum(['purchase', 'sale']),
+    account: accountCodeSchema,
+    controlAccount: z.enum(['471', '472']),
+    sourceAmount: moneySchema,
+    allocated: moneySchema,
+    amount: moneySchema,
+    priorReleaseCount: z.number().int().nonnegative(),
+    priorCreditCount: z.number().int().nonnegative(),
+    priorCreditHash: z.string().regex(/^[a-f0-9]{64}$/),
+    stateHash: z.string().regex(/^[a-f0-9]{64}$/),
+    registrationIds: z.array(idSchema).min(1).max(128),
+    beforeSchedule: z.array(deferralAllocationSchema).min(1).max(60),
+    afterSchedule: z.array(deferralAllocationSchema).min(1).max(60),
+  })
+  .strict();
+export type DeferralRescheduleInput = z.infer<typeof deferralRescheduleInput>;
+export type DeferralRescheduleEffect = z.infer<typeof deferralRescheduleEffect>;

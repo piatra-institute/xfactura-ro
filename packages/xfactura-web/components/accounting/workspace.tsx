@@ -8,6 +8,7 @@ import { CorrectionForm, OpeningForm, PurchaseForm, StatementForm, type Run } fr
 import CorrectionReview, { CorrectionDetails } from './correction-review';
 import GeneralDetails from './general-details';
 import BankStatementEntries from './bank-statement-entries';
+import RescheduleReview, { RescheduleDetails } from './reschedule-review';
 
 type Props = { companyId: string };
 
@@ -218,7 +219,7 @@ export default function Workspace({ companyId }: Props) {
       </dl>
       <nav className="acc-tabs" aria-label="Secțiuni contabilitate">
         {[
-          ['review', 'De verificat', pending.length],
+          ['review', 'De verificat', pending.length + state.rescheduleReviews.length],
           ['bank', 'Bancă', unreconciled.length],
           ['journal', 'Registre', null],
           ['documents', 'Documente', state.evidence.length],
@@ -246,7 +247,10 @@ export default function Workspace({ companyId }: Props) {
               <p>Verifică documentul, perioada și efectul înainte de aprobare.</p>
             </div>
           </div>
-          {!pending.length ? (
+          {state.rescheduleReviews.map((review) => (
+            <RescheduleReview key={review.id} {...{ state, review, run, busy, showJournal }} />
+          ))}
+          {!pending.length && !state.rescheduleReviews.length ? (
             <p className="acc-empty">
               Nu sunt propuneri în așteptare. Adaugă o factură sau verifică mișcările bancare.
             </p>
@@ -549,6 +553,21 @@ export default function Workspace({ companyId }: Props) {
           </div>
           {!state.balances.length ? (
             <p className="acc-empty">Balanța apare după prima poziție contabilizată.</p>
+          ) : null}
+          {state.reschedules.length ? (
+            <details className="acc-disclosure">
+              <summary>Modificări ale calendarelor de alocare</summary>
+              {state.reschedules.map((row) => (
+                <details className="acc-disclosure" key={row.id}>
+                  <summary>
+                    {row.date} ·{' '}
+                    {state.invoiceLabels[row.body.sourceInvoiceId]?.number ?? 'Abonament'} · plan{' '}
+                    {row.sequence}
+                  </summary>
+                  <RescheduleDetails state={state} effect={row.body} showJournal={showJournal} />
+                </details>
+              ))}
+            </details>
           ) : null}
           <h2 className="acc-spaced">Jurnal contabil</h2>
           {state.journals.map((entry) => (

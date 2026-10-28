@@ -121,6 +121,7 @@ import {
   advanceRefundInput,
   deferralCreditInput,
   deferralDiscountInput,
+  deferralRescheduleInput,
   idSchema,
   inviteSchema,
   matchSchema,
@@ -130,7 +131,12 @@ import {
   reviewSchema,
   statementSchema,
 } from './domain';
-import { actionRequestSchema, actionReviewSchema, monthSchema } from './reviews';
+import {
+  actionRequestSchema,
+  actionReviewSchema,
+  monthSchema,
+  rejectReviewSchema,
+} from './reviews';
 import { agentGrants } from './schema';
 
 export const capabilityDescriptor = z.object({
@@ -469,6 +475,18 @@ export class Capabilities {
         deferralDiscountInput,
         proposalOutput,
         (actor, key, body) => service.deferrals.proposeDiscount(actor, key, body),
+      ),
+      'deferrals.proposeReschedule': define(
+        'Prepare a prospective equal-month subscription schedule from a separate agreement, preserving price, recognized amounts and VAT. Returns an exact action review; human approval and reviews.execute apply it without a journal entry.',
+        deferralRescheduleInput,
+        reviewOutput,
+        (actor, key, body) =>
+          service.reviews.request(
+            actor,
+            key,
+            { operation: 'deferrals.reschedule', input: body },
+            'deferrals.proposeReschedule',
+          ),
       ),
       'deferrals.reviseDiscount': define(
         'Revise an unposted subscription discount and refresh its exact source/credit snapshot for fresh human approval.',
@@ -904,13 +922,13 @@ export class Capabilities {
         (actor, key, body) => service.periods.close(actor, key, body.month),
       ),
       'reviews.request': define(
-        'Prepare a payment match or month close with an exact state-bound effect snapshot.',
+        'Prepare a payment match, month close or subscription calendar with an exact state-bound effect snapshot.',
         actionRequestSchema,
         reviewOutput,
         (actor, key, body) => service.reviews.request(actor, key, body),
       ),
       'reviews.list': define(
-        'Read pending, approved or executed action reviews with exact effects.',
+        'Read pending, approved, executed or superseded action reviews with exact effects.',
         reviewPage,
         pageOutput(reviewOutput),
         (actor, _, body) => service.queries.reviews(actor, body),
@@ -921,8 +939,14 @@ export class Capabilities {
         reviewOutput,
         (actor, key, body) => service.reviews.approve(actor, key, body),
       ),
+      'reviews.reject': define(
+        'Human rejection of an exact subscription schedule review, with a retained reason. The original plan and records remain intact.',
+        rejectReviewSchema,
+        reviewOutput,
+        (actor, key, body) => service.reviews.reject(actor, key, body),
+      ),
       'reviews.execute': define(
-        'Execute a human-approved payment match or month close after rechecking the snapshot.',
+        'Execute a human-approved payment match, month close or subscription calendar after rechecking its exact snapshot.',
         actionReviewSchema,
         reviewOutput,
         (actor, key, body) => service.reviews.execute(actor, key, body),

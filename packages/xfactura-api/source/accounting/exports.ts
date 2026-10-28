@@ -10,6 +10,7 @@ import {
   deferralPostings,
   deferralReleases,
   deferralCancellations,
+  deferralReschedules,
   advancePayments,
   advanceInvoices,
   advanceInvoiceMatches,
@@ -55,6 +56,7 @@ import {
 import type { ObjectStore } from './object-store';
 
 const exportTables = {
+  deferralReschedules,
   bankStatementFiles,
   bankStatementSources,
   bankStatementEntries,

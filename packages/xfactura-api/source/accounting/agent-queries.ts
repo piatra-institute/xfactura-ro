@@ -30,7 +30,7 @@ import { findProposal } from './books';
 import type { Transaction } from './db';
 import { pageInput } from './capability-contracts';
 import type { CapabilityId } from './capability-policy';
-import { deferralReleaseSuperseded } from './deferral-state';
+import { deferralReleaseSuperseded, rescheduleReviewSuperseded } from './deferral-state';
 
 export const datedPage = pageInput
   .extend({ from: dateSchema.optional(), to: dateSchema.optional() })
@@ -45,7 +45,7 @@ export const journalPage = datedPage.safeExtend({
   kind: z.enum(['opening', 'purchase', 'payment', 'correction', 'general']).optional(),
 });
 export const reviewPage = pageInput
-  .extend({ status: z.enum(['pending', 'approved', 'executed']).optional() })
+  .extend({ status: z.enum(['pending', 'approved', 'executed', 'superseded']).optional() })
   .strict();
 
 const proposalApproved = (tx: Transaction) =>
@@ -440,29 +440,37 @@ export class AgentQueries {
     const body = reviewPage.parse(input);
     return this.runner.read(
       actor,
-      async (tx) =>
-        page(
-          await tx
-            .select()
-            .from(actionReviews)
-            .where(
-              and(
-                eq(actionReviews.companyId, actor.companyId),
-                body.cursor ? gt(actionReviews.id, uuidCursor(body.cursor)!) : undefined,
-                body.status === 'pending'
-                  ? sql`${actionReviews.approvedAt} is null`
-                  : body.status === 'approved'
-                    ? sql`${actionReviews.approvedAt} is not null and ${actionReviews.executedAt} is null`
-                    : body.status === 'executed'
-                      ? sql`${actionReviews.executedAt} is not null`
+      async (tx) => {
+        const superseded = rescheduleReviewSuperseded(tx);
+        const rows = await tx
+          .select({
+            ...getTableColumns(actionReviews),
+            superseded: sql<boolean>`${superseded}`.mapWith(Boolean),
+          })
+          .from(actionReviews)
+          .where(
+            and(
+              eq(actionReviews.companyId, actor.companyId),
+              body.cursor ? gt(actionReviews.id, uuidCursor(body.cursor)!) : undefined,
+              body.status === 'pending'
+                ? sql`${actionReviews.approvedAt} is null and ${actionReviews.executedAt} is null and not (${superseded})`
+                : body.status === 'approved'
+                  ? sql`${actionReviews.approvedAt} is not null and ${actionReviews.executedAt} is null and not (${superseded})`
+                  : body.status === 'executed'
+                    ? sql`${actionReviews.executedAt} is not null`
+                    : body.status === 'superseded'
+                      ? superseded
                       : undefined,
-              ),
-            )
-            .orderBy(asc(actionReviews.id))
-            .limit(body.limit + 1),
+            ),
+          )
+          .orderBy(asc(actionReviews.id))
+          .limit(body.limit + 1);
+        return page(
+          rows.map(({ superseded, ...row }) => (superseded ? { ...row, superseded: true } : row)),
           body.limit,
           (row) => row.id,
-        ),
+        );
+      },
       'reviews.list',
     );
   }

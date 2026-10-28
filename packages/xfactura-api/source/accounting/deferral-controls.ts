@@ -5,6 +5,7 @@ import {
   deferralPostings,
   deferralReleases,
   deferralCancellations,
+  deferralReschedules,
   journalLines,
   journals,
   proposals,
@@ -77,6 +78,14 @@ export async function deferralControls(
     )
     .where(and(eq(deferralCancellations.companyId, companyId), lte(journals.date, date)));
   const byDeferral = new Map(cancellations.map(({ record }) => [record.deferralId, record]));
+  const reschedules = await tx
+    .select()
+    .from(deferralReschedules)
+    .where(and(eq(deferralReschedules.companyId, companyId), lte(deferralReschedules.date, date)));
+  const schedules = new Map<string, typeof deferralReschedules.$inferSelect>();
+  for (const row of reschedules)
+    if (!schedules.has(row.deferralId) || schedules.get(row.deferralId)!.sequence < row.sequence)
+      schedules.set(row.deferralId, row);
   let prepaid = 0n,
     deferredRevenue = 0n,
     dueCount = 0;
@@ -96,7 +105,7 @@ export async function deferralControls(
       (cancellation?.amountBani ?? 0n);
     if (invoice.direction === 'purchase') prepaid += remaining;
     else deferredRevenue += remaining;
-    dueCount += plan.schedule.filter(
+    dueCount += (schedules.get(root.record.deferralId)?.body.afterSchedule ?? plan.schedule).filter(
       (row) =>
         row.date <= date &&
         row.amount !== '0.00' &&

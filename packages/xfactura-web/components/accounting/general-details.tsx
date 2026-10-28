@@ -5,6 +5,20 @@ import { formatMoney } from './api';
 import { AdvancePaymentDetails, InvoiceAdvanceDetails } from './advance-details';
 import InvoiceSources from './invoice-sources';
 
+function PlanSource({ state, path, id }: { state: Overview; path: string; id?: string }) {
+  const plan = id ? state.rescheduleSources[id] : null;
+  return plan ? (
+    <div>
+      <dt>Calendar aplicat</dt>
+      <dd>
+        <a href={`${path}/evidence/${plan.evidenceId}`} download>
+          Acord · plan {plan.version}
+        </a>
+      </dd>
+    </div>
+  ) : null;
+}
+
 export default function GeneralDetails({
   body,
   state,
@@ -46,6 +60,7 @@ export default function GeneralDetails({
           <dt>Luna alocată</dt>
           <dd>{allocation.month.slice(0, 7)}</dd>
         </div>
+        <PlanSource state={state} path={path} id={allocation.rescheduleId} />
         <div>
           <dt>
             {allocation.direction === 'purchase' ? 'Cheltuială recunoscută' : 'Venit recunoscut'}
@@ -224,6 +239,11 @@ export default function GeneralDetails({
               </div>
             </>
           ) : null}
+          <PlanSource
+            state={state}
+            path={path}
+            id={discount?.rescheduleId ?? cancellation?.rescheduleId}
+          />
           {cancellation ? (
             <>
               <div>
