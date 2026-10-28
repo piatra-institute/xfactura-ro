@@ -20,6 +20,7 @@ export default function GeneralDetails({
     settlement = body.settlement,
     credit = invoice?.credit,
     cancellation = invoice?.deferralCredit,
+    discount = invoice?.deferralDiscount,
     service = body.accrual ?? body.unbilledSale,
     matchedServices = invoice?.accrualMatch?.allocations ?? invoice?.unbilledSaleMatch?.allocations;
   if (body.advancePayment || body.advanceRefund)
@@ -211,6 +212,18 @@ export default function GeneralDetails({
               </div>
             </>
           ) : null}
+          {discount ? (
+            <>
+              <div>
+                <dt>Reducere comercială</dt>
+                <dd>{formatMoney(discount.amount)}</dd>
+              </div>
+              <div>
+                <dt>Servicii și calendar</dt>
+                <dd>Neschimbate</dd>
+              </div>
+            </>
+          ) : null}
           {cancellation ? (
             <>
               <div>
@@ -275,11 +288,13 @@ export default function GeneralDetails({
               <dt>
                 {invoice.deferral || invoice.advance
                   ? 'Contract'
-                  : cancellation
-                    ? 'Acord de anulare'
-                    : invoice.accrualMatch
-                      ? 'Document de primire'
-                      : 'Document pentru tratament'}
+                  : discount
+                    ? 'Acord de reducere'
+                    : cancellation
+                      ? 'Acord de anulare'
+                      : invoice.accrualMatch
+                        ? 'Document de primire'
+                        : 'Document pentru tratament'}
               </dt>
               <dd>
                 <a href={`${path}/evidence/${invoice.treatmentEvidenceId}`} download>

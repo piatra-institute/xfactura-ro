@@ -122,3 +122,25 @@ export const deferralCreditSchema = z
   })
   .strict();
 export type DeferralCreditInput = z.infer<typeof deferralCreditInput>;
+
+export const deferralDiscountInput = creditNoteInput
+  .extend({
+    kind: z.literal('commercial_discount'),
+    servicesUnchanged: z.literal(true),
+  })
+  .strict();
+export const deferralDiscountSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    deferralId: idSchema,
+    servicesUnchanged: z.literal(true),
+    account: z.enum(['609', '709']),
+    amount: moneySchema,
+    controlAccount: z.enum(['471', '472']),
+    sourceAmount: moneySchema,
+    cancellationJournalId: idSchema.nullable(),
+    evidenceHash: z.string().regex(/^[a-f0-9]{64}$/),
+    ruleReference: z.literal('OMFP1802:76(5)'),
+  })
+  .strict();
+export type DeferralDiscountInput = z.infer<typeof deferralDiscountInput>;

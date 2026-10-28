@@ -21,7 +21,7 @@ import { invoiceRule } from './accounting-catalogue';
 import { financialYearForDate, regimesAt } from './foundation';
 import { loadDeferrals, type DeferralState } from './deferral-state';
 
-async function openMonth(tx: Transaction, companyId: string, date: string) {
+export async function openMonth(tx: Transaction, companyId: string, date: string) {
   const [period] = await tx
     .select({ closedAt: periods.closedAt })
     .from(periods)

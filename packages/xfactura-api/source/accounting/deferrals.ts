@@ -6,6 +6,7 @@ import {
   deferralInput,
   deferralReleaseInput,
   deferralCreditInput,
+  deferralDiscountInput,
   idSchema,
   requireCondition,
 } from './domain';
@@ -28,6 +29,7 @@ import { deferralView, loadDeferrals } from './deferral-state';
 import { financialYearForDate } from './foundation';
 import { deferralControls } from './deferral-controls';
 import { interpretDeferralCredit } from './deferral-credits';
+import { interpretDeferralDiscount } from './deferral-discounts';
 
 export const deferralReadInput = z.object({ id: idSchema, date: dateSchema }).strict();
 export const deferralPageInput = z
@@ -45,6 +47,39 @@ export const deferralReconcileInput = z
 
 export class Deferrals {
   constructor(private readonly runner: Commands) {}
+  proposeDiscount(
+    actor: Actor,
+    key: string,
+    input: unknown,
+    revision?: { id: string; version: number },
+  ) {
+    const body = deferralDiscountInput.parse(input);
+    return this.runner.run(
+      actor,
+      key,
+      revision ? 'deferrals.reviseDiscount' : 'deferrals.proposeDiscount',
+      { body, revision: revision ?? null },
+      'write',
+      async (tx) => {
+        const result = await interpretDeferralDiscount(tx, actor, body);
+        return retainGeneralProposal(
+          tx,
+          actor,
+          generalBody({
+            financialYearId: body.financialYearId,
+            evidenceId: result.invoice.evidenceId,
+            date: body.recognitionDate,
+            purpose: result.invoice.direction,
+            description: `Reducere comercială abonament · ${result.invoice.body.number}`,
+            sourceReference: `invoice:${result.invoice.id}`,
+            lines: result.lines,
+            invoice: result.treatment,
+          }),
+          revision,
+        );
+      },
+    );
+  }
   proposeCreditNote(
     actor: Actor,
     key: string,

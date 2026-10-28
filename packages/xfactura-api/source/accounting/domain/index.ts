@@ -19,7 +19,12 @@ import {
 export * from './accruals';
 import { unbilledSaleMatchSchema, unbilledSaleTreatmentSchema } from './unbilled-sales';
 export * from './unbilled-sales';
-import { deferralTreatmentSchema, deferralReleaseSchema, deferralCreditSchema } from './deferrals';
+import {
+  deferralTreatmentSchema,
+  deferralReleaseSchema,
+  deferralCreditSchema,
+  deferralDiscountSchema,
+} from './deferrals';
 export * from './deferrals';
 import {
   advancePaymentSchema,
@@ -153,6 +158,7 @@ export const invoiceTreatmentSchema = z
     unbilledSaleMatch: unbilledSaleMatchSchema.optional(),
     deferral: deferralTreatmentSchema.optional(),
     deferralCredit: deferralCreditSchema.optional(),
+    deferralDiscount: deferralDiscountSchema.optional(),
     advance: advanceInvoiceSchema.optional(),
     advanceFinal: advanceFinalSchema.optional(),
     advanceCredit: advanceCreditSchema.optional(),

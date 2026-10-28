@@ -120,6 +120,7 @@ import {
   advanceCreditInput,
   advanceRefundInput,
   deferralCreditInput,
+  deferralDiscountInput,
   idSchema,
   inviteSchema,
   matchSchema,
@@ -462,6 +463,21 @@ export class Capabilities {
         deferralCreditInput,
         proposalOutput,
         (actor, key, body) => service.deferrals.proposeCreditNote(actor, key, body),
+      ),
+      'deferrals.proposeDiscount': define(
+        'Prepare a post-invoice commercial subscription discount in 609/709 with separate agreement and unchanged services. Preserve the original 471/472 allocation schedule; exact human approval remains required.',
+        deferralDiscountInput,
+        proposalOutput,
+        (actor, key, body) => service.deferrals.proposeDiscount(actor, key, body),
+      ),
+      'deferrals.reviseDiscount': define(
+        'Revise an unposted subscription discount and refresh its exact source/credit snapshot for fresh human approval.',
+        deferralDiscountInput
+          .extend({ id: idSchema, version: z.number().int().positive() })
+          .strict(),
+        proposalOutput,
+        (actor, key, { id, version, ...body }) =>
+          service.deferrals.proposeDiscount(actor, key, body, { id, version }),
       ),
       'deferrals.reviseCreditNote': define(
         'Refresh an unposted subscription cancellation after allocations invalidate its snapshot; obtain new human approval.',

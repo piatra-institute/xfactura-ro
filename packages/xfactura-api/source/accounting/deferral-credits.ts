@@ -28,6 +28,12 @@ export async function interpretDeferralCredit(
   requireCondition(state, 'NOT_FOUND', 'Abonamentul original nu este disponibil.', 404);
   await checkDeferralSource(tx, actor, state);
   requireCondition(
+    result.original.credits.every((row) => row.date <= input.recognitionDate),
+    'DEFERRAL_EVENT_ORDER',
+    'Data anulării nu poate preceda corecțiile deja contabilizate.',
+    409,
+  );
+  requireCondition(
     !state.cancellation,
     'DEFERRAL_ALREADY_CANCELLED',
     'Abonamentul are deja o anulare. O altă modificare necesită un tratament separat.',
@@ -115,7 +121,12 @@ export async function checkDeferralCreditPosting(tx: Transaction, actor: Actor, 
     credit = invoice?.credit;
   if (!cancellation) return false;
   requireCondition(
-    invoice && credit && !invoice.deferral && !invoice.accrualMatch && !invoice.unbilledSaleMatch,
+    invoice &&
+      credit &&
+      !invoice.deferral &&
+      !invoice.deferralDiscount &&
+      !invoice.accrualMatch &&
+      !invoice.unbilledSaleMatch,
     'MULTIPLE_ORIGINS',
     'Corecția identifică un singur abonament original.',
   );

@@ -130,9 +130,29 @@ export default function Workspace({ companyId }: Props) {
       .reduce((sum, row) => sum.plus(row.balance), new Amount(0))
       .toFixed(2);
   const payable = new Amount(balance('401')).negated().toFixed(2);
-  const serviceExpenses = state.balances
+  const grossServiceExpenses = state.balances
     .filter((row) => /^(61\d|62\d)(?:\.|$)/.test(row.account))
-    .reduce((sum, row) => sum.plus(row.balance), new Amount(0))
+    .reduce((sum, row) => sum.plus(row.balance), new Amount(0));
+  const serviceDiscounts = new Set(
+    state.proposals
+      .filter(
+        ({ body }) =>
+          'invoice' in body &&
+          body.invoice?.direction === 'purchase' &&
+          body.invoice.credit?.kind === 'commercial_discount' &&
+          body.invoice.account === '609',
+      )
+      .map((proposal) => proposal.id),
+  );
+  const serviceExpenses = state.journals
+    .filter((entry) => serviceDiscounts.has(entry.sourceId))
+    .reduce(
+      (sum, entry) =>
+        entry.lines
+          .filter((line) => /^609(?:\.|$)/.test(line.account))
+          .reduce((total, line) => total.plus(line.debit).minus(line.credit), sum),
+      grossServiceExpenses,
+    )
     .toFixed(2);
 
   return (

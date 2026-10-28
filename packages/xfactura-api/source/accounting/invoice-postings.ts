@@ -21,6 +21,7 @@ import { checkAccrualInvoicePosting } from './accrual-matching';
 import { checkUnbilledSaleInvoicePosting } from './unbilled-sale-matching';
 import { checkDeferralInvoicePosting } from './deferral-interpretation';
 import { checkDeferralCreditPosting } from './deferral-credits';
+import { checkDeferralDiscountPosting } from './deferral-discounts';
 import { checkAdvanceInvoicePosting } from './advance-interpretation';
 import { checkAdvanceFinalPosting } from './advance-final';
 import { checkAdvanceCreditPosting } from './advance-credits';
@@ -249,6 +250,7 @@ export async function checkInvoicePosting(tx: Transaction, actor: Actor, body: G
   if (await checkAccrualInvoicePosting(tx, actor, body)) return;
   if (await checkUnbilledSaleInvoicePosting(tx, actor, body)) return;
   if (await checkDeferralInvoicePosting(tx, actor, body)) return;
+  if (await checkDeferralDiscountPosting(tx, actor, body)) return;
   if (await checkDeferralCreditPosting(tx, actor, body)) return;
   if (await checkCreditPosting(tx, actor, body)) return;
   const input = body.invoice;

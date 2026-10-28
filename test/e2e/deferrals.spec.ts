@@ -85,6 +85,7 @@ test('reviews a subscription schedule and next-year allocation, with a keyboard 
         'deferrals.proposeInvoice',
         'deferrals.proposeRelease',
         'deferrals.proposeCreditNote',
+        'deferrals.proposeDiscount',
       ],
       expiresAt: new Date(Date.now() + 3600000).toISOString(),
     });
@@ -208,6 +209,68 @@ test('reviews a subscription schedule and next-year allocation, with a keyboard 
     version: obsolete.version,
     hash: obsolete.hash,
   });
+  const discountAgreement = await source(
+      'acord-reducere.txt',
+      'Separately agreed commercial discount with subscription services and schedule unchanged',
+    ),
+    discountXml = await source(
+      'reducere-abonament.xml',
+      invoiceXml({
+        credit: true,
+        number: 'REDUCERE-2026',
+        originalNumber: 'ABONAMENT-2026',
+        date: '2026-02-01',
+        net: '10.00',
+        tax: '2.10',
+        gross: '12.10',
+      }),
+    ),
+    discount = await invoke('invoices.import', { evidenceId: discountXml.id });
+  await invoke(
+    'deferrals.proposeDiscount',
+    {
+      financialYearId: nextYear.id,
+      invoiceId: discount.id,
+      originalInvoiceId: invoice.id,
+      recognitionDate: '2026-02-01',
+      decisionDate: '2026-02-01',
+      treatmentEvidenceId: discountAgreement.id,
+      kind: 'commercial_discount',
+      periodBasis: 'current_period_event',
+      reason: 'Reducere de preț convenită separat, cu serviciile și calendarul neschimbate',
+      servicesUnchanged: true,
+    },
+    grant.token,
+  );
+  await page.reload();
+  const discountCard = page
+      .locator('.acc-review')
+      .filter({ hasText: 'Reducere comercială abonament' }),
+    discountEffects = discountCard.getByRole('table', { name: 'Efect contabil propus' });
+  await expect(discountCard).toContainText('Servicii și calendar');
+  await expect(discountCard).toContainText('Neschimbate');
+  await expect(discountCard).toContainText('Acord de reducere');
+  await expect(discountEffects).toContainText('609');
+  await expect(discountEffects).not.toContainText('471');
+  await page.screenshot({
+    path: info.outputPath(`subscription-discount-${info.project.name}.png`),
+    fullPage: true,
+  });
+  await discountCard.getByRole('button', { name: 'ABONAMENT-2026', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(original).toHaveAttribute('open', '');
+  await expect(original.locator('summary')).toBeFocused();
+  await page.goto(`/contabilitate?company=${companyId}&financialYearId=${nextYear.id}`);
+  await discountCard.getByRole('button', { name: 'Aprobă această versiune', exact: true }).click();
+  await discountCard.getByRole('button', { name: 'Contabilizează', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('contabilizată');
+  await expect(
+    page.locator('.acc-balances > div').filter({ hasText: 'Cheltuieli cu servicii' }),
+  ).toContainText('23,33');
+  expect(await invoke('deferrals.get', { id: root.id, date: '2026-02-28' })).toMatchObject({
+    allocated: '33.33',
+    remaining: '66.67',
+  });
   const agreement = await source(
       'acord-anulare.txt',
       'Written agreement cancels the unprovided February and March 2026 services',
@@ -285,7 +348,7 @@ test('reviews a subscription schedule and next-year allocation, with a keyboard 
   ).toMatchObject({ status: 'reconciled' });
   expect(await invoke('vat.summary', { financialYearId: nextYear.id })).toMatchObject({
     status: 'reconciled',
-    totals: { inputTax: '-14.00', outputTax: '0.00' },
+    totals: { inputTax: '-16.10', outputTax: '0.00' },
   });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   expect(errors).toEqual([]);

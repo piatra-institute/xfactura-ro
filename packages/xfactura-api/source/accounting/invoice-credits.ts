@@ -23,7 +23,8 @@ export async function interpretCreditNote(
   tx: Transaction,
   actor: Actor,
   input: CreditNoteInput,
-  origin: 'service' | 'deferred_subscription' | 'invoiced_advance' = 'service',
+  origin:
+    'service' | 'deferred_subscription' | 'subscription_discount' | 'invoiced_advance' = 'service',
 ) {
   const [credit] = await tx
     .select()
@@ -49,7 +50,9 @@ export async function interpretCreditNote(
       ? !!previous.advance && input.kind === 'cancellation'
       : origin === 'deferred_subscription'
         ? !!previous.deferral && input.kind === 'cancellation'
-        : !previous.deferral && !previous.advance && !previous.advanceFinal,
+        : origin === 'subscription_discount'
+          ? !!previous.deferral && input.kind === 'commercial_discount'
+          : !previous.deferral && !previous.advance && !previous.advanceFinal,
     'DEFERRAL_CREDIT_TREATMENT',
     'Corecția abonamentului necesită repartizarea distinctă între perioadele recunoscute și cele viitoare.',
   );
