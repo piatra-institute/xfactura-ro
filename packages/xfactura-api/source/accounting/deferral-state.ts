@@ -225,7 +225,21 @@ export function deferralView(state: DeferralState, date: string) {
     account: state.interpretation.account,
     controlAccount: state.invoice.direction === 'purchase' ? ('471' as const) : ('472' as const),
     serviceFrom: state.treatment.serviceFrom,
-    serviceTo: effectiveSchedule.at(-1)!.date,
+    serviceTo: lastReschedule?.body.serviceTo ?? state.treatment.serviceTo,
+    ...(state.treatment.schemaVersion === 2
+      ? {
+          allocation: {
+            basis: state.treatment.basis,
+            method: state.treatment.method,
+            dayCountBasis: state.treatment.dayCountBasis,
+            rounding: state.treatment.rounding,
+            serviceDays: effectiveSchedule.reduce(
+              (sum, row) => sum + ('days' in row && typeof row.days === 'number' ? row.days : 0),
+              0,
+            ),
+          },
+        }
+      : {}),
     ...(lastReschedule
       ? {
           reschedule: {

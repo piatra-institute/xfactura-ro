@@ -17,7 +17,11 @@ import {
   accrualAdjustmentSchema,
 } from './accruals';
 export * from './accruals';
-import { unbilledSaleMatchSchema, unbilledSaleTreatmentSchema } from './unbilled-sales';
+import {
+  unbilledSaleMatchSchema,
+  unbilledSaleTreatmentSchema,
+  unbilledSaleAdjustmentSchema,
+} from './unbilled-sales';
 export * from './unbilled-sales';
 import {
   deferralTreatmentSchema,
@@ -182,6 +186,7 @@ export const generalJournalSchema = z
     advancePayment: advancePaymentSchema.optional(),
     advanceRefund: advanceRefundSchema.optional(),
     unbilledSale: unbilledSaleTreatmentSchema.optional(),
+    unbilledSaleAdjustment: unbilledSaleAdjustmentSchema.optional(),
   })
   .strict();
 export const generalBodySchema = generalJournalSchema

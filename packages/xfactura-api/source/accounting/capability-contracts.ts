@@ -9,6 +9,7 @@ import {
   openingSchema,
   purchaseSchema,
   accrualAdjustmentSchema,
+  unbilledSaleAdjustmentSchema,
   deferralRescheduleEffect,
 } from './domain';
 import { monthSchema } from './reviews';
@@ -251,12 +252,24 @@ export const unbilledSalePositionOutput = z.object({
   net: decimalString,
   tax: decimalString,
   gross: decimalString,
+  measurementBasis: z.literal('estimated_consideration').optional(),
+  adjustedNet: decimalString,
+  adjustedTax: decimalString,
+  adjustedGross: decimalString,
+  adjustmentCount: z.number().int().nonnegative(),
   remainingNet: decimalString,
   remainingTax: decimalString,
   remainingGross: decimalString,
   matchedGross: decimalString,
-  status: z.enum(['open', 'matched']),
+  status: z.enum(['open', 'matched', 'released']),
   hash: hashSchema,
+});
+export const unbilledSaleAdjustmentOutput = z.object({
+  id: idSchema,
+  journalId: idSchema,
+  proposalHash: hashSchema,
+  treatment: unbilledSaleAdjustmentSchema,
+  createdAt: z.string(),
 });
 export const unbilledSaleReconcileOutput = z.object({
   financialYearId: idSchema,
@@ -289,6 +302,15 @@ export const deferralPositionOutput = z.object({
       originalServiceTo: dateSchema,
     })
     .optional(),
+  allocation: z
+    .object({
+      basis: z.literal('uniform_service'),
+      method: z.literal('actual_calendar_days'),
+      dayCountBasis: z.literal('actual_inclusive'),
+      rounding: z.literal('cumulative_floor_bani'),
+      serviceDays: z.number().int().positive(),
+    })
+    .optional(),
   amount: decimalString,
   allocated: decimalString,
   cancelled: decimalString,
@@ -311,6 +333,9 @@ export const deferralPositionOutput = z.object({
         month: dateSchema,
         date: dateSchema,
         amount: decimalString,
+        serviceFrom: dateSchema.optional(),
+        serviceTo: dateSchema.optional(),
+        days: z.number().int().min(1).max(31).optional(),
         journalId: idSchema.nullable(),
         cancellationJournalId: idSchema.nullable(),
         status: z.enum(['scheduled', 'posted', 'not_required', 'cancelled']),

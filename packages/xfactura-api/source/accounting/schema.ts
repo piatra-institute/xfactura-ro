@@ -1025,6 +1025,43 @@ export const unbilledSaleMatches = sqliteTable(
     ),
   ],
 );
+export const unbilledSaleAdjustments = sqliteTable(
+  'acc_unbilled_sale_adjustments',
+  {
+    companyId: companyId(),
+    proposalId: text('proposal_id').notNull(),
+    unbilledSaleId: text('unbilled_sale_id').notNull(),
+    journalId: text('journal_id').notNull(),
+    reference: text('reference').notNull(),
+    netBani: bani('net_bani').notNull(),
+    taxBani: bani('tax_bani').notNull(),
+    grossBani: bani('gross_bani').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.proposalId] }),
+    uniqueIndex('unbilled_sale_adjustment_journal').on(t.companyId, t.journalId),
+    uniqueIndex('unbilled_sale_adjustment_reference').on(t.companyId, t.reference),
+    index('unbilled_sale_adjustment_position').on(t.companyId, t.unbilledSaleId),
+    foreignKey({
+      columns: [t.companyId, t.proposalId],
+      foreignColumns: [proposals.companyId, proposals.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.unbilledSaleId],
+      foreignColumns: [unbilledSalePostings.companyId, unbilledSalePostings.unbilledSaleId],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.journalId],
+      foreignColumns: [journals.companyId, journals.id],
+    }),
+    check(
+      'unbilled_sale_adjustment_amounts',
+      sql`typeof(${t.netBani})='integer' and typeof(${t.taxBani})='integer' and typeof(${t.grossBani})='integer' and ${t.grossBani}=${t.netBani}+${t.taxBani} and (${t.netBani}<>0 or ${t.taxBani}<>0)`,
+    ),
+  ],
+);
 export const deferralPostings = sqliteTable(
   'acc_deferral_postings',
   {

@@ -12,11 +12,30 @@ type Props = {
   showJournal: (id: string, yearId?: string) => void;
 };
 
+function AllocationValue({ row }: { row?: DeferralRescheduleEffect['beforeSchedule'][number] }) {
+  return row ? (
+    <>
+      {formatMoney(row.amount)}
+      {'days' in row && typeof row.days === 'number' ? (
+        <span className="acc-hint">
+          <br />
+          {row.days} zile
+        </span>
+      ) : null}
+    </>
+  ) : (
+    <>—</>
+  );
+}
+
 export function RescheduleDetails({ state, effect, showJournal }: Props) {
   const before = new Map(effect.beforeSchedule.map((row) => [row.month, row]));
   const after = new Map(effect.afterSchedule.map((row) => [row.month, row]));
   const months = [...new Set([...before.keys(), ...after.keys()])].sort();
   const source = state.evidence.find((row) => row.id === effect.evidenceId);
+  const last = effect.beforeSchedule.at(-1)!;
+  const previousEnd =
+    'serviceTo' in last && typeof last.serviceTo === 'string' ? last.serviceTo : last.date;
   return (
     <>
       <dl className="acc-review-meta">
@@ -26,7 +45,7 @@ export function RescheduleDetails({ state, effect, showJournal }: Props) {
         </div>
         <div>
           <dt>Final anterior</dt>
-          <dd>{effect.beforeSchedule.at(-1)!.date}</dd>
+          <dd>{previousEnd}</dd>
         </div>
         <div>
           <dt>Final nou</dt>
@@ -44,6 +63,12 @@ export function RescheduleDetails({ state, effect, showJournal }: Props) {
           <dt>Preț și TVA</dt>
           <dd>Neschimbate</dd>
         </div>
+        {effect.method === 'actual_calendar_days' ? (
+          <div>
+            <dt>Alocare</dt>
+            <dd>Pe zile calendaristice</dd>
+          </div>
+        ) : null}
         <div>
           <dt>Motiv</dt>
           <dd>{effect.reason}</dd>
@@ -74,8 +99,12 @@ export function RescheduleDetails({ state, effect, showJournal }: Props) {
             {months.map((month) => (
               <tr key={month}>
                 <td>{month.slice(0, 7)}</td>
-                <td>{before.has(month) ? formatMoney(before.get(month)!.amount) : '—'}</td>
-                <td>{after.has(month) ? formatMoney(after.get(month)!.amount) : '—'}</td>
+                <td>
+                  <AllocationValue row={before.get(month)} />
+                </td>
+                <td>
+                  <AllocationValue row={after.get(month)} />
+                </td>
               </tr>
             ))}
           </tbody>
@@ -105,8 +134,10 @@ export default function RescheduleReview({
       <div className="acc-review-heading">
         <div>
           <h3>
-            Calendar abonament ·{' '}
-            {state.invoiceLabels[review.effect.sourceInvoiceId]?.number ?? 'Modificare'}
+            {review.effect.method === 'actual_calendar_days'
+              ? 'Calendar servicii'
+              : 'Calendar abonament'}{' '}
+            · {state.invoiceLabels[review.effect.sourceInvoiceId]?.number ?? 'Modificare'}
           </h3>
           <p>
             {review.effect.date} · plan {review.effect.sequence}

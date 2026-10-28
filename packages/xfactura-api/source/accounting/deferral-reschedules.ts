@@ -3,6 +3,7 @@ import type { Transaction } from './db';
 import type { Actor } from './commands';
 import {
   allocationSchedule,
+  actualDaySchedule,
   canonical,
   deferralRescheduleEffect,
   deferralRescheduleInput,
@@ -22,6 +23,11 @@ export async function previewDeferralReschedule(tx: Transaction, actor: Actor, i
   const body = deferralRescheduleInput.parse(input),
     [state] = await loadDeferrals(tx, actor.companyId, [body.deferralId]);
   requireCondition(state, 'NOT_FOUND', 'Abonamentul nu este disponibil.', 404);
+  requireCondition(
+    body.method === state.treatment.method,
+    'DEFERRAL_RESCHEDULE_METHOD',
+    'Modificarea păstrează metoda de alocare documentată inițial.',
+  );
   const year = await financialYearForDate(tx, actor.companyId, body.date);
   requireCondition(
     year.id === body.financialYearId,
@@ -49,6 +55,7 @@ export async function previewDeferralReschedule(tx: Transaction, actor: Actor, i
   );
   requireCondition(
     body.effectiveFrom.endsWith('-01') &&
+      (state.treatment.schemaVersion !== 2 || body.effectiveFrom >= state.treatment.serviceFrom) &&
       body.effectiveFrom >= body.date &&
       body.evidenceDate <= body.date &&
       body.evidenceDate >= state.journal.date &&
@@ -91,7 +98,9 @@ export async function previewDeferralReschedule(tx: Transaction, actor: Actor, i
   requireCondition(amount > 0n, 'NOTHING_DUE', 'Nu mai există o valoare viitoare de repartizat.');
   const afterSchedule = [
     ...prefix,
-    ...allocationSchedule(fromBani(amount), body.effectiveFrom, body.serviceTo),
+    ...(body.method === 'actual_calendar_days'
+      ? actualDaySchedule(fromBani(amount), body.effectiveFrom, body.serviceTo).schedule
+      : allocationSchedule(fromBani(amount), body.effectiveFrom, body.serviceTo)),
   ];
   requireCondition(
     afterSchedule.length <= 60 && canonical(afterSchedule) !== canonical(beforeSchedule),
@@ -115,14 +124,15 @@ export async function previewDeferralReschedule(tx: Transaction, actor: Actor, i
     'O lună modificată este închisă.',
     409,
   );
-  await checkDeferralHorizon(tx, actor, {
+  const candidate = {
     invoice: state.invoice,
     treatment: {
       ...state.interpretation,
       deferral: { ...state.treatment, serviceTo: body.serviceTo, schedule: afterSchedule },
     },
     lines: state.body.lines,
-  });
+  };
+  await checkDeferralHorizon(tx, actor, candidate);
   const registrationIds = new Set(state.interpretation.registrationIds);
   for (const row of afterSchedule) {
     const current = await regimesAt(tx, actor.companyId, row.date);

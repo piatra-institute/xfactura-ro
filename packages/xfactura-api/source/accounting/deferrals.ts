@@ -144,6 +144,14 @@ export class Deferrals {
         );
         const result = await interpretDeferralInvoice(tx, actor, body);
         await checkDeferralHorizon(tx, actor, result);
+        const description =
+          body.method === 'actual_calendar_days'
+            ? result.invoice.direction === 'purchase'
+              ? 'Servicii achiziționate'
+              : 'Servicii facturate'
+            : result.invoice.direction === 'purchase'
+              ? 'Abonament achiziționat'
+              : 'Abonament facturat';
         return retainGeneralProposal(
           tx,
           actor,
@@ -152,7 +160,7 @@ export class Deferrals {
             evidenceId: result.invoice.evidenceId,
             date: body.recognitionDate,
             purpose: result.invoice.direction,
-            description: `${result.invoice.direction === 'purchase' ? 'Abonament achiziționat' : 'Abonament facturat'} · ${result.invoice.body.number}`,
+            description: `${description} · ${result.invoice.body.number}`,
             sourceReference: `invoice:${result.invoice.id}`,
             lines: result.lines,
             invoice: result.treatment,

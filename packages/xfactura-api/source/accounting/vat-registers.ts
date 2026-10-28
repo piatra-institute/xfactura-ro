@@ -1,5 +1,6 @@
 import { and, asc, eq, gt, gte, lte } from 'drizzle-orm';
 import { z } from 'zod';
+import { alias } from 'drizzle-orm/sqlite-core';
 import { Commands, type Actor } from './commands';
 import type { Transaction } from './db';
 import {
@@ -24,6 +25,7 @@ import {
   journals,
   proposals,
   unbilledSalePostings,
+  unbilledSaleAdjustments,
 } from './schema';
 
 export const vatPeriodInput = z
@@ -106,6 +108,11 @@ export const unbilledSaleVatOutput = z.object({
   ruleHash: hashSchema,
   registrationIds: z.array(idSchema),
 });
+export const unbilledSaleAdjustmentVatOutput = unbilledSaleVatOutput.extend({
+  adjustmentId: idSchema,
+  serviceReference: z.string(),
+  taxTreatment: z.enum(['non_vat', 'same_service_month']),
+});
 const totalsOutput = z.object({
   base: decimalString,
   sourceTax: decimalString,
@@ -131,6 +138,7 @@ export const vatSummaryOutput = z.object({
   to: dateSchema,
   entryCount: z.number().int(),
   unbilledSaleEntryCount: z.number().int(),
+  unbilledSaleAdjustmentEntryCount: z.number().int().optional(),
   advancePaymentEntryCount: z.number().int(),
   totals: totalsOutput,
   groups: z.array(
@@ -382,6 +390,102 @@ async function unbilledEntries(
     },
   );
 }
+async function unbilledAdjustmentEntries(
+  tx: Transaction,
+  companyId: string,
+  range: { from: string; to: string },
+  page?: z.infer<typeof unbilledSaleVatInput>,
+) {
+  const original = alias(proposals, 'original_unbilled_sale');
+  const query = tx
+    .select({
+      record: unbilledSaleAdjustments,
+      journal: journals,
+      proposal: proposals,
+      original: original.body,
+      sourceHash: evidence.hash,
+    })
+    .from(unbilledSaleAdjustments)
+    .innerJoin(
+      journals,
+      and(
+        eq(journals.companyId, unbilledSaleAdjustments.companyId),
+        eq(journals.id, unbilledSaleAdjustments.journalId),
+      ),
+    )
+    .innerJoin(
+      proposals,
+      and(
+        eq(proposals.companyId, unbilledSaleAdjustments.companyId),
+        eq(proposals.id, unbilledSaleAdjustments.proposalId),
+      ),
+    )
+    .innerJoin(
+      original,
+      and(
+        eq(original.companyId, unbilledSaleAdjustments.companyId),
+        eq(original.id, unbilledSaleAdjustments.unbilledSaleId),
+      ),
+    )
+    .innerJoin(
+      evidence,
+      and(eq(evidence.companyId, journals.companyId), eq(evidence.id, journals.evidenceId)),
+    )
+    .where(
+      and(
+        eq(unbilledSaleAdjustments.companyId, companyId),
+        gte(journals.date, range.from),
+        lte(journals.date, range.to),
+        page?.cursor ? gt(unbilledSaleAdjustments.proposalId, page.cursor) : undefined,
+      ),
+    )
+    .orderBy(asc(unbilledSaleAdjustments.proposalId))
+    .$dynamic();
+  const rows = await (page ? query.limit(page.limit + 1) : query);
+  return rows.map(
+    ({
+      record,
+      journal,
+      proposal,
+      original,
+      sourceHash,
+    }): z.infer<typeof unbilledSaleAdjustmentVatOutput> => {
+      const root = generalBodySchema.parse(original).unbilledSale,
+        change = generalBodySchema.parse(proposal.body).unbilledSaleAdjustment;
+      requireCondition(
+        root && change,
+        'REGISTER_SOURCE',
+        'Reevaluarea nu identifică serviciile de facturat.',
+        500,
+      );
+      return {
+        adjustmentId: record.proposalId,
+        unbilledSaleId: record.unbilledSaleId,
+        journalId: journal.id,
+        proposalHash: proposal.hash,
+        evidenceId: journal.evidenceId,
+        sourceHash,
+        reference: change.reference,
+        serviceReference: root.reference,
+        taxTreatment: change.taxTreatment,
+        direction: 'sale',
+        recognitionDate: journal.date,
+        originalTaxPointDate: root.taxPointDate,
+        customer: root.customer,
+        category: root.vatCategory,
+        rate: change.rate,
+        base: change.delta.net,
+        sourceTax: change.delta.tax,
+        gross: change.delta.gross,
+        inputTax: '0.00',
+        outputTax: change.delta.tax,
+        ruleId: change.ruleId,
+        ruleHash: change.ruleHash,
+        registrationIds: change.registrationIds,
+      };
+    },
+  );
+}
 type RegisterMovement = Pick<
   Entry,
   'direction' | 'category' | 'rate' | 'base' | 'sourceTax' | 'gross' | 'inputTax' | 'outputTax'
@@ -446,6 +550,21 @@ export class VatRegisters {
       'vat.entries',
     );
   }
+  unbilledSaleAdjustments(actor: Actor, input: unknown) {
+    const body = unbilledSaleVatInput.parse(input);
+    return this.runner.read(
+      actor,
+      async (tx) => {
+        const range = await period(tx, actor.companyId, body),
+          rows = await unbilledAdjustmentEntries(tx, actor.companyId, range, body);
+        return {
+          items: rows.slice(0, body.limit),
+          nextCursor: rows.length > body.limit ? rows[body.limit - 1].adjustmentId : null,
+        };
+      },
+      'vat.unbilledSaleAdjustments',
+    );
+  }
   summary(actor: Actor, input: unknown) {
     const body = vatPeriodInput.parse(input);
     return this.runner.read(
@@ -454,6 +573,7 @@ export class VatRegisters {
         const range = await period(tx, actor.companyId, body);
         const rows = await entries(tx, actor.companyId, range);
         const sales = await unbilledEntries(tx, actor.companyId, range);
+        const salesAdjustments = await unbilledAdjustmentEntries(tx, actor.companyId, range);
         const advancePayments = await advanceCashVatEntries(tx, actor.companyId, range);
         const posted = await tx
           .select({ journal: journals, proposal: proposals })
@@ -543,6 +663,7 @@ export class VatRegisters {
             !body?.accrualAdjustment &&
             !body?.deferralRelease &&
             !body?.unbilledSale &&
+            !body?.unbilledSaleAdjustment &&
             !body?.advancePayment &&
             !body?.advanceRefund &&
             journal.kind !== 'payment' &&
@@ -553,7 +674,7 @@ export class VatRegisters {
             issues.push({ code: 'UNCLASSIFIED_JOURNAL', invoiceId: null, journalId: journal.id });
           }
         }
-        const movements = [...rows, ...sales, ...advancePayments];
+        const movements = [...rows, ...sales, ...salesAdjustments, ...advancePayments];
         const total = totals(movements);
         const inputDifference = ledgerInput - toBani(total.inputTax),
           outputDifference = ledgerOutput - toBani(total.outputTax);
@@ -584,6 +705,9 @@ export class VatRegisters {
           ...range,
           entryCount: movements.length,
           unbilledSaleEntryCount: sales.length,
+          ...(salesAdjustments.length
+            ? { unbilledSaleAdjustmentEntryCount: salesAdjustments.length }
+            : {}),
           advancePaymentEntryCount: advancePayments.length,
           totals: total,
           groups,

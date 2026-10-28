@@ -50,6 +50,7 @@ import {
   unbilledSalePageInput,
   unbilledSaleReadInput,
   unbilledSaleReconcileInput,
+  unbilledSaleAdjustmentPageInput,
 } from './unbilled-sales';
 import {
   vatEntriesInput,
@@ -58,6 +59,7 @@ import {
   vatSummaryOutput,
   unbilledSaleVatOutput,
   unbilledSaleVatInput,
+  unbilledSaleAdjustmentVatOutput,
 } from './vat-registers';
 import { obligationOutput, ruleOutput } from './accounting-catalogue';
 import {
@@ -92,6 +94,7 @@ import {
   accrualAdjustmentOutput,
   accrualReconcileOutput,
   unbilledSalePositionOutput,
+  unbilledSaleAdjustmentOutput,
   unbilledSaleReconcileOutput,
   deferralPositionOutput,
   deferralReconcileOutput,
@@ -112,6 +115,7 @@ import {
   accrualInvoiceInput,
   unbilledSaleInput,
   unbilledSaleInvoiceInput,
+  unbilledSaleAdjustmentInput,
   deferralInput,
   deferralReleaseInput,
   advancePaymentInput,
@@ -459,7 +463,7 @@ export class Capabilities {
         (actor, _, body) => service.vat.advancePayments(actor, body),
       ),
       'deferrals.proposeInvoice': define(
-        'Prepare an early domestic RON subscription invoice in 471/472 with an evidenced equal-calendar-month schedule. VAT remains at the invoice tax point; advances and regime/rate transitions need distinct treatment.',
+        'Prepare an early domestic RON service invoice in 471/472. Use uniform_subscription/equal_calendar_months for whole months, or uniform_service/actual_calendar_days for inclusive day-based benefit including partial months. VAT remains at the invoice tax point; advances and regime/rate transitions need distinct treatment.',
         deferralInput,
         proposalOutput,
         (actor, key, body) => service.deferrals.proposeInvoice(actor, key, body),
@@ -477,7 +481,7 @@ export class Capabilities {
         (actor, key, body) => service.deferrals.proposeDiscount(actor, key, body),
       ),
       'deferrals.proposeReschedule': define(
-        'Prepare a prospective equal-month subscription schedule from a separate agreement, preserving price, recognized amounts and VAT. Returns an exact action review; human approval and reviews.execute apply it without a journal entry.',
+        'Prepare a prospective service schedule from a separate agreement. Preserve its original equal-month or actual-day method, price, recognized amounts and VAT. Returns an exact action review; human approval and reviews.execute apply it without a journal entry.',
         deferralRescheduleInput,
         reviewOutput,
         (actor, key, body) =>
@@ -506,7 +510,7 @@ export class Capabilities {
       ),
       'deferrals.reviseInvoice': define(
         'Revise an unposted subscription invoice/schedule and invalidate its old approval.',
-        deferralInput.extend({ id: idSchema, version: z.number().int().positive() }).strict(),
+        deferralInput.safeExtend({ id: idSchema, version: z.number().int().positive() }).strict(),
         proposalOutput,
         (actor, key, { id, version, ...body }) =>
           service.deferrals.proposeInvoice(actor, key, body, { id, version }),
@@ -597,6 +601,27 @@ export class Capabilities {
         (actor, key, { id, version, ...body }) =>
           service.unbilledSales.matchInvoice(actor, key, body, { id, version }),
       ),
+      'unbilledSales.proposeAdjustment': define(
+        'Prepare a new-information remeasurement or release of an explicitly estimated, uninvoiced service balance. Same financial year; normal VAT restricted to the original service month. No credit, bad-debt, contract-price or prior-period correction treatment.',
+        unbilledSaleAdjustmentInput,
+        proposalOutput,
+        (actor, key, body) => service.unbilledSales.proposeAdjustment(actor, key, body),
+      ),
+      'unbilledSales.reviseAdjustment': define(
+        'Refresh an unposted unbilled-sales remeasurement against current remaining amounts, requiring fresh exact human approval.',
+        unbilledSaleAdjustmentInput
+          .extend({ id: idSchema, version: z.number().int().positive() })
+          .strict(),
+        proposalOutput,
+        (actor, key, { id, version, ...body }) =>
+          service.unbilledSales.proposeAdjustment(actor, key, body, { id, version }),
+      ),
+      'unbilledSales.adjustments': define(
+        'Read immutable, dated unbilled-sales estimate changes with source evidence and exact signed deltas.',
+        unbilledSaleAdjustmentPageInput,
+        pageOutput(unbilledSaleAdjustmentOutput),
+        (actor, _, body) => service.unbilledSales.adjustments(actor, body),
+      ),
       'unbilledSales.get': define(
         'Read one unbilled-service receivable and its dated invoiced/remaining amounts.',
         unbilledSaleReadInput,
@@ -620,6 +645,12 @@ export class Capabilities {
         unbilledSaleVatInput,
         pageOutput(unbilledSaleVatOutput),
         (actor, _, body) => service.vat.unbilledSales(actor, body),
+      ),
+      'vat.unbilledSaleAdjustments': define(
+        'Read signed unbilled-sales estimate movements in the working VAT register, retaining original tax points and source links. Not an official declaration.',
+        unbilledSaleVatInput,
+        pageOutput(unbilledSaleAdjustmentVatOutput),
+        (actor, _, body) => service.vat.unbilledSaleAdjustments(actor, body),
       ),
       'accruals.revise': define(
         'Revise an unposted service accrual and invalidate its previous approval.',

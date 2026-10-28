@@ -47,7 +47,7 @@ test('reviews unbilled sales and a later-year invoice without repeating revenue 
   async function post(proposal: { id: string; version: number; hash: string }) {
     const input = { id: proposal.id, version: proposal.version, hash: proposal.hash };
     await invoke('books.approve', input);
-    await invoke('ledger.post', input);
+    return invoke('ledger.post', input);
   }
   const proof = await source(
       'servicii-dec2025.txt',
@@ -76,7 +76,11 @@ test('reviews unbilled sales and a later-year invoice without repeating revenue 
   );
   const grant = await invoke('agents.issue', {
     name: 'Sales preparation agent',
-    scopes: ['unbilledSales.propose', 'unbilledSales.matchInvoice'],
+    scopes: [
+      'unbilledSales.propose',
+      'unbilledSales.matchInvoice',
+      'unbilledSales.proposeAdjustment',
+    ],
     expiresAt: new Date(Date.now() + 3600000).toISOString(),
   });
   const original = await invoke(
@@ -204,6 +208,133 @@ test('reviews unbilled sales and a later-year invoice without repeating revenue 
   expect(await invoke('vat.summary', { financialYearId: year.id })).toMatchObject({
     status: 'reconciled',
     totals: { base: '0.00', outputTax: '0.00' },
+  });
+  const estimateProof = await source(
+    'estimare-servicii.txt',
+    'Completed January services with uncertain consideration, measured from the retained acceptance record',
+  );
+  const estimated = await invoke(
+    'unbilledSales.propose',
+    {
+      financialYearId: year.id,
+      evidenceId: estimateProof.id,
+      evidenceDate: '2026-01-20',
+      reference: 'ESTIMARE-2026',
+      date: '2026-01-20',
+      serviceFrom: '2026-01-01',
+      serviceTo: '2026-01-20',
+      customer: { name: 'Client servicii SRL', taxId: '87654321', country: 'RO' },
+      currency: 'RON',
+      account: '704',
+      net: '100.00',
+      vatCategory: 'S',
+      taxPointDate: '2026-01-20',
+      taxPointBasis: 'completed_service',
+      measurementBasis: 'estimated_consideration',
+      reason: 'Evaluare documentată a valorii estimate pentru serviciile deja finalizate',
+    },
+    grant.token,
+  );
+  const rootEntry = await post(estimated);
+  const measurementProof = await source(
+    'informatii-noi-venit.txt',
+    'New measurement information increases the unbilled service consideration to 120 RON before invoicing',
+  );
+  const changed = await invoke(
+    'unbilledSales.proposeAdjustment',
+    {
+      financialYearId: year.id,
+      unbilledSaleId: estimated.id,
+      reference: 'REEVALUARE-2026',
+      evidenceId: measurementProof.id,
+      evidenceDate: '2026-01-25',
+      newInformationDate: '2026-01-25',
+      date: '2026-01-25',
+      periodBasis: 'current_year_estimate_change',
+      changeBasis: 'new_measurement_information',
+      action: 'reestimate',
+      remainingNet: '120.00',
+      reason: 'Informații noi privind evaluarea contraprestației pentru serviciile prestate',
+    },
+    grant.token,
+  );
+  await page.goto(`/contabilitate?company=${companyId}&financialYearId=${year.id}`);
+  await expect(card).toContainText('Servicii inițiale');
+  await expect(card).toContainText('Perioada TVA');
+  const remaining = card.getByRole('table', { name: 'Sold nefacturat', exact: true });
+  await expect(remaining).toContainText('100,00');
+  await expect(remaining).toContainText('120,00');
+  await expect(remaining).toContainText('4,20');
+  await expect(card.getByRole('link', { name: 'informatii-noi-venit.txt' })).toHaveAttribute(
+    'href',
+    `${base}/evidence/${measurementProof.id}`,
+  );
+  await page.screenshot({
+    path: info.outputPath(`sales-estimate-${info.project.name}.png`),
+    fullPage: true,
+  });
+  await card.getByRole('button', { name: 'ESTIMARE-2026', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  const estimateJournal = page.locator(`#journal-${rootEntry.id}`);
+  await expect(estimateJournal).toHaveAttribute('open', '');
+  await expect(estimateJournal.locator('summary')).toBeFocused();
+  await expect(estimateJournal).toContainText('Valoare estimată');
+  await page.goto(`/contabilitate?company=${companyId}&financialYearId=${year.id}`);
+  await card.getByRole('button', { name: 'Aprobă această versiune', exact: true }).click();
+  await card.getByRole('button', { name: 'Contabilizează', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('contabilizată');
+  const changedEntry = await invoke('ledger.post', {
+    id: changed.id,
+    version: changed.version,
+    hash: changed.hash,
+  });
+  const measuredXml = await source(
+    'factura-reevaluata.xml',
+    invoiceXml({
+      direction: 'sale',
+      number: 'REEVALUATA-2026',
+      date: '2026-02-01',
+      taxPointDate: '2026-01-20',
+      net: '120.00',
+      tax: '25.20',
+      gross: '145.20',
+    }),
+  );
+  const measuredInvoice = await invoke('invoices.import', { evidenceId: measuredXml.id });
+  await invoke(
+    'unbilledSales.matchInvoice',
+    {
+      financialYearId: year.id,
+      invoiceId: measuredInvoice.id,
+      recognitionDate: '2026-02-01',
+      allocations: [{ unbilledSaleId: estimated.id, net: '120.00', tax: '25.20' }],
+    },
+    grant.token,
+  );
+  await page.reload();
+  await expect(card.getByRole('table', { name: 'Servicii deja înregistrate' })).toContainText(
+    '145,20',
+  );
+  await expect(card.getByRole('table', { name: 'Efect contabil propus' })).not.toContainText(
+    '4427',
+  );
+  await card.getByRole('button', { name: 'Ultima ajustare', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator(`#journal-${changedEntry.id}`)).toHaveAttribute('open', '');
+  await expect(page.locator(`#journal-${changedEntry.id}`).locator('summary')).toBeFocused();
+  await page.goto(`/contabilitate?company=${companyId}&financialYearId=${year.id}`);
+  await card.getByRole('button', { name: 'Aprobă această versiune', exact: true }).click();
+  await card.getByRole('button', { name: 'Contabilizează', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('contabilizată');
+  expect(await invoke('unbilledSales.get', { id: estimated.id, date: '2026-02-28' })).toMatchObject(
+    { status: 'matched', adjustedNet: '120.00', remainingGross: '0.00', matchedGross: '145.20' },
+  );
+  expect(
+    await invoke('unbilledSales.reconcile', { financialYearId: year.id, date: '2026-02-28' }),
+  ).toMatchObject({ status: 'reconciled' });
+  expect(await invoke('vat.summary', { financialYearId: year.id })).toMatchObject({
+    status: 'reconciled',
+    totals: { base: '120.00', outputTax: '25.20' },
   });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   expect(errors).toEqual([]);

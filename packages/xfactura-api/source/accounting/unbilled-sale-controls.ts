@@ -8,6 +8,7 @@ import {
   proposals,
   unbilledSaleMatches,
   unbilledSalePostings,
+  unbilledSaleAdjustments,
 } from './schema';
 
 /** Positions span years; each selected financial year must carry its opening 418 balance. */
@@ -74,7 +75,18 @@ export async function unbilledSaleControls(
         sql`(${journalLines.account}='418' or ${journalLines.account} like '418.%')`,
       ),
     );
-  const unbilled = original.gross - matched.gross;
+  const [adjusted] = await tx
+    .select({ gross: exactSum(sql`${unbilledSaleAdjustments.grossBani}`) })
+    .from(unbilledSaleAdjustments)
+    .innerJoin(
+      journals,
+      and(
+        eq(journals.companyId, unbilledSaleAdjustments.companyId),
+        eq(journals.id, unbilledSaleAdjustments.journalId),
+      ),
+    )
+    .where(and(eq(unbilledSaleAdjustments.companyId, companyId), lte(journals.date, date)));
+  const unbilled = original.gross + adjusted.gross - matched.gross;
   return {
     unbilledSaleCount: original.count,
     receivable: {

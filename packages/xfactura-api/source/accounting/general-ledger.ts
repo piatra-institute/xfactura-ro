@@ -38,6 +38,7 @@ import { checkAccrualAdjustmentPosting } from './accrual-adjustments';
 import { checkDeferralReleasePosting } from './deferral-interpretation';
 import { checkAdvancePaymentPosting } from './advance-interpretation';
 import { checkAdvanceRefundPosting } from './advance-refunds';
+import { checkUnbilledSaleAdjustmentPosting } from './unbilled-sale-adjustments';
 
 export const ledgerReviewInput = reviewSchema.extend({ id: idSchema }).strict();
 export const balanceInput = z
@@ -51,6 +52,7 @@ async function validateBody(tx: Transaction, actor: Actor, body: GeneralBody) {
       body.settlement,
       body.accrual,
       body.unbilledSale,
+      body.unbilledSaleAdjustment,
       body.accrualAdjustment,
       body.deferralRelease,
       body.advancePayment,
@@ -106,6 +108,7 @@ async function validateBody(tx: Transaction, actor: Actor, body: GeneralBody) {
   await checkSettlementPosting(tx, actor, body);
   await checkAccrualPosting(tx, actor, body);
   await checkUnbilledSalePosting(tx, actor, body);
+  await checkUnbilledSaleAdjustmentPosting(tx, actor, body);
   await checkAccrualAdjustmentPosting(tx, actor, body);
   await checkDeferralReleasePosting(tx, actor, body);
   await checkAdvancePaymentPosting(tx, actor, body);

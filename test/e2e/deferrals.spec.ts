@@ -424,6 +424,134 @@ test('reviews a subscription schedule and next-year allocation, with a keyboard 
     status: 'reconciled',
     totals: { inputTax: '-16.10', outputTax: '0.00' },
   });
+  const dayContract = await source(
+    'servicii-pe-zile.txt',
+    'Documented uniform daily benefit from 16 January through 15 March 2026, inclusive, agreed before invoicing',
+  );
+  const dayXml = await source(
+    'factura-pe-zile.xml',
+    invoiceXml({ number: 'ZILE-2026', date: '2026-01-01' }),
+  );
+  const dayInvoice = await invoke('invoices.import', { evidenceId: dayXml.id });
+  const dayRoot = await invoke(
+    'deferrals.proposeInvoice',
+    {
+      financialYearId: nextYear.id,
+      invoiceId: dayInvoice.id,
+      recognitionDate: '2026-01-01',
+      evidenceId: dayContract.id,
+      evidenceDate: '2025-12-20',
+      taxPointBasis: 'early_invoice',
+      account: '628',
+      deduction: 'full',
+      counterpartyVatCollection: 'no',
+      basis: 'uniform_service',
+      method: 'actual_calendar_days',
+      serviceFrom: '2026-01-16',
+      serviceTo: '2026-03-15',
+      reason:
+        'Servicii uniforme în fiecare zi calendaristică din perioada contractuală documentată',
+    },
+    grant.token,
+  );
+  await page.reload();
+  const dayCard = page.locator('.acc-review');
+  await expect(dayCard.getByRole('heading')).toHaveText('Servicii achiziționate · ZILE-2026');
+  await expect(dayCard).toContainText('Pe zile calendaristice');
+  await expect(dayCard).toContainText('59');
+  const dayPlan = dayCard.getByRole('table', { name: 'Plan de alocare', exact: true });
+  await expect(dayPlan.locator('tbody tr')).toHaveCount(3);
+  await expect(dayPlan.locator('tbody tr').nth(0).getByRole('cell').nth(2)).toHaveText('16');
+  await expect(dayPlan).toContainText('27,11');
+  await expect(dayPlan).toContainText('47,46');
+  await expect(dayPlan).toContainText('25,43');
+  await page.screenshot({
+    path: info.outputPath(`actual-day-plan-${info.project.name}.png`),
+    fullPage: true,
+  });
+  await dayCard.getByRole('button', { name: 'Aprobă această versiune', exact: true }).click();
+  await dayCard.getByRole('button', { name: 'Contabilizează', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('contabilizată');
+  const daySource = await invoke('ledger.post', {
+    id: dayRoot.id,
+    version: dayRoot.version,
+    hash: dayRoot.hash,
+  });
+  await post(
+    await invoke(
+      'deferrals.proposeRelease',
+      { financialYearId: nextYear.id, deferralId: dayRoot.id, month: '2026-01-01' },
+      grant.token,
+    ),
+  );
+  const dayAgreement = await source(
+    'acord-calendar-zile.txt',
+    'New agreement retains January benefit and the same remaining value, extending uniform daily services through 10 April',
+  );
+  await invoke(
+    'deferrals.proposeReschedule',
+    {
+      financialYearId: nextYear.id,
+      deferralId: dayRoot.id,
+      date: '2026-02-01',
+      effectiveFrom: '2026-02-01',
+      serviceTo: '2026-04-10',
+      evidenceId: dayAgreement.id,
+      evidenceDate: '2026-02-01',
+      method: 'actual_calendar_days',
+      priceUnchanged: true,
+      reason: 'Prelungire documentată a serviciilor uniforme, cu valoarea viitoare neschimbată',
+    },
+    grant.token,
+  );
+  await page.reload();
+  const dayCalendar = page.locator('[data-review-kind="reschedule"]');
+  await expect(dayCalendar).toContainText('Calendar servicii');
+  await expect(dayCalendar).toContainText('Pe zile calendaristice');
+  await expect(
+    dayCalendar.locator('.acc-review-meta > div').filter({ hasText: 'Final anterior' }),
+  ).toContainText('2026-03-15');
+  await expect(dayCalendar.getByRole('table', { name: 'Calendar de alocare' })).toContainText(
+    '29,57',
+  );
+  await expect(dayCalendar.getByRole('table', { name: 'Calendar de alocare' })).toContainText(
+    '10 zile',
+  );
+  await page.screenshot({
+    path: info.outputPath(`actual-day-amendment-${info.project.name}.png`),
+    fullPage: true,
+  });
+  await dayCalendar.getByRole('button', { name: 'ZILE-2026', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator(`#journal-${daySource.id}`)).toHaveAttribute('open', '');
+  await expect(page.locator(`#journal-${daySource.id}`).locator('summary')).toBeFocused();
+  await page.goto(`/contabilitate?company=${companyId}&financialYearId=${nextYear.id}`);
+  await dayCalendar.getByRole('button', { name: 'Aprobă acest plan', exact: true }).click();
+  const beforeCalendar = (await invoke('journals.list', { limit: 100 })).items.length;
+  await dayCalendar.getByRole('button', { name: 'Aplică planul', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Calendarul de alocare a fost actualizat');
+  expect((await invoke('journals.list', { limit: 100 })).items).toHaveLength(beforeCalendar);
+  expect(await invoke('deferrals.get', { id: dayRoot.id, date: '2026-04-30' })).toMatchObject({
+    serviceTo: '2026-04-10',
+    allocated: '27.11',
+    remaining: '72.89',
+    allocation: { serviceDays: 85 },
+  });
+  for (const month of ['2026-02-01', '2026-03-01', '2026-04-01'])
+    await post(
+      await invoke(
+        'deferrals.proposeRelease',
+        { financialYearId: nextYear.id, deferralId: dayRoot.id, month },
+        grant.token,
+      ),
+    );
+  expect(
+    await invoke('deferrals.reconcile', { financialYearId: nextYear.id, date: '2026-04-30' }),
+  ).toMatchObject({ status: 'reconciled' });
+  expect(await invoke('vat.summary', { financialYearId: nextYear.id })).toMatchObject({
+    status: 'reconciled',
+    totals: { inputTax: '4.90', outputTax: '0.00' },
+  });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   expect(errors).toEqual([]);
 });

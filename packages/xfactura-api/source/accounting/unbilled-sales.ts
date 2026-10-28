@@ -6,11 +6,14 @@ import {
   Amount,
   canonical,
   dateSchema,
+  generalBodySchema,
   idSchema,
   requireCondition,
   unbilledSaleInput,
   unbilledSaleInvoiceInput,
   unbilledSaleTreatmentSchema,
+  unbilledSaleAdjustmentInput,
+  unbilledSaleAdjustmentSchema,
   type GeneralBody,
   type PostingLine,
   type UnbilledSaleInput,
@@ -24,6 +27,7 @@ import {
   proposals,
   unbilledSaleMatches,
   unbilledSalePostings,
+  unbilledSaleAdjustments,
 } from './schema';
 import { financialYearForDate, regimesAt } from './foundation';
 import { invoiceRule } from './accounting-catalogue';
@@ -31,6 +35,7 @@ import { generalBody, retainGeneralProposal } from './general-ledger';
 import { loadUnbilledSales, unbilledSaleView } from './unbilled-sale-state';
 import { interpretUnbilledSaleInvoice } from './unbilled-sale-matching';
 import { unbilledSaleControls } from './unbilled-sale-controls';
+import { interpretUnbilledSaleAdjustment } from './unbilled-sale-adjustments';
 
 export const unbilledSaleReadInput = z.object({ id: idSchema, date: dateSchema }).strict();
 export const unbilledSaleReconcileInput = z
@@ -40,6 +45,14 @@ export const unbilledSalePageInput = z
   .object({
     date: dateSchema,
     onlyOpen: z.boolean().default(true),
+    limit: z.number().int().min(1).max(100).default(25),
+    cursor: idSchema.optional(),
+  })
+  .strict();
+export const unbilledSaleAdjustmentPageInput = z
+  .object({
+    unbilledSaleId: idSchema,
+    date: dateSchema,
     limit: z.number().int().min(1).max(100).default(25),
     cursor: idSchema.optional(),
   })
@@ -191,6 +204,95 @@ export async function checkUnbilledSalePosting(tx: Transaction, actor: Actor, bo
 
 export class UnbilledSales {
   constructor(private readonly runner: Commands) {}
+  proposeAdjustment(
+    actor: Actor,
+    key: string,
+    input: unknown,
+    revision?: { id: string; version: number },
+  ) {
+    const body = unbilledSaleAdjustmentInput.parse(input);
+    return this.runner.run(
+      actor,
+      key,
+      revision ? 'unbilledSales.reviseAdjustment' : 'unbilledSales.proposeAdjustment',
+      { body, revision: revision ?? null },
+      'write',
+      async (tx) => {
+        const result = await interpretUnbilledSaleAdjustment(tx, actor, body);
+        return retainGeneralProposal(
+          tx,
+          actor,
+          generalBody({
+            financialYearId: body.financialYearId,
+            evidenceId: body.evidenceId,
+            date: body.date,
+            purpose: 'adjustment',
+            description: `${body.action === 'release' ? 'Eliberare estimare venit' : 'Reevaluare venit de facturat'} · ${result.treatment.serviceReference} · ${body.reference}`,
+            sourceReference: `unbilled-sale-adjustment:${body.reference}`,
+            correctsJournalId: result.previousJournalId,
+            lines: result.lines,
+            unbilledSaleAdjustment: result.treatment,
+          }),
+          revision,
+        );
+      },
+    );
+  }
+  adjustments(actor: Actor, input: unknown) {
+    const body = unbilledSaleAdjustmentPageInput.parse(input);
+    return this.runner.read(
+      actor,
+      async (tx) => {
+        const [root] = await loadUnbilledSales(tx, actor.companyId, [body.unbilledSaleId]);
+        requireCondition(
+          root && root.journal.date <= body.date,
+          'NOT_FOUND',
+          'Serviciile nu sunt disponibile la această dată.',
+          404,
+        );
+        const rows = await tx
+          .select({ record: unbilledSaleAdjustments, proposal: proposals })
+          .from(unbilledSaleAdjustments)
+          .innerJoin(
+            journals,
+            and(
+              eq(journals.companyId, unbilledSaleAdjustments.companyId),
+              eq(journals.id, unbilledSaleAdjustments.journalId),
+            ),
+          )
+          .innerJoin(
+            proposals,
+            and(
+              eq(proposals.companyId, unbilledSaleAdjustments.companyId),
+              eq(proposals.id, unbilledSaleAdjustments.proposalId),
+            ),
+          )
+          .where(
+            and(
+              eq(unbilledSaleAdjustments.companyId, actor.companyId),
+              eq(unbilledSaleAdjustments.unbilledSaleId, body.unbilledSaleId),
+              lte(journals.date, body.date),
+              body.cursor ? gt(unbilledSaleAdjustments.proposalId, body.cursor) : undefined,
+            ),
+          )
+          .orderBy(asc(unbilledSaleAdjustments.proposalId))
+          .limit(body.limit + 1);
+        return {
+          items: rows.slice(0, body.limit).map(({ record, proposal }) => ({
+            id: record.proposalId,
+            journalId: record.journalId,
+            proposalHash: proposal.hash,
+            treatment: unbilledSaleAdjustmentSchema.parse(
+              generalBodySchema.parse(proposal.body).unbilledSaleAdjustment,
+            ),
+            createdAt: record.createdAt,
+          })),
+          nextCursor: rows.length > body.limit ? rows[body.limit - 1].record.proposalId : null,
+        };
+      },
+      'unbilledSales.adjustments',
+    );
+  }
   propose(actor: Actor, key: string, input: unknown, revision?: { id: string; version: number }) {
     const body = unbilledSaleInput.parse(input);
     return this.runner.run(
@@ -313,6 +415,23 @@ export class UnbilledSales {
               lte(journals.date, body.date),
             ),
           );
+        const adjusted = tx
+          .select({ amount: sql`coalesce(sum(${unbilledSaleAdjustments.grossBani}),0)` })
+          .from(unbilledSaleAdjustments)
+          .innerJoin(
+            journals,
+            and(
+              eq(journals.companyId, unbilledSaleAdjustments.companyId),
+              eq(journals.id, unbilledSaleAdjustments.journalId),
+            ),
+          )
+          .where(
+            and(
+              eq(unbilledSaleAdjustments.companyId, unbilledSalePostings.companyId),
+              eq(unbilledSaleAdjustments.unbilledSaleId, unbilledSalePostings.unbilledSaleId),
+              lte(journals.date, body.date),
+            ),
+          );
         const rows = await tx
           .select({ id: unbilledSalePostings.unbilledSaleId })
           .from(unbilledSalePostings)
@@ -336,7 +455,7 @@ export class UnbilledSales {
               lte(journals.date, body.date),
               body.cursor ? gt(unbilledSalePostings.unbilledSaleId, body.cursor) : undefined,
               body.onlyOpen
-                ? sql`cast(replace(json_extract(${proposals.body}, '$.unbilledSale.gross'),'.','') as integer)>(${used})`
+                ? sql`cast(replace(json_extract(${proposals.body}, '$.unbilledSale.gross'),'.','') as integer)+(${adjusted})>(${used})`
                 : undefined,
             ),
           )

@@ -140,6 +140,13 @@ export async function interpretUnbilledSaleInvoice(
       'UNBILLED_SALE_INVOICE_ORIGIN',
       'Factura trebuie să identifice același client și servicii deja prestate.',
     );
+    requireCondition(
+      state.adjustments.every((row) => row.journal.date <= input.recognitionDate) &&
+        state.matches.every((row) => row.date <= input.recognitionDate),
+      'UNBILLED_SALE_EVENT_ORDER',
+      'Factura nu poate preceda o reevaluare deja contabilizată.',
+      409,
+    );
     const net = toBani(item.net),
       allocatedTax = toBani(item.tax),
       gross = net + allocatedTax;
@@ -165,7 +172,10 @@ export async function interpretUnbilledSaleInvoice(
       originalFinancialYearId: state.body.financialYearId,
       proposalHash: state.proposal.hash,
       positionHash: state.hash,
-      positionVersion: state.matches.length,
+      positionVersion: state.matches.length + state.adjustments.length,
+      ...(state.adjustments.length
+        ? { latestAdjustmentJournalId: state.adjustments.at(-1)!.journal.id }
+        : {}),
       reference: old.reference,
       availableGross: fromBani(remaining.gross),
       remainingGross: fromBani(remaining.gross - gross),

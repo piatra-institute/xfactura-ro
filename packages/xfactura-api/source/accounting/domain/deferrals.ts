@@ -11,8 +11,6 @@ import {
 } from './values';
 
 const terms = {
-  basis: z.literal('uniform_subscription'),
-  method: z.literal('equal_calendar_months'),
   serviceFrom: dateSchema,
   serviceTo: dateSchema,
   evidenceDate: dateSchema,
@@ -28,15 +26,36 @@ export const deferralInput = z
     account: accountCodeSchema,
     deduction: z.enum(['full', 'none']),
     counterpartyVatCollection: z.literal('no'),
+    basis: z.enum(['uniform_subscription', 'uniform_service']),
+    method: z.enum(['equal_calendar_months', 'actual_calendar_days']),
     ...terms,
   })
-  .strict();
+  .strict()
+  .refine(
+    (value) =>
+      value.basis ===
+      (value.method === 'equal_calendar_months' ? 'uniform_subscription' : 'uniform_service'),
+    { message: 'Documentați baza corespunzătoare metodei de alocare.', path: ['basis'] },
+  );
 export const deferralAllocationSchema = z
   .object({ month: dateSchema, date: dateSchema, amount: moneySchema })
   .strict();
-export const deferralTreatmentSchema = z
+export const deferralDayAllocationSchema = deferralAllocationSchema
+  .extend({
+    serviceFrom: dateSchema,
+    serviceTo: dateSchema,
+    days: z.number().int().min(1).max(31),
+  })
+  .strict();
+export const deferralScheduleRowSchema = z.union([
+  deferralAllocationSchema,
+  deferralDayAllocationSchema,
+]);
+const monthlyTreatmentSchema = z
   .object({
     schemaVersion: z.literal(1),
+    basis: z.literal('uniform_subscription'),
+    method: z.literal('equal_calendar_months'),
     ...terms,
     taxPointBasis: z.literal('early_invoice'),
     evidenceHash: z.string().regex(/^[a-f0-9]{64}$/),
@@ -44,6 +63,25 @@ export const deferralTreatmentSchema = z
     schedule: z.array(deferralAllocationSchema).min(1).max(60),
   })
   .strict();
+const dailyTreatmentSchema = z
+  .object({
+    schemaVersion: z.literal(2),
+    basis: z.literal('uniform_service'),
+    method: z.literal('actual_calendar_days'),
+    ...terms,
+    taxPointBasis: z.literal('early_invoice'),
+    evidenceHash: z.string().regex(/^[a-f0-9]{64}$/),
+    amount: moneySchema,
+    dayCountBasis: z.literal('actual_inclusive'),
+    rounding: z.literal('cumulative_floor_bani'),
+    serviceDays: z.number().int().min(1).max(1860),
+    schedule: z.array(deferralDayAllocationSchema).min(1).max(60),
+  })
+  .strict();
+export const deferralTreatmentSchema = z.discriminatedUnion('schemaVersion', [
+  monthlyTreatmentSchema,
+  dailyTreatmentSchema,
+]);
 export const deferralReleaseInput = z
   .object({ financialYearId: idSchema, deferralId: idSchema, month: dateSchema })
   .strict();
@@ -72,8 +110,10 @@ export const deferralReleaseSchema = z
   .strict();
 
 export function monthEnd(month: string) {
-  const [year, number] = dateSchema.parse(month).split('-').map(Number);
-  return new Date(Date.UTC(year, number, 0)).toISOString().slice(0, 10);
+  const date = new Date(`${dateSchema.parse(month).slice(0, 7)}-01T00:00:00Z`);
+  date.setUTCMonth(date.getUTCMonth() + 1);
+  date.setUTCDate(0);
+  return date.toISOString().slice(0, 10);
 }
 /** Uniform full-month benefits; remainder bani belong to the final month. */
 export function allocationSchedule(amount: string, from: string, to: string) {
@@ -103,6 +143,41 @@ export function allocationSchedule(amount: string, from: string, to: string) {
 export type DeferralInput = z.infer<typeof deferralInput>;
 export type DeferralReleaseInput = z.infer<typeof deferralReleaseInput>;
 
+/** Actual inclusive service days; cumulative floor in bani keeps each period boundary within one ban. */
+export function actualDaySchedule(amount: string, from: string, to: string) {
+  dateSchema.parse(from);
+  dateSchema.parse(to);
+  const [firstYear, firstMonth] = from.split('-').map(Number),
+    [lastYear, lastMonth] = to.split('-').map(Number);
+  const count = (lastYear - firstYear) * 12 + lastMonth - firstMonth + 1,
+    total = toBani(amount);
+  requireCondition(
+    from <= to && count >= 1 && count <= 60 && total > 0n,
+    'DEFERRAL_SCHEDULE',
+    'Documentați între una și 60 de luni de servicii uniforme, cu valoare pozitivă.',
+  );
+  const daysBetween = (start: string, end: string) =>
+    Math.round((Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86400000) + 1;
+  const serviceDays = daysBetween(from, to);
+  let cumulativeDays = 0,
+    allocated = 0n;
+  const schedule = Array.from({ length: count }, (_, index) => {
+    const current = new Date(`${from.slice(0, 7)}-01T00:00:00Z`);
+    current.setUTCMonth(current.getUTCMonth() + index);
+    const month = current.toISOString().slice(0, 10),
+      date = monthEnd(month),
+      serviceFrom = from > month ? from : month,
+      serviceTo = to < date ? to : date,
+      days = daysBetween(serviceFrom, serviceTo);
+    cumulativeDays += days;
+    const target = (total * BigInt(cumulativeDays)) / BigInt(serviceDays),
+      value = target - allocated;
+    allocated = target;
+    return { month, date, amount: fromBani(value), serviceFrom, serviceTo, days };
+  });
+  return { serviceDays, schedule };
+}
+
 export const deferralCreditInput = creditNoteInput
   .extend({ kind: z.literal('cancellation'), cancelFrom: dateSchema })
   .strict();
@@ -120,7 +195,7 @@ export const deferralCreditSchema = z
     priorReleaseCount: z.number().int().min(0),
     priorStateHash: z.string().regex(/^[a-f0-9]{64}$/),
     evidenceHash: z.string().regex(/^[a-f0-9]{64}$/),
-    months: z.array(deferralAllocationSchema).min(1).max(60),
+    months: z.array(deferralScheduleRowSchema).min(1).max(60),
     rescheduleId: idSchema.optional(),
     rescheduleVersion: z.number().int().positive().optional(),
   })
@@ -160,7 +235,7 @@ export const deferralRescheduleInput = z
     serviceTo: dateSchema,
     evidenceId: idSchema,
     evidenceDate: dateSchema,
-    method: z.literal('equal_calendar_months'),
+    method: z.enum(['equal_calendar_months', 'actual_calendar_days']),
     priceUnchanged: z.literal(true),
     reason: z.string().trim().min(10).max(1000),
   })
@@ -187,8 +262,8 @@ export const deferralRescheduleEffect = deferralRescheduleInput
     priorCreditHash: z.string().regex(/^[a-f0-9]{64}$/),
     stateHash: z.string().regex(/^[a-f0-9]{64}$/),
     registrationIds: z.array(idSchema).min(1).max(128),
-    beforeSchedule: z.array(deferralAllocationSchema).min(1).max(60),
-    afterSchedule: z.array(deferralAllocationSchema).min(1).max(60),
+    beforeSchedule: z.array(deferralScheduleRowSchema).min(1).max(60),
+    afterSchedule: z.array(deferralScheduleRowSchema).min(1).max(60),
   })
   .strict();
 export type DeferralRescheduleInput = z.infer<typeof deferralRescheduleInput>;

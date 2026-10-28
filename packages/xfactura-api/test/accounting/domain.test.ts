@@ -9,9 +9,97 @@ import {
   trialBalance,
   type PostingLine,
   allocationSchedule,
+  actualDaySchedule,
 } from '../../source/accounting/domain';
 
 describe('the A1 books', () => {
+  test('actual-day allocations retain inclusive days, exact totals and less than one ban of cumulative rounding', () => {
+    expect(actualDaySchedule('100.00', '2026-01-16', '2026-03-15')).toEqual({
+      serviceDays: 59,
+      schedule: [
+        {
+          month: '2026-01-01',
+          date: '2026-01-31',
+          amount: '27.11',
+          serviceFrom: '2026-01-16',
+          serviceTo: '2026-01-31',
+          days: 16,
+        },
+        {
+          month: '2026-02-01',
+          date: '2026-02-28',
+          amount: '47.46',
+          serviceFrom: '2026-02-01',
+          serviceTo: '2026-02-28',
+          days: 28,
+        },
+        {
+          month: '2026-03-01',
+          date: '2026-03-31',
+          amount: '25.43',
+          serviceFrom: '2026-03-01',
+          serviceTo: '2026-03-15',
+          days: 15,
+        },
+      ],
+    });
+    expect(
+      actualDaySchedule('100.00', '2024-02-10', '2024-03-09').schedule.map((row) => row.amount),
+    ).toEqual(['68.96', '31.04']);
+    expect(actualDaySchedule('0.01', '2026-03-05', '2026-03-05')).toMatchObject({
+      serviceDays: 1,
+      schedule: [{ amount: '0.01', days: 1 }],
+    });
+    fc.assert(
+      fc.property(
+        fc.bigInt({ min: 1n, max: 999999999999999999n }),
+        fc.integer({ min: 1996, max: 2101 }),
+        fc.integer({ min: 0, max: 11 }),
+        fc.integer({ min: 1, max: 28 }),
+        fc.integer({ min: 1, max: 1400 }),
+        (total, year, month, day, length) => {
+          const first = new Date(Date.UTC(year, month, day)),
+            last = new Date(first);
+          last.setUTCDate(last.getUTCDate() + length - 1);
+          const from = first.toISOString().slice(0, 10),
+            to = last.toISOString().slice(0, 10),
+            amount = `${total / 100n}.${String(total % 100n).padStart(2, '0')}`;
+          const result = actualDaySchedule(amount, from, to),
+            calendar = new Map<string, number>();
+          for (let i = 0; i < length; i++) {
+            const date = new Date(first);
+            date.setUTCDate(date.getUTCDate() + i);
+            const key = date.toISOString().slice(0, 7);
+            calendar.set(key, (calendar.get(key) ?? 0) + 1);
+          }
+          expect(result.serviceDays).toBe(length);
+          expect(result.schedule).toHaveLength(calendar.size);
+          let cumulativeDays = 0,
+            allocated = 0n;
+          for (const row of result.schedule) {
+            const value = BigInt(row.amount.replace('.', ''));
+            expect(value >= 0n).toBe(true);
+            expect(row.days).toBe(calendar.get(row.month.slice(0, 7))!);
+            expect(row.serviceFrom >= from && row.serviceTo <= to).toBe(true);
+            cumulativeDays += row.days;
+            allocated += value;
+            const shortfall = total * BigInt(cumulativeDays) - allocated * BigInt(length);
+            expect(shortfall >= 0n && shortfall < BigInt(length)).toBe(true);
+          }
+          expect(allocated).toBe(total);
+          expect(cumulativeDays).toBe(length);
+        },
+      ),
+      { seed: 20261029, numRuns: 500 },
+    );
+    for (const [amount, from, to] of [
+      ['0.00', '2026-01-01', '2026-01-31'],
+      ['1.00', '2026-03-01', '2026-02-28'],
+      ['1.00', '2026-02-30', '2026-03-01'],
+      ['1.00', '2025-01-01', '2030-01-01'],
+    ])
+      expect(() => actualDaySchedule(amount, from, to)).toThrow();
+  });
   test('uniform subscription schedules preserve exact bani over full months, including leap years', () => {
     const decimal = (value: bigint) => `${value / 100n}.${String(value % 100n).padStart(2, '0')}`;
     expect(allocationSchedule('100.00', '2024-02-01', '2024-04-30')).toEqual([

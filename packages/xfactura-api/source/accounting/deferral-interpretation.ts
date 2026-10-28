@@ -1,9 +1,10 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, gt, lte, inArray } from 'drizzle-orm';
 import type { Transaction } from './db';
 import type { Actor } from './commands';
 import {
   Amount,
   allocationSchedule,
+  actualDaySchedule,
   canonical,
   deferralInput,
   deferralReleaseSchema,
@@ -15,7 +16,7 @@ import {
   type GeneralBody,
   type PostingLine,
 } from './domain';
-import { evidence, periods } from './schema';
+import { evidence, periods, regimeEvents } from './schema';
 import { interpretInvoice } from './invoice-postings';
 import { invoiceRule } from './accounting-catalogue';
 import { financialYearForDate, regimesAt } from './foundation';
@@ -73,9 +74,14 @@ export async function interpretDeferralInvoice(
     result.invoice.direction === 'purchase'
       ? new Amount(result.treatment.gross).minus(result.treatment.deductibleTax).toFixed(2)
       : result.treatment.net;
-  const schedule = allocationSchedule(amount, input.serviceFrom, input.serviceTo);
+  const daily =
+    input.method === 'actual_calendar_days'
+      ? actualDaySchedule(amount, input.serviceFrom, input.serviceTo)
+      : null;
+  const schedule =
+    daily?.schedule ?? allocationSchedule(amount, input.serviceFrom, input.serviceTo);
   const plan = deferralTreatmentSchema.parse({
-    schemaVersion: 1,
+    schemaVersion: daily ? 2 : 1,
     basis: input.basis,
     method: input.method,
     taxPointBasis: input.taxPointBasis,
@@ -86,6 +92,13 @@ export async function interpretDeferralInvoice(
     evidenceHash: source.hash,
     amount,
     schedule,
+    ...(daily
+      ? {
+          serviceDays: daily.serviceDays,
+          dayCountBasis: 'actual_inclusive',
+          rounding: 'cumulative_floor_bani',
+        }
+      : {}),
   });
   return {
     invoice: result.invoice,
@@ -99,14 +112,46 @@ export async function interpretDeferralInvoice(
 }
 
 /** Known rate/registration transitions need their own adjustment treatment. */
+async function checkRegistrationPath(tx: Transaction, actor: Actor, from: string, to: string) {
+  const original = await regimesAt(tx, actor.companyId, from);
+  const changes = await tx
+    .select({ axis: regimeEvents.axis, value: regimeEvents.value })
+    .from(regimeEvents)
+    .where(
+      and(
+        eq(regimeEvents.companyId, actor.companyId),
+        inArray(regimeEvents.axis, ['vat', 'vat_collection']),
+        gt(regimeEvents.effectiveFrom, from),
+        lte(regimeEvents.effectiveFrom, to),
+      ),
+    );
+  requireCondition(
+    changes.every((row) =>
+      row.axis === 'vat'
+        ? row.value === original.vat?.value
+        : original.vat?.value !== 'normal_vat' || row.value === 'no',
+    ),
+    'DEFERRAL_VAT_TRANSITION',
+    'Schimbările de regim din interiorul perioadei cer un tratament distinct.',
+  );
+}
 export async function checkDeferralHorizon(
   tx: Transaction,
   actor: Actor,
-  result: Awaited<ReturnType<typeof interpretDeferralInvoice>>,
+  result: {
+    invoice: Awaited<ReturnType<typeof interpretDeferralInvoice>>['invoice'];
+    treatment: { taxPointDate: string; deferral?: { schedule: { date: string }[] } };
+  },
 ) {
   const original = await regimesAt(tx, actor.companyId, result.treatment.taxPointDate),
     category = result.invoice.body.taxes[0].category,
     rate = result.invoice.body.taxes[0].rate ?? '0';
+  await checkRegistrationPath(
+    tx,
+    actor,
+    result.treatment.taxPointDate,
+    result.treatment.deferral!.schedule.at(-1)!.date,
+  );
   for (const allocation of result.treatment.deferral!.schedule) {
     const current = await regimesAt(tx, actor.companyId, allocation.date);
     requireCondition(
@@ -211,6 +256,7 @@ export async function interpretDeferralRelease(
   );
   await openMonth(tx, actor.companyId, allocation.date);
   await checkDeferralSource(tx, actor, state);
+  await checkRegistrationPath(tx, actor, state.interpretation.taxPointDate, allocation.date);
   const old = state.interpretation,
     current = await regimesAt(tx, actor.companyId, allocation.date),
     original = await regimesAt(tx, actor.companyId, old.taxPointDate),

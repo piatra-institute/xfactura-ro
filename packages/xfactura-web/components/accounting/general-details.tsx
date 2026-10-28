@@ -35,6 +35,7 @@ export default function GeneralDetails({
     credit = invoice?.credit,
     cancellation = invoice?.deferralCredit,
     discount = invoice?.deferralDiscount,
+    deferral = invoice?.deferral,
     service = body.accrual ?? body.unbilledSale,
     matchedServices = invoice?.accrualMatch?.allocations ?? invoice?.unbilledSaleMatch?.allocations;
   if (body.advancePayment || body.advanceRefund)
@@ -70,8 +71,8 @@ export default function GeneralDetails({
       </dl>
     );
   }
-  if (body.accrualAdjustment) {
-    const adjustment = body.accrualAdjustment;
+  if (body.accrualAdjustment || body.unbilledSaleAdjustment) {
+    const adjustment = (body.accrualAdjustment ?? body.unbilledSaleAdjustment)!;
     const amounts = [
       { key: 'net' as const, label: 'Valoare fără TVA' },
       ...(adjustment.previousRemaining.tax !== '0.00' || adjustment.remaining.tax !== '0.00'
@@ -79,10 +80,13 @@ export default function GeneralDetails({
             {
               key: 'tax' as const,
               label:
-                adjustment.previousRemaining.deferredTax !== '0.00' ||
-                adjustment.remaining.deferredTax !== '0.00'
+                body.accrualAdjustment &&
+                (body.accrualAdjustment.previousRemaining.deferredTax !== '0.00' ||
+                  body.accrualAdjustment.remaining.deferredTax !== '0.00')
                   ? 'TVA în așteptarea facturii'
-                  : 'TVA inclusă în cost',
+                  : body.unbilledSaleAdjustment
+                    ? 'TVA colectată'
+                    : 'TVA inclusă în cost',
             },
           ]
         : []),
@@ -92,7 +96,7 @@ export default function GeneralDetails({
       <>
         <dl className="acc-review-meta">
           <div>
-            <dt>Angajament inițial</dt>
+            <dt>{body.accrualAdjustment ? 'Angajament inițial' : 'Servicii inițiale'}</dt>
             <dd>
               <button
                 className="acc-secondary"
@@ -100,7 +104,9 @@ export default function GeneralDetails({
                   showJournal(adjustment.originalJournalId, adjustment.originalFinancialYearId)
                 }
               >
-                {adjustment.accrualReference}
+                {'accrualReference' in adjustment
+                  ? adjustment.accrualReference
+                  : adjustment.serviceReference}
               </button>
             </dd>
           </div>
@@ -108,6 +114,12 @@ export default function GeneralDetails({
             <dt>Data informației noi</dt>
             <dd>{adjustment.newInformationDate}</dd>
           </div>
+          {body.unbilledSaleAdjustment?.taxTreatment === 'same_service_month' ? (
+            <div>
+              <dt>Perioada TVA</dt>
+              <dd>{body.unbilledSaleAdjustment.taxPointDate.slice(0, 7)}</dd>
+            </div>
+          ) : null}
           <div>
             <dt>Motiv</dt>
             <dd>{adjustment.reason}</dd>
@@ -159,6 +171,12 @@ export default function GeneralDetails({
           <dt>Data documentului</dt>
           <dd>{service.evidenceDate}</dd>
         </div>
+        {body.unbilledSale?.measurementBasis === 'estimated_consideration' ? (
+          <div>
+            <dt>Bază de evaluare</dt>
+            <dd>Valoare estimată</dd>
+          </div>
+        ) : null}
         {body.accrual && body.accrual.deferredTax !== '0.00' ? (
           <div>
             <dt>TVA în așteptarea facturii</dt>
@@ -272,7 +290,7 @@ export default function GeneralDetails({
             <dt>
               {invoice.advance
                 ? 'Serviciu estimat pentru'
-                : invoice.deferral
+                : deferral
                   ? 'Începutul serviciilor'
                   : 'Data serviciului'}
             </dt>
@@ -306,7 +324,7 @@ export default function GeneralDetails({
           {invoice.treatmentEvidenceId !== body.evidenceId ? (
             <div>
               <dt>
-                {invoice.deferral || invoice.advance
+                {deferral || invoice.advance
                   ? 'Contract'
                   : discount
                     ? 'Acord de reducere'
@@ -323,21 +341,33 @@ export default function GeneralDetails({
               </dd>
             </div>
           ) : null}
-          {invoice.deferral ? (
+          {deferral ? (
             <>
               <div>
-                <dt>Perioada abonamentului</dt>
+                <dt>
+                  {deferral.schemaVersion === 2 ? 'Perioada serviciilor' : 'Perioada abonamentului'}
+                </dt>
                 <dd>
-                  {invoice.deferral.serviceFrom} — {invoice.deferral.serviceTo}
+                  {deferral.serviceFrom} — {deferral.serviceTo}
                 </dd>
               </div>
               <div>
                 <dt>Alocare</dt>
-                <dd>Lunar, în cote egale</dd>
+                <dd>
+                  {deferral.method === 'actual_calendar_days'
+                    ? 'Pe zile calendaristice'
+                    : 'Lunar, în cote egale'}
+                </dd>
               </div>
+              {deferral.schemaVersion === 2 ? (
+                <div>
+                  <dt>Zile de servicii</dt>
+                  <dd>{deferral.serviceDays}</dd>
+                </div>
+              ) : null}
               <div>
                 <dt>Justificare</dt>
-                <dd>{invoice.deferral.reason}</dd>
+                <dd>{deferral.reason}</dd>
               </div>
             </>
           ) : null}
@@ -364,7 +394,7 @@ export default function GeneralDetails({
             </table>
           </div>
         ) : null}
-        {invoice.deferral ? (
+        {deferral ? (
           <div className="acc-table-scroll">
             <table>
               <caption>Plan de alocare</caption>
@@ -372,14 +402,18 @@ export default function GeneralDetails({
                 <tr>
                   <th>Lună</th>
                   <th>Data înregistrării</th>
+                  {deferral.schemaVersion === 2 ? <th>Zile</th> : null}
                   <th>{invoice.direction === 'purchase' ? 'Cheltuială' : 'Venit'}</th>
                 </tr>
               </thead>
               <tbody>
-                {invoice.deferral.schedule.map((item) => (
+                {deferral.schedule.map((item) => (
                   <tr key={item.month}>
                     <td>{item.month.slice(0, 7)}</td>
                     <td>{item.date}</td>
+                    {deferral.schemaVersion === 2 ? (
+                      <td>{'days' in item && typeof item.days === 'number' ? item.days : ''}</td>
+                    ) : null}
                     <td>{formatMoney(item.amount)}</td>
                   </tr>
                 ))}

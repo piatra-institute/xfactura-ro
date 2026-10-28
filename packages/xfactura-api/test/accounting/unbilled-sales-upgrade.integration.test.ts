@@ -38,6 +38,7 @@ test.each([
   { baseline: 23 },
   { baseline: 25 },
   { baseline: 27 },
+  { baseline: 32 },
 ])(
   'populated 00$baseline books upgrade without rewriting evidence, approved treatments, matches or cached commands',
   async ({ baseline }) => {
@@ -220,6 +221,38 @@ test.each([
         oldStatement = bankInput
           ? await service.bank.importStatement(actor, bankKey, bankInput)
           : null;
+      const pendingSale =
+        baseline === 32
+          ? await (async () => {
+              const [originalSale] = await db.orm.select().from(unbilledSalePostings);
+              const file = await service.documents.record(actor, key(), {
+                filename: 'pending-sale.xml',
+                mediaType: 'application/xml',
+                bytes: Buffer.from(
+                  invoiceXml({
+                    direction: 'sale',
+                    number: 'PENDING-SALE',
+                    date: '2026-03-01',
+                    taxPointDate: '2026-02-28',
+                  }),
+                ),
+              });
+              const invoice = await service.invoices.import(actor, key(), { evidenceId: file.id });
+              const proposal = await service.unbilledSales.matchInvoice(actor, key(), {
+                financialYearId: financialYear.id,
+                invoiceId: invoice.id,
+                recognitionDate: '2026-03-01',
+                allocations: [
+                  { unbilledSaleId: originalSale.unbilledSaleId, net: '100.00', tax: '21.00' },
+                ],
+              });
+              await service.books.approve(actor, key(), proposal.id, {
+                version: proposal.version,
+                hash: proposal.hash,
+              });
+              return proposal;
+            })()
+          : null;
       const tables = {
           commands,
           evidence,
@@ -268,6 +301,13 @@ test.each([
       expect(await service.invoices.import(actor, key(), { evidenceId: xml.id })).toEqual(invoice);
       expect(await db.orm.select().from(unbilledSalePostings)).toHaveLength(baseline >= 17 ? 1 : 0);
       expect(await db.orm.select().from(unbilledSaleMatches)).toHaveLength(0);
+      if (pendingSale) {
+        const input = { id: pendingSale.id, version: pendingSale.version, hash: pendingSale.hash },
+          commandKey = key();
+        const posted = await service.ledger.post(actor, commandKey, input);
+        expect(await service.ledger.post(actor, commandKey, input)).toEqual(posted);
+        expect(await db.orm.select().from(unbilledSaleMatches)).toHaveLength(1);
+      }
       expect(await service.accruals.get(actor, { id: original.id, date: '2026-02-28' })).toEqual(
         before,
       );
