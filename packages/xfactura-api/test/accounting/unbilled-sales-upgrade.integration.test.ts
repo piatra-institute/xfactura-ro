@@ -24,8 +24,12 @@ import {
   proposals,
   unbilledSaleMatches,
   unbilledSalePostings,
+  movements,
+  statements,
+  statementMovements,
 } from '../../source/accounting/schema';
 import { invoiceXml } from './fixtures/invoice';
+import { iban, camt, camtEntry } from './fixtures/bank';
 
 test.each([
   { baseline: 15 },
@@ -33,6 +37,7 @@ test.each([
   { baseline: 19 },
   { baseline: 23 },
   { baseline: 25 },
+  { baseline: 27 },
 ])(
   'populated 00$baseline books upgrade without rewriting evidence, approved treatments, matches or cached commands',
   async ({ baseline }) => {
@@ -190,6 +195,31 @@ test.each([
           }),
         );
       }
+      const bankSource =
+        baseline >= 27
+          ? await service.documents.record(actor, key(), {
+              filename: 'old-statement.csv',
+              mediaType: 'text/csv',
+              bytes: Buffer.from(
+                'movement_id,booking_date,amount,currency,reference\nUPGRADE-PAY,2026-10-05,-100.00,RON,Retained original payment\n',
+              ),
+            })
+          : null;
+      const bankInput = bankSource
+        ? {
+            evidenceId: bankSource.id,
+            bankAccount: iban,
+            statementId: 'PRE-UPGRADE',
+            from: '2026-10-01',
+            to: '2026-10-31',
+            opening: '1000.00',
+            closing: '900.00',
+          }
+        : null;
+      const bankKey = key(),
+        oldStatement = bankInput
+          ? await service.bank.importStatement(actor, bankKey, bankInput)
+          : null;
       const tables = {
           commands,
           evidence,
@@ -204,6 +234,7 @@ test.each([
           accrualMatches,
           ...(baseline >= 17 ? { unbilledSalePostings, unbilledSaleMatches } : {}),
           ...(baseline >= 19 ? { accrualAdjustments } : {}),
+          ...(baseline >= 27 ? { movements, statements, statementMovements } : {}),
         },
         preserved = new Map<string, unknown>();
       for (const [name, table] of Object.entries(tables))
@@ -213,6 +244,27 @@ test.each([
       await migrate(db);
       for (const [name, table] of Object.entries(tables))
         expect(preserved.get(name)).toEqual(await db.orm.select().from(table));
+      if (bankInput) {
+        expect(await service.bank.importStatement(actor, bankKey, bankInput)).toEqual(
+          oldStatement!,
+        );
+        const xml = await service.documents.record(actor, key(), {
+          filename: 'post-upgrade.xml',
+          mediaType: 'application/xml',
+          bytes: Buffer.from(
+            camt({
+              entries: camtEntry({ amount: '100.00', bankRef: 'UPGRADE-PAY' }),
+              closing: '900.00',
+            }),
+          ),
+        });
+        await service.bankFiles.import(actor, key(), {
+          evidenceId: xml.id,
+          financialYearId: financialYear.id,
+          format: 'camt.053',
+        });
+        expect(preserved.get('movements')).toEqual(await db.orm.select().from(movements));
+      }
       expect(await service.invoices.import(actor, key(), { evidenceId: xml.id })).toEqual(invoice);
       expect(await db.orm.select().from(unbilledSalePostings)).toHaveLength(baseline >= 17 ? 1 : 0);
       expect(await db.orm.select().from(unbilledSaleMatches)).toHaveLength(0);

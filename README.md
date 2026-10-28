@@ -28,6 +28,8 @@ The accounting engine includes year-scoped general postings, analytical accounts
 
 Retained e-Factura ZIP imports now preserve the original archive, extracted XML/signature/supporting files and an immutable provenance manifest. API/MCP imports the batch atomically; invoice review links the exact ZIP/member bytes. Signature and ANAF acceptance verification remain separate from import.
 
+Bank imports accept bounded complete RON MT940 and camt.053.001.02/.08 files alongside CSV, retaining booked/value dates, references, batch details and original bytes. API/MCP reuses known movements across sources; the bank screen verifies source details and exact balances. Daily statement chains must cover the month without gaps before closing. See the [bank-file workflow](docs/AGENT_API.md#bank-file-workflow) for configuration, limits and unsupported variants.
+
 ## SQLite and Turso
 
 Configure `.env` using [.env.example](.env.example). Local data is stored in `.accounting/xfactura.db`; immutable originals and generated exports are stored in `.accounting/objects`.
@@ -44,6 +46,8 @@ bun run db:migrate
 ```
 
 Review the generated migration and snapshot together. The archive tables, indexes, foreign keys and checks in `0026_invoice_archives.sql` are generated from `schema.ts`. Its companion `0027_invoice_archive_guards.sql` contains hand-written SQLite triggers for immutable manifests and member projections; Drizzle Kit does not model those trigger definitions. `generate --custom` creates an empty migration for this unsupported DDL, rather than generating its SQL. See [Drizzle Kit custom migrations](https://orm.drizzle.team/docs/drizzle-kit-generate#custom-migrations). `0001_posting_guards.sql` is a Drizzle custom migration for database invariants that schema declarations cannot express: balanced atomic postings, immutability and closed-period protection. SQLite table rebuilds can remove triggers; recheck those guards whenever a generated migration rebuilds a protected table. The later correction migration adds its own approval, exact-line and immutable-link guards without rebuilding the original tables. Do not hand-write table migrations or apply schema pushes to accounting books.
+
+The bank tables, indexes, foreign keys and checks in `0028_bank_statement_files.sql` are also Drizzle-generated. `0029_bank_statement_file_guards.sql` defines only the SQLite manifest/projection invariants that Drizzle cannot represent. A populated `0027` upgrade proves existing CSV source identities and cached results remain intact.
 
 ## Docker Compose
 

@@ -68,78 +68,14 @@ export class Bank {
         'Soldul inițial plus mișcările diferă de soldul final.',
       );
 
-      const hash = sha256(canonical(body));
-      const [previous] = await tx
-        .select()
-        .from(statements)
-        .where(
-          and(
-            eq(statements.companyId, actor.companyId),
-            eq(statements.bankAccount, body.bankAccount),
-            eq(statements.sourceId, body.statementId),
-          ),
-        );
-      if (previous) {
-        requireCondition(
-          previous.hash === hash,
-          'STATEMENT_CONFLICT',
-          'Identificatorul extrasului există cu alte date.',
-          409,
-        );
-        return { id: previous.id };
-      }
       await ensureBankAccount(tx, actor, body.bankAccount, body.from);
-      const statementId = randomUUID();
-      await tx.insert(statements).values({
-        id: statementId,
-        companyId: actor.companyId,
-        evidenceId: source.id,
-        bankAccount: body.bankAccount,
-        sourceId: body.statementId,
-        periodFrom: body.from,
-        periodTo: body.to,
-        openingBani: toBani(body.opening),
-        closingBani: toBani(body.closing),
-        hash,
-      });
-
-      for (const row of rows) {
-        const [previousMovement] = await tx
-          .select()
-          .from(movements)
-          .where(
-            and(
-              eq(movements.companyId, actor.companyId),
-              eq(movements.bankAccount, body.bankAccount),
-              eq(movements.sourceId, row.sourceId),
-            ),
-          );
-        if (previousMovement) {
-          requireCondition(
-            previousMovement.date === row.date &&
-              previousMovement.amountBani === toBani(row.amount) &&
-              previousMovement.reference === row.reference,
-            'MOVEMENT_CONFLICT',
-            'Mișcare bancară cu același identificator și alte date.',
-            409,
-          );
-        }
-        const movementId = previousMovement?.id ?? randomUUID();
-        if (!previousMovement)
-          await tx.insert(movements).values({
-            id: movementId,
-            companyId: actor.companyId,
-            bankAccount: body.bankAccount,
-            sourceId: row.sourceId,
-            date: row.date,
-            amountBani: toBani(row.amount),
-            reference: row.reference,
-          });
-        await tx
-          .insert(statementMovements)
-          .values({ companyId: actor.companyId, statementId, movementId });
-      }
-      return { id: statementId };
+      const stored = await retainBankStatement(
+        tx,
+        actor,
+        { ...body, hash: sha256(canonical(body)) },
+        rows,
+      );
+      return { id: stored.id };
     });
   }
 
@@ -346,4 +282,131 @@ export class Bank {
     });
     return { id };
   }
+}
+
+export async function retainBankStatement(
+  tx: Transaction,
+  actor: Actor,
+  body: {
+    evidenceId: string;
+    bankAccount: string;
+    statementId: string;
+    from: string;
+    to: string;
+    opening: string;
+    closing: string;
+    hash: string;
+  },
+  rows: Array<{
+    sourceId: string;
+    date: string;
+    amount: string;
+    reference: string;
+    movementId?: string;
+  }>,
+) {
+  const [previous] = await tx
+    .select()
+    .from(statements)
+    .where(
+      and(
+        eq(statements.companyId, actor.companyId),
+        eq(statements.bankAccount, body.bankAccount),
+        eq(statements.sourceId, body.statementId),
+      ),
+    );
+  if (previous) {
+    requireCondition(
+      previous.hash === body.hash,
+      'STATEMENT_CONFLICT',
+      'Identificatorul extrasului există cu alte date.',
+      409,
+    );
+    const links = await tx
+      .select({ id: movements.id, sourceId: movements.sourceId })
+      .from(statementMovements)
+      .innerJoin(
+        movements,
+        and(
+          eq(movements.companyId, statementMovements.companyId),
+          eq(movements.id, statementMovements.movementId),
+        ),
+      )
+      .where(
+        and(
+          eq(statementMovements.companyId, actor.companyId),
+          eq(statementMovements.statementId, previous.id),
+        ),
+      );
+    const ordered = rows.map((row) =>
+      links.find((link) =>
+        row.movementId ? link.id === row.movementId : link.sourceId === row.sourceId,
+      ),
+    );
+    requireCondition(
+      links.length === rows.length && ordered.every(Boolean),
+      'STATEMENT_CONFLICT',
+      'Mișcările extrasului nu corespund sursei reimportate.',
+      409,
+    );
+    return { id: previous.id, movements: ordered.map((row) => row!) };
+  }
+  const statementId = randomUUID();
+  await tx.insert(statements).values({
+    id: statementId,
+    companyId: actor.companyId,
+    evidenceId: body.evidenceId,
+    bankAccount: body.bankAccount,
+    sourceId: body.statementId,
+    periodFrom: body.from,
+    periodTo: body.to,
+    openingBani: toBani(body.opening),
+    closingBani: toBani(body.closing),
+    hash: body.hash,
+  });
+  const stored: Array<{ id: string; sourceId: string }> = [];
+  for (const row of rows) {
+    const [existing] = await tx
+      .select()
+      .from(movements)
+      .where(
+        and(
+          eq(movements.companyId, actor.companyId),
+          eq(movements.bankAccount, body.bankAccount),
+          row.movementId ? eq(movements.id, row.movementId) : eq(movements.sourceId, row.sourceId),
+        ),
+      );
+    if (existing)
+      requireCondition(
+        existing.date === row.date &&
+          existing.amountBani === toBani(row.amount) &&
+          (row.movementId || existing.reference === row.reference),
+        'MOVEMENT_CONFLICT',
+        'Mișcare bancară cu același identificator și alte date.',
+        409,
+      );
+    else
+      requireCondition(
+        !row.movementId,
+        'MOVEMENT_CONFLICT',
+        'Mișcarea bancară identificată nu mai este disponibilă.',
+        409,
+      );
+    const id = existing?.id ?? randomUUID();
+    if (!existing)
+      await tx.insert(movements).values({
+        id,
+        companyId: actor.companyId,
+        bankAccount: body.bankAccount,
+        sourceId: row.sourceId,
+        date: row.date,
+        amountBani: toBani(row.amount),
+        reference: row.reference,
+      });
+    await tx
+      .insert(statementMovements)
+      .values({ companyId: actor.companyId, statementId, movementId: id });
+    stored.push({ id, sourceId: existing?.sourceId ?? row.sourceId });
+  }
+  return { id: statementId, movements: stored };
 }

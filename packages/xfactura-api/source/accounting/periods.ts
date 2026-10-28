@@ -153,16 +153,33 @@ export class Periods {
         ),
       );
     const banks = accounts.filter((account) => account.kind === 'bank');
-    const covering = statement.filter((item) =>
-      banks.some(
-        (account) =>
-          account.identifier === item.bankAccount &&
-          item.periodFrom <= (account.openedOn > month ? account.openedOn : month) &&
-          item.periodTo >= monthEnd,
-      ),
+    const covering = statement.filter(
+      (item) => item.periodFrom <= monthEnd && item.periodTo >= monthEnd,
     );
     requireCondition(
-      banks.every((account) => covering.some((item) => item.bankAccount === account.identifier)),
+      banks.every((account) => {
+        let next = account.openedOn > month ? account.openedOn : month;
+        const chain = statement
+          .filter(
+            (item) =>
+              item.bankAccount === account.identifier &&
+              item.periodTo >= next &&
+              item.periodFrom <= monthEnd,
+          )
+          .sort(
+            (a, b) =>
+              a.periodFrom.localeCompare(b.periodFrom) || a.periodTo.localeCompare(b.periodTo),
+          );
+        for (const item of chain) {
+          if (item.periodFrom > next) return false;
+          if (item.periodTo >= monthEnd) return true;
+          if (item.periodTo >= next)
+            next = new Date(Date.parse(`${item.periodTo}T00:00:00Z`) + 86400000)
+              .toISOString()
+              .slice(0, 10);
+        }
+        return false;
+      }),
       'STATEMENT_REQUIRED',
       'Lipsește extrasul complet pentru un cont bancar activ.',
     );

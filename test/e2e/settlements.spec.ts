@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { invoiceXml } from '../../packages/xfactura-api/test/accounting/fixtures/invoice';
+import { iban, camt, camtEntry } from '../../packages/xfactura-api/test/accounting/fixtures/bank';
 
 test('verifies a cross-year credit and source-linked settlement prepared through the agent API', async ({
   page,
@@ -116,7 +117,7 @@ test('verifies a cross-year credit and source-linked settlement prepared through
     validFrom: '2026-01-01',
   });
   await invoke('treasury.createAccount', {
-    identifier: 'RO00SECOND',
+    identifier: iban,
     kind: 'bank',
     currency: 'RON',
     ledgerAccount: '5121.SECOND',
@@ -179,18 +180,26 @@ test('verifies a cross-year credit and source-linked settlement prepared through
   await proposal.getByRole('button', { name: 'Aprobă această versiune', exact: true }).click();
   await proposal.getByRole('button', { name: 'Contabilizează', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('contabilizată');
-  const csv = await source(
-    'statement.csv',
-    'movement_id,booking_date,amount,currency,reference\nRECEIPT,2026-01-20,94.80,RON,Incasare INV-2025\n',
-  );
-  await invoke('bank.importStatement', {
-    evidenceId: csv.id,
-    bankAccount: 'RO00SECOND',
-    statementId: 'JAN-2026',
+  const bankXml = camt({
+    id: 'JAN-2026',
     from: '2026-01-01',
     to: '2026-01-31',
     opening: '0.00',
     closing: '94.80',
+    entries: camtEntry({
+      amount: '94.80',
+      direction: 'CRDT',
+      bankRef: 'RECEIPT',
+      date: '2026-01-20',
+      value: '2026-01-21',
+      text: 'Incasare INV-2025',
+    }),
+  });
+  const statement = await source('statement.xml', bankXml);
+  await invoke('bank.importFile', {
+    evidenceId: statement.id,
+    financialYearId: year.id,
+    format: 'camt.053',
   });
   const movements = await invoke('bank.movements', { matched: false });
   await invoke(
@@ -206,7 +215,7 @@ test('verifies a cross-year credit and source-linked settlement prepared through
   await page.reload();
   await expect(proposal.getByRole('table').first()).toContainText('INV-2025');
   await expect(proposal.getByRole('table').first()).toContainText('96,80');
-  await expect(proposal).toContainText('RO00SECOND');
+  await expect(proposal).toContainText(iban);
   await expect(proposal).toContainText('Comision bancar: 2,00');
   await expect(proposal.locator('.acc-review-heading strong')).toContainText('94,80');
   await page.screenshot({
@@ -221,6 +230,25 @@ test('verifies a cross-year credit and source-linked settlement prepared through
   ).toBe('0.00');
   await page.getByRole('button', { name: /^Bancă/ }).click();
   await expect(page.locator('.acc-bank-row')).toContainText('Reconciliată');
+  await expect(page.locator('.acc-bank-row')).toContainText('RECEIPT');
+  await expect(page.locator('.acc-bank-row')).not.toContainText(/bank:[a-f0-9]{64}/);
+  const sourceDetails = page.locator('.acc-bank-source');
+  await sourceDetails.locator('summary').focus();
+  await page.keyboard.press('Enter');
+  await expect(sourceDetails).toContainText('Data valutei');
+  await expect(sourceDetails).toContainText('2026-01-21');
+  await expect(sourceDetails).toContainText('RECEIPT');
+  const sourceLink = page.getByRole('link', { name: 'JAN-2026', exact: true });
+  await expect(sourceLink).toBeVisible();
+  const [download] = await Promise.all([page.waitForEvent('download'), sourceLink.click()]);
+  const stream = await download.createReadStream(),
+    chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(chunk);
+  expect(Buffer.concat(chunks).toString()).toBe(bankXml);
+  await page.screenshot({
+    path: info.outputPath(`bank-source-${info.project.name}.png`),
+    fullPage: true,
+  });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );

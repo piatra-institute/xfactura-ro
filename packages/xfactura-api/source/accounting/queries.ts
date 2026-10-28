@@ -27,11 +27,14 @@ import {
   invoiceSettlements,
   invoiceDocuments,
   invoiceArchiveEntries,
+  bankStatementSources,
+  bankStatementEntries,
   periods,
   proposals,
   statements,
   taxPositions,
 } from './schema';
+import { meaningfulReference } from './bank-statement-document';
 
 export function overview(runner: Commands, actor: Actor, financialYearId?: string) {
   if (financialYearId) idSchema.parse(financialYearId);
@@ -117,6 +120,57 @@ export function overview(runner: Commands, actor: Actor, financialYearId?: strin
         ),
       )
       .orderBy(desc(statements.periodTo));
+    const bankReferences = bankMovements.length
+      ? await tx
+          .select({
+            movementId: bankStatementEntries.movementId,
+            bankReference: sql<
+              string | null
+            >`json_extract(${bankStatementEntries.body},'$.bankReference')`,
+            customerReference: sql<
+              string | null
+            >`json_extract(${bankStatementEntries.body},'$.customerReference')`,
+            entryReference: sql<
+              string | null
+            >`json_extract(${bankStatementEntries.body},'$.entryReference')`,
+          })
+          .from(bankStatementEntries)
+          .innerJoin(
+            movements,
+            and(
+              eq(movements.companyId, bankStatementEntries.companyId),
+              eq(movements.id, bankStatementEntries.movementId),
+            ),
+          )
+          .where(
+            and(
+              eq(bankStatementEntries.companyId, actor.companyId),
+              gte(movements.date, financialYear.from),
+              lte(movements.date, financialYear.to),
+            ),
+          )
+      : [];
+    const bankSources = bankStatements.length
+      ? await tx
+          .select({
+            id: bankStatementSources.id,
+            statementId: bankStatementSources.statementId,
+            sourceId: bankStatementSources.sourceId,
+            format: sql<
+              'mt940' | 'camt.053'
+            >`json_extract(${bankStatementSources.body},'$.format')`,
+          })
+          .from(bankStatementSources)
+          .where(
+            and(
+              eq(bankStatementSources.companyId, actor.companyId),
+              inArray(
+                bankStatementSources.statementId,
+                bankStatements.map((row) => row.id),
+              ),
+            ),
+          )
+      : [];
     const positions = await tx
       .select()
       .from(taxPositions)
@@ -333,6 +387,17 @@ export function overview(runner: Commands, actor: Actor, financialYearId?: strin
       })),
       movements: bankMovements.map(({ amountBani, ...movement }) => ({
         ...movement,
+        sourceReference:
+          bankReferences
+            .filter((row) => row.movementId === movement.id)
+            .map(
+              (row) =>
+                meaningfulReference(row.bankReference) ??
+                meaningfulReference(row.customerReference) ??
+                meaningfulReference(row.entryReference),
+            )
+            .find(Boolean) ??
+          (/^(bank|entry):[a-f0-9]{64}$/.test(movement.sourceId) ? null : movement.sourceId),
         amount: fromBani(amountBani),
         matched:
           payments.some((item) => item.movementId === movement.id) ||
@@ -340,6 +405,7 @@ export function overview(runner: Commands, actor: Actor, financialYearId?: strin
       })),
       statements: bankStatements.map(({ openingBani, closingBani, ...statement }) => ({
         ...statement,
+        source: bankSources.find((source) => source.statementId === statement.id) ?? null,
         opening: fromBani(openingBani),
         closing: fromBani(closingBani),
       })),

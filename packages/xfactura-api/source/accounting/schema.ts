@@ -13,6 +13,7 @@ import {
 import type { ProposalBody, StoredLine, Role } from './domain';
 import type { InvoiceDocument } from './invoice-document';
 import type { ArchiveMember } from './invoice-archive';
+import type { StoredBankStatement, StoredBankEntry } from './bank-statement-document';
 
 // libSQL returns 64-bit integers as bigint. Only explicitly small counters use Number.
 const counter = customType<{ data: number; driverData: number | bigint }>({
@@ -590,6 +591,77 @@ export const statements = sqliteTable(
     }),
   ],
 );
+export const bankStatementFiles = sqliteTable(
+  'acc_bank_statement_files',
+  {
+    companyId: companyId(),
+    evidenceId: text('evidence_id').notNull(),
+    financialYearId: text('financial_year_id').notNull(),
+    format: text('format', { enum: ['mt940', 'camt.053'] }).notNull(),
+    parserVersion: text('parser_version').notNull(),
+    inputHash: text('input_hash').notNull(),
+    manifestHash: text('manifest_hash').notNull(),
+    manifest: text('manifest', { mode: 'json' }).$type<StoredBankStatement[]>().notNull(),
+    statementCount: counter('statement_count').notNull(),
+    entryCount: counter('entry_count').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.evidenceId] }),
+    foreignKey({
+      columns: [t.companyId, t.evidenceId],
+      foreignColumns: [evidence.companyId, evidence.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.financialYearId],
+      foreignColumns: [accountingYears.companyId, accountingYears.id],
+    }),
+    check(
+      'bank_file_format',
+      sql`${t.format} in ('mt940','camt.053') and ${t.parserVersion}='bank-statement-1'`,
+    ),
+    check(
+      'bank_file_manifest',
+      sql`json_valid(${t.manifest}) and json_type(${t.manifest})='array' and json_array_length(${t.manifest})=${t.statementCount}`,
+    ),
+    check(
+      'bank_file_counts',
+      sql`typeof(${t.statementCount})='integer' and ${t.statementCount} between 1 and 100 and typeof(${t.entryCount})='integer' and ${t.entryCount} between 0 and 2000`,
+    ),
+  ],
+);
+export const bankStatementSources = sqliteTable(
+  'acc_bank_statement_sources',
+  {
+    companyId: companyId(),
+    id: text('id').notNull(),
+    fileEvidenceId: text('file_evidence_id').notNull(),
+    statementId: text('statement_id').notNull(),
+    ordinal: counter('ordinal').notNull(),
+    bankAccount: text('bank_account').notNull(),
+    sourceId: text('source_id').notNull(),
+    financialHash: text('financial_hash').notNull(),
+    body: text('body', { mode: 'json' }).$type<Omit<StoredBankStatement, 'entries'>>().notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.id] }),
+    uniqueIndex('bank_source_ordinal').on(t.companyId, t.fileEvidenceId, t.ordinal),
+    index('bank_source_identity').on(t.companyId, t.bankAccount, t.sourceId),
+    foreignKey({
+      columns: [t.companyId, t.fileEvidenceId],
+      foreignColumns: [bankStatementFiles.companyId, bankStatementFiles.evidenceId],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.statementId],
+      foreignColumns: [statements.companyId, statements.id],
+    }),
+    check(
+      'bank_source_ordinal_valid',
+      sql`typeof(${t.ordinal})='integer' and ${t.ordinal} between 0 and 99`,
+    ),
+  ],
+);
 export const movements = sqliteTable(
   'acc_movements',
   {
@@ -604,6 +676,34 @@ export const movements = sqliteTable(
   (t) => [
     primaryKey({ columns: [t.companyId, t.id] }),
     uniqueIndex('movement_source').on(t.companyId, t.bankAccount, t.sourceId),
+  ],
+);
+export const bankStatementEntries = sqliteTable(
+  'acc_bank_statement_entries',
+  {
+    companyId: companyId(),
+    id: text('id').notNull(),
+    sourceId: text('source_id').notNull(),
+    movementId: text('movement_id').notNull(),
+    ordinal: counter('ordinal').notNull(),
+    body: text('body', { mode: 'json' }).$type<StoredBankEntry>().notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.id] }),
+    uniqueIndex('bank_entry_source_ordinal').on(t.companyId, t.sourceId, t.ordinal),
+    index('bank_entry_movement').on(t.companyId, t.movementId),
+    foreignKey({
+      columns: [t.companyId, t.sourceId],
+      foreignColumns: [bankStatementSources.companyId, bankStatementSources.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.movementId],
+      foreignColumns: [movements.companyId, movements.id],
+    }),
+    check(
+      'bank_entry_ordinal',
+      sql`typeof(${t.ordinal})='integer' and ${t.ordinal} between 0 and 1999`,
+    ),
   ],
 );
 export const statementMovements = sqliteTable(

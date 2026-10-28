@@ -3,6 +3,7 @@ import { Companies } from './companies';
 import { Books } from './books';
 import { Corrections } from './corrections';
 import { Bank } from './bank';
+import { BankStatementFiles } from './bank-statement-files';
 import { Documents } from './documents';
 import { Exports } from './exports';
 import { Periods } from './periods';
@@ -32,6 +33,7 @@ export class Accounting {
   readonly books: Books;
   readonly corrections: Corrections;
   readonly bank: Bank;
+  readonly bankFiles: BankStatementFiles;
   readonly documents: Documents;
   readonly exports: Exports;
   readonly periods: Periods;
@@ -62,6 +64,7 @@ export class Accounting {
     this.books = new Books(this.commands);
     this.corrections = new Corrections(this.commands);
     this.bank = new Bank(this.commands, objects);
+    this.bankFiles = new BankStatementFiles(this.commands, objects);
     this.documents = new Documents(this.commands, objects);
     this.exports = new Exports(this.commands, objects);
     this.periods = new Periods(this.commands);

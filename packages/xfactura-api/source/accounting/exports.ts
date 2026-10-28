@@ -34,6 +34,9 @@ import {
   movementSources,
   treasuryAccounts,
   bankAccounts,
+  bankStatementFiles,
+  bankStatementSources,
+  bankStatementEntries,
   companies,
   correctionOutcomes,
   evidence,
@@ -52,6 +55,9 @@ import {
 import type { ObjectStore } from './object-store';
 
 const exportTables = {
+  bankStatementFiles,
+  bankStatementSources,
+  bankStatementEntries,
   advancePayments,
   advanceInvoices,
   advanceInvoiceMatches,

@@ -23,6 +23,13 @@ import {
 } from './invoice-archives';
 import { invoicePostingInput } from './invoice-postings';
 import { treasuryPage } from './treasury';
+import {
+  bankFileInput,
+  bankFileReadInput,
+  bankFileOutput,
+  bankStatementEntryPage,
+  bankStatementEntriesOutput,
+} from './bank-statement-files';
 import { positionQuery, positionRead } from './invoice-positions';
 import { settlementRevisionInput } from './settlements';
 import { deferralPageInput, deferralReadInput, deferralReconcileInput } from './deferrals';
@@ -849,6 +856,24 @@ export class Capabilities {
         statementSchema,
         recordIdSchema,
         (actor, key, body) => service.bank.importStatement(actor, key, body),
+      ),
+      'bank.importFile': define(
+        'Import retained complete RON MT940 or camt.053 statements into configured accounts. Preserve booking/value dates, original bank references and entry details; no posting or payment authority.',
+        bankFileInput,
+        bankFileOutput,
+        (actor, key, body) => service.bankFiles.import(actor, key, body),
+      ),
+      'bank.file': define(
+        'Read a retained bank-file manifest and original statement identities.',
+        bankFileReadInput,
+        bankFileOutput,
+        (actor, _, body) => service.bankFiles.get(actor, body),
+      ),
+      'bank.statementEntries': define(
+        'Read booked bank entries with value dates, references, charges and transaction details. Cursor is the last source ordinal; nested details are not additional movements.',
+        bankStatementEntryPage,
+        bankStatementEntriesOutput,
+        (actor, _, body) => service.bankFiles.entries(actor, body),
       ),
       'bank.match': define(
         'Human confirmation of a payment allocation. Agents use reviews.request and reviews.execute.',

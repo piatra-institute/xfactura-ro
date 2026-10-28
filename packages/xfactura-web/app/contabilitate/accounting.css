@@ -357,6 +357,18 @@
   font-size: 14px;
   color: var(--acc-muted);
 }
+.acc-bank-entry {
+  border-block-start: 1px solid var(--acc-line);
+  padding-block: 1rem;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.acc-bank-reference {
+  white-space: pre-wrap;
+}
+.acc-bank-source > summary {
+  cursor: pointer;
+}
 .acc-empty {
   border-top: 1px solid var(--acc-line);
   padding: 25px 0;

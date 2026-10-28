@@ -1,12 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import type { Overview } from 'xfactura-api/accounting-types';
 import { Amount, proposalLines } from 'xfactura-api/accounting';
 import { ApiError, command, companyPath, field, formatMoney, get, upload } from './api';
 import { CorrectionForm, OpeningForm, PurchaseForm, StatementForm, type Run } from './forms';
 import CorrectionReview, { CorrectionDetails } from './correction-review';
 import GeneralDetails from './general-details';
+import BankStatementEntries from './bank-statement-entries';
 
 type Props = { companyId: string };
 
@@ -397,7 +398,8 @@ export default function Workspace({ companyId }: Props) {
                   <div>
                     <h3>{movement.reference || 'Mișcare bancară'}</h3>
                     <p>
-                      {movement.date} · {movement.sourceId}
+                      {movement.date}
+                      {movement.sourceReference ? ` · ${movement.sourceReference}` : ''}
                     </p>
                   </div>
                   <strong>{formatMoney(movement.amount)}</strong>
@@ -462,18 +464,33 @@ export default function Workspace({ companyId }: Props) {
                 </thead>
                 <tbody>
                   {state.statements.map((statement) => (
-                    <tr key={statement.id}>
-                      <td>
-                        <a href={`${path}/evidence/${statement.evidenceId}`} download>
-                          {statement.sourceId}
-                        </a>
-                      </td>
-                      <td>
-                        {statement.periodFrom} — {statement.periodTo}
-                      </td>
-                      <td>{formatMoney(statement.opening)}</td>
-                      <td>{formatMoney(statement.closing)}</td>
-                    </tr>
+                    <Fragment key={statement.id}>
+                      <tr>
+                        <td>
+                          <a href={`${path}/evidence/${statement.evidenceId}`} download>
+                            {statement.source?.sourceId ?? statement.sourceId}
+                          </a>
+                          {statement.source ? (
+                            <span className="acc-hint">
+                              {' '}
+                              · {statement.source.format === 'mt940' ? 'MT940' : 'camt.053'}
+                            </span>
+                          ) : null}
+                        </td>
+                        <td>
+                          {statement.periodFrom} — {statement.periodTo}
+                        </td>
+                        <td>{formatMoney(statement.opening)}</td>
+                        <td>{formatMoney(statement.closing)}</td>
+                      </tr>
+                      {statement.source ? (
+                        <tr>
+                          <td colSpan={4}>
+                            <BankStatementEntries path={path} sourceId={statement.source.id} />
+                          </td>
+                        </tr>
+                      ) : null}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
