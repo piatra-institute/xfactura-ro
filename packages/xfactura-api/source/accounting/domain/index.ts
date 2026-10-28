@@ -11,8 +11,16 @@ import {
 export * from './values';
 import { creditDetailsSchema, settlementBodySchema } from './settlements';
 export * from './settlements';
-import { accrualInvoiceMatchSchema, accrualTreatmentSchema } from './accruals';
+import {
+  accrualInvoiceMatchSchema,
+  accrualTreatmentSchema,
+  accrualAdjustmentSchema,
+} from './accruals';
 export * from './accruals';
+import { unbilledSaleMatchSchema, unbilledSaleTreatmentSchema } from './unbilled-sales';
+export * from './unbilled-sales';
+import { deferralTreatmentSchema, deferralReleaseSchema, deferralCreditSchema } from './deferrals';
+export * from './deferrals';
 
 export const lineSchema = z
   .object({
@@ -134,6 +142,9 @@ export const invoiceTreatmentSchema = z
     deductibleTax: moneySchema,
     credit: creditDetailsSchema.optional(),
     accrualMatch: accrualInvoiceMatchSchema.optional(),
+    unbilledSaleMatch: unbilledSaleMatchSchema.optional(),
+    deferral: deferralTreatmentSchema.optional(),
+    deferralCredit: deferralCreditSchema.optional(),
   })
   .strict();
 export const generalJournalSchema = z
@@ -149,6 +160,9 @@ export const generalJournalSchema = z
     invoice: invoiceTreatmentSchema.optional(),
     settlement: settlementBodySchema.optional(),
     accrual: accrualTreatmentSchema.optional(),
+    accrualAdjustment: accrualAdjustmentSchema.optional(),
+    deferralRelease: deferralReleaseSchema.optional(),
+    unbilledSale: unbilledSaleTreatmentSchema.optional(),
   })
   .strict();
 export const generalBodySchema = generalJournalSchema

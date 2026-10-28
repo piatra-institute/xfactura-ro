@@ -6,6 +6,12 @@ import {
   allocations,
   accrualPostings,
   accrualMatches,
+  accrualAdjustments,
+  deferralPostings,
+  deferralReleases,
+  deferralCancellations,
+  unbilledSalePostings,
+  unbilledSaleMatches,
   approvals,
   audit,
   actionReviews,
@@ -39,6 +45,12 @@ import {
 import type { ObjectStore } from './object-store';
 
 const exportTables = {
+  deferralCancellations,
+  deferralPostings,
+  deferralReleases,
+  accrualAdjustments,
+  unbilledSalePostings,
+  unbilledSaleMatches,
   accrualPostings,
   accrualMatches,
   accountingYears,

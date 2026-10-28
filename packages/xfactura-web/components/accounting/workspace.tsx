@@ -111,7 +111,9 @@ export default function Workspace({ companyId }: Props) {
 
   const canWrite = state.role !== 'viewer';
   const accountNames = state.accountNames;
-  const pending = state.proposals.filter((proposal) => !proposal.posted && !proposal.withdrawn);
+  const pending = state.proposals.filter(
+    (proposal) => !proposal.posted && !proposal.withdrawn && !proposal.superseded,
+  );
   const unreconciled = state.movements.filter((movement) => !movement.matched);
   const hasOpening = state.proposals.some(
     (proposal) =>

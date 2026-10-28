@@ -19,6 +19,8 @@ import { InvoicePositions } from './invoice-positions';
 import { Settlements } from './settlements';
 import { VatRegisters } from './vat-registers';
 import { Accruals } from './accruals';
+import { UnbilledSales } from './unbilled-sales';
+import { Deferrals } from './deferrals';
 import type { Database } from './db';
 import type { ObjectStore } from './object-store';
 
@@ -43,6 +45,8 @@ export class Accounting {
   readonly settlements: Settlements;
   readonly vat: VatRegisters;
   readonly accruals: Accruals;
+  readonly unbilledSales: UnbilledSales;
+  readonly deferrals: Deferrals;
 
   constructor(
     readonly db: Database,
@@ -68,6 +72,8 @@ export class Accounting {
     this.settlements = new Settlements(this.commands);
     this.vat = new VatRegisters(this.commands);
     this.accruals = new Accruals(this.commands);
+    this.unbilledSales = new UnbilledSales(this.commands);
+    this.deferrals = new Deferrals(this.commands);
     this.capabilities = new Capabilities(this);
   }
   overview(actor: Actor, financialYearId?: string) {

@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import { Commands, type Actor } from './commands';
+import { supersededDeferralReleaseIds } from './deferral-state';
 import {
   correctionBodySchema,
   fromBani,
@@ -131,6 +132,7 @@ export function overview(runner: Commands, actor: Actor, financialYearId?: strin
       .select()
       .from(correctionOutcomes)
       .where(eq(correctionOutcomes.companyId, actor.companyId));
+    const superseded = await supersededDeferralReleaseIds(tx, actor.companyId);
     const closedPeriods = await tx
       .select()
       .from(periods)
@@ -246,6 +248,7 @@ export function overview(runner: Commands, actor: Actor, financialYearId?: strin
         const latest = applied.at(-1);
         return {
           ...proposal,
+          superseded: superseded.has(proposal.id),
           withdrawn: outcomes.some(
             (outcome) => outcome.proposalId === proposal.id && outcome.status === 'withdrawn',
           ),

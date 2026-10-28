@@ -765,6 +765,190 @@ export const accrualMatches = sqliteTable(
     ),
   ],
 );
+export const accrualAdjustments = sqliteTable(
+  'acc_accrual_adjustments',
+  {
+    companyId: companyId(),
+    proposalId: text('proposal_id').notNull(),
+    accrualId: text('accrual_id').notNull(),
+    journalId: text('journal_id').notNull(),
+    reference: text('reference').notNull(),
+    netBani: bani('net_bani').notNull(),
+    taxBani: bani('tax_bani').notNull(),
+    grossBani: bani('gross_bani').notNull(),
+    deferredTaxBani: bani('deferred_tax_bani').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.proposalId] }),
+    uniqueIndex('accrual_adjustment_journal').on(t.companyId, t.journalId),
+    uniqueIndex('accrual_adjustment_reference').on(t.companyId, t.reference),
+    index('accrual_adjustment_position').on(t.companyId, t.accrualId),
+    foreignKey({
+      columns: [t.companyId, t.proposalId],
+      foreignColumns: [proposals.companyId, proposals.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.accrualId],
+      foreignColumns: [accrualPostings.companyId, accrualPostings.accrualId],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.journalId],
+      foreignColumns: [journals.companyId, journals.id],
+    }),
+    check(
+      'accrual_adjustment_amounts',
+      sql`typeof(${t.netBani})='integer' and typeof(${t.taxBani})='integer' and typeof(${t.grossBani})='integer' and typeof(${t.deferredTaxBani})='integer' and ${t.grossBani}=${t.netBani}+${t.taxBani} and (${t.netBani}<>0 or ${t.taxBani}<>0) and (${t.deferredTaxBani}=0 or ${t.deferredTaxBani}=${t.taxBani})`,
+    ),
+  ],
+);
+export const unbilledSalePostings = sqliteTable(
+  'acc_unbilled_sale_postings',
+  {
+    companyId: companyId(),
+    unbilledSaleId: text('unbilled_sale_id').notNull(),
+    journalId: text('journal_id').notNull(),
+    reference: text('reference').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.unbilledSaleId] }),
+    uniqueIndex('unbilled_sale_journal').on(t.companyId, t.journalId),
+    uniqueIndex('unbilled_sale_reference').on(t.companyId, t.reference),
+    foreignKey({
+      columns: [t.companyId, t.unbilledSaleId],
+      foreignColumns: [proposals.companyId, proposals.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.journalId],
+      foreignColumns: [journals.companyId, journals.id],
+    }),
+  ],
+);
+export const unbilledSaleMatches = sqliteTable(
+  'acc_unbilled_sale_matches',
+  {
+    companyId: companyId(),
+    invoiceId: text('invoice_id').notNull(),
+    unbilledSaleId: text('unbilled_sale_id').notNull(),
+    netBani: bani('net_bani').notNull(),
+    taxBani: bani('tax_bani').notNull(),
+    grossBani: bani('gross_bani').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.invoiceId, t.unbilledSaleId] }),
+    index('unbilled_sale_match_position').on(t.companyId, t.unbilledSaleId),
+    foreignKey({
+      columns: [t.companyId, t.invoiceId],
+      foreignColumns: [invoicePostings.companyId, invoicePostings.invoiceId],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.unbilledSaleId],
+      foreignColumns: [unbilledSalePostings.companyId, unbilledSalePostings.unbilledSaleId],
+    }),
+    check(
+      'unbilled_sale_match_amounts',
+      sql`typeof(${t.netBani})='integer' and typeof(${t.taxBani})='integer' and typeof(${t.grossBani})='integer' and ${t.netBani}>0 and ${t.taxBani}>=0 and ${t.grossBani}=${t.netBani}+${t.taxBani}`,
+    ),
+  ],
+);
+export const deferralPostings = sqliteTable(
+  'acc_deferral_postings',
+  {
+    companyId: companyId(),
+    deferralId: text('deferral_id').notNull(),
+    invoiceId: text('invoice_id').notNull(),
+    journalId: text('journal_id').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.deferralId] }),
+    uniqueIndex('deferral_invoice').on(t.companyId, t.invoiceId),
+    uniqueIndex('deferral_journal').on(t.companyId, t.journalId),
+    foreignKey({
+      columns: [t.companyId, t.deferralId],
+      foreignColumns: [proposals.companyId, proposals.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.invoiceId],
+      foreignColumns: [invoicePostings.companyId, invoicePostings.invoiceId],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.journalId],
+      foreignColumns: [journals.companyId, journals.id],
+    }),
+  ],
+);
+export const deferralReleases = sqliteTable(
+  'acc_deferral_releases',
+  {
+    companyId: companyId(),
+    deferralId: text('deferral_id').notNull(),
+    month: text('month').notNull(),
+    proposalId: text('proposal_id').notNull(),
+    journalId: text('journal_id').notNull(),
+    amountBani: bani('amount_bani').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.deferralId, t.month] }),
+    uniqueIndex('deferral_release_proposal').on(t.companyId, t.proposalId),
+    uniqueIndex('deferral_release_journal').on(t.companyId, t.journalId),
+    foreignKey({
+      columns: [t.companyId, t.deferralId],
+      foreignColumns: [deferralPostings.companyId, deferralPostings.deferralId],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.proposalId],
+      foreignColumns: [proposals.companyId, proposals.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.journalId],
+      foreignColumns: [journals.companyId, journals.id],
+    }),
+    check('deferral_release_amount', sql`typeof(${t.amountBani})='integer' and ${t.amountBani}>0`),
+  ],
+);
+export const deferralCancellations = sqliteTable(
+  'acc_deferral_cancellations',
+  {
+    companyId: companyId(),
+    deferralId: text('deferral_id').notNull(),
+    creditInvoiceId: text('credit_invoice_id').notNull(),
+    journalId: text('journal_id').notNull(),
+    fromMonth: text('from_month').notNull(),
+    toMonth: text('to_month').notNull(),
+    amountBani: bani('amount_bani').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.creditInvoiceId] }),
+    uniqueIndex('deferral_cancellation_source').on(t.companyId, t.deferralId),
+    uniqueIndex('deferral_cancellation_journal').on(t.companyId, t.journalId),
+    foreignKey({
+      columns: [t.companyId, t.deferralId],
+      foreignColumns: [deferralPostings.companyId, deferralPostings.deferralId],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.creditInvoiceId],
+      foreignColumns: [invoiceCredits.companyId, invoiceCredits.creditInvoiceId],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.journalId],
+      foreignColumns: [journals.companyId, journals.id],
+    }),
+    check(
+      'deferral_cancellation_amount',
+      sql`typeof(${t.amountBani})='integer' and ${t.amountBani}>0`,
+    ),
+    check('deferral_cancellation_months', sql`${t.fromMonth}<=${t.toMonth}`),
+  ],
+);
 export const commands = sqliteTable(
   'acc_commands',
   {

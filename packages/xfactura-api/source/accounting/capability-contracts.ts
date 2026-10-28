@@ -8,6 +8,7 @@ import {
   lineSchema,
   openingSchema,
   purchaseSchema,
+  accrualAdjustmentSchema,
 } from './domain';
 import { monthSchema } from './reviews';
 import { invoiceDocumentSchema } from './invoice-document';
@@ -51,6 +52,7 @@ export const proposalView = proposalOutput.extend({
   approved: z.boolean(),
   posted: z.boolean(),
   withdrawn: z.boolean(),
+  superseded: z.boolean(),
   lines: z.array(lineSchema),
 });
 export const approvalOutput = z.object({
@@ -201,13 +203,25 @@ export const accrualPositionOutput = z.object({
   tax: decimalString,
   gross: decimalString,
   deferredTax: decimalString,
+  adjustedNet: decimalString,
+  adjustedTax: decimalString,
+  adjustedGross: decimalString,
+  adjustedDeferredTax: decimalString,
+  adjustmentCount: z.number().int(),
   remainingNet: decimalString,
   remainingTax: decimalString,
   remainingGross: decimalString,
   remainingDeferredTax: decimalString,
   matchedGross: decimalString,
-  status: z.enum(['open', 'matched']),
+  status: z.enum(['open', 'matched', 'released']),
   hash: hashSchema,
+});
+export const accrualAdjustmentOutput = z.object({
+  id: idSchema,
+  journalId: idSchema,
+  proposalHash: hashSchema,
+  treatment: accrualAdjustmentSchema,
+  createdAt: z.string(),
 });
 const accrualControlOutput = z.object({
   ledger: decimalString,
@@ -220,6 +234,93 @@ export const accrualReconcileOutput = z.object({
   accrualCount: z.number().int(),
   liability: accrualControlOutput,
   vatAwaitingInvoice: accrualControlOutput,
+  status: z.enum(['reconciled', 'needs_review']),
+});
+export const unbilledSalePositionOutput = z.object({
+  id: idSchema,
+  reference: z.string(),
+  date: dateSchema,
+  financialYearId: idSchema,
+  journalId: idSchema,
+  evidenceId: idSchema,
+  customer: z.object({ name: z.string(), taxId: z.string(), country: z.literal('RO') }),
+  serviceFrom: dateSchema,
+  serviceTo: dateSchema,
+  taxPointDate: dateSchema,
+  net: decimalString,
+  tax: decimalString,
+  gross: decimalString,
+  remainingNet: decimalString,
+  remainingTax: decimalString,
+  remainingGross: decimalString,
+  matchedGross: decimalString,
+  status: z.enum(['open', 'matched']),
+  hash: hashSchema,
+});
+export const unbilledSaleReconcileOutput = z.object({
+  financialYearId: idSchema,
+  date: dateSchema,
+  unbilledSaleCount: z.number().int(),
+  receivable: accrualControlOutput,
+  status: z.enum(['reconciled', 'needs_review']),
+});
+export const deferralPositionOutput = z.object({
+  id: idSchema,
+  invoiceId: idSchema,
+  number: z.string(),
+  direction: z.enum(['purchase', 'sale']),
+  date: dateSchema,
+  financialYearId: idSchema,
+  journalId: idSchema,
+  evidenceId: idSchema,
+  invoiceEvidenceId: idSchema,
+  account: accountCodeSchema,
+  controlAccount: z.enum(['471', '472']),
+  serviceFrom: dateSchema,
+  serviceTo: dateSchema,
+  amount: decimalString,
+  allocated: decimalString,
+  cancelled: decimalString,
+  remaining: decimalString,
+  status: z.enum(['open', 'allocated', 'cancelled']),
+  cancellation: z
+    .object({
+      creditInvoiceId: idSchema,
+      journalId: idSchema,
+      date: dateSchema,
+      from: dateSchema,
+      to: dateSchema,
+      amount: decimalString,
+    })
+    .nullable(),
+  nextDueMonth: dateSchema.nullable(),
+  schedule: z
+    .array(
+      z.object({
+        month: dateSchema,
+        date: dateSchema,
+        amount: decimalString,
+        journalId: idSchema.nullable(),
+        cancellationJournalId: idSchema.nullable(),
+        status: z.enum(['scheduled', 'posted', 'not_required', 'cancelled']),
+      }),
+    )
+    .min(1)
+    .max(60),
+  hash: hashSchema,
+});
+const deferralControlOutput = z.object({
+  ledger: decimalString,
+  remaining: decimalString,
+  difference: decimalString,
+});
+export const deferralReconcileOutput = z.object({
+  financialYearId: idSchema,
+  date: dateSchema,
+  deferralCount: z.number().int(),
+  dueCount: z.number().int(),
+  prepaid: deferralControlOutput,
+  deferredRevenue: deferralControlOutput,
   status: z.enum(['reconciled', 'needs_review']),
 });
 export const movementOutput = z.object({

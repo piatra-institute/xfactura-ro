@@ -18,6 +18,9 @@ import { invoiceRule } from './accounting-catalogue';
 import { regimesAt } from './foundation';
 import { checkCreditPosting } from './invoice-credits';
 import { checkAccrualInvoicePosting } from './accrual-matching';
+import { checkUnbilledSaleInvoicePosting } from './unbilled-sale-matching';
+import { checkDeferralInvoicePosting } from './deferral-interpretation';
+import { checkDeferralCreditPosting } from './deferral-credits';
 
 export const invoicePostingInput = z
   .object({
@@ -35,7 +38,12 @@ export const invoicePostingInput = z
 export type InvoicePostingInput = z.infer<typeof invoicePostingInput>;
 
 /** Deterministic bounded treatment; importing a document never establishes service delivery. */
-export async function interpretInvoice(tx: Transaction, actor: Actor, input: InvoicePostingInput) {
+export async function interpretInvoice(
+  tx: Transaction,
+  actor: Actor,
+  input: InvoicePostingInput,
+  timing: 'service' | 'early_subscription' = 'service',
+) {
   const [invoice] = await tx
     .select()
     .from(invoiceDocuments)
@@ -69,10 +77,15 @@ export async function interpretInvoice(tx: Transaction, actor: Actor, input: Inv
     'Această propunere acoperă facturi de servicii interne în RON. Este necesar un tratament separat.',
   );
   requireCondition(
-    input.recognitionDate.slice(0, 7) === input.serviceDate.slice(0, 7) &&
-      input.serviceDate === input.taxPointDate &&
-      doc.issueDate.slice(0, 7) === input.recognitionDate.slice(0, 7) &&
-      (!doc.taxPointDate || doc.taxPointDate === input.taxPointDate),
+    timing === 'early_subscription'
+      ? input.recognitionDate === doc.issueDate &&
+          input.taxPointDate === doc.issueDate &&
+          input.serviceDate >= doc.issueDate &&
+          (!doc.taxPointDate || doc.taxPointDate === doc.issueDate)
+      : input.recognitionDate.slice(0, 7) === input.serviceDate.slice(0, 7) &&
+          input.serviceDate === input.taxPointDate &&
+          doc.issueDate.slice(0, 7) === input.recognitionDate.slice(0, 7) &&
+          (!doc.taxPointDate || doc.taxPointDate === input.taxPointDate),
     'UNSUPPORTED_PERIOD_TREATMENT',
     'Perioadele diferite necesită tratarea explicită a angajamentelor și a exigibilității.',
   );
@@ -202,6 +215,9 @@ export async function checkInvoicePosting(tx: Transaction, actor: Actor, body: G
     'O propunere are o singură origine economică.',
   );
   if (await checkAccrualInvoicePosting(tx, actor, body)) return;
+  if (await checkUnbilledSaleInvoicePosting(tx, actor, body)) return;
+  if (await checkDeferralInvoicePosting(tx, actor, body)) return;
+  if (await checkDeferralCreditPosting(tx, actor, body)) return;
   if (await checkCreditPosting(tx, actor, body)) return;
   const input = body.invoice;
   const expected = await interpretInvoice(tx, actor, {

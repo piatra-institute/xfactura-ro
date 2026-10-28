@@ -148,6 +148,7 @@ export async function interpretAccrualInvoice(
     requireCondition(
       old.supplier.taxId === doc.supplier.taxId.replace(/^RO/i, '') &&
         old.supplier.country === doc.supplier.country &&
+        state.adjustments.every((row) => row.journal.date <= input.recognitionDate) &&
         state.journal.date <= input.recognitionDate &&
         state.journal.date <= input.receivedDate &&
         old.serviceTo <= doc.issueDate,
@@ -181,9 +182,12 @@ export async function interpretAccrualInvoice(
       accrualId: item.accrualId,
       originalJournalId: state.journal.id,
       originalFinancialYearId: state.body.financialYearId,
+      ...(state.adjustments.length
+        ? { latestAdjustmentJournalId: state.adjustments.at(-1)!.journal.id }
+        : {}),
       proposalHash: state.proposal.hash,
       positionHash: state.hash,
-      positionVersion: state.matches.length,
+      positionVersion: state.matches.length + state.adjustments.length,
       reference: old.reference,
       availableGross: fromBani(remaining.gross),
       remainingGross: fromBani(remaining.gross - gross),

@@ -5,6 +5,9 @@ import type { Transaction } from './db';
 import { sha256 } from './object-store';
 import { financialYearForDate } from './foundation';
 import { accrualControls } from './accrual-controls';
+import { unbilledSaleControls } from './unbilled-sale-controls';
+import { deferralControls } from './deferral-controls';
+import { supersededDeferralReleaseIds } from './deferral-state';
 import {
   allocations,
   companies,
@@ -58,6 +61,7 @@ export class Periods {
       .select()
       .from(correctionOutcomes)
       .where(eq(correctionOutcomes.companyId, actor.companyId));
+    const superseded = await supersededDeferralReleaseIds(tx, actor.companyId);
     requireCondition(
       posted.some(
         (entry) =>
@@ -77,6 +81,7 @@ export class Periods {
       !proposed.some(
         (item) =>
           item.body.date.slice(0, 7) === month.slice(0, 7) &&
+          !superseded.has(item.id) &&
           !outcomes.some(
             (outcome) => outcome.proposalId === item.id && outcome.status === 'withdrawn',
           ) &&
@@ -226,10 +231,34 @@ export class Periods {
         );
     }
     const accruals = await accrualControls(tx, actor.companyId, financialYear.from, monthEnd);
+    const deferrals = await deferralControls(tx, actor.companyId, financialYear.from, monthEnd);
+    requireCondition(
+      deferrals.deferralCount === 0 ||
+        (deferrals.prepaid.difference === '0.00' &&
+          deferrals.deferredRevenue.difference === '0.00'),
+      'DEFERRAL_CONTROL_DIFFERENCE',
+      'Soldurile 471/472 diferă de alocările documentate. Verificați soldurile reportate.',
+    );
+    requireCondition(
+      deferrals.dueCount === 0,
+      'DEFERRAL_ALLOCATION_DUE',
+      'Contabilizați alocările scadente ale abonamentelor înainte de închiderea lunii.',
+    );
+    const unbilledSales = await unbilledSaleControls(
+      tx,
+      actor.companyId,
+      financialYear.from,
+      monthEnd,
+    );
     requireCondition(
       accruals.accrualCount === 0 || accruals.status === 'reconciled',
       'ACCRUAL_CONTROL_DIFFERENCE',
       'Soldurile 408 sau 4428 diferă de angajamentele documentate. Verificați soldurile reportate și potrivirile facturilor.',
+    );
+    requireCondition(
+      unbilledSales.unbilledSaleCount === 0 || unbilledSales.status === 'reconciled',
+      'UNBILLED_SALE_CONTROL_DIFFERENCE',
+      'Soldul 418 diferă de serviciile documentate. Verificați soldurile reportate și facturile emise.',
     );
     return {
       kind: 'periods.close' as const,
@@ -251,6 +280,8 @@ export class Periods {
           company,
           financialYear,
           accruals,
+          deferrals,
+          unbilledSales,
           accounts,
           nativeMatched: nativeMatched.sort((a, b) => a.movementId.localeCompare(b.movementId)),
           imported: imported.sort((a, b) => a.id.localeCompare(b.id)),

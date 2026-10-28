@@ -3,6 +3,7 @@ import type { Transaction } from './db';
 import { fromBani } from './domain';
 import {
   accrualMatches,
+  accrualAdjustments,
   accrualPostings,
   invoicePostings,
   journalLines,
@@ -90,8 +91,22 @@ export async function accrualControls(
   const awaitingVat = lines
     .filter((line) => /^4428(?:\.|$)/.test(line.account))
     .reduce((sum, line) => sum + line.debit - line.credit, 0n);
-  const unbilled = original.gross - matched.gross,
-    deferred = original.deferredTax - matched.tax;
+  const [adjusted] = await tx
+    .select({
+      gross: exactSum(sql`${accrualAdjustments.grossBani}`),
+      deferredTax: exactSum(sql`${accrualAdjustments.deferredTaxBani}`),
+    })
+    .from(accrualAdjustments)
+    .innerJoin(
+      journals,
+      and(
+        eq(journals.companyId, accrualAdjustments.companyId),
+        eq(journals.id, accrualAdjustments.journalId),
+      ),
+    )
+    .where(and(eq(accrualAdjustments.companyId, companyId), lte(journals.date, date)));
+  const unbilled = original.gross + adjusted.gross - matched.gross,
+    deferred = original.deferredTax + adjusted.deferredTax - matched.tax;
   return {
     accrualCount: original.count,
     liability: {

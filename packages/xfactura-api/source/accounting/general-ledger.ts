@@ -33,6 +33,9 @@ import { findProposal } from './books';
 import { checkInvoicePosting } from './invoice-postings';
 import { checkSettlementPosting } from './settlements';
 import { checkAccrualPosting } from './accruals';
+import { checkUnbilledSalePosting } from './unbilled-sales';
+import { checkAccrualAdjustmentPosting } from './accrual-adjustments';
+import { checkDeferralReleasePosting } from './deferral-interpretation';
 
 export const ledgerReviewInput = reviewSchema.extend({ id: idSchema }).strict();
 export const balanceInput = z
@@ -41,7 +44,14 @@ export const balanceInput = z
 
 async function validateBody(tx: Transaction, actor: Actor, body: GeneralBody) {
   requireCondition(
-    [body.invoice, body.settlement, body.accrual].filter(Boolean).length <= 1,
+    [
+      body.invoice,
+      body.settlement,
+      body.accrual,
+      body.unbilledSale,
+      body.accrualAdjustment,
+      body.deferralRelease,
+    ].filter(Boolean).length <= 1,
     'MULTIPLE_ORIGINS',
     'O propunere are o singură origine economică.',
   );
@@ -91,6 +101,9 @@ async function validateBody(tx: Transaction, actor: Actor, body: GeneralBody) {
   await checkInvoicePosting(tx, actor, body);
   await checkSettlementPosting(tx, actor, body);
   await checkAccrualPosting(tx, actor, body);
+  await checkUnbilledSalePosting(tx, actor, body);
+  await checkAccrualAdjustmentPosting(tx, actor, body);
+  await checkDeferralReleasePosting(tx, actor, body);
 }
 
 /** Shared by the capability endpoint and the existing human proposal-review route. */

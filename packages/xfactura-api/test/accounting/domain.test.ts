@@ -8,9 +8,47 @@ import {
   BANK_CSV_HEADER,
   trialBalance,
   type PostingLine,
+  allocationSchedule,
 } from '../../source/accounting/domain';
 
 describe('the A1 books', () => {
+  test('uniform subscription schedules preserve exact bani over full months, including leap years', () => {
+    const decimal = (value: bigint) => `${value / 100n}.${String(value % 100n).padStart(2, '0')}`;
+    expect(allocationSchedule('100.00', '2024-02-01', '2024-04-30')).toEqual([
+      { month: '2024-02-01', date: '2024-02-29', amount: '33.33' },
+      { month: '2024-03-01', date: '2024-03-31', amount: '33.33' },
+      { month: '2024-04-01', date: '2024-04-30', amount: '33.34' },
+    ]);
+    fc.assert(
+      fc.property(
+        fc.bigInt({ min: 1n, max: 999999999999999999n }),
+        fc.integer({ min: 1, max: 60 }),
+        (total, count) => {
+          const last = new Date(Date.UTC(2025, count, 0)).toISOString().slice(0, 10),
+            rows = allocationSchedule(decimal(total), '2025-01-01', last),
+            amounts = rows.map((row) => BigInt(row.amount.replace('.', '')));
+          expect(rows).toHaveLength(count);
+          expect(amounts.reduce((sum, value) => sum + value, 0n)).toBe(total);
+          expect(amounts.every((amount) => amount >= 0n)).toBe(true);
+          expect(new Set(rows.map((row) => row.month)).size).toBe(count);
+          expect(amounts.slice(0, -1).every((amount) => amount === total / BigInt(count))).toBe(
+            true,
+          );
+          expect(amounts[count - 1] - total / BigInt(count)).toBe(total % BigInt(count));
+        },
+      ),
+      { seed: 20261028, numRuns: 500 },
+    );
+    for (const [amount, from, to] of [
+      ['0.00', '2026-01-01', '2026-01-31'],
+      ['1.00', '2026-01-02', '2026-01-31'],
+      ['1.00', '2026-01-01', '2026-01-30'],
+      ['1.00', '2026-03-01', '2026-02-28'],
+      ['1.00', '2025-01-01', '2030-01-31'],
+    ])
+      expect(() => allocationSchedule(amount, from, to)).toThrow();
+  });
+
   test('opening, purchase and payment produce the independently specified balances', () => {
     const entries: PostingLine[][] = [
       [

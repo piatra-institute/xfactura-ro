@@ -113,6 +113,62 @@
       "when": 1793090892564,
       "tag": "0015_accrual_guards",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1793182904897,
+      "tag": "0016_unbilled_sales",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1793182909458,
+      "tag": "0017_unbilled_sale_guards",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1793185010248,
+      "tag": "0018_accrual_adjustments",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1793185010557,
+      "tag": "0019_accrual_adjustment_guards",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1793190096612,
+      "tag": "0020_period_allocations",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1793190096918,
+      "tag": "0021_period_allocation_guards",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1793195806045,
+      "tag": "0022_deferral_cancellations",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1793195894420,
+      "tag": "0023_deferral_cancellation_guards",
+      "breakpoints": true
     }
   ]
 }

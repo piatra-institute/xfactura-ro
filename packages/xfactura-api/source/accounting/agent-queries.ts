@@ -30,6 +30,7 @@ import { findProposal } from './books';
 import type { Transaction } from './db';
 import { pageInput } from './capability-contracts';
 import type { CapabilityId } from './capability-policy';
+import { deferralReleaseSuperseded } from './deferral-state';
 
 export const datedPage = pageInput
   .extend({ from: dateSchema.optional(), to: dateSchema.optional() })
@@ -37,7 +38,7 @@ export const datedPage = pageInput
   .refine((value) => !value.from || !value.to || value.from <= value.to, 'Interval invalid.');
 export const proposalPage = datedPage.safeExtend({
   kind: z.enum(['opening', 'purchase', 'correction', 'general']).optional(),
-  status: z.enum(['pending', 'approved', 'posted', 'withdrawn']).optional(),
+  status: z.enum(['pending', 'approved', 'posted', 'withdrawn', 'superseded']).optional(),
 });
 export const movementPage = datedPage.safeExtend({ matched: z.boolean().optional() });
 export const journalPage = datedPage.safeExtend({
@@ -197,29 +198,34 @@ export class AgentQueries {
       actor,
       async (tx) => {
         const status =
-          body.status === 'posted'
-            ? proposalPosted(tx)
-            : body.status === 'withdrawn'
-              ? proposalWithdrawn(tx)
-              : body.status === 'approved'
-                ? and(
-                    proposalApproved(tx),
-                    sql`not ${proposalPosted(tx)}`,
-                    sql`not ${proposalWithdrawn(tx)}`,
-                  )
-                : body.status === 'pending'
+          body.status === 'superseded'
+            ? deferralReleaseSuperseded(tx)
+            : body.status === 'posted'
+              ? proposalPosted(tx)
+              : body.status === 'withdrawn'
+                ? proposalWithdrawn(tx)
+                : body.status === 'approved'
                   ? and(
-                      sql`not ${proposalApproved(tx)}`,
+                      proposalApproved(tx),
                       sql`not ${proposalPosted(tx)}`,
                       sql`not ${proposalWithdrawn(tx)}`,
+                      sql`not ${deferralReleaseSuperseded(tx)}`,
                     )
-                  : undefined;
+                  : body.status === 'pending'
+                    ? and(
+                        sql`not ${proposalApproved(tx)}`,
+                        sql`not ${proposalPosted(tx)}`,
+                        sql`not ${proposalWithdrawn(tx)}`,
+                        sql`not ${deferralReleaseSuperseded(tx)}`,
+                      )
+                    : undefined;
         const rows = await tx
           .select({
             ...getTableColumns(proposals),
             approved: sql<boolean>`${proposalApproved(tx)}`.mapWith(Boolean),
             posted: sql<boolean>`${proposalPosted(tx)}`.mapWith(Boolean),
             withdrawn: sql<boolean>`${proposalWithdrawn(tx)}`.mapWith(Boolean),
+            superseded: sql<boolean>`${deferralReleaseSuperseded(tx)}`.mapWith(Boolean),
           })
           .from(proposals)
           .where(
@@ -255,6 +261,7 @@ export class AgentQueries {
             approved: sql<boolean>`${proposalApproved(tx)}`.mapWith(Boolean),
             posted: sql<boolean>`${proposalPosted(tx)}`.mapWith(Boolean),
             withdrawn: sql<boolean>`${proposalWithdrawn(tx)}`.mapWith(Boolean),
+            superseded: sql<boolean>`${deferralReleaseSuperseded(tx)}`.mapWith(Boolean),
           })
           .from(proposals)
           .where(and(eq(proposals.companyId, actor.companyId), eq(proposals.id, id)));

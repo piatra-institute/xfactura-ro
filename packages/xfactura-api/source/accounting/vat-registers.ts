@@ -22,6 +22,7 @@ import {
   journalLines,
   journals,
   proposals,
+  unbilledSalePostings,
 } from './schema';
 
 export const vatPeriodInput = z
@@ -30,6 +31,12 @@ export const vatPeriodInput = z
 export const vatEntriesInput = vatPeriodInput
   .extend({
     direction: z.enum(['purchase', 'sale']).optional(),
+    limit: z.number().int().min(1).max(100).default(25),
+    cursor: idSchema.optional(),
+  })
+  .strict();
+export const unbilledSaleVatInput = vatPeriodInput
+  .extend({
     limit: z.number().int().min(1).max(100).default(25),
     cursor: idSchema.optional(),
   })
@@ -59,6 +66,36 @@ export const vatEntryOutput = z.object({
   ruleId: z.string(),
   ruleHash: hashSchema,
   registrationIds: z.array(idSchema),
+  previousRecognition: z
+    .object({
+      unbilledSaleIds: z.array(idSchema),
+      base: decimalString,
+      sourceTax: decimalString,
+      gross: decimalString,
+    })
+    .optional(),
+});
+export const unbilledSaleVatOutput = z.object({
+  unbilledSaleId: idSchema,
+  journalId: idSchema,
+  proposalHash: hashSchema,
+  evidenceId: idSchema,
+  sourceHash: hashSchema,
+  reference: z.string(),
+  direction: z.literal('sale'),
+  recognitionDate: dateSchema,
+  originalTaxPointDate: dateSchema,
+  customer: z.object({ name: z.string(), taxId: z.string(), country: z.literal('RO') }),
+  category: z.string(),
+  rate: z.string(),
+  base: decimalString,
+  sourceTax: decimalString,
+  gross: decimalString,
+  inputTax: decimalString,
+  outputTax: decimalString,
+  ruleId: z.string(),
+  ruleHash: hashSchema,
+  registrationIds: z.array(idSchema),
 });
 const totalsOutput = z.object({
   base: decimalString,
@@ -84,6 +121,7 @@ export const vatSummaryOutput = z.object({
   from: dateSchema,
   to: dateSchema,
   entryCount: z.number().int(),
+  unbilledSaleEntryCount: z.number().int(),
   totals: totalsOutput,
   groups: z.array(
     totalsOutput.extend({
@@ -196,7 +234,8 @@ async function entries(
       'Înregistrarea facturii nu are un tratament identificat.',
       500,
     );
-    const sign = treatment.credit ? -1n : 1n;
+    const previouslyRecognized = treatment.unbilledSaleMatch;
+    const sign = previouslyRecognized ? 0n : treatment.credit ? -1n : 1n;
     const signed = (value: string) => fromBani(toBani(value) * sign);
     return {
       invoiceId: invoice.id,
@@ -223,11 +262,102 @@ async function entries(
       ruleId: treatment.ruleId,
       ruleHash: treatment.ruleHash,
       registrationIds: treatment.registrationIds,
+      ...(previouslyRecognized
+        ? {
+            previousRecognition: {
+              unbilledSaleIds: previouslyRecognized.allocations.map((row) => row.unbilledSaleId),
+              base: treatment.net,
+              sourceTax: treatment.tax,
+              gross: treatment.gross,
+            },
+          }
+        : {}),
     };
   });
 }
 
-function totals(rows: Entry[]) {
+async function unbilledEntries(
+  tx: Transaction,
+  companyId: string,
+  range: { from: string; to: string },
+  page?: z.infer<typeof unbilledSaleVatInput>,
+) {
+  const query = tx
+    .select({
+      record: unbilledSalePostings,
+      journal: journals,
+      proposal: proposals,
+      sourceHash: evidence.hash,
+    })
+    .from(unbilledSalePostings)
+    .innerJoin(
+      journals,
+      and(
+        eq(journals.companyId, unbilledSalePostings.companyId),
+        eq(journals.id, unbilledSalePostings.journalId),
+      ),
+    )
+    .innerJoin(
+      proposals,
+      and(
+        eq(proposals.companyId, unbilledSalePostings.companyId),
+        eq(proposals.id, unbilledSalePostings.unbilledSaleId),
+      ),
+    )
+    .innerJoin(
+      evidence,
+      and(eq(evidence.companyId, journals.companyId), eq(evidence.id, journals.evidenceId)),
+    )
+    .where(
+      and(
+        eq(unbilledSalePostings.companyId, companyId),
+        gte(journals.date, range.from),
+        lte(journals.date, range.to),
+        page?.cursor ? gt(unbilledSalePostings.unbilledSaleId, page.cursor) : undefined,
+      ),
+    )
+    .orderBy(asc(unbilledSalePostings.unbilledSaleId))
+    .$dynamic();
+  const rows = await (page ? query.limit(page.limit + 1) : query);
+  return rows.map(
+    ({ record, journal, proposal, sourceHash }): z.infer<typeof unbilledSaleVatOutput> => {
+      const treatment = generalBodySchema.parse(proposal.body).unbilledSale;
+      requireCondition(
+        treatment,
+        'REGISTER_SOURCE',
+        'Înregistrarea nu identifică serviciile de facturat.',
+        500,
+      );
+      return {
+        unbilledSaleId: record.unbilledSaleId,
+        journalId: journal.id,
+        proposalHash: proposal.hash,
+        evidenceId: journal.evidenceId,
+        sourceHash,
+        reference: treatment.reference,
+        direction: 'sale',
+        recognitionDate: journal.date,
+        originalTaxPointDate: treatment.taxPointDate,
+        customer: treatment.customer,
+        category: treatment.vatCategory,
+        rate: treatment.rate,
+        base: treatment.net,
+        sourceTax: treatment.tax,
+        gross: treatment.gross,
+        inputTax: '0.00',
+        outputTax: treatment.tax,
+        ruleId: treatment.ruleId,
+        ruleHash: treatment.ruleHash,
+        registrationIds: treatment.registrationIds,
+      };
+    },
+  );
+}
+type RegisterMovement = Pick<
+  Entry,
+  'direction' | 'category' | 'rate' | 'base' | 'sourceTax' | 'gross' | 'inputTax' | 'outputTax'
+>;
+function totals(rows: RegisterMovement[]) {
   const sum = (field: 'base' | 'sourceTax' | 'gross' | 'inputTax' | 'outputTax') =>
     fromBani(rows.reduce((value, row) => value + toBani(row[field]), 0n));
   return {
@@ -242,6 +372,21 @@ function totals(rows: Entry[]) {
 /** Source-linked working registers. Reconciliation is not a statutory declaration/conformance claim. */
 export class VatRegisters {
   constructor(private readonly runner: Commands) {}
+  unbilledSales(actor: Actor, input: unknown) {
+    const body = unbilledSaleVatInput.parse(input);
+    return this.runner.read(
+      actor,
+      async (tx) => {
+        const range = await period(tx, actor.companyId, body),
+          rows = await unbilledEntries(tx, actor.companyId, range, body);
+        return {
+          items: rows.slice(0, body.limit),
+          nextCursor: rows.length > body.limit ? rows[body.limit - 1].unbilledSaleId : null,
+        };
+      },
+      'vat.unbilledSales',
+    );
+  }
   entries(actor: Actor, input: unknown) {
     const body = vatEntriesInput.parse(input);
     return this.runner.read(
@@ -264,6 +409,7 @@ export class VatRegisters {
       async (tx) => {
         const range = await period(tx, actor.companyId, body);
         const rows = await entries(tx, actor.companyId, range);
+        const sales = await unbilledEntries(tx, actor.companyId, range);
         const posted = await tx
           .select({ journal: journals, proposal: proposals })
           .from(journals)
@@ -349,6 +495,9 @@ export class VatRegisters {
             !invoiceJournals.has(journal.id) &&
             !body?.settlement &&
             !body?.accrual &&
+            !body?.accrualAdjustment &&
+            !body?.deferralRelease &&
+            !body?.unbilledSale &&
             journal.kind !== 'payment' &&
             ownLines.some((line) =>
               /^(401|4111|4426|4427|6\d{2}|7\d{2})(?:\.|$)/.test(line.account),
@@ -357,15 +506,16 @@ export class VatRegisters {
             issues.push({ code: 'UNCLASSIFIED_JOURNAL', invoiceId: null, journalId: journal.id });
           }
         }
-        const total = totals(rows);
+        const movements = [...rows, ...sales];
+        const total = totals(movements);
         const inputDifference = ledgerInput - toBani(total.inputTax),
           outputDifference = ledgerOutput - toBani(total.outputTax);
         if (inputDifference !== 0n)
           issues.push({ code: 'INPUT_VAT_DIFFERENCE', invoiceId: null, journalId: null });
         if (outputDifference !== 0n)
           issues.push({ code: 'OUTPUT_VAT_DIFFERENCE', invoiceId: null, journalId: null });
-        const grouped = new Map<string, Entry[]>();
-        for (const row of rows) {
+        const grouped = new Map<string, RegisterMovement[]>();
+        for (const row of movements) {
           const key = `${row.direction}:${row.category}:${row.rate}`;
           const group = grouped.get(key) ?? [];
           group.push(row);
@@ -385,7 +535,8 @@ export class VatRegisters {
           scope: 'posted_domestic_service_treatments' as const,
           officialDeclaration: false as const,
           ...range,
-          entryCount: rows.length,
+          entryCount: movements.length,
+          unbilledSaleEntryCount: sales.length,
           totals: total,
           groups,
           reconciliation: {
@@ -403,6 +554,7 @@ export class VatRegisters {
             canonical({
               result,
               rows,
+              sales,
               posted,
               lines: lines.map((line) => ({
                 ...line,

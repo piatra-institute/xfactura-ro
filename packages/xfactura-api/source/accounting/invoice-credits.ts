@@ -19,7 +19,12 @@ import { regimesAt } from './foundation';
 
 const identity = (value: string) => value.trim().replace(/^RO/i, '');
 /** The original approved tax treatment owns the rate; the credit's issue date does not replace it. */
-export async function interpretCreditNote(tx: Transaction, actor: Actor, input: CreditNoteInput) {
+export async function interpretCreditNote(
+  tx: Transaction,
+  actor: Actor,
+  input: CreditNoteInput,
+  origin: 'service' | 'deferred_subscription' = 'service',
+) {
   const [credit] = await tx
     .select()
     .from(invoiceDocuments)
@@ -34,6 +39,13 @@ export async function interpretCreditNote(tx: Transaction, actor: Actor, input: 
   const doc = credit.body,
     base = original.invoice.body,
     previous = original.treatment;
+  requireCondition(
+    origin === 'deferred_subscription'
+      ? !!previous.deferral && input.kind === 'cancellation'
+      : !previous.deferral,
+    'DEFERRAL_CREDIT_TREATMENT',
+    'Corecția abonamentului necesită repartizarea distinctă între perioadele recunoscute și cele viitoare.',
+  );
   requireCondition(
     doc.documentType === 'credit_note' &&
       doc.currency === 'RON' &&
@@ -130,11 +142,15 @@ export async function interpretCreditNote(tx: Transaction, actor: Actor, input: 
     409,
   );
   const account =
-    input.kind === 'commercial_discount'
-      ? credit.direction === 'sale'
-        ? '709'
-        : '609'
-      : previous.account;
+    origin === 'deferred_subscription'
+      ? credit.direction === 'purchase'
+        ? '471'
+        : '472'
+      : input.kind === 'commercial_discount'
+        ? credit.direction === 'sale'
+          ? '709'
+          : '609'
+        : previous.account;
   const deductibleTax = previous.deduction === 'full' ? totals.tax : '0.00';
   const lines: PostingLine[] =
     credit.direction === 'sale'
@@ -154,7 +170,12 @@ export async function interpretCreditNote(tx: Transaction, actor: Actor, input: 
     lines.push({ account: '4427', debit: totals.tax, credit: '0.00' });
   if (credit.direction === 'purchase' && new Amount(deductibleTax).gt(0))
     lines.push({ account: '4426', debit: '0.00', credit: deductibleTax });
-  const { accrualMatch: _matchedAccruals, ...originalTreatment } = previous;
+  const {
+    accrualMatch: _matchedAccruals,
+    unbilledSaleMatch: _matchedSales,
+    deferral: _deferredSubscription,
+    ...originalTreatment
+  } = previous;
   const treatment = invoiceTreatmentSchema.parse({
     ...originalTreatment,
     invoiceId: credit.id,

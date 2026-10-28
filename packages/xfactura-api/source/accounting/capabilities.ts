@@ -19,8 +19,26 @@ import { invoicePostingInput } from './invoice-postings';
 import { treasuryPage } from './treasury';
 import { positionQuery, positionRead } from './invoice-positions';
 import { settlementRevisionInput } from './settlements';
-import { accrualPageInput, accrualReadInput, accrualReconcileInput } from './accruals';
-import { vatEntriesInput, vatEntryOutput, vatPeriodInput, vatSummaryOutput } from './vat-registers';
+import { deferralPageInput, deferralReadInput, deferralReconcileInput } from './deferrals';
+import {
+  accrualPageInput,
+  accrualReadInput,
+  accrualReconcileInput,
+  accrualAdjustmentPageInput,
+} from './accruals';
+import {
+  unbilledSalePageInput,
+  unbilledSaleReadInput,
+  unbilledSaleReconcileInput,
+} from './unbilled-sales';
+import {
+  vatEntriesInput,
+  vatEntryOutput,
+  vatPeriodInput,
+  vatSummaryOutput,
+  unbilledSaleVatOutput,
+  unbilledSaleVatInput,
+} from './vat-registers';
 import { obligationOutput, ruleOutput } from './accounting-catalogue';
 import {
   approvalOutput,
@@ -51,7 +69,12 @@ import {
   positionOutput,
   treasuryAccountOutput,
   accrualPositionOutput,
+  accrualAdjustmentOutput,
   accrualReconcileOutput,
+  unbilledSalePositionOutput,
+  unbilledSaleReconcileOutput,
+  deferralPositionOutput,
+  deferralReconcileOutput,
 } from './capability-contracts';
 import {
   correctionSchema,
@@ -62,7 +85,13 @@ import {
   settlementInput,
   treasuryAccountInput,
   accrualInput,
+  accrualAdjustmentInput,
   accrualInvoiceInput,
+  unbilledSaleInput,
+  unbilledSaleInvoiceInput,
+  deferralInput,
+  deferralReleaseInput,
+  deferralCreditInput,
   idSchema,
   inviteSchema,
   matchSchema,
@@ -275,6 +304,65 @@ export class Capabilities {
         proposalOutput,
         (actor, key, body) => service.invoices.proposeCreditNote(actor, key, body),
       ),
+      'deferrals.proposeInvoice': define(
+        'Prepare an early domestic RON subscription invoice in 471/472 with an evidenced equal-calendar-month schedule. VAT remains at the invoice tax point; advances and regime/rate transitions need distinct treatment.',
+        deferralInput,
+        proposalOutput,
+        (actor, key, body) => service.deferrals.proposeInvoice(actor, key, body),
+      ),
+      'deferrals.proposeCreditNote': define(
+        'Prepare an evidenced current-period cancellation of whole future subscription months using a linked credit note. Retain earned amounts; reduce 471/472, invoice position and original-rate VAT. Requires exact human approval before ledger.post.',
+        deferralCreditInput,
+        proposalOutput,
+        (actor, key, body) => service.deferrals.proposeCreditNote(actor, key, body),
+      ),
+      'deferrals.reviseCreditNote': define(
+        'Refresh an unposted subscription cancellation after allocations invalidate its snapshot; obtain new human approval.',
+        deferralCreditInput.extend({ id: idSchema, version: z.number().int().positive() }).strict(),
+        proposalOutput,
+        (actor, key, { id, version, ...body }) =>
+          service.deferrals.proposeCreditNote(actor, key, body, { id, version }),
+      ),
+      'deferrals.reviseInvoice': define(
+        'Revise an unposted subscription invoice/schedule and invalidate its old approval.',
+        deferralInput.extend({ id: idSchema, version: z.number().int().positive() }).strict(),
+        proposalOutput,
+        (actor, key, { id, version, ...body }) =>
+          service.deferrals.proposeInvoice(actor, key, body, { id, version }),
+      ),
+      'deferrals.proposeRelease': define(
+        'Prepare one scheduled month-end expense/revenue allocation from 471/472 without repeating invoice VAT or settlement. Requires exact human approval before ledger.post.',
+        deferralReleaseInput,
+        proposalOutput,
+        (actor, key, body) => service.deferrals.proposeRelease(actor, key, body),
+      ),
+      'deferrals.reviseRelease': define(
+        'Refresh an unposted monthly allocation after reviewed source/registration changes invalidate its snapshot.',
+        deferralReleaseInput
+          .extend({ id: idSchema, version: z.number().int().positive() })
+          .strict(),
+        proposalOutput,
+        (actor, key, { id, version, ...body }) =>
+          service.deferrals.proposeRelease(actor, key, body, { id, version }),
+      ),
+      'deferrals.get': define(
+        'Read one subscription schedule, dated allocated/remaining amounts and due month references.',
+        deferralReadInput,
+        deferralPositionOutput,
+        (actor, _, body) => service.deferrals.get(actor, body),
+      ),
+      'deferrals.list': define(
+        'Read bounded purchase/sale deferral positions, including carried prior-year schedules.',
+        deferralPageInput,
+        pageOutput(deferralPositionOutput),
+        (actor, _, body) => service.deferrals.list(actor, body),
+      ),
+      'deferrals.reconcile': define(
+        'Reconcile native schedules to 471/472 in one financial year and count unposted due allocations. Does not establish fiscal conformance.',
+        deferralReconcileInput,
+        deferralReconcileOutput,
+        (actor, _, body) => service.deferrals.reconcile(actor, body),
+      ),
       'invoices.reviseCreditNote': define(
         'Refresh an unposted credit-note proposal after competing credits or a changed review decision.',
         creditNoteInput.extend({ id: idSchema, version: z.number().int().positive() }).strict(),
@@ -299,6 +387,58 @@ export class Capabilities {
         accrualInput,
         proposalOutput,
         (actor, key, body) => service.accruals.propose(actor, key, body),
+      ),
+      'unbilledSales.propose': define(
+        'Prepare completed domestic RON services in 418/704, recognizing applicable output VAT at the service tax point. Requires exact human approval before ledger.post.',
+        unbilledSaleInput,
+        proposalOutput,
+        (actor, key, body) => service.unbilledSales.propose(actor, key, body),
+      ),
+      'unbilledSales.revise': define(
+        'Revise an unposted unbilled-service proposal and invalidate its old approval.',
+        unbilledSaleInput.extend({ id: idSchema, version: z.number().int().positive() }).strict(),
+        proposalOutput,
+        (actor, key, { id, version, ...body }) =>
+          service.unbilledSales.propose(actor, key, body, { id, version }),
+      ),
+      'unbilledSales.matchInvoice': define(
+        'Prepare an issued invoice against posted unbilled services without recognizing revenue or output VAT again. Supports exact partial/grouped allocations.',
+        unbilledSaleInvoiceInput,
+        proposalOutput,
+        (actor, key, body) => service.unbilledSales.matchInvoice(actor, key, body),
+      ),
+      'unbilledSales.reviseMatch': define(
+        'Refresh an unposted sales invoice match after competing allocations change available balances.',
+        unbilledSaleInvoiceInput
+          .extend({ id: idSchema, version: z.number().int().positive() })
+          .strict(),
+        proposalOutput,
+        (actor, key, { id, version, ...body }) =>
+          service.unbilledSales.matchInvoice(actor, key, body, { id, version }),
+      ),
+      'unbilledSales.get': define(
+        'Read one unbilled-service receivable and its dated invoiced/remaining amounts.',
+        unbilledSaleReadInput,
+        unbilledSalePositionOutput,
+        (actor, _, body) => service.unbilledSales.get(actor, body),
+      ),
+      'unbilledSales.list': define(
+        'Read bounded unbilled-service receivables, including prior-year positions.',
+        unbilledSalePageInput,
+        pageOutput(unbilledSalePositionOutput),
+        (actor, _, body) => service.unbilledSales.list(actor, body),
+      ),
+      'unbilledSales.reconcile': define(
+        "Reconcile dated unbilled-service positions to the selected financial year's 418 control balance.",
+        unbilledSaleReconcileInput,
+        unbilledSaleReconcileOutput,
+        (actor, _, body) => service.unbilledSales.reconcile(actor, body),
+      ),
+      'vat.unbilledSales': define(
+        'Read bounded source-linked unbilled-service VAT recognition rows. Later issued invoices do not repeat these tax movements.',
+        unbilledSaleVatInput,
+        pageOutput(unbilledSaleVatOutput),
+        (actor, _, body) => service.vat.unbilledSales(actor, body),
       ),
       'accruals.revise': define(
         'Revise an unposted service accrual and invalidate its previous approval.',
@@ -325,6 +465,27 @@ export class Capabilities {
         accrualReadInput,
         accrualPositionOutput,
         (actor, _, body) => service.accruals.get(actor, body),
+      ),
+      'accruals.proposeAdjustment': define(
+        'Prepare an evidenced current-year change to the remaining unbilled purchase estimate, or release that remainder. Retains original postings and invoiced amounts; requires human approval before ledger.post.',
+        accrualAdjustmentInput,
+        proposalOutput,
+        (actor, key, body) => service.accruals.proposeAdjustment(actor, key, body),
+      ),
+      'accruals.reviseAdjustment': define(
+        'Refresh an unposted accrual adjustment after matches or other estimate changes invalidate its exact snapshot.',
+        accrualAdjustmentInput
+          .extend({ id: idSchema, version: z.number().int().positive() })
+          .strict(),
+        proposalOutput,
+        (actor, key, { id, version, ...body }) =>
+          service.accruals.proposeAdjustment(actor, key, body, { id, version }),
+      ),
+      'accruals.adjustments': define(
+        'Read bounded, dated immutable purchase-estimate adjustments and their original links, evidence and exact deltas.',
+        accrualAdjustmentPageInput,
+        pageOutput(accrualAdjustmentOutput),
+        (actor, _, body) => service.accruals.adjustments(actor, body),
       ),
       'accruals.reconcile': define(
         'Reconcile all dated unbilled purchase positions and deferred VAT to 408/4428 in one financial year. Reveals missing opening continuity; other deferred-VAT uses require separate supported classifications.',

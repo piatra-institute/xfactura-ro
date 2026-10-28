@@ -27,6 +27,12 @@ try {
     'settlements-mobile',
     'accruals-desktop',
     'accruals-mobile',
+    'unbilled-sales-desktop',
+    'unbilled-sales-mobile',
+    'accrual-adjustments-desktop',
+    'accrual-adjustments-mobile',
+    'deferrals-desktop',
+    'deferrals-mobile',
   ]) {
     await auth.api.signUpEmail({
       body: { email: `${name}@example.test`, name, password: 'synthetic-browser-password' },

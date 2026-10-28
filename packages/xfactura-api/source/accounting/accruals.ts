@@ -5,9 +5,11 @@ import type { Transaction } from './db';
 import {
   Amount,
   accrualInput,
+  accrualAdjustmentInput,
   accrualInvoiceInput,
   accrualTreatmentSchema,
   canonical,
+  generalBodySchema,
   dateSchema,
   idSchema,
   requireCondition,
@@ -18,6 +20,7 @@ import {
 import {
   accrualPostings,
   accrualMatches,
+  accrualAdjustments,
   companies,
   evidence,
   invoiceDocuments,
@@ -31,6 +34,7 @@ import { invoiceRule } from './accounting-catalogue';
 import { accrualView, loadAccruals } from './accrual-state';
 import { interpretAccrualInvoice } from './accrual-matching';
 import { accrualControls } from './accrual-controls';
+import { interpretAccrualAdjustment } from './accrual-adjustments';
 
 export const accrualReadInput = z.object({ id: idSchema, date: dateSchema }).strict();
 export const accrualReconcileInput = z
@@ -43,6 +47,10 @@ export const accrualPageInput = z
     limit: z.number().int().min(1).max(100).default(25),
     cursor: idSchema.optional(),
   })
+  .strict();
+export const accrualAdjustmentPageInput = accrualPageInput
+  .omit({ onlyOpen: true })
+  .extend({ accrualId: idSchema })
   .strict();
 
 export async function interpretAccrual(tx: Transaction, actor: Actor, input: AccrualInput) {
@@ -185,6 +193,124 @@ export async function checkAccrualPosting(tx: Transaction, actor: Actor, body: G
 
 export class Accruals {
   constructor(private readonly runner: Commands) {}
+  proposeAdjustment(
+    actor: Actor,
+    key: string,
+    input: unknown,
+    revision?: { id: string; version: number },
+  ) {
+    const body = accrualAdjustmentInput.parse(input);
+    return this.runner.run(
+      actor,
+      key,
+      revision ? 'accruals.reviseAdjustment' : 'accruals.proposeAdjustment',
+      { body, revision: revision ?? null },
+      'write',
+      async (tx) => {
+        const [posted] = await tx
+          .select({ id: accrualAdjustments.proposalId })
+          .from(accrualAdjustments)
+          .where(
+            and(
+              eq(accrualAdjustments.companyId, actor.companyId),
+              eq(accrualAdjustments.reference, body.reference),
+            ),
+          );
+        requireCondition(
+          !posted,
+          'ACCRUAL_ADJUSTMENT_EXISTS',
+          'Ajustarea este deja contabilizată.',
+          409,
+        );
+        const result = await interpretAccrualAdjustment(tx, actor, body);
+        return retainGeneralProposal(
+          tx,
+          actor,
+          generalBody({
+            financialYearId: body.financialYearId,
+            evidenceId: body.evidenceId,
+            date: body.date,
+            purpose: 'adjustment',
+            description: `${body.action === 'release' ? 'Stornare angajament' : 'Ajustare estimare'} · ${result.treatment.accrualReference} · ${body.reference}`,
+            sourceReference: `accrual-adjustment:${body.reference}`,
+            correctsJournalId: result.previousJournalId,
+            lines: result.lines,
+            accrualAdjustment: result.treatment,
+          }),
+          revision,
+        );
+      },
+    );
+  }
+  adjustments(actor: Actor, input: unknown) {
+    const body = accrualAdjustmentPageInput.parse(input);
+    return this.runner.read(
+      actor,
+      async (tx) => {
+        const [root] = await tx
+          .select({ id: accrualPostings.accrualId })
+          .from(accrualPostings)
+          .innerJoin(
+            journals,
+            and(
+              eq(journals.companyId, accrualPostings.companyId),
+              eq(journals.id, accrualPostings.journalId),
+            ),
+          )
+          .where(
+            and(
+              eq(accrualPostings.companyId, actor.companyId),
+              eq(accrualPostings.accrualId, body.accrualId),
+              lte(journals.date, body.date),
+            ),
+          );
+        requireCondition(
+          root,
+          'NOT_FOUND',
+          'Angajamentul nu este disponibil la această dată.',
+          404,
+        );
+        const rows = await tx
+          .select({ record: accrualAdjustments, proposal: proposals })
+          .from(accrualAdjustments)
+          .innerJoin(
+            journals,
+            and(
+              eq(journals.companyId, accrualAdjustments.companyId),
+              eq(journals.id, accrualAdjustments.journalId),
+            ),
+          )
+          .innerJoin(
+            proposals,
+            and(
+              eq(proposals.companyId, accrualAdjustments.companyId),
+              eq(proposals.id, accrualAdjustments.proposalId),
+            ),
+          )
+          .where(
+            and(
+              eq(accrualAdjustments.companyId, actor.companyId),
+              eq(accrualAdjustments.accrualId, body.accrualId),
+              lte(journals.date, body.date),
+              body.cursor ? gt(accrualAdjustments.proposalId, body.cursor) : undefined,
+            ),
+          )
+          .orderBy(asc(accrualAdjustments.proposalId))
+          .limit(body.limit + 1);
+        return {
+          items: rows.slice(0, body.limit).map(({ record, proposal }) => ({
+            id: record.proposalId,
+            journalId: record.journalId,
+            proposalHash: proposal.hash,
+            treatment: generalBodySchema.parse(proposal.body).accrualAdjustment!,
+            createdAt: record.createdAt,
+          })),
+          nextCursor: rows.length > body.limit ? rows[body.limit - 1].record.proposalId : null,
+        };
+      },
+      'accruals.adjustments',
+    );
+  }
   reconcile(actor: Actor, input: unknown) {
     const body = accrualReconcileInput.parse(input);
     return this.runner.read(
@@ -318,6 +444,23 @@ export class Accruals {
               lte(journals.date, body.date),
             ),
           );
+        const changed = tx
+          .select({ amount: sql`coalesce(sum(${accrualAdjustments.grossBani}),0)` })
+          .from(accrualAdjustments)
+          .innerJoin(
+            journals,
+            and(
+              eq(journals.companyId, accrualAdjustments.companyId),
+              eq(journals.id, accrualAdjustments.journalId),
+            ),
+          )
+          .where(
+            and(
+              eq(accrualAdjustments.companyId, accrualPostings.companyId),
+              eq(accrualAdjustments.accrualId, accrualPostings.accrualId),
+              lte(journals.date, body.date),
+            ),
+          );
         const rows = await tx
           .select({ id: accrualPostings.accrualId })
           .from(accrualPostings)
@@ -341,7 +484,7 @@ export class Accruals {
               lte(journals.date, body.date),
               body.cursor ? gt(accrualPostings.accrualId, body.cursor) : undefined,
               body.onlyOpen
-                ? sql`cast(replace(json_extract(${proposals.body}, '$.accrual.gross'),'.','') as integer)>(${used})`
+                ? sql`cast(replace(json_extract(${proposals.body}, '$.accrual.gross'),'.','') as integer)+(${changed})>(${used})`
                 : undefined,
             ),
           )
