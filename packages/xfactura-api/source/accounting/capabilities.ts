@@ -125,6 +125,7 @@ import {
   advanceRefundInput,
   deferralCreditInput,
   deferralDiscountInput,
+  deferralScopeReductionInput,
   deferralRescheduleInput,
   idSchema,
   inviteSchema,
@@ -473,6 +474,21 @@ export class Capabilities {
         deferralCreditInput,
         proposalOutput,
         (actor, key, body) => service.deferrals.proposeCreditNote(actor, key, body),
+      ),
+      'deferrals.proposeScopeReduction': define(
+        'Prepare a separately evidenced partial cancellation of unprovided services using a linked credit note. Reduce 471/472 and original-rate VAT; preserve earned periods, calendar dates and allocation method, and redistribute the positive future remainder. Explicitly document cancelled_future_services and uniform remaining services. Requires exact human approval before ledger.post; one scope cancellation per source.',
+        deferralScopeReductionInput,
+        proposalOutput,
+        (actor, key, body) => service.deferrals.proposeScopeReduction(actor, key, body),
+      ),
+      'deferrals.reviseScopeReduction': define(
+        'Refresh an unposted future-service scope reduction after its source, credit or calendar snapshot changes. Earlier approval is invalidated; obtain fresh human approval.',
+        deferralScopeReductionInput
+          .extend({ id: idSchema, version: z.number().int().positive() })
+          .strict(),
+        proposalOutput,
+        (actor, key, { id, version, ...body }) =>
+          service.deferrals.proposeScopeReduction(actor, key, body, { id, version }),
       ),
       'deferrals.proposeDiscount': define(
         'Prepare a post-invoice commercial subscription discount in 609/709 with separate agreement and unchanged services. Preserve the original 471/472 allocation schedule; exact human approval remains required.',

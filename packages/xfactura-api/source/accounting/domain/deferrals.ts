@@ -181,7 +181,7 @@ export function actualDaySchedule(amount: string, from: string, to: string) {
 export const deferralCreditInput = creditNoteInput
   .extend({ kind: z.literal('cancellation'), cancelFrom: dateSchema })
   .strict();
-export const deferralCreditSchema = z
+const fullDeferralCreditSchema = z
   .object({
     schemaVersion: z.literal(1),
     deferralId: idSchema,
@@ -201,6 +201,28 @@ export const deferralCreditSchema = z
   })
   .strict();
 export type DeferralCreditInput = z.infer<typeof deferralCreditInput>;
+
+export const deferralScopeReductionInput = deferralCreditInput
+  .extend({
+    changeBasis: z.literal('cancelled_future_services'),
+    remainingServices: z.literal('uniform'),
+  })
+  .strict();
+export const deferralScopeReductionSchema = fullDeferralCreditSchema
+  .extend({
+    schemaVersion: z.literal(2),
+    changeBasis: z.literal('cancelled_future_services'),
+    remainingServices: z.literal('uniform'),
+    method: z.enum(['equal_calendar_months', 'actual_calendar_days']),
+    beforeSchedule: z.array(deferralScheduleRowSchema).min(1).max(60),
+    afterSchedule: z.array(deferralScheduleRowSchema).min(1).max(60),
+  })
+  .strict();
+export const deferralCreditSchema = z.discriminatedUnion('schemaVersion', [
+  fullDeferralCreditSchema,
+  deferralScopeReductionSchema,
+]);
+export type DeferralScopeReductionInput = z.infer<typeof deferralScopeReductionInput>;
 
 export const deferralDiscountInput = creditNoteInput
   .extend({

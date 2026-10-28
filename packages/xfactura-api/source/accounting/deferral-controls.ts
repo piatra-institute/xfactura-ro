@@ -67,7 +67,7 @@ export async function deferralControls(
       ),
     );
   const cancellations = await tx
-    .select({ record: deferralCancellations })
+    .select({ record: deferralCancellations, body: proposals.body })
     .from(deferralCancellations)
     .innerJoin(
       journals,
@@ -76,8 +76,17 @@ export async function deferralControls(
         eq(journals.id, deferralCancellations.journalId),
       ),
     )
+    .innerJoin(
+      proposals,
+      and(eq(proposals.companyId, journals.companyId), eq(proposals.id, journals.sourceId)),
+    )
     .where(and(eq(deferralCancellations.companyId, companyId), lte(journals.date, date)));
-  const byDeferral = new Map(cancellations.map(({ record }) => [record.deferralId, record]));
+  const byDeferral = new Map(
+    cancellations.map(({ record, body }) => [
+      record.deferralId,
+      { ...record, treatment: generalBodySchema.parse(body).invoice!.deferralCredit! },
+    ]),
+  );
   const reschedules = await tx
     .select()
     .from(deferralReschedules)
@@ -105,11 +114,17 @@ export async function deferralControls(
       (cancellation?.amountBani ?? 0n);
     if (invoice.direction === 'purchase') prepaid += remaining;
     else deferredRevenue += remaining;
-    dueCount += (schedules.get(root.record.deferralId)?.body.afterSchedule ?? plan.schedule).filter(
+    const schedule =
+      cancellation?.treatment.schemaVersion === 2
+        ? cancellation.treatment.afterSchedule
+        : (schedules.get(root.record.deferralId)?.body.afterSchedule ?? plan.schedule);
+    dueCount += schedule.filter(
       (row) =>
         row.date <= date &&
         row.amount !== '0.00' &&
-        (!cancellation || row.month < cancellation.fromMonth) &&
+        (!cancellation ||
+          cancellation.treatment.schemaVersion === 2 ||
+          row.month < cancellation.fromMonth) &&
         !months.has(`${root.record.deferralId}:${row.month}`),
     ).length;
   }

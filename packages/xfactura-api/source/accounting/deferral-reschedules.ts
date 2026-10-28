@@ -39,7 +39,7 @@ export async function previewDeferralReschedule(tx: Transaction, actor: Actor, i
   requireCondition(
     !state.cancellation,
     'DEFERRAL_ALREADY_CANCELLED',
-    'Un abonament anulat necesită un nou contract, nu replanificarea serviciilor anulate.',
+    'Serviciile au deja o anulare totală sau parțială. O altă modificare necesită un tratament distinct.',
     409,
   );
   const latest = state.reschedules.at(-1),

@@ -232,7 +232,9 @@ export async function interpretDeferralRelease(
   const allocation = deferralSchedule(state).find((row) => row.month === input.month);
   requireCondition(allocation, 'DEFERRAL_MONTH', 'Luna nu aparține planului de alocare.');
   requireCondition(
-    !state.cancellation || input.month < state.cancellation.record.fromMonth,
+    !state.cancellation ||
+      state.cancellation.treatment.schemaVersion === 2 ||
+      input.month < state.cancellation.record.fromMonth,
     'DEFERRAL_MONTH_CANCELLED',
     'Serviciile din această lună au fost anulate.',
     409,

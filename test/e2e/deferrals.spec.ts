@@ -87,6 +87,7 @@ test('reviews a subscription schedule and next-year allocation, with a keyboard 
         'deferrals.proposeCreditNote',
         'deferrals.proposeDiscount',
         'deferrals.proposeReschedule',
+        'deferrals.proposeScopeReduction',
       ],
       expiresAt: new Date(Date.now() + 3600000).toISOString(),
     });
@@ -537,6 +538,72 @@ test('reviews a subscription schedule and next-year allocation, with a keyboard 
     remaining: '72.89',
     allocation: { serviceDays: 85 },
   });
+  const scopeAgreement = await source(
+    'acord-diminuare-servicii.txt',
+    'Signed agreement cancels part of future services from 1 February; remaining benefits are uniform over the same dates',
+  );
+  const scopeXml = await source(
+    'diminuare-servicii.xml',
+    invoiceXml({
+      credit: true,
+      originalNumber: 'ZILE-2026',
+      number: 'ZILE-REDUCERE',
+      date: '2026-02-01',
+      net: '20.00',
+      tax: '4.20',
+      gross: '24.20',
+    }),
+  );
+  const scopeInvoice = await invoke('invoices.import', { evidenceId: scopeXml.id });
+  const scope = await invoke(
+    'deferrals.proposeScopeReduction',
+    {
+      financialYearId: nextYear.id,
+      originalInvoiceId: dayInvoice.id,
+      invoiceId: scopeInvoice.id,
+      recognitionDate: '2026-02-01',
+      decisionDate: '2026-02-01',
+      treatmentEvidenceId: scopeAgreement.id,
+      kind: 'cancellation',
+      periodBasis: 'current_period_event',
+      cancelFrom: '2026-02-01',
+      changeBasis: 'cancelled_future_services',
+      remainingServices: 'uniform',
+      reason:
+        'Acord nou privind diminuarea serviciilor viitoare, cu beneficiile rămase uniforme în aceeași perioadă',
+    },
+    grant.token,
+  );
+  await page.reload();
+  const scopeCard = page.locator('.acc-review');
+  await expect(scopeCard.getByRole('heading')).toHaveText(
+    'Diminuare servicii viitoare · ZILE-REDUCERE',
+  );
+  await expect(scopeCard).toContainText('52,89');
+  const scopeTable = scopeCard.getByRole('table', { name: 'Plan de alocare modificat' });
+  await expect(scopeTable.locator('tbody tr')).toHaveCount(4);
+  await expect(scopeTable.locator('tbody tr').nth(0)).toContainText('27,11');
+  await expect(scopeTable).toContainText('21,46');
+  await expect(scopeTable).toContainText('23,76');
+  await expect(scopeTable).toContainText('7,67');
+  await page.screenshot({
+    path: info.outputPath(`scope-reduction-${info.project.name}.png`),
+    fullPage: true,
+  });
+  const agreementDownload = await Promise.all([
+    page.waitForEvent('download'),
+    scopeCard.getByRole('link', { name: 'Descarcă' }).click(),
+  ]);
+  expect(agreementDownload[0].suggestedFilename()).toBe('acord-diminuare-servicii.txt');
+  await scopeCard.getByRole('button', { name: 'Aprobă această versiune', exact: true }).click();
+  await scopeCard.getByRole('button', { name: 'Contabilizează', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('contabilizată');
+  await invoke('ledger.post', { id: scope.id, version: scope.version, hash: scope.hash });
+  expect(await invoke('deferrals.get', { id: dayRoot.id, date: '2026-04-30' })).toMatchObject({
+    cancelled: '20.00',
+    remaining: '52.89',
+    cancellation: { kind: 'scope_reduction' },
+  });
   for (const month of ['2026-02-01', '2026-03-01', '2026-04-01'])
     await post(
       await invoke(
@@ -550,7 +617,7 @@ test('reviews a subscription schedule and next-year allocation, with a keyboard 
   ).toMatchObject({ status: 'reconciled' });
   expect(await invoke('vat.summary', { financialYearId: nextYear.id })).toMatchObject({
     status: 'reconciled',
-    totals: { inputTax: '4.90', outputTax: '0.00' },
+    totals: { inputTax: '0.70', outputTax: '0.00' },
   });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   expect(errors).toEqual([]);

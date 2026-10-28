@@ -34,6 +34,7 @@ export default function GeneralDetails({
     settlement = body.settlement,
     credit = invoice?.credit,
     cancellation = invoice?.deferralCredit,
+    scopeReduction = cancellation?.schemaVersion === 2 ? cancellation : undefined,
     discount = invoice?.deferralDiscount,
     deferral = invoice?.deferral,
     service = body.accrual ?? body.unbilledSale,
@@ -265,7 +266,7 @@ export default function GeneralDetails({
           {cancellation ? (
             <>
               <div>
-                <dt>Anulare din</dt>
+                <dt>{scopeReduction ? 'Modificare din' : 'Anulare din'}</dt>
                 <dd>{cancellation.cancelFrom.slice(0, 7)}</dd>
               </div>
               <div>
@@ -284,6 +285,16 @@ export default function GeneralDetails({
                 <dt>Sold amânat după</dt>
                 <dd>{formatMoney(cancellation.remainingAfter)}</dd>
               </div>
+              {scopeReduction ? (
+                <div>
+                  <dt>Alocare</dt>
+                  <dd>
+                    {scopeReduction.method === 'actual_calendar_days'
+                      ? 'Pe zile calendaristice'
+                      : 'Lunar, în cote egale'}
+                  </dd>
+                </div>
+              ) : null}
             </>
           ) : null}
           <div>
@@ -373,7 +384,7 @@ export default function GeneralDetails({
           ) : null}
         </dl>
         <InvoiceAdvanceDetails {...{ body, state, path, showJournal }} />
-        {cancellation ? (
+        {cancellation && !scopeReduction ? (
           <div className="acc-table-scroll">
             <table>
               <caption>Luni anulate</caption>
@@ -388,6 +399,33 @@ export default function GeneralDetails({
                   <tr key={item.month}>
                     <td>{item.month.slice(0, 7)}</td>
                     <td>{formatMoney(item.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+        {scopeReduction ? (
+          <div className="acc-table-scroll">
+            <table>
+              <caption>Plan de alocare modificat</caption>
+              <thead>
+                <tr>
+                  <th>Lună</th>
+                  {scopeReduction.method === 'actual_calendar_days' ? <th>Zile</th> : null}
+                  <th>Înainte</th>
+                  <th>După</th>
+                </tr>
+              </thead>
+              <tbody>
+                {scopeReduction.afterSchedule.map((row, index) => (
+                  <tr key={row.month}>
+                    <td>{row.month.slice(0, 7)}</td>
+                    {scopeReduction.method === 'actual_calendar_days' ? (
+                      <td>{'days' in row ? row.days : ''}</td>
+                    ) : null}
+                    <td>{formatMoney(scopeReduction.beforeSchedule[index].amount)}</td>
+                    <td>{formatMoney(row.amount)}</td>
                   </tr>
                 ))}
               </tbody>

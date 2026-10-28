@@ -318,6 +318,7 @@ export const deferralPositionOutput = z.object({
   status: z.enum(['open', 'allocated', 'cancelled']),
   cancellation: z
     .object({
+      kind: z.literal('scope_reduction').optional(),
       creditInvoiceId: idSchema,
       journalId: idSchema,
       date: dateSchema,
