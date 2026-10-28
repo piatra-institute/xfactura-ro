@@ -33,6 +33,8 @@ try {
     'accrual-adjustments-mobile',
     'deferrals-desktop',
     'deferrals-mobile',
+    'advances-desktop',
+    'advances-mobile',
   ]) {
     await auth.api.signUpEmail({
       body: { email: `${name}@example.test`, name, password: 'synthetic-browser-password' },

@@ -1,6 +1,6 @@
 # Accounting capabilities and MCP
 
-The implemented API covers general-ledger proposals and financial-year reports, company chart/configuration records, domestic RON service invoices/credits, purchase accruals, completed unbilled sales and later-invoice matching, uniform subscription allocations through 471/472, invoice positions, bank/cash settlements and working VAT registers. It does not calculate full tax positions, generate official declarations, submit to ANAF or establish replacement eligibility. [ACCOUNTING_ENGINE.md](ACCOUNTING_ENGINE.md) specifies the engine capabilities and their limits. The built-in accounting agent and browser OAuth delegation remain planned. External clients can already use MCP with an explicitly issued accounting credential.
+The implemented API covers general-ledger proposals and financial-year reports, company chart/configuration records, domestic RON service invoices/credits, purchase accruals, completed unbilled sales and later-invoice matching, uniform subscription allocations through 471/472, service advances through 4092/419, invoice positions, bank/cash settlements and working VAT registers. It does not calculate full tax positions, generate official declarations, submit to ANAF or establish replacement eligibility. [ACCOUNTING_ENGINE.md](ACCOUNTING_ENGINE.md) specifies the engine capabilities and their limits. The built-in accounting agent and browser OAuth delegation remain planned. External clients can already use MCP with an explicitly issued accounting credential.
 
 ## One contract
 
@@ -27,6 +27,8 @@ Discovery reports only implemented capabilities available to the current princip
 | `rules.list`, `obligations.catalogue` | Draft calculation/specification references; no applicability or declaration claim. |
 | `ledger.propose`, `ledger.revise`, `ledger.post`, `ledger.balance` | General and opening entries, exact approved execution and year-scoped reports. |
 | `invoices.import`, `invoices.list`, `invoices.get`, `invoices.propose` | Retained UBL facts and bounded domestic service treatments. |
+| `invoices.importArchive`, `invoices.archive` | Atomic retained ZIP import and immutable manifest; extracted invoice/signature/supporting bytes remain distinct, with no acceptance or posting claim. |
+| `invoices.sources` | Bounded archive/member provenance for an invoice, including exact XML variants. |
 | `invoices.proposeCreditNote`, `invoices.reviseCreditNote` | Linked current-period commercial credits retaining the original tax treatment. |
 | `positions.get`, `positions.list` | Dated invoice receivables/payables, credits, settlements and refunds. |
 | `accruals.propose`, `accruals.revise` | Evidenced service purchases in 408, with estimated recoverable VAT awaiting the invoice in 4428. |
@@ -40,9 +42,15 @@ Discovery reports only implemented capabilities available to the current princip
 | `deferrals.proposeRelease`, `deferrals.reviseRelease` | Month-end expense/revenue allocations; exact human approval and `ledger.post`, without repeated VAT. |
 | `deferrals.proposeCreditNote`, `deferrals.reviseCreditNote` | A linked credit cancels whole future subscription months, preserving earned amounts and the original tax treatment. |
 | `deferrals.get`, `deferrals.list`, `deferrals.reconcile` | Dated schedules/remaining amounts and year-scoped 471/472 controls, including carried prior-year subscriptions. |
+| `advances.proposePayment`, `advances.revisePayment` | Explain a whole retained RON bank movement as an evidenced service advance; purchase cash alone deducts no VAT, customer receipts recognize applicable output VAT. |
+| `advances.proposeInvoice`, `advances.reviseInvoice` | Interpret a retained 380/386 advance invoice, optionally matching whole earlier payments without repeating VAT. |
+| `advances.proposeFinalInvoice`, `advances.reviseFinalInvoice` | Recognize the full service and consume explicitly referenced, fully settled advances through negative final-invoice lines. |
+| `advances.proposeCreditNote`, `advances.reviseCreditNote` | Cancel only the unused invoiced advance; existing positions and settlements handle the resulting refund. |
+| `advances.proposeRefund`, `advances.reviseRefund` | Return an entire unbilled bank advance under a separately retained current agreement. |
+| `advances.getPayment`, `advances.payments`, `advances.get`, `advances.list`, `advances.reconcile` | Dated payment/invoice positions, bounded pages and year-scoped 4092/419 controls. |
 | `treasury.accounts`, `treasury.createAccount`, `treasury.recordCash` | RON bank/cash mappings and documented cash facts; mapping changes are human-only. |
 | `settlements.propose`, `settlements.revise` | Exact partial/grouped allocations, refunds and fees for retained movements; post with `ledger.post` after human approval. |
-| `vat.entries`, `vat.unbilledSales`, `vat.summary` | Source-linked invoice/service working registers and combined ledger reconciliation; no official return. |
+| `vat.entries`, `vat.unbilledSales`, `vat.advancePayments`, `vat.summary` | Source-linked invoice/service/advance working registers and combined ledger reconciliation; no official return. |
 | `evidence.list`, `evidence.read`, `evidence.record` | Source metadata, immutable originals and content-addressed upload. |
 | `proposals.list`, `proposals.get` | Exact versions, approval/posting state and deterministic posting lines. |
 | `books.proposeOpening`, `books.proposePurchase`, `books.revisePurchase` | Prepare the existing opening or domestic service-purchase interpretation. |
@@ -62,6 +70,24 @@ List inputs have `limit` (default 25, maximum 100) and optional `cursor`; output
 For subscriptions, `deferrals.proposeInvoice` requires the retained invoice, separate contract evidence/date, service dates, `uniform_subscription`, `equal_calendar_months`, `early_invoice`, service account and explicit deduction. Only complete calendar months under covered, stable VAT rules are supported. `deferrals.proposeRelease` names `financialYearId`, `deferralId` and the first day of the scheduled month; its journal date is month end. Read and approve the exact effects before `ledger.post`. `DEFERRAL_ALLOCATION_DUE` requires posting due monthly amounts; `DEFERRAL_CONTROL_DIFFERENCE` requires reconciling the carried 471/472 balance. `DEFERRAL_VAT_TRANSITION` and `DEFERRAL_CREDIT_TREATMENT` need separate treatments, not manual overrides of the schedule. Ordinary native settlements still pay/collect the source invoice. Neither a schedule nor a payment authorizes autonomous posting or movement of funds.
 
 Subscription cancellation uses `deferrals.proposeCreditNote`, with the retained credit invoice, `originalInvoiceId`, financial year, recognition/decision dates, separate `treatmentEvidenceId`, `kind: cancellation`, `periodBasis: current_period_event`, reason and `cancelFrom`. It covers that entire month and the following scheduled months. Neither recognition nor issue may follow the first cancelled day. Credit cost/revenue must equal those exact schedule amounts. `STALE_DEFERRAL_CREDIT` needs revision and fresh human approval; `DEFERRAL_MONTH_CANCELLED` rejects obsolete allocations. Unaffected prepared allocations become stale until `reviseRelease` includes the cancellation journal. Position reads separate `allocated`, `cancelled` and `remaining`, and retain dated cancellation/month links. Price discounts, repeated amendments and prior-period errors remain unsupported. Never submit the deferred original through the ordinary service-credit workflow.
+
+## Archive workflow
+
+1. Upload the original ZIP through `evidence.record`.
+2. Invoke `invoices.importArchive` with `{evidenceId}` and a stable idempotency key.
+3. Read `outcome`, `invoiceCount` and each manifest entry's `kind`, `invoiceId`, `evidenceId`, path and hash. `no_invoice` retains a response/supporting archive without creating an invoice. `signatureVerification: not_performed` never means ANAF acceptance.
+4. Read invoice facts through `invoices.get`, then choose a supported accounting treatment and prepare it for exact human approval. Import never posts.
+5. Use `invoices.archive` for the retained manifest and `invoices.sources` with `{invoiceId, limit, cursor}` for source origins. `evidence.read` or authenticated download retrieves the original ZIP and exact member bytes under its own scope.
+
+Limits are 10 MiB compressed, 100 entries, 10 MiB per file, 40 MiB expanded and 200:1 per-file expansion. Unsupported/encrypted/nested archives and unsafe paths fail closed. A malformed, foreign-company or conflicting invoice rejects the whole batch. Fixing an import requires new retained source evidence; never modify original bytes or silently discard a failed member. Both repeated and concurrent identical imports preserve one manifest and the original normalized invoice identities. Every retry rechecks live authorization, including revoked grants.
+
+## Advance workflow
+
+For advances, retain a separate contract and expected service date. `proposePayment` names the whole bank movement, partner, direction, service account, net and S/O category. `proposeInvoice` names the imported invoice, recognition/tax-point dates, explicit deduction and optional `paymentIds`; selected payments must fully explain that invoice. A pre-invoice payment cannot currently split across invoices. Invoice-first advances use ordinary `settlements.propose` for partial/grouped payments.
+
+`proposeFinalInvoice` names the retained final invoice and allocations `{advanceInvoiceId, lineId, net, tax}`. Each allocation identifies a negative source line and a fully settled advance. The source XML must reference each advance invoice. Partial use and multiple advances are supported; rates, partner, account and deduction must agree. `ADVANCE_UNSETTLED` requires settlement first; `STALE_ADVANCE_FINAL` requires revision and fresh human approval. Unsupported rate/registration transitions, rounding differences and separate regularization documents need distinct treatments.
+
+Unused invoiced advances use `proposeCreditNote` with the original invoice, retained credit, current-period cancellation decision and separate agreement. Unbilled advances use `proposeRefund` with the opposite whole bank movement and current agreement. Neither can consume amounts already matched, used or refunded. `ADVANCE_CONTROL_DIFFERENCE` requires reconciling itemized 4092/419 positions, including explicit carried openings. Approval remains human `books.approve`, execution exact `ledger.post`; no capability moves funds.
 
 ## Delegate accounting access
 

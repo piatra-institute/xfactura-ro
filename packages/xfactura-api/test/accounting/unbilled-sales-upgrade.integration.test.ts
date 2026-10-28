@@ -27,7 +27,13 @@ import {
 } from '../../source/accounting/schema';
 import { invoiceXml } from './fixtures/invoice';
 
-test.each([{ baseline: 15 }, { baseline: 17 }, { baseline: 19 }])(
+test.each([
+  { baseline: 15 },
+  { baseline: 17 },
+  { baseline: 19 },
+  { baseline: 23 },
+  { baseline: 25 },
+])(
   'populated 00$baseline books upgrade without rewriting evidence, approved treatments, matches or cached commands',
   async ({ baseline }) => {
     const directory = await mkdtemp(join(tmpdir(), 'xfactura-unbilled-upgrade-')),
@@ -207,6 +213,7 @@ test.each([{ baseline: 15 }, { baseline: 17 }, { baseline: 19 }])(
       await migrate(db);
       for (const [name, table] of Object.entries(tables))
         expect(preserved.get(name)).toEqual(await db.orm.select().from(table));
+      expect(await service.invoices.import(actor, key(), { evidenceId: xml.id })).toEqual(invoice);
       expect(await db.orm.select().from(unbilledSalePostings)).toHaveLength(baseline >= 17 ? 1 : 0);
       expect(await db.orm.select().from(unbilledSaleMatches)).toHaveLength(0);
       expect(await service.accruals.get(actor, { id: original.id, date: '2026-02-28' })).toEqual(

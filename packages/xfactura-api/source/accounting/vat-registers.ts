@@ -14,6 +14,7 @@ import {
 import { decimalString, hashSchema, yearOutput } from './capability-contracts';
 import { financialYearForDate } from './foundation';
 import { sha256 } from './object-store';
+import { advanceCashVatEntries } from './advance-registers';
 import {
   accountingYears,
   evidence,
@@ -74,6 +75,14 @@ export const vatEntryOutput = z.object({
       gross: decimalString,
     })
     .optional(),
+  previousAdvanceRecognition: z
+    .object({
+      paymentIds: z.array(idSchema),
+      base: decimalString,
+      sourceTax: decimalString,
+      gross: decimalString,
+    })
+    .optional(),
 });
 export const unbilledSaleVatOutput = z.object({
   unbilledSaleId: idSchema,
@@ -122,6 +131,7 @@ export const vatSummaryOutput = z.object({
   to: dateSchema,
   entryCount: z.number().int(),
   unbilledSaleEntryCount: z.number().int(),
+  advancePaymentEntryCount: z.number().int(),
   totals: totalsOutput,
   groups: z.array(
     totalsOutput.extend({
@@ -235,6 +245,10 @@ async function entries(
       500,
     );
     const previouslyRecognized = treatment.unbilledSaleMatch;
+    const advanceRecognized =
+      invoice.direction === 'sale' && treatment.advance?.payments.length
+        ? treatment.advance
+        : undefined;
     const sign = previouslyRecognized ? 0n : treatment.credit ? -1n : 1n;
     const signed = (value: string) => fromBani(toBani(value) * sign);
     return {
@@ -253,15 +267,30 @@ async function entries(
       originalInvoiceId: treatment.credit?.originalInvoiceId ?? null,
       category: invoice.body.taxes[0].category,
       rate: invoice.body.taxes[0].rate ?? '0',
-      base: signed(treatment.net),
-      sourceTax: signed(treatment.tax),
-      gross: signed(treatment.gross),
+      base: advanceRecognized ? '0.00' : signed(treatment.net),
+      sourceTax: advanceRecognized ? '0.00' : signed(treatment.tax),
+      gross: advanceRecognized ? '0.00' : signed(treatment.gross),
       inputTax: invoice.direction === 'purchase' ? signed(treatment.deductibleTax) : '0.00',
-      outputTax: invoice.direction === 'sale' ? signed(treatment.tax) : '0.00',
+      outputTax:
+        invoice.direction === 'sale'
+          ? advanceRecognized
+            ? '0.00'
+            : signed(treatment.tax)
+          : '0.00',
       deduction: treatment.deduction,
       ruleId: treatment.ruleId,
       ruleHash: treatment.ruleHash,
       registrationIds: treatment.registrationIds,
+      ...(advanceRecognized
+        ? {
+            previousAdvanceRecognition: {
+              paymentIds: advanceRecognized.payments.map((row) => row.paymentId),
+              base: treatment.net,
+              sourceTax: treatment.tax,
+              gross: treatment.gross,
+            },
+          }
+        : {}),
       ...(previouslyRecognized
         ? {
             previousRecognition: {
@@ -371,6 +400,21 @@ function totals(rows: RegisterMovement[]) {
 
 /** Source-linked working registers. Reconciliation is not a statutory declaration/conformance claim. */
 export class VatRegisters {
+  advancePayments(actor: Actor, input: unknown) {
+    const body = unbilledSaleVatInput.parse(input);
+    return this.runner.read(
+      actor,
+      async (tx) => {
+        const range = await period(tx, actor.companyId, body),
+          rows = await advanceCashVatEntries(tx, actor.companyId, range, body);
+        return {
+          items: rows.slice(0, body.limit),
+          nextCursor: rows.length > body.limit ? rows[body.limit - 1].journalId : null,
+        };
+      },
+      'vat.advancePayments',
+    );
+  }
   constructor(private readonly runner: Commands) {}
   unbilledSales(actor: Actor, input: unknown) {
     const body = unbilledSaleVatInput.parse(input);
@@ -410,6 +454,7 @@ export class VatRegisters {
         const range = await period(tx, actor.companyId, body);
         const rows = await entries(tx, actor.companyId, range);
         const sales = await unbilledEntries(tx, actor.companyId, range);
+        const advancePayments = await advanceCashVatEntries(tx, actor.companyId, range);
         const posted = await tx
           .select({ journal: journals, proposal: proposals })
           .from(journals)
@@ -498,6 +543,8 @@ export class VatRegisters {
             !body?.accrualAdjustment &&
             !body?.deferralRelease &&
             !body?.unbilledSale &&
+            !body?.advancePayment &&
+            !body?.advanceRefund &&
             journal.kind !== 'payment' &&
             ownLines.some((line) =>
               /^(401|4111|4426|4427|6\d{2}|7\d{2})(?:\.|$)/.test(line.account),
@@ -506,7 +553,7 @@ export class VatRegisters {
             issues.push({ code: 'UNCLASSIFIED_JOURNAL', invoiceId: null, journalId: journal.id });
           }
         }
-        const movements = [...rows, ...sales];
+        const movements = [...rows, ...sales, ...advancePayments];
         const total = totals(movements);
         const inputDifference = ledgerInput - toBani(total.inputTax),
           outputDifference = ledgerOutput - toBani(total.outputTax);
@@ -537,6 +584,7 @@ export class VatRegisters {
           ...range,
           entryCount: movements.length,
           unbilledSaleEntryCount: sales.length,
+          advancePaymentEntryCount: advancePayments.length,
           totals: total,
           groups,
           reconciliation: {

@@ -21,6 +21,9 @@ import { checkAccrualInvoicePosting } from './accrual-matching';
 import { checkUnbilledSaleInvoicePosting } from './unbilled-sale-matching';
 import { checkDeferralInvoicePosting } from './deferral-interpretation';
 import { checkDeferralCreditPosting } from './deferral-credits';
+import { checkAdvanceInvoicePosting } from './advance-interpretation';
+import { checkAdvanceFinalPosting } from './advance-final';
+import { checkAdvanceCreditPosting } from './advance-credits';
 
 export const invoicePostingInput = z
   .object({
@@ -42,7 +45,7 @@ export async function interpretInvoice(
   tx: Transaction,
   actor: Actor,
   input: InvoicePostingInput,
-  timing: 'service' | 'early_subscription' = 'service',
+  timing: 'service' | 'early_subscription' | 'early_advance' = 'service',
 ) {
   const [invoice] = await tx
     .select()
@@ -77,12 +80,17 @@ export async function interpretInvoice(
     'Această propunere acoperă facturi de servicii interne în RON. Este necesar un tratament separat.',
   );
   requireCondition(
-    timing === 'early_subscription'
+    timing === 'early_advance'
       ? input.recognitionDate === doc.issueDate &&
+          input.serviceDate > doc.issueDate &&
+          input.taxPointDate <= doc.issueDate &&
+          (!doc.taxPointDate || doc.taxPointDate === input.taxPointDate)
+      : timing === 'early_subscription'
+        ? input.recognitionDate === doc.issueDate &&
           input.taxPointDate === doc.issueDate &&
           input.serviceDate >= doc.issueDate &&
           (!doc.taxPointDate || doc.taxPointDate === doc.issueDate)
-      : input.recognitionDate.slice(0, 7) === input.serviceDate.slice(0, 7) &&
+        : input.recognitionDate.slice(0, 7) === input.serviceDate.slice(0, 7) &&
           input.serviceDate === input.taxPointDate &&
           doc.issueDate.slice(0, 7) === input.recognitionDate.slice(0, 7) &&
           (!doc.taxPointDate || doc.taxPointDate === input.taxPointDate),
@@ -209,6 +217,30 @@ export async function interpretInvoice(
 
 export async function checkInvoicePosting(tx: Transaction, actor: Actor, body: GeneralBody) {
   if (!body.invoice) return;
+  const [document] = await tx
+    .select({ body: invoiceDocuments.body })
+    .from(invoiceDocuments)
+    .where(
+      and(
+        eq(invoiceDocuments.companyId, actor.companyId),
+        eq(invoiceDocuments.id, body.invoice.invoiceId),
+      ),
+    );
+  requireCondition(
+    !document ||
+      !document.body.lines.some((row) => new Amount(row.net).lt(0)) ||
+      body.invoice.advanceFinal,
+    'ADVANCE_FINAL_REQUIRED',
+    'Liniile negative necesită regularizarea explicită a avansurilor.',
+  );
+  requireCondition(
+    !document || document.body.invoiceTypeCode !== '386' || body.invoice.advance,
+    'ADVANCE_INVOICE_REQUIRED',
+    'Factura de avans necesită tratamentul distinct în 4092/419.',
+  );
+  if (await checkAdvanceInvoicePosting(tx, actor, body)) return;
+  if (await checkAdvanceFinalPosting(tx, actor, body)) return;
+  if (await checkAdvanceCreditPosting(tx, actor, body)) return;
   requireCondition(
     !body.settlement,
     'MULTIPLE_ORIGINS',

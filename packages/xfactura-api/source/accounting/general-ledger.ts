@@ -36,6 +36,8 @@ import { checkAccrualPosting } from './accruals';
 import { checkUnbilledSalePosting } from './unbilled-sales';
 import { checkAccrualAdjustmentPosting } from './accrual-adjustments';
 import { checkDeferralReleasePosting } from './deferral-interpretation';
+import { checkAdvancePaymentPosting } from './advance-interpretation';
+import { checkAdvanceRefundPosting } from './advance-refunds';
 
 export const ledgerReviewInput = reviewSchema.extend({ id: idSchema }).strict();
 export const balanceInput = z
@@ -51,6 +53,8 @@ async function validateBody(tx: Transaction, actor: Actor, body: GeneralBody) {
       body.unbilledSale,
       body.accrualAdjustment,
       body.deferralRelease,
+      body.advancePayment,
+      body.advanceRefund,
     ].filter(Boolean).length <= 1,
     'MULTIPLE_ORIGINS',
     'O propunere are o singură origine economică.',
@@ -104,6 +108,8 @@ async function validateBody(tx: Transaction, actor: Actor, body: GeneralBody) {
   await checkUnbilledSalePosting(tx, actor, body);
   await checkAccrualAdjustmentPosting(tx, actor, body);
   await checkDeferralReleasePosting(tx, actor, body);
+  await checkAdvancePaymentPosting(tx, actor, body);
+  await checkAdvanceRefundPosting(tx, actor, body);
 }
 
 /** Shared by the capability endpoint and the existing human proposal-review route. */

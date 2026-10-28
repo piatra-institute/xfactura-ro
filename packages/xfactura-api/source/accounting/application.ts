@@ -14,6 +14,7 @@ import { Capabilities } from './capabilities';
 import { Foundation } from './foundation';
 import { GeneralLedger } from './general-ledger';
 import { Invoices } from './invoices';
+import { InvoiceArchives } from './invoice-archives';
 import { Treasury } from './treasury';
 import { InvoicePositions } from './invoice-positions';
 import { Settlements } from './settlements';
@@ -21,6 +22,7 @@ import { VatRegisters } from './vat-registers';
 import { Accruals } from './accruals';
 import { UnbilledSales } from './unbilled-sales';
 import { Deferrals } from './deferrals';
+import { Advances } from './advances';
 import type { Database } from './db';
 import type { ObjectStore } from './object-store';
 
@@ -40,6 +42,7 @@ export class Accounting {
   readonly foundation: Foundation;
   readonly ledger: GeneralLedger;
   readonly invoices: Invoices;
+  readonly invoiceArchives: InvoiceArchives;
   readonly treasury: Treasury;
   readonly positions: InvoicePositions;
   readonly settlements: Settlements;
@@ -47,6 +50,7 @@ export class Accounting {
   readonly accruals: Accruals;
   readonly unbilledSales: UnbilledSales;
   readonly deferrals: Deferrals;
+  readonly advances: Advances;
 
   constructor(
     readonly db: Database,
@@ -67,6 +71,7 @@ export class Accounting {
     this.foundation = new Foundation(this.commands);
     this.ledger = new GeneralLedger(this.commands);
     this.invoices = new Invoices(this.commands, objects);
+    this.invoiceArchives = new InvoiceArchives(this.commands, objects);
     this.treasury = new Treasury(this.commands);
     this.positions = new InvoicePositions(this.commands);
     this.settlements = new Settlements(this.commands);
@@ -74,6 +79,7 @@ export class Accounting {
     this.accruals = new Accruals(this.commands);
     this.unbilledSales = new UnbilledSales(this.commands);
     this.deferrals = new Deferrals(this.commands);
+    this.advances = new Advances(this.commands);
     this.capabilities = new Capabilities(this);
   }
   overview(actor: Actor, financialYearId?: string) {

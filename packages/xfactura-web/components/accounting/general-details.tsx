@@ -2,6 +2,8 @@ import type { GeneralBody } from 'xfactura-api/accounting';
 import type { Overview } from 'xfactura-api/accounting-types';
 import { Amount } from 'xfactura-api/accounting';
 import { formatMoney } from './api';
+import { AdvancePaymentDetails, InvoiceAdvanceDetails } from './advance-details';
+import InvoiceSources from './invoice-sources';
 
 export default function GeneralDetails({
   body,
@@ -20,6 +22,8 @@ export default function GeneralDetails({
     cancellation = invoice?.deferralCredit,
     service = body.accrual ?? body.unbilledSale,
     matchedServices = invoice?.accrualMatch?.allocations ?? invoice?.unbilledSaleMatch?.allocations;
+  if (body.advancePayment || body.advanceRefund)
+    return <AdvancePaymentDetails {...{ body, state, path, showJournal }} />;
   if (body.deferralRelease) {
     const allocation = body.deferralRelease;
     return (
@@ -166,6 +170,14 @@ export default function GeneralDetails({
   if (invoice)
     return (
       <>
+        {state.invoiceArchiveCounts[invoice.invoiceId] ? (
+          <InvoiceSources
+            key={`${invoice.invoiceId}:${state.invoiceArchiveCounts[invoice.invoiceId]}`}
+            path={path}
+            invoiceId={invoice.invoiceId}
+            count={state.invoiceArchiveCounts[invoice.invoiceId]}
+          />
+        ) : null}
         <dl className="acc-review-meta">
           {invoice.accrualMatch ? (
             <div>
@@ -224,8 +236,14 @@ export default function GeneralDetails({
             </>
           ) : null}
           <div>
-            <dt>{invoice.deferral ? 'Începutul serviciilor' : 'Data serviciului'}</dt>
-            <dd>{invoice.serviceDate}</dd>
+            <dt>
+              {invoice.advance
+                ? 'Serviciu estimat pentru'
+                : invoice.deferral
+                  ? 'Începutul serviciilor'
+                  : 'Data serviciului'}
+            </dt>
+            <dd>{invoice.advance?.serviceExpectedOn ?? invoice.serviceDate}</dd>
           </div>
           <div>
             <dt>{credit ? 'Exigibilitate inițială TVA' : 'Exigibilitate TVA'}</dt>
@@ -236,7 +254,9 @@ export default function GeneralDetails({
               <dt>
                 {credit ? 'Corecție ' : ''}
                 {invoice.direction === 'sale'
-                  ? invoice.unbilledSaleMatch
+                  ? invoice.unbilledSaleMatch ||
+                    (invoice.advance?.previousOutputTax !== undefined &&
+                      invoice.advance.previousOutputTax !== '0.00')
                     ? 'TVA colectată anterior'
                     : 'TVA colectată'
                   : 'TVA dedusă'}
@@ -253,7 +273,7 @@ export default function GeneralDetails({
           {invoice.treatmentEvidenceId !== body.evidenceId ? (
             <div>
               <dt>
-                {invoice.deferral
+                {invoice.deferral || invoice.advance
                   ? 'Contract'
                   : cancellation
                     ? 'Acord de anulare'
@@ -287,6 +307,7 @@ export default function GeneralDetails({
             </>
           ) : null}
         </dl>
+        <InvoiceAdvanceDetails {...{ body, state, path, showJournal }} />
         {cancellation ? (
           <div className="acc-table-scroll">
             <table>

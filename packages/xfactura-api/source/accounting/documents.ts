@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { Transaction } from './db';
 import { and, eq } from 'drizzle-orm';
 import { idSchema, requireCondition } from './domain';
 import { Commands, principal, type Actor } from './commands';
@@ -32,36 +33,7 @@ export class Documents {
       { hash, filename: input.filename, mediaType: input.mediaType },
       'write',
       async (tx) => {
-        await tx.insert(audit).values({
-          ...actor,
-          action: 'evidence.received',
-          body: {
-            hash,
-            filename: input.filename,
-            mediaType: input.mediaType,
-            origin: 'manual_upload',
-            principal: principal(actor),
-          },
-        });
-        const [previous] = await tx
-          .select()
-          .from(evidence)
-          .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.hash, hash)));
-        if (previous) return previous;
-        await this.objects.put(actor.companyId, input.bytes);
-        const [result] = await tx
-          .insert(evidence)
-          .values({
-            id: randomUUID(),
-            companyId: actor.companyId,
-            hash,
-            filename: input.filename,
-            mediaType: input.mediaType || 'application/octet-stream',
-            size: input.bytes.length,
-            createdBy: actor.actorId,
-          })
-          .returning();
-        return result;
+        return retainEvidence(tx, actor, this.objects, input, hash);
       },
     );
   }
@@ -81,4 +53,46 @@ export class Documents {
       'evidence.read',
     );
   }
+}
+
+/** Retain source bytes in the caller's transaction, including archive-member provenance. */
+export async function retainEvidence(
+  tx: Transaction,
+  actor: Actor,
+  objects: ObjectStore,
+  input: { filename: string; mediaType: string; bytes: Uint8Array },
+  hash = sha256(input.bytes),
+  origin:
+    string | { kind: 'archive_member'; archiveEvidenceId: string; path: string } = 'manual_upload',
+) {
+  await tx.insert(audit).values({
+    ...actor,
+    action: 'evidence.received',
+    body: {
+      hash,
+      filename: input.filename,
+      mediaType: input.mediaType,
+      origin,
+      principal: principal(actor),
+    },
+  });
+  const [previous] = await tx
+    .select()
+    .from(evidence)
+    .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.hash, hash)));
+  if (previous) return previous;
+  await objects.put(actor.companyId, input.bytes);
+  const [result] = await tx
+    .insert(evidence)
+    .values({
+      id: randomUUID(),
+      companyId: actor.companyId,
+      hash,
+      filename: input.filename,
+      mediaType: input.mediaType || 'application/octet-stream',
+      size: input.bytes.length,
+      createdBy: actor.actorId,
+    })
+    .returning();
+  return result;
 }

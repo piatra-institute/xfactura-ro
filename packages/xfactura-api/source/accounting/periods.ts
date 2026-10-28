@@ -7,6 +7,7 @@ import { financialYearForDate } from './foundation';
 import { accrualControls } from './accrual-controls';
 import { unbilledSaleControls } from './unbilled-sale-controls';
 import { deferralControls } from './deferral-controls';
+import { advanceControls } from './advance-controls';
 import { supersededDeferralReleaseIds } from './deferral-state';
 import {
   allocations,
@@ -231,6 +232,12 @@ export class Periods {
         );
     }
     const accruals = await accrualControls(tx, actor.companyId, financialYear.from, monthEnd);
+    const advances = await advanceControls(tx, actor.companyId, financialYear.from, monthEnd);
+    requireCondition(
+      advances.status === 'reconciled',
+      'ADVANCE_CONTROL_DIFFERENCE',
+      'Soldurile 4092/419 diferă de avansurile documentate. Verificați reportarea, facturile și regularizările.',
+    );
     const deferrals = await deferralControls(tx, actor.companyId, financialYear.from, monthEnd);
     requireCondition(
       deferrals.deferralCount === 0 ||
@@ -280,6 +287,7 @@ export class Periods {
           company,
           financialYear,
           accruals,
+          advances,
           deferrals,
           unbilledSales,
           accounts,

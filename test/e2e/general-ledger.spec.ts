@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { invoiceXml } from '../../packages/xfactura-api/test/accounting/fixtures/invoice';
+import { invoiceZip } from '../../packages/xfactura-api/test/accounting/fixtures/archive';
 
 test('reviews agent-prepared VAT invoice lines and keeps financial years separate', async ({
   page,
@@ -58,19 +59,23 @@ test('reviews agent-prepared VAT invoice lines and keeps financial years separat
   });
   const grant = await invoke('agents.issue', {
     name: 'Invoice import agent',
-    scopes: ['evidence.record', 'invoices.import', 'invoices.propose'],
+    scopes: ['evidence.record', 'invoices.importArchive', 'invoices.propose'],
     expiresAt: new Date(Date.now() + 3600000).toISOString(),
   });
   const original = await invoke(
     'evidence.record',
     {
-      filename: 'issued.xml',
-      mediaType: 'application/xml',
-      base64: Buffer.from(invoiceXml({ direction: 'sale' })).toString('base64'),
+      filename: 'efactura-issued.zip',
+      mediaType: 'application/zip',
+      base64: Buffer.from(
+        invoiceZip({ 'facturi/issued.xml': invoiceXml({ direction: 'sale' }) }),
+      ).toString('base64'),
     },
     grant.token,
   );
-  const invoice = await invoke('invoices.import', { evidenceId: original.id }, grant.token);
+  const imported = await invoke('invoices.importArchive', { evidenceId: original.id }, grant.token);
+  expect(imported.signatureVerification).toBe('not_performed');
+  const invoice = { id: imported.entries[0].invoiceId };
   await invoke(
     'invoices.propose',
     {
@@ -108,6 +113,21 @@ test('reviews agent-prepared VAT invoice lines and keeps financial years separat
   await expect(proposal.locator('tbody tr').nth(2)).toContainText('4427');
   await expect(proposal.locator('tbody tr').nth(2)).toContainText('21,00');
   await expect(proposal).toContainText('Exigibilitate TVA');
+  const archives = proposal.locator('.acc-invoice-sources');
+  await archives.locator('summary').focus();
+  await page.keyboard.press('Enter');
+  await expect(
+    archives.getByRole('link', { name: 'efactura-issued.zip', exact: true }),
+  ).toBeVisible();
+  await expect(archives).toContainText('facturi/issued.xml');
+  expect(Buffer.from(await (await request.get(`${base}/evidence/${original.id}`)).body())).toEqual(
+    Buffer.from(invoiceZip({ 'facturi/issued.xml': invoiceXml({ direction: 'sale' }) })),
+  );
+  expect(
+    Buffer.from(
+      await (await request.get(`${base}/evidence/${imported.entries[0].evidenceId}`)).body(),
+    ).toString(),
+  ).toBe(invoiceXml({ direction: 'sale' }));
   await selector.focus();
   await selector.press('Tab');
   await expect(page.getByRole('button', { name: 'Export complet', exact: true })).toBeFocused();

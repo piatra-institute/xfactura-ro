@@ -26,6 +26,7 @@ import {
   movementPostings,
   invoiceSettlements,
   invoiceDocuments,
+  invoiceArchiveEntries,
   periods,
   proposals,
   statements,
@@ -179,6 +180,8 @@ export function overview(runner: Commands, actor: Actor, financialYearId?: strin
             ? [
                 body.invoice.invoiceId,
                 ...(body.invoice.credit ? [body.invoice.credit.originalInvoiceId] : []),
+                ...(body.invoice.advanceFinal?.allocations.map((row) => row.advanceInvoiceId) ??
+                  []),
               ]
             : []),
           ...('settlement' in body && body.settlement
@@ -203,6 +206,23 @@ export function overview(runner: Commands, actor: Actor, financialYearId?: strin
             ),
           )
       : [];
+    const archiveCounts = invoiceIds.length
+      ? await tx
+          .select({
+            invoiceId: invoiceArchiveEntries.invoiceId,
+            count: sql<number>`count(distinct ${invoiceArchiveEntries.archiveEvidenceId})`.mapWith(
+              Number,
+            ),
+          })
+          .from(invoiceArchiveEntries)
+          .where(
+            and(
+              eq(invoiceArchiveEntries.companyId, actor.companyId),
+              inArray(invoiceArchiveEntries.invoiceId, invoiceIds),
+            ),
+          )
+          .groupBy(invoiceArchiveEntries.invoiceId)
+      : [];
     const publicLines = lines
       .filter((line) => postedIds.has(line.journalId))
       .map((line) => ({
@@ -214,6 +234,9 @@ export function overview(runner: Commands, actor: Actor, financialYearId?: strin
       company,
       financialYear,
       financialYears,
+      invoiceArchiveCounts: Object.fromEntries(
+        archiveCounts.map((row) => [row.invoiceId!, row.count]),
+      ),
       accountNames: Object.fromEntries(names.map((row) => [row.code, row.name])),
       invoiceLabels: Object.fromEntries(
         invoiceLabels.map(({ id, body, evidenceId, direction }) => [

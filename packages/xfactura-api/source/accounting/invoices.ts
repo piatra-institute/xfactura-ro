@@ -2,11 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { and, asc, eq, gt } from 'drizzle-orm';
 import { z } from 'zod';
 import { Commands, type Actor } from './commands';
+import type { Transaction } from './db';
 import { canonical, creditNoteInput, idSchema, requireCondition } from './domain';
 import { companies, evidence, invoiceDocuments } from './schema';
 import type { ObjectStore } from './object-store';
 import { sha256 } from './object-store';
-import { parseInvoiceXml } from './invoice-document';
+import { parseInvoiceXml, type InvoiceDocument } from './invoice-document';
 import { generalBody, retainGeneralProposal } from './general-ledger';
 import { interpretInvoice, invoicePostingInput } from './invoice-postings';
 import { pageInput } from './capability-contracts';
@@ -17,6 +18,69 @@ export const invoicePage = pageInput
   .extend({ direction: z.enum(['purchase', 'sale']).optional() })
   .strict();
 const cui = (value: string) => value.trim().replace(/^RO/i, '');
+
+/** The XML and archive paths share invoice identity, conflict detection and persistence. */
+export async function inspectInvoice(tx: Transaction, actor: Actor, parsed: InvoiceDocument) {
+  const [company] = await tx.select().from(companies).where(eq(companies.id, actor.companyId));
+  const sale = parsed.supplier.country === 'RO' && cui(parsed.supplier.taxId) === company.cui;
+  const purchase = parsed.customer.country === 'RO' && cui(parsed.customer.taxId) === company.cui;
+  requireCondition(
+    sale !== purchase,
+    'INVOICE_COMPANY',
+    'Factura trebuie să identifice compania ca emitent sau beneficiar.',
+  );
+  const direction = sale ? ('sale' as const) : ('purchase' as const);
+  const sourceKey = sha256(
+    canonical([
+      direction,
+      parsed.documentType,
+      parsed.supplier.country,
+      cui(parsed.supplier.taxId),
+      parsed.number,
+      parsed.issueDate.slice(0, 4),
+    ]),
+  );
+  const hash = sha256(canonical(parsed));
+  const [duplicate] = await tx
+    .select()
+    .from(invoiceDocuments)
+    .where(
+      and(
+        eq(invoiceDocuments.companyId, actor.companyId),
+        eq(invoiceDocuments.sourceKey, sourceKey),
+      ),
+    );
+  requireCondition(
+    !duplicate || duplicate.hash === hash,
+    'INVOICE_SOURCE_CONFLICT',
+    'Aceeași factură are conținut diferit. Verificați ambele surse.',
+    409,
+  );
+  return { direction, sourceKey, hash, duplicate };
+}
+export async function retainInvoice(
+  tx: Transaction,
+  actor: Actor,
+  evidenceId: string,
+  parsed: InvoiceDocument,
+) {
+  const { direction, sourceKey, hash, duplicate } = await inspectInvoice(tx, actor, parsed);
+  if (duplicate) return duplicate;
+  const [invoice] = await tx
+    .insert(invoiceDocuments)
+    .values({
+      id: randomUUID(),
+      companyId: actor.companyId,
+      evidenceId,
+      direction,
+      sourceKey,
+      hash,
+      body: parsed,
+      createdBy: actor.actorId,
+    })
+    .returning();
+  return invoice;
+}
 
 export class Invoices {
   constructor(
@@ -39,59 +103,7 @@ export class Invoices {
       'invoices.import',
     );
     return this.runner.run(actor, key, 'invoices.import', body, 'write', async (tx) => {
-      const [company] = await tx.select().from(companies).where(eq(companies.id, actor.companyId));
-      const sale = parsed.supplier.country === 'RO' && cui(parsed.supplier.taxId) === company.cui;
-      const purchase =
-        parsed.customer.country === 'RO' && cui(parsed.customer.taxId) === company.cui;
-      requireCondition(
-        sale !== purchase,
-        'INVOICE_COMPANY',
-        'Factura trebuie să identifice compania ca emitent sau beneficiar.',
-      );
-      const direction = sale ? 'sale' : 'purchase';
-      const sourceKey = sha256(
-        canonical([
-          direction,
-          parsed.documentType,
-          parsed.supplier.country,
-          cui(parsed.supplier.taxId),
-          parsed.number,
-          parsed.issueDate.slice(0, 4),
-        ]),
-      );
-      const hash = sha256(canonical(parsed));
-      const [duplicate] = await tx
-        .select()
-        .from(invoiceDocuments)
-        .where(
-          and(
-            eq(invoiceDocuments.companyId, actor.companyId),
-            eq(invoiceDocuments.sourceKey, sourceKey),
-          ),
-        );
-      if (duplicate) {
-        requireCondition(
-          duplicate.hash === hash,
-          'INVOICE_SOURCE_CONFLICT',
-          'Aceeași factură are conținut diferit. Verificați ambele surse.',
-          409,
-        );
-        return duplicate;
-      }
-      const [invoice] = await tx
-        .insert(invoiceDocuments)
-        .values({
-          id: randomUUID(),
-          companyId: actor.companyId,
-          evidenceId: body.evidenceId,
-          direction,
-          sourceKey,
-          hash,
-          body: parsed,
-          createdBy: actor.actorId,
-        })
-        .returning();
-      return invoice;
+      return retainInvoice(tx, actor, body.evidenceId, parsed);
     });
   }
   list(actor: Actor, input: unknown) {

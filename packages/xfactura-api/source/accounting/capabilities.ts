@@ -15,11 +15,24 @@ import {
 } from './foundation';
 import { balanceInput, ledgerReviewInput } from './general-ledger';
 import { invoiceImportInput, invoicePage } from './invoices';
+import {
+  archiveInput,
+  archiveOutput,
+  invoiceSourcesInput,
+  invoiceSourceOutput,
+} from './invoice-archives';
 import { invoicePostingInput } from './invoice-postings';
 import { treasuryPage } from './treasury';
 import { positionQuery, positionRead } from './invoice-positions';
 import { settlementRevisionInput } from './settlements';
 import { deferralPageInput, deferralReadInput, deferralReconcileInput } from './deferrals';
+import {
+  advanceReadInput,
+  advancePaymentReadInput,
+  advancePageInput,
+  advanceReconcileInput,
+} from './advances';
+import { advanceCashVatOutput } from './advance-registers';
 import {
   accrualPageInput,
   accrualReadInput,
@@ -75,6 +88,9 @@ import {
   unbilledSaleReconcileOutput,
   deferralPositionOutput,
   deferralReconcileOutput,
+  advancePaymentOutput,
+  advancePositionOutput,
+  advanceReconcileOutput,
 } from './capability-contracts';
 import {
   correctionSchema,
@@ -91,6 +107,11 @@ import {
   unbilledSaleInvoiceInput,
   deferralInput,
   deferralReleaseInput,
+  advancePaymentInput,
+  advanceInvoiceInput,
+  advanceFinalInput,
+  advanceCreditInput,
+  advanceRefundInput,
   deferralCreditInput,
   idSchema,
   inviteSchema,
@@ -280,6 +301,24 @@ export class Capabilities {
         invoiceOutput,
         (actor, key, body) => service.invoices.import(actor, key, body),
       ),
+      'invoices.importArchive': define(
+        'Import retained ZIP members atomically, preserving the original archive, extracted bytes and invoice provenance. Does not verify signatures, establish ANAF acceptance or post accounting.',
+        archiveInput,
+        archiveOutput,
+        (actor, key, body) => service.invoiceArchives.import(actor, key, body),
+      ),
+      'invoices.archive': define(
+        'Read an immutable archive manifest, its invoices, supporting files and hashes. A signature file is not verified acceptance.',
+        archiveInput,
+        archiveOutput,
+        (actor, _, body) => service.invoiceArchives.get(actor, body),
+      ),
+      'invoices.sources': define(
+        'Read bounded archive origins of an invoice, including semantically identical XML variants and exact member bytes.',
+        invoiceSourcesInput,
+        pageOutput(invoiceSourceOutput),
+        (actor, _, body) => service.invoiceArchives.sources(actor, body),
+      ),
       'invoices.list': define(
         'Read bounded imported invoice facts and source references.',
         invoicePage,
@@ -303,6 +342,107 @@ export class Capabilities {
         creditNoteInput,
         proposalOutput,
         (actor, key, body) => service.invoices.proposeCreditNote(actor, key, body),
+      ),
+      'advances.proposePayment': define(
+        'Prepare an evidenced domestic RON supplier/customer bank advance before invoicing; input VAT is not deducted from a payment.',
+        advancePaymentInput,
+        proposalOutput,
+        (actor, key, body) => service.advances.proposePayment(actor, key, body),
+      ),
+      'advances.revisePayment': define(
+        'Revise the unposted advance proposal and require fresh exact human approval.',
+        advancePaymentInput.extend({ id: idSchema, version: z.number().int().positive() }).strict(),
+        proposalOutput,
+        (actor, key, { id, version, ...body }) =>
+          service.advances.proposePayment(actor, key, body, { id, version }),
+      ),
+      'advances.proposeInvoice': define(
+        'Prepare a domestic RON advance invoice in 4092/419; optional whole prior payments settle it without duplicating VAT.',
+        advanceInvoiceInput,
+        proposalOutput,
+        (actor, key, body) => service.advances.proposeInvoice(actor, key, body),
+      ),
+      'advances.reviseInvoice': define(
+        'Revise the unposted advance proposal and require fresh exact human approval.',
+        advanceInvoiceInput.extend({ id: idSchema, version: z.number().int().positive() }).strict(),
+        proposalOutput,
+        (actor, key, { id, version, ...body }) =>
+          service.advances.proposeInvoice(actor, key, body, { id, version }),
+      ),
+      'advances.proposeFinalInvoice': define(
+        'Prepare the complete service and exact referenced negative advance lines on a final invoice, preserving VAT already recorded.',
+        advanceFinalInput,
+        proposalOutput,
+        (actor, key, body) => service.advances.proposeFinalInvoice(actor, key, body),
+      ),
+      'advances.reviseFinalInvoice': define(
+        'Revise the unposted advance proposal and require fresh exact human approval.',
+        advanceFinalInput.extend({ id: idSchema, version: z.number().int().positive() }).strict(),
+        proposalOutput,
+        (actor, key, { id, version, ...body }) =>
+          service.advances.proposeFinalInvoice(actor, key, body, { id, version }),
+      ),
+      'advances.proposeCreditNote': define(
+        'Prepare cancellation of an unused invoiced advance; reject amounts already regularized and preserve refund obligations.',
+        advanceCreditInput,
+        proposalOutput,
+        (actor, key, body) => service.advances.proposeCreditNote(actor, key, body),
+      ),
+      'advances.reviseCreditNote': define(
+        'Revise the unposted advance proposal and require fresh exact human approval.',
+        advanceCreditInput.extend({ id: idSchema, version: z.number().int().positive() }).strict(),
+        proposalOutput,
+        (actor, key, { id, version, ...body }) =>
+          service.advances.proposeCreditNote(actor, key, body, { id, version }),
+      ),
+      'advances.proposeRefund': define(
+        'Prepare the full documented bank refund of an unmatched, uninvoiced advance; never moves money.',
+        advanceRefundInput,
+        proposalOutput,
+        (actor, key, body) => service.advances.proposeRefund(actor, key, body),
+      ),
+      'advances.reviseRefund': define(
+        'Revise the unposted advance proposal and require fresh exact human approval.',
+        advanceRefundInput.extend({ id: idSchema, version: z.number().int().positive() }).strict(),
+        proposalOutput,
+        (actor, key, { id, version, ...body }) =>
+          service.advances.proposeRefund(actor, key, body, { id, version }),
+      ),
+      'advances.getPayment': define(
+        'Read one dated pre-invoice payment and its invoice/refund resolution.',
+        advancePaymentReadInput,
+        advancePaymentOutput,
+        (actor, _, body) => service.advances.getPayment(actor, body),
+      ),
+      'advances.get': define(
+        'Read one dated invoiced advance, remaining amounts and control balance.',
+        advanceReadInput,
+        advancePositionOutput,
+        (actor, _, body) => service.advances.get(actor, body),
+      ),
+      'advances.payments': define(
+        'Read bounded dated bank advances before invoice, including carried prior-year positions.',
+        advancePageInput,
+        pageOutput(advancePaymentOutput),
+        (actor, _, body) => service.advances.payments(actor, body),
+      ),
+      'advances.list': define(
+        'Read bounded dated invoiced advance positions and exact remaining amounts.',
+        advancePageInput,
+        pageOutput(advancePositionOutput),
+        (actor, _, body) => service.advances.list(actor, body),
+      ),
+      'advances.reconcile': define(
+        'Reconcile native bank/invoice advances to 4092/419 for one financial year.',
+        advanceReconcileInput,
+        advanceReconcileOutput,
+        (actor, _, body) => service.advances.reconcile(actor, body),
+      ),
+      'vat.advancePayments': define(
+        'Read source-linked cash-advance VAT movements; supplier payments alone have no input deduction.',
+        unbilledSaleVatInput,
+        pageOutput(advanceCashVatOutput),
+        (actor, _, body) => service.vat.advancePayments(actor, body),
       ),
       'deferrals.proposeInvoice': define(
         'Prepare an early domestic RON subscription invoice in 471/472 with an evidenced equal-calendar-month schedule. VAT remains at the invoice tax point; advances and regime/rate transitions need distinct treatment.',

@@ -1,6 +1,6 @@
-import { SaxesParser } from 'saxes';
 import { z } from 'zod';
-import { Amount, dateSchema, moneySchema, requireCondition } from './domain';
+import { sourceXml, type XmlElement as Element } from './source-xml';
+import { Amount, dateSchema, moneySchema, signedMoneySchema, requireCondition } from './domain';
 
 export const invoiceParserVersion = 'ubl-invoice-1';
 const partySchema = z
@@ -16,7 +16,14 @@ const rateSchema = z
   .transform((value) => new Amount(value).toString());
 export const invoiceDocumentSchema = z
   .object({
-    parserVersion: z.literal(invoiceParserVersion),
+    parserVersion: z.enum([invoiceParserVersion, 'ubl-invoice-2']),
+    invoiceTypeCode: z.enum(['380', '386']).optional(),
+    invoiceReferences: z
+      .array(
+        z.object({ number: z.string().min(1).max(100), issueDate: dateSchema.nullable() }).strict(),
+      )
+      .max(100)
+      .optional(),
     documentType: z.enum(['invoice', 'credit_note']),
     number: z.string().min(1).max(100),
     issueDate: dateSchema,
@@ -32,7 +39,7 @@ export const invoiceDocumentSchema = z
           .object({
             id: z.string().min(1).max(100),
             description: z.string().max(1000),
-            net: moneySchema,
+            net: signedMoneySchema,
             vatCategory: z.string().min(1).max(10),
             vatRate: rateSchema.nullable(),
           })
@@ -73,88 +80,7 @@ export type InvoiceDocument = z.infer<typeof invoiceDocumentSchema>;
 
 const cbc = 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2';
 const cac = 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2';
-type Element = {
-  local: string;
-  uri: string;
-  text: string;
-  attributes: Record<string, string>;
-  children: Element[];
-};
 
-// Bounded, namespace-aware parsing. No external entities, DTDs, network or filesystem access.
-function tree(bytes: Uint8Array): Element {
-  requireCondition(
-    bytes.length > 0 && bytes.length <= 10 * 1024 * 1024,
-    'XML_SIZE',
-    'Fișierul XML depășește limita.',
-  );
-  const stack: Element[] = [];
-  let root: Element | undefined,
-    nodes = 0;
-  const parser = new SaxesParser({ xmlns: true });
-  parser.on('xmldecl', (declaration) => {
-    requireCondition(
-      !declaration.encoding || declaration.encoding.toUpperCase() === 'UTF-8',
-      'XML_ENCODING',
-      'Folosiți un document XML UTF-8.',
-    );
-  });
-  parser.on('doctype', () => {
-    requireCondition(false, 'XML_DTD', 'Declarațiile DTD nu sunt acceptate.');
-  });
-  parser.on('opentag', (tag) => {
-    requireCondition(
-      ++nodes <= 100000 && stack.length < 64 && Object.keys(tag.attributes).length <= 100,
-      'XML_COMPLEXITY',
-      'Structura XML depășește limita.',
-    );
-    const node: Element = {
-      local: tag.local,
-      uri: tag.uri,
-      text: '',
-      attributes: Object.fromEntries(
-        Object.values(tag.attributes)
-          .filter((attr) => !attr.uri)
-          .map((attr) => [attr.local, attr.value]),
-      ),
-      children: [],
-    };
-    if (stack.length) stack.at(-1)!.children.push(node);
-    else {
-      requireCondition(!root, 'XML_ROOT', 'Documentul XML trebuie să aibă o singură rădăcină.');
-      root = node;
-    }
-    stack.push(node);
-  });
-  const text = (value: string) => {
-    const node = stack.at(-1);
-    if (node) {
-      requireCondition(
-        node.text.length + value.length <= 65536,
-        'XML_TEXT',
-        'Câmpul XML depășește limita.',
-      );
-      node.text += value;
-    }
-  };
-  parser.on('text', text);
-  parser.on('cdata', text);
-  parser.on('closetag', () => {
-    stack.pop();
-  });
-  parser.on('error', () => {
-    requireCondition(false, 'XML_INVALID', 'Documentul XML nu este valid.');
-  });
-  let xml: string;
-  try {
-    xml = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-  } catch {
-    requireCondition(false, 'XML_ENCODING', 'Folosiți un document XML UTF-8.');
-  }
-  parser.write(xml).close();
-  requireCondition(root && stack.length === 0, 'XML_ROOT', 'Document XML incomplet.');
-  return root;
-}
 function children(node: Element, local: string, uri = cac) {
   return node.children.filter((child) => child.local === local && child.uri === uri);
 }
@@ -173,7 +99,7 @@ function value(node: Element, local: string, optional = false) {
   requireCondition(child.children.length === 0, 'XML_FIELD', `Câmp compus neacceptat: ${local}.`);
   return child.text.trim();
 }
-function amount(node: Element, local: string, currency: string, optional = false) {
+function amount(node: Element, local: string, currency: string, optional = false, signed = false) {
   const child = one(node, local, cbc, optional);
   if (!child) return '0.00';
   requireCondition(
@@ -181,7 +107,7 @@ function amount(node: Element, local: string, currency: string, optional = false
     'XML_CURRENCY',
     `Moneda lipsește sau diferă la ${local}.`,
   );
-  return moneySchema.parse(child.text.trim());
+  return (signed ? signedMoneySchema : moneySchema).parse(child.text.trim());
 }
 function rounding(node: Element, currency: string) {
   const child = one(node, 'PayableRoundingAmount', cbc, true);
@@ -218,7 +144,10 @@ function party(root: Element, role: string) {
 const sum = (values: string[]) => values.reduce((total, value) => total.plus(value), new Amount(0));
 
 export function parseInvoiceXml(bytes: Uint8Array): InvoiceDocument {
-  const root = tree(bytes);
+  return invoiceDocumentFromXml(sourceXml(bytes));
+}
+
+export function invoiceDocumentFromXml(root: Element): InvoiceDocument {
   requireCondition(
     (root.local === 'Invoice' || root.local === 'CreditNote') &&
       root.uri === `urn:oasis:names:specification:ubl:schema:xsd:${root.local}-2`,
@@ -226,8 +155,9 @@ export function parseInvoiceXml(bytes: Uint8Array): InvoiceDocument {
     'Este necesară o factură UBL Invoice sau CreditNote.',
   );
   const credit = root.local === 'CreditNote';
+  const typeCode = value(root, credit ? 'CreditNoteTypeCode' : 'InvoiceTypeCode');
   requireCondition(
-    value(root, credit ? 'CreditNoteTypeCode' : 'InvoiceTypeCode') === (credit ? '381' : '380'),
+    credit ? typeCode === '381' : typeCode === '380' || typeCode === '386',
     'INVOICE_TYPE',
     'Tipul facturii necesită un tratament separat.',
   );
@@ -241,8 +171,15 @@ export function parseInvoiceXml(bytes: Uint8Array): InvoiceDocument {
     'Totalul TVA în moneda facturii lipsește sau este ambiguu.',
   );
   const totals = one(root, 'LegalMonetaryTotal')!;
-  const billing = one(root, 'BillingReference', cac, true);
-  const original = billing ? one(billing, 'InvoiceDocumentReference') : undefined;
+  const references = children(root, 'BillingReference').map((billing) => {
+    const original = one(billing, 'InvoiceDocumentReference')!;
+    return { number: value(original, 'ID')!, issueDate: value(original, 'IssueDate', true) };
+  });
+  requireCondition(
+    references.length <= 100 && (!credit || references.length <= 1),
+    'XML_REFERENCE',
+    'Referințele facturilor sunt prea multe sau ambigue.',
+  );
   const lines = children(root, credit ? 'CreditNoteLine' : 'InvoiceLine').map((node) => {
     const item = one(node, 'Item')!;
     const category = one(item, 'ClassifiedTaxCategory')!;
@@ -254,13 +191,23 @@ export function parseInvoiceXml(bytes: Uint8Array): InvoiceDocument {
     return {
       id: value(node, 'ID')!,
       description: value(item, 'Name')!,
-      net: amount(node, 'LineExtensionAmount', currency),
+      net: amount(node, 'LineExtensionAmount', currency, false, true),
       vatCategory: value(category, 'ID')!,
       vatRate: value(category, 'Percent', true),
     };
   });
   const document = invoiceDocumentSchema.parse({
-    parserVersion: invoiceParserVersion,
+    parserVersion:
+      typeCode === '386' ||
+      references.length > 1 ||
+      lines.some((line) => new Amount(line.net).lt(0))
+        ? 'ubl-invoice-2'
+        : invoiceParserVersion,
+    ...(typeCode === '386' ||
+    references.length > 1 ||
+    lines.some((line) => new Amount(line.net).lt(0))
+      ? { invoiceTypeCode: typeCode, invoiceReferences: references }
+      : {}),
     documentType: credit ? 'credit_note' : 'invoice',
     number: value(root, 'ID'),
     issueDate: value(root, 'IssueDate'),
@@ -268,7 +215,7 @@ export function parseInvoiceXml(bytes: Uint8Array): InvoiceDocument {
     currency,
     supplier: party(root, 'AccountingSupplierParty'),
     customer: party(root, 'AccountingCustomerParty'),
-    originalInvoiceNumber: original ? value(original, 'ID') : null,
+    originalInvoiceNumber: references[0]?.number ?? null,
     customizationId: value(root, 'CustomizationID')!,
     lines,
     taxes: children(taxTotal[0], 'TaxSubtotal').map((node) => {

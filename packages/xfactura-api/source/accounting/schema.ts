@@ -12,6 +12,7 @@ import {
 } from 'drizzle-orm/sqlite-core';
 import type { ProposalBody, StoredLine, Role } from './domain';
 import type { InvoiceDocument } from './invoice-document';
+import type { ArchiveMember } from './invoice-archive';
 
 // libSQL returns 64-bit integers as bigint. Only explicitly small counters use Number.
 const counter = customType<{ data: number; driverData: number | bigint }>({
@@ -206,6 +207,76 @@ export const invoiceDocuments = sqliteTable(
       columns: [t.companyId, t.evidenceId],
       foreignColumns: [evidence.companyId, evidence.id],
     }),
+  ],
+);
+export const invoiceArchives = sqliteTable(
+  'acc_invoice_archives',
+  {
+    companyId: companyId(),
+    evidenceId: text('evidence_id').notNull(),
+    formatVersion: text('format_version').$type<'efactura-zip-1'>().notNull(),
+    manifestHash: text('manifest_hash').notNull(),
+    manifest: text('manifest', { mode: 'json' }).$type<ArchiveMember[]>().notNull(),
+    fileCount: counter('file_count').notNull(),
+    invoiceCount: counter('invoice_count').notNull(),
+    expandedBytes: counter('expanded_bytes').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.evidenceId] }),
+    foreignKey({
+      columns: [t.companyId, t.evidenceId],
+      foreignColumns: [evidence.companyId, evidence.id],
+    }),
+    check('archive_format', sql`${t.formatVersion}='efactura-zip-1'`),
+    check(
+      'archive_manifest',
+      sql`json_valid(${t.manifest}) and json_type(${t.manifest})='array' and json_array_length(${t.manifest})=${t.fileCount}`,
+    ),
+    check(
+      'archive_counts',
+      sql`typeof(${t.fileCount})='integer' and ${t.fileCount} between 1 and 100 and typeof(${t.invoiceCount})='integer' and ${t.invoiceCount} between 0 and ${t.fileCount} and typeof(${t.expandedBytes})='integer' and ${t.expandedBytes} between 1 and 41943040`,
+    ),
+    check(
+      'archive_manifest_hash',
+      sql`length(${t.manifestHash})=64 and ${t.manifestHash} not glob '*[^0-9a-f]*'`,
+    ),
+  ],
+);
+export const invoiceArchiveEntries = sqliteTable(
+  'acc_invoice_archive_entries',
+  {
+    companyId: companyId(),
+    id: text('id').notNull(),
+    archiveEvidenceId: text('archive_evidence_id').notNull(),
+    evidenceId: text('evidence_id').notNull(),
+    path: text('path').notNull(),
+    kind: text('kind', {
+      enum: ['invoice', 'signature', 'supporting_xml', 'attachment'],
+    }).notNull(),
+    invoiceId: text('invoice_id'),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.id] }),
+    uniqueIndex('archive_entry_path').on(t.companyId, t.archiveEvidenceId, t.path),
+    index('archive_entry_invoice').on(t.companyId, t.invoiceId, t.id),
+    foreignKey({
+      columns: [t.companyId, t.archiveEvidenceId],
+      foreignColumns: [invoiceArchives.companyId, invoiceArchives.evidenceId],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.evidenceId],
+      foreignColumns: [evidence.companyId, evidence.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.invoiceId],
+      foreignColumns: [invoiceDocuments.companyId, invoiceDocuments.id],
+    }),
+    check(
+      'archive_entry_kind',
+      sql`${t.kind} in ('invoice','signature','supporting_xml','attachment') and ((${t.kind}='invoice' and ${t.invoiceId} is not null) or (${t.kind}<>'invoice' and ${t.invoiceId} is null))`,
+    ),
   ],
 );
 export const memberships = sqliteTable(
@@ -947,6 +1018,166 @@ export const deferralCancellations = sqliteTable(
       sql`typeof(${t.amountBani})='integer' and ${t.amountBani}>0`,
     ),
     check('deferral_cancellation_months', sql`${t.fromMonth}<=${t.toMonth}`),
+  ],
+);
+export const advancePayments = sqliteTable(
+  'acc_advance_payments',
+  {
+    companyId: companyId(),
+    paymentId: text('payment_id').notNull(),
+    movementId: text('movement_id').notNull(),
+    journalId: text('journal_id').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.paymentId] }),
+    uniqueIndex('advance_payment_movement').on(t.companyId, t.movementId),
+    uniqueIndex('advance_payment_journal').on(t.companyId, t.journalId),
+    foreignKey({
+      columns: [t.companyId, t.paymentId],
+      foreignColumns: [proposals.companyId, proposals.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.movementId],
+      foreignColumns: [movementPostings.companyId, movementPostings.movementId],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.journalId],
+      foreignColumns: [journals.companyId, journals.id],
+    }),
+  ],
+);
+export const advanceInvoices = sqliteTable(
+  'acc_advance_invoices',
+  {
+    companyId: companyId(),
+    invoiceId: text('invoice_id').notNull(),
+    proposalId: text('proposal_id').notNull(),
+    journalId: text('journal_id').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.invoiceId] }),
+    uniqueIndex('advance_invoice_proposal').on(t.companyId, t.proposalId),
+    uniqueIndex('advance_invoice_journal').on(t.companyId, t.journalId),
+    foreignKey({
+      columns: [t.companyId, t.invoiceId],
+      foreignColumns: [invoicePostings.companyId, invoicePostings.invoiceId],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.proposalId],
+      foreignColumns: [proposals.companyId, proposals.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.journalId],
+      foreignColumns: [journals.companyId, journals.id],
+    }),
+  ],
+);
+export const advanceInvoiceMatches = sqliteTable(
+  'acc_advance_invoice_matches',
+  {
+    companyId: companyId(),
+    paymentId: text('payment_id').notNull(),
+    invoiceId: text('invoice_id').notNull(),
+    journalId: text('journal_id').notNull(),
+    netBani: bani('net_bani').notNull(),
+    taxBani: bani('tax_bani').notNull(),
+    grossBani: bani('gross_bani').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.paymentId] }),
+    index('advance_matches_invoice').on(t.companyId, t.invoiceId),
+    foreignKey({
+      columns: [t.companyId, t.paymentId],
+      foreignColumns: [advancePayments.companyId, advancePayments.paymentId],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.invoiceId],
+      foreignColumns: [advanceInvoices.companyId, advanceInvoices.invoiceId],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.journalId],
+      foreignColumns: [journals.companyId, journals.id],
+    }),
+    check(
+      'advance_match_amounts',
+      sql`typeof(${t.netBani})='integer' and typeof(${t.taxBani})='integer' and typeof(${t.grossBani})='integer' and ${t.netBani}>0 and ${t.taxBani}>=0 and ${t.grossBani}=${t.netBani}+${t.taxBani}`,
+    ),
+  ],
+);
+export const advanceUses = sqliteTable(
+  'acc_advance_uses',
+  {
+    companyId: companyId(),
+    advanceInvoiceId: text('advance_invoice_id').notNull(),
+    finalInvoiceId: text('final_invoice_id').notNull(),
+    journalId: text('journal_id').notNull(),
+    lineId: text('line_id').notNull(),
+    netBani: bani('net_bani').notNull(),
+    taxBani: bani('tax_bani').notNull(),
+    grossBani: bani('gross_bani').notNull(),
+    controlBani: bani('control_bani').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.finalInvoiceId, t.advanceInvoiceId] }),
+    index('advance_uses_source').on(t.companyId, t.advanceInvoiceId),
+    uniqueIndex('advance_use_line').on(t.companyId, t.finalInvoiceId, t.lineId),
+    foreignKey({
+      columns: [t.companyId, t.advanceInvoiceId],
+      foreignColumns: [advanceInvoices.companyId, advanceInvoices.invoiceId],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.finalInvoiceId],
+      foreignColumns: [invoicePostings.companyId, invoicePostings.invoiceId],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.journalId],
+      foreignColumns: [journals.companyId, journals.id],
+    }),
+    check(
+      'advance_use_amounts',
+      sql`typeof(${t.netBani})='integer' and typeof(${t.taxBani})='integer' and typeof(${t.grossBani})='integer' and typeof(${t.controlBani})='integer' and ${t.netBani}>0 and ${t.taxBani}>=0 and ${t.grossBani}=${t.netBani}+${t.taxBani} and ${t.controlBani}>0`,
+    ),
+  ],
+);
+export const advanceRefunds = sqliteTable(
+  'acc_advance_refunds',
+  {
+    companyId: companyId(),
+    paymentId: text('payment_id').notNull(),
+    movementId: text('movement_id').notNull(),
+    proposalId: text('proposal_id').notNull(),
+    journalId: text('journal_id').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.paymentId] }),
+    uniqueIndex('advance_refund_movement').on(t.companyId, t.movementId),
+    uniqueIndex('advance_refund_journal').on(t.companyId, t.journalId),
+    foreignKey({
+      columns: [t.companyId, t.paymentId],
+      foreignColumns: [advancePayments.companyId, advancePayments.paymentId],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.movementId],
+      foreignColumns: [movementPostings.companyId, movementPostings.movementId],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.proposalId],
+      foreignColumns: [proposals.companyId, proposals.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.journalId],
+      foreignColumns: [journals.companyId, journals.id],
+    }),
   ],
 );
 export const commands = sqliteTable(

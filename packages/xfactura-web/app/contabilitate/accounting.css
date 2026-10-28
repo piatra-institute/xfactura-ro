@@ -524,6 +524,16 @@
 .acc-document-list details {
   width: 100%;
 }
+.acc-invoice-sources .acc-document-list {
+  margin-top: 0;
+}
+.acc-invoice-sources a {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.acc-invoice-sources code {
+  flex-basis: 100%;
+}
 .acc-document-list summary {
   font-size: 12px;
   padding: 0;
