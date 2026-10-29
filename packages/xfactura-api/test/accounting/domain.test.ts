@@ -10,9 +10,59 @@ import {
   type PostingLine,
   allocationSchedule,
   actualDaySchedule,
+  evidencedSchedule,
 } from '../../source/accounting/domain';
 
 describe('the A1 books', () => {
+  test('documented benefits preserve explicit amounts, zero months and exact bani without proration', () => {
+    const decimal = (value: bigint) => `${value / 100n}.${String(value % 100n).padStart(2, '0')}`;
+    const benefits = [
+      { month: '2026-01-01', amount: '20.00', benefit: 'January contracted services' },
+      { month: '2026-02-01', amount: '50.00', benefit: 'February contracted services' },
+      { month: '2026-03-01', amount: '30.00', benefit: 'March contracted services' },
+    ];
+    expect(evidencedSchedule('100.00', '2026-01-16', '2026-03-15', benefits)).toEqual([
+      { ...benefits[0], date: '2026-01-31', serviceFrom: '2026-01-16', serviceTo: '2026-01-31' },
+      { ...benefits[1], date: '2026-02-28', serviceFrom: '2026-02-01', serviceTo: '2026-02-28' },
+      { ...benefits[2], date: '2026-03-31', serviceFrom: '2026-03-01', serviceTo: '2026-03-15' },
+    ]);
+    fc.assert(
+      fc.property(
+        fc
+          .array(fc.bigInt({ min: 0n, max: 9999999999999999n }), { minLength: 1, maxLength: 60 })
+          .filter((values) => values.some((v) => v > 0n)),
+        (values) => {
+          const input = values.map((value, index) => ({
+            month: new Date(Date.UTC(2026, index, 1)).toISOString().slice(0, 10),
+            amount: decimal(value),
+            benefit: `Documented service benefit for month ${index + 1}`,
+          }));
+          const end = new Date(Date.UTC(2026, values.length - 1, 15)).toISOString().slice(0, 10),
+            rows = evidencedSchedule(
+              decimal(values.reduce((a, b) => a + b, 0n)),
+              '2026-01-15',
+              end,
+              input,
+            );
+          expect(rows.map(({ month, amount, benefit }) => ({ month, amount, benefit }))).toEqual(
+            input,
+          );
+          expect(rows[0].serviceFrom).toBe('2026-01-15');
+          expect(rows.at(-1)!.serviceTo).toBe(end);
+        },
+      ),
+      { seed: 20261029, numRuns: 500 },
+    );
+    for (const invalid of [
+      benefits.slice(1),
+      [benefits[1], benefits[0], benefits[2]],
+      [benefits[0], benefits[0], benefits[2]],
+      benefits.map((row) => ({ ...row, amount: '0.00' })),
+      benefits.map((row) => ({ ...row, benefit: 'short' })),
+      benefits.map((row) => ({ ...row, amount: '33.33' })),
+    ])
+      expect(() => evidencedSchedule('100.00', '2026-01-16', '2026-03-15', invalid)).toThrow();
+  });
   test('actual-day allocations retain inclusive days, exact totals and less than one ban of cumulative rounding', () => {
     expect(actualDaySchedule('100.00', '2026-01-16', '2026-03-15')).toEqual({
       serviceDays: 59,

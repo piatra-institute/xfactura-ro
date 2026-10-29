@@ -64,6 +64,12 @@ export default function GeneralDetails({
           <dd>{allocation.month.slice(0, 7)}</dd>
         </div>
         <PlanSource state={state} path={path} id={allocation.rescheduleId} />
+        {allocation.benefitEvidence ? (
+          <div>
+            <dt>Confirmarea serviciilor</dt>
+            <dd>{allocation.benefitEvidence.evidenceDate}</dd>
+          </div>
+        ) : null}
         <div>
           <dt>
             {allocation.direction === 'purchase' ? 'Cheltuială recunoscută' : 'Venit recunoscut'}
@@ -375,7 +381,7 @@ export default function GeneralDetails({
               ) : null}
               <div>
                 <dt>
-                  {deferral.schemaVersion === 2 ? 'Perioada serviciilor' : 'Perioada abonamentului'}
+                  {deferral.schemaVersion !== 1 ? 'Perioada serviciilor' : 'Perioada abonamentului'}
                 </dt>
                 <dd>
                   {deferral.serviceFrom} — {deferral.serviceTo}
@@ -386,7 +392,9 @@ export default function GeneralDetails({
                 <dd>
                   {deferral.method === 'actual_calendar_days'
                     ? 'Pe zile calendaristice'
-                    : 'Lunar, în cote egale'}
+                    : deferral.method === 'evidenced_monthly_amounts'
+                      ? 'Sume lunare documentate'
+                      : 'Lunar, în cote egale'}
                 </dd>
               </div>
               {deferral.schemaVersion === 2 ? (
@@ -416,8 +424,13 @@ export default function GeneralDetails({
               <tbody>
                 {cancellation.months.map((item) => (
                   <tr key={item.month}>
-                    <td>{item.month.slice(0, 7)}</td>
-                    <td>{formatMoney(item.amount)}</td>
+                    <td className="acc-month">{item.month.slice(0, 7)}</td>
+                    <td>
+                      {formatMoney(item.amount)}
+                      {'benefit' in item && typeof item.benefit === 'string' ? (
+                        <span className="acc-benefit">{item.benefit}</span>
+                      ) : null}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -466,12 +479,17 @@ export default function GeneralDetails({
               <tbody>
                 {deferral.schedule.map((item) => (
                   <tr key={item.month}>
-                    <td>{item.month.slice(0, 7)}</td>
+                    <td className="acc-month">{item.month.slice(0, 7)}</td>
                     <td>{item.date}</td>
                     {deferral.schemaVersion === 2 ? (
                       <td>{'days' in item && typeof item.days === 'number' ? item.days : ''}</td>
                     ) : null}
-                    <td>{formatMoney(item.amount)}</td>
+                    <td>
+                      {formatMoney(item.amount)}
+                      {'benefit' in item && typeof item.benefit === 'string' ? (
+                        <span className="acc-benefit">{item.benefit}</span>
+                      ) : null}
+                    </td>
                   </tr>
                 ))}
               </tbody>

@@ -31,6 +31,11 @@ export async function interpretDeferralCredit(
   const result = await interpretCreditNote(tx, actor, input, 'deferred_subscription');
   const [state] = await loadDeferrals(tx, actor.companyId, [result.original.proposal.id]);
   requireCondition(state, 'NOT_FOUND', 'Abonamentul original nu este disponibil.', 404);
+  requireCondition(
+    !scopeReduction || state.treatment.schemaVersion !== 3,
+    'DEFERRAL_SCOPE_ALLOCATION',
+    'Diminuarea unui plan de beneficii documentate necesită un nou plan explicit; repartizarea uniformă nu se presupune.',
+  );
   await checkDeferralSource(tx, actor, state);
   await openMonth(tx, actor.companyId, input.recognitionDate);
   requireCondition(

@@ -465,7 +465,7 @@ export class Capabilities {
         (actor, _, body) => service.vat.advancePayments(actor, body),
       ),
       'deferrals.proposeInvoice': define(
-        'Prepare an early domestic RON service invoice in 471/472. Use uniform_subscription/equal_calendar_months for whole months, or uniform_service/actual_calendar_days for inclusive day-based benefit including partial months. VAT remains at the invoice tax point; advances and regime/rate transitions need distinct treatment.',
+        'Prepare an early domestic RON service invoice in 471/472. Use uniform_subscription/equal_calendar_months, uniform_service/actual_calendar_days, or documented_monthly_benefits/evidenced_monthly_amounts with exact benefits rows. Explicit monthly amounts must equal the cost/revenue basis, and their releases require separate service evidence. VAT remains at the invoice tax point.',
         deferralInput,
         proposalOutput,
         (actor, key, body) => service.deferrals.proposeInvoice(actor, key, body),
@@ -492,7 +492,7 @@ export class Capabilities {
         (actor, key, body) => service.deferrals.proposeCreditNote(actor, key, body),
       ),
       'deferrals.proposeScopeReduction': define(
-        'Prepare a separately evidenced partial cancellation of unprovided services using a linked credit note. Reduce 471/472 and original-rate VAT; preserve earned periods, calendar dates and allocation method, and redistribute the positive future remainder. Explicitly document cancelled_future_services and uniform remaining services. Requires exact human approval before ledger.post; one scope cancellation per source.',
+        'Prepare a separately evidenced partial cancellation of unprovided services using a linked credit note. Reduce 471/472 and original-rate VAT; preserve earned periods, calendar dates and allocation method, and redistribute the positive future remainder. Requires an equal-month or actual-day source and explicit uniform remaining services; documented-monthly benefit reductions need separate coverage. Requires exact human approval before ledger.post; one scope cancellation per source.',
         deferralScopeReductionInput,
         proposalOutput,
         (actor, key, body) => service.deferrals.proposeScopeReduction(actor, key, body),
@@ -513,7 +513,7 @@ export class Capabilities {
         (actor, key, body) => service.deferrals.proposeDiscount(actor, key, body),
       ),
       'deferrals.proposeReschedule': define(
-        'Prepare a prospective service schedule from a separate agreement. Preserve its original equal-month or actual-day method, price, recognized amounts and VAT. Returns an exact action review; human approval and reviews.execute apply it without a journal entry.',
+        'Prepare a prospective service schedule from a separate agreement. Preserve the original method, price, recognized prefix and VAT. Evidenced monthly amounts require explicit benefits for the unchanged future value. Returns an exact action review; human approval and reviews.execute apply it without a journal entry.',
         deferralRescheduleInput,
         reviewOutput,
         (actor, key, body) =>
@@ -548,7 +548,7 @@ export class Capabilities {
           service.deferrals.proposeInvoice(actor, key, body, { id, version }),
       ),
       'deferrals.proposeRelease': define(
-        'Prepare one scheduled month-end expense/revenue allocation from 471/472 without repeating invoice VAT or settlement. Requires exact human approval before ledger.post.',
+        'Prepare one scheduled month-end allocation from 471/472 without repeating invoice VAT. Evidenced monthly amounts require benefitEvidence with a separate service-confirmation evidenceId and evidenceDate covering the service month. Requires exact human approval before ledger.post.',
         deferralReleaseInput,
         proposalOutput,
         (actor, key, body) => service.deferrals.proposeRelease(actor, key, body),

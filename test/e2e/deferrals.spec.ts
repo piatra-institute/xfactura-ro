@@ -719,6 +719,151 @@ test('reviews a subscription schedule and next-year allocation, with a keyboard 
     status: 'reconciled',
     totals: { inputTax: '7.00', outputTax: '0.00' },
   });
+  const benefitAgreement = await source(
+      'contract-beneficii.txt',
+      'Documented nonuniform monthly services with separately evidenced monthly acceptance',
+    ),
+    benefitXml = await source(
+      'beneficii.xml',
+      invoiceXml({ number: 'BENEFICII-2026', date: '2026-01-01' }),
+    ),
+    benefitInvoice = await invoke('invoices.import', { evidenceId: benefitXml.id }),
+    benefits = ['20.00', '50.00', '30.00'].map((amount, index) => ({
+      month: `2026-0${index + 1}-01`,
+      amount,
+      benefit: [
+        'Configurare inițială și documentarea serviciilor',
+        'Servicii operaționale și verificări lunare',
+        'Predarea documentației și închiderea serviciilor',
+      ][index],
+    })),
+    benefitRoot = await invoke(
+      'deferrals.proposeInvoice',
+      {
+        financialYearId: nextYear.id,
+        invoiceId: benefitInvoice.id,
+        recognitionDate: '2026-01-01',
+        evidenceId: benefitAgreement.id,
+        evidenceDate: '2026-01-01',
+        taxPointBasis: 'early_invoice',
+        account: '628',
+        deduction: 'full',
+        counterpartyVatCollection: 'no',
+        basis: 'documented_monthly_benefits',
+        method: 'evidenced_monthly_amounts',
+        serviceFrom: '2026-01-16',
+        serviceTo: '2026-03-15',
+        benefits,
+        reason:
+          'Valori lunare explicite conform serviciilor contractate, cu confirmarea realizării înainte de recunoaștere',
+      },
+      grant.token,
+    );
+  await page.reload();
+  const benefitCard = page.locator('.acc-review'),
+    benefitPlan = benefitCard.getByRole('table', { name: 'Plan de alocare', exact: true });
+  await expect(benefitCard).toContainText('Sume lunare documentate');
+  await expect(benefitPlan).toContainText(benefits[0].benefit);
+  await expect(benefitPlan.locator('tbody tr').nth(1)).toContainText('50,00');
+  await page.screenshot({
+    path: info.outputPath(`benefit-plan-${info.project.name}.png`),
+    fullPage: true,
+  });
+  await benefitCard.getByRole('button', { name: 'Aprobă această versiune', exact: true }).click();
+  await benefitCard.getByRole('button', { name: 'Contabilizează', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('contabilizată');
+  await invoke('ledger.post', {
+    id: benefitRoot.id,
+    version: benefitRoot.version,
+    hash: benefitRoot.hash,
+  });
+  const acceptance = await source(
+      'confirmare-ianuarie.txt',
+      'January services completed and accepted on 31 January 2026',
+    ),
+    benefitRelease = await invoke(
+      'deferrals.proposeRelease',
+      {
+        financialYearId: nextYear.id,
+        deferralId: benefitRoot.id,
+        month: '2026-01-01',
+        benefitEvidence: { evidenceId: acceptance.id, evidenceDate: '2026-01-31' },
+      },
+      grant.token,
+    );
+  await page.reload();
+  const benefitReleaseCard = page.locator('.acc-review');
+  await expect(benefitReleaseCard).toContainText('Confirmarea serviciilor');
+  await expect(benefitReleaseCard).toContainText('2026-01-31');
+  const acceptanceDownload = await Promise.all([
+    page.waitForEvent('download'),
+    benefitReleaseCard.getByRole('link', { name: 'confirmare-ianuarie.txt', exact: true }).click(),
+  ]);
+  expect(acceptanceDownload[0].suggestedFilename()).toBe('confirmare-ianuarie.txt');
+  await page.screenshot({
+    path: info.outputPath(`benefit-release-${info.project.name}.png`),
+    fullPage: true,
+  });
+  await benefitReleaseCard
+    .getByRole('button', { name: 'Aprobă această versiune', exact: true })
+    .click();
+  await benefitReleaseCard.getByRole('button', { name: 'Contabilizează', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('contabilizată');
+  await invoke('ledger.post', {
+    id: benefitRelease.id,
+    version: benefitRelease.version,
+    hash: benefitRelease.hash,
+  });
+  const benefitChange = await source(
+    'acord-beneficii-noi.txt',
+    'New agreement changes future monthly benefits only, January and the total price remain unchanged',
+  );
+  await invoke(
+    'deferrals.proposeReschedule',
+    {
+      financialYearId: nextYear.id,
+      deferralId: benefitRoot.id,
+      date: '2026-02-01',
+      effectiveFrom: '2026-02-01',
+      serviceTo: '2026-04-10',
+      evidenceId: benefitChange.id,
+      evidenceDate: '2026-02-01',
+      method: 'evidenced_monthly_amounts',
+      benefits: ['30.00', '25.00', '25.00'].map((amount, index) => ({
+        month: `2026-0${index + 2}-01`,
+        amount,
+        benefit: 'Servicii viitoare conform acordului actualizat',
+      })),
+      priceUnchanged: true,
+      reason:
+        'Repartizarea documentată a serviciilor viitoare, cu ianuarie și valoarea totală păstrate',
+    },
+    grant.token,
+  );
+  await page.reload();
+  const benefitCalendar = page.locator('[data-review-kind="reschedule"]');
+  await expect(benefitCalendar).toContainText('Sume lunare documentate');
+  await expect(benefitCalendar.getByRole('table', { name: 'Calendar de alocare' })).toContainText(
+    benefits[0].benefit,
+  );
+  await expect(benefitCalendar).toContainText('Servicii viitoare conform acordului actualizat');
+  await page.screenshot({
+    path: info.outputPath(`benefit-amendment-${info.project.name}.png`),
+    fullPage: true,
+  });
+  await benefitCalendar.getByRole('button', { name: 'Aprobă acest plan', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await benefitCalendar.getByRole('button', { name: 'Aplică planul', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Calendarul de alocare a fost actualizat');
+  expect(await invoke('deferrals.get', { id: benefitRoot.id, date: '2026-02-01' })).toMatchObject({
+    allocated: '20.00',
+    remaining: '80.00',
+    schedule: [{ amount: '20.00' }, { amount: '30.00' }, { amount: '25.00' }, { amount: '25.00' }],
+  });
+  expect(await invoke('vat.summary', { financialYearId: nextYear.id })).toMatchObject({
+    status: 'reconciled',
+    totals: { inputTax: '28.00', outputTax: '0.00' },
+  });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   expect(errors).toEqual([]);
 });

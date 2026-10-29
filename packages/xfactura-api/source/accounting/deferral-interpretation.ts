@@ -5,6 +5,7 @@ import {
   Amount,
   allocationSchedule,
   actualDaySchedule,
+  evidencedSchedule,
   canonical,
   deferralInput,
   deferralReleaseSchema,
@@ -80,9 +81,11 @@ export async function interpretDeferralInvoice(
       ? actualDaySchedule(amount, input.serviceFrom, input.serviceTo)
       : null;
   const schedule =
-    daily?.schedule ?? allocationSchedule(amount, input.serviceFrom, input.serviceTo);
+    input.method === 'evidenced_monthly_amounts'
+      ? evidencedSchedule(amount, input.serviceFrom, input.serviceTo, input.benefits ?? [])
+      : (daily?.schedule ?? allocationSchedule(amount, input.serviceFrom, input.serviceTo));
   const plan = deferralTreatmentSchema.parse({
-    schemaVersion: daily ? 2 : 1,
+    schemaVersion: input.method === 'evidenced_monthly_amounts' ? 3 : daily ? 2 : 1,
     basis: input.basis,
     method: input.method,
     taxPointBasis: input.taxPointBasis,
@@ -182,6 +185,11 @@ function invoiceRequest(body: GeneralBody): DeferralInput {
     serviceTo: plan.serviceTo,
     evidenceDate: plan.evidenceDate,
     reason: plan.reason,
+    ...(plan.schemaVersion === 3
+      ? {
+          benefits: plan.schedule.map(({ month, amount, benefit }) => ({ month, amount, benefit })),
+        }
+      : {}),
   });
 }
 export async function checkDeferralInvoicePosting(
@@ -271,6 +279,44 @@ export async function interpretDeferralRelease(
   );
   await openMonth(tx, actor.companyId, allocation.date);
   await checkDeferralSource(tx, actor, state);
+  let benefitEvidence;
+  if (state.treatment.schemaVersion === 3) {
+    requireCondition(
+      input.benefitEvidence,
+      'DEFERRAL_BENEFIT_EVIDENCE',
+      'Păstrați confirmarea serviciilor aferente lunii înainte de recunoaștere.',
+    );
+    const [source] = await tx
+      .select()
+      .from(evidence)
+      .where(
+        and(
+          eq(evidence.companyId, actor.companyId),
+          eq(evidence.id, input.benefitEvidence.evidenceId),
+        ),
+      );
+    requireCondition(source, 'NOT_FOUND', 'Confirmarea serviciilor nu este disponibilă.', 404);
+    requireCondition(
+      ![
+        state.invoice.evidenceId,
+        state.interpretation.treatmentEvidenceId,
+        ...state.reschedules.map((row) => row.evidenceId),
+      ].includes(source.id) &&
+        input.benefitEvidence.evidenceDate >=
+          ('serviceTo' in allocation && typeof allocation.serviceTo === 'string'
+            ? allocation.serviceTo
+            : allocation.date) &&
+        input.benefitEvidence.evidenceDate <= allocation.date,
+      'DEFERRAL_BENEFIT_EVIDENCE',
+      'Documentați separat serviciile realizate până la sfârșitul perioadei alocate.',
+    );
+    benefitEvidence = { ...input.benefitEvidence, evidenceHash: source.hash };
+  } else
+    requireCondition(
+      !input.benefitEvidence,
+      'DEFERRAL_BENEFIT_EVIDENCE',
+      'Confirmarea distinctă se aplică planului de beneficii lunare documentate.',
+    );
   await checkRegistrationPath(tx, actor, state.interpretation.taxPointDate, allocation.date);
   const old = state.interpretation,
     current = await regimesAt(tx, actor.companyId, allocation.date),
@@ -313,6 +359,7 @@ export async function interpretDeferralRelease(
     ],
     ...(state.cancellation ? { cancellationJournalId: state.cancellation.record.journalId } : {}),
     ...rescheduleContext(state),
+    ...(benefitEvidence ? { benefitEvidence } : {}),
   });
   const lines: PostingLine[] = [
     {
@@ -338,12 +385,22 @@ export async function checkDeferralReleasePosting(
     financialYearId: body.financialYearId,
     deferralId: body.deferralRelease.deferralId,
     month: body.deferralRelease.month,
+    ...(body.deferralRelease.benefitEvidence
+      ? {
+          benefitEvidence: {
+            evidenceId: body.deferralRelease.benefitEvidence.evidenceId,
+            evidenceDate: body.deferralRelease.benefitEvidence.evidenceDate,
+          },
+        }
+      : {}),
   });
   requireCondition(
     canonical(expected.treatment) === canonical(body.deferralRelease) &&
       canonical(expected.lines) === canonical(body.lines) &&
       body.date === expected.treatment.date &&
-      body.evidenceId === expected.state.interpretation.treatmentEvidenceId &&
+      body.evidenceId ===
+        (expected.treatment.benefitEvidence?.evidenceId ??
+          expected.state.interpretation.treatmentEvidenceId) &&
       body.purpose === 'general' &&
       !body.correctsJournalId &&
       body.sourceReference ===

@@ -237,7 +237,7 @@ export class Deferrals {
         const result = await interpretDeferralInvoice(tx, actor, body);
         await checkDeferralHorizon(tx, actor, result);
         const description =
-          body.method === 'actual_calendar_days'
+          body.method !== 'equal_calendar_months'
             ? result.invoice.direction === 'purchase'
               ? 'Servicii achiziționate'
               : 'Servicii facturate'
@@ -282,7 +282,9 @@ export class Deferrals {
           actor,
           generalBody({
             financialYearId: body.financialYearId,
-            evidenceId: result.state.interpretation.treatmentEvidenceId,
+            evidenceId:
+              result.treatment.benefitEvidence?.evidenceId ??
+              result.state.interpretation.treatmentEvidenceId,
             date: result.treatment.date,
             purpose: 'general',
             description: `${result.treatment.direction === 'purchase' ? 'Cheltuială aferentă perioadei' : 'Venit aferent perioadei'} · ${result.state.invoice.body.number} · ${body.month.slice(0, 7)}`,

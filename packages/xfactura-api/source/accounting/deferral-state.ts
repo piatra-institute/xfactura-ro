@@ -257,7 +257,9 @@ export function deferralView(state: DeferralState, date: string) {
             ),
           },
         }
-      : {}),
+      : state.treatment.schemaVersion === 3
+        ? { allocation: { basis: state.treatment.basis, method: state.treatment.method } }
+        : {}),
     ...(lastReschedule
       ? {
           reschedule: {

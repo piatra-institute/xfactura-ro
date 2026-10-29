@@ -4,6 +4,7 @@ import type { Actor } from './commands';
 import {
   allocationSchedule,
   actualDaySchedule,
+  evidencedSchedule,
   canonical,
   deferralRescheduleEffect,
   deferralRescheduleInput,
@@ -55,7 +56,7 @@ export async function previewDeferralReschedule(tx: Transaction, actor: Actor, i
   );
   requireCondition(
     body.effectiveFrom.endsWith('-01') &&
-      (state.treatment.schemaVersion !== 2 || body.effectiveFrom >= state.treatment.serviceFrom) &&
+      (state.treatment.schemaVersion === 1 || body.effectiveFrom >= state.treatment.serviceFrom) &&
       body.effectiveFrom >= body.date &&
       body.evidenceDate <= body.date &&
       body.evidenceDate >= state.journal.date &&
@@ -98,9 +99,11 @@ export async function previewDeferralReschedule(tx: Transaction, actor: Actor, i
   requireCondition(amount > 0n, 'NOTHING_DUE', 'Nu mai există o valoare viitoare de repartizat.');
   const afterSchedule = [
     ...prefix,
-    ...(body.method === 'actual_calendar_days'
-      ? actualDaySchedule(fromBani(amount), body.effectiveFrom, body.serviceTo).schedule
-      : allocationSchedule(fromBani(amount), body.effectiveFrom, body.serviceTo)),
+    ...(body.method === 'evidenced_monthly_amounts'
+      ? evidencedSchedule(fromBani(amount), body.effectiveFrom, body.serviceTo, body.benefits ?? [])
+      : body.method === 'actual_calendar_days'
+        ? actualDaySchedule(fromBani(amount), body.effectiveFrom, body.serviceTo).schedule
+        : allocationSchedule(fromBani(amount), body.effectiveFrom, body.serviceTo)),
   ];
   requireCondition(
     afterSchedule.length <= 60 && canonical(afterSchedule) !== canonical(beforeSchedule),

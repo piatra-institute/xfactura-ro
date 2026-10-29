@@ -16,6 +16,9 @@ function AllocationValue({ row }: { row?: DeferralRescheduleEffect['beforeSchedu
   return row ? (
     <>
       {formatMoney(row.amount)}
+      {'benefit' in row && typeof row.benefit === 'string' ? (
+        <span className="acc-benefit">{row.benefit}</span>
+      ) : null}
       {'days' in row && typeof row.days === 'number' ? (
         <span className="acc-hint">
           <br />
@@ -69,6 +72,12 @@ export function RescheduleDetails({ state, effect, showJournal }: Props) {
             <dd>Pe zile calendaristice</dd>
           </div>
         ) : null}
+        {effect.method === 'evidenced_monthly_amounts' ? (
+          <div>
+            <dt>Alocare</dt>
+            <dd>Sume lunare documentate</dd>
+          </div>
+        ) : null}
         <div>
           <dt>Motiv</dt>
           <dd>{effect.reason}</dd>
@@ -98,7 +107,7 @@ export function RescheduleDetails({ state, effect, showJournal }: Props) {
           <tbody>
             {months.map((month) => (
               <tr key={month}>
-                <td>{month.slice(0, 7)}</td>
+                <td className="acc-month">{month.slice(0, 7)}</td>
                 <td>
                   <AllocationValue row={before.get(month)} />
                 </td>
@@ -134,7 +143,7 @@ export default function RescheduleReview({
       <div className="acc-review-heading">
         <div>
           <h3>
-            {review.effect.method === 'actual_calendar_days'
+            {review.effect.method !== 'equal_calendar_months'
               ? 'Calendar servicii'
               : 'Calendar abonament'}{' '}
             · {state.invoiceLabels[review.effect.sourceInvoiceId]?.number ?? 'Modificare'}

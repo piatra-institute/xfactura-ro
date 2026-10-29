@@ -305,13 +305,19 @@ export const deferralPositionOutput = z.object({
     })
     .optional(),
   allocation: z
-    .object({
-      basis: z.literal('uniform_service'),
-      method: z.literal('actual_calendar_days'),
-      dayCountBasis: z.literal('actual_inclusive'),
-      rounding: z.literal('cumulative_floor_bani'),
-      serviceDays: z.number().int().positive(),
-    })
+    .union([
+      z.object({
+        basis: z.literal('uniform_service'),
+        method: z.literal('actual_calendar_days'),
+        dayCountBasis: z.literal('actual_inclusive'),
+        rounding: z.literal('cumulative_floor_bani'),
+        serviceDays: z.number().int().positive(),
+      }),
+      z.object({
+        basis: z.literal('documented_monthly_benefits'),
+        method: z.literal('evidenced_monthly_amounts'),
+      }),
+    ])
     .optional(),
   amount: decimalString,
   allocated: decimalString,
@@ -339,6 +345,7 @@ export const deferralPositionOutput = z.object({
         serviceFrom: dateSchema.optional(),
         serviceTo: dateSchema.optional(),
         days: z.number().int().min(1).max(31).optional(),
+        benefit: z.string().min(10).max(500).optional(),
         journalId: idSchema.nullable(),
         cancellationJournalId: idSchema.nullable(),
         status: z.enum(['scheduled', 'posted', 'not_required', 'cancelled']),

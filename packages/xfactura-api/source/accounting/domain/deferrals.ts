@@ -16,6 +16,14 @@ const terms = {
   evidenceDate: dateSchema,
   reason: z.string().trim().min(10).max(1000),
 };
+export const deferralBenefitInputSchema = z
+  .object({
+    month: dateSchema,
+    amount: moneySchema,
+    benefit: z.string().trim().min(10).max(500),
+  })
+  .strict();
+const benefitsSchema = z.array(deferralBenefitInputSchema).min(1).max(60);
 export const deferralInput = z
   .object({
     financialYearId: idSchema,
@@ -26,16 +34,31 @@ export const deferralInput = z
     account: accountCodeSchema,
     deduction: z.enum(['full', 'none']),
     counterpartyVatCollection: z.literal('no'),
-    basis: z.enum(['uniform_subscription', 'uniform_service']),
-    method: z.enum(['equal_calendar_months', 'actual_calendar_days']),
+    basis: z.enum(['uniform_subscription', 'uniform_service', 'documented_monthly_benefits']),
+    method: z.enum(['equal_calendar_months', 'actual_calendar_days', 'evidenced_monthly_amounts']),
+    benefits: benefitsSchema.optional(),
     ...terms,
   })
   .strict()
   .refine(
     (value) =>
       value.basis ===
-      (value.method === 'equal_calendar_months' ? 'uniform_subscription' : 'uniform_service'),
+      (value.method === 'equal_calendar_months'
+        ? 'uniform_subscription'
+        : value.method === 'actual_calendar_days'
+          ? 'uniform_service'
+          : 'documented_monthly_benefits'),
     { message: 'Documentați baza corespunzătoare metodei de alocare.', path: ['basis'] },
+  )
+  .refine(
+    (value) =>
+      value.method === 'evidenced_monthly_amounts'
+        ? !!value.benefits
+        : value.benefits === undefined,
+    {
+      message: 'Furnizați sumele și beneficiile lunare numai pentru alocarea documentată.',
+      path: ['benefits'],
+    },
   );
 export const deferralSupplementInput = deferralInput
   .safeExtend({
@@ -64,9 +87,17 @@ export const deferralDayAllocationSchema = deferralAllocationSchema
     days: z.number().int().min(1).max(31),
   })
   .strict();
+export const deferralBenefitAllocationSchema = deferralAllocationSchema
+  .extend({
+    serviceFrom: dateSchema,
+    serviceTo: dateSchema,
+    benefit: z.string().trim().min(10).max(500),
+  })
+  .strict();
 export const deferralScheduleRowSchema = z.union([
   deferralAllocationSchema,
   deferralDayAllocationSchema,
+  deferralBenefitAllocationSchema,
 ]);
 const monthlyTreatmentSchema = z
   .object({
@@ -97,12 +128,37 @@ const dailyTreatmentSchema = z
     supplement: deferralSupplementSchema.optional(),
   })
   .strict();
+const benefitTreatmentSchema = z
+  .object({
+    schemaVersion: z.literal(3),
+    basis: z.literal('documented_monthly_benefits'),
+    method: z.literal('evidenced_monthly_amounts'),
+    ...terms,
+    taxPointBasis: z.literal('early_invoice'),
+    evidenceHash: z.string().regex(/^[a-f0-9]{64}$/),
+    amount: moneySchema,
+    schedule: z.array(deferralBenefitAllocationSchema).min(1).max(60),
+    supplement: deferralSupplementSchema.optional(),
+  })
+  .strict();
 export const deferralTreatmentSchema = z.discriminatedUnion('schemaVersion', [
   monthlyTreatmentSchema,
   dailyTreatmentSchema,
+  benefitTreatmentSchema,
 ]);
+export const deferralBenefitEvidenceInput = z
+  .object({ evidenceId: idSchema, evidenceDate: dateSchema })
+  .strict();
+const deferralBenefitEvidenceSchema = deferralBenefitEvidenceInput
+  .extend({ evidenceHash: z.string().regex(/^[a-f0-9]{64}$/) })
+  .strict();
 export const deferralReleaseInput = z
-  .object({ financialYearId: idSchema, deferralId: idSchema, month: dateSchema })
+  .object({
+    financialYearId: idSchema,
+    deferralId: idSchema,
+    month: dateSchema,
+    benefitEvidence: deferralBenefitEvidenceInput.optional(),
+  })
   .strict();
 export const deferralReleaseSchema = z
   .object({
@@ -125,6 +181,7 @@ export const deferralReleaseSchema = z
     cancellationJournalId: idSchema.optional(),
     rescheduleId: idSchema.optional(),
     rescheduleVersion: z.number().int().positive().optional(),
+    benefitEvidence: deferralBenefitEvidenceSchema.optional(),
   })
   .strict();
 
@@ -196,6 +253,52 @@ export function actualDaySchedule(amount: string, from: string, to: string) {
     return { month, date, amount: fromBani(value), serviceFrom, serviceTo, days };
   });
   return { serviceDays, schedule };
+}
+
+/** Exact monthly benefit amounts are an evidenced accounting judgment, never an inferred proration. */
+export function evidencedSchedule(
+  amount: string,
+  from: string,
+  to: string,
+  input: z.infer<typeof benefitsSchema>,
+) {
+  dateSchema.parse(from);
+  dateSchema.parse(to);
+  const benefits = benefitsSchema.parse(input),
+    total = toBani(amount),
+    [firstYear, firstMonth] = from.split('-').map(Number),
+    [lastYear, lastMonth] = to.split('-').map(Number),
+    count = (lastYear - firstYear) * 12 + lastMonth - firstMonth + 1;
+  requireCondition(
+    from <= to && count >= 1 && count <= 60 && benefits.length === count && total > 0n,
+    'DEFERRAL_BENEFITS',
+    'Documentați fiecare lună a perioadei și o valoare totală pozitivă.',
+  );
+  const schedule = benefits.map((row, index) => {
+    const current = new Date(`${from.slice(0, 7)}-01T00:00:00Z`);
+    current.setUTCMonth(current.getUTCMonth() + index);
+    const month = current.toISOString().slice(0, 10),
+      date = monthEnd(month);
+    requireCondition(
+      row.month === month,
+      'DEFERRAL_BENEFITS',
+      'Lunile trebuie să fie complete, consecutive și în ordine, fără dubluri.',
+    );
+    return {
+      month,
+      date,
+      amount: row.amount,
+      serviceFrom: from > month ? from : month,
+      serviceTo: to < date ? to : date,
+      benefit: row.benefit,
+    };
+  });
+  requireCondition(
+    schedule.reduce((sum, row) => sum + toBani(row.amount), 0n) === total,
+    'DEFERRAL_BENEFIT_AMOUNT',
+    'Sumele lunare trebuie să egaleze exact baza de cost sau venit, inclusiv TVA nerecuperabilă.',
+  );
+  return schedule;
 }
 
 export const deferralCreditInput = creditNoteInput
@@ -277,13 +380,21 @@ export const deferralRescheduleInput = z
     serviceTo: dateSchema,
     evidenceId: idSchema,
     evidenceDate: dateSchema,
-    method: z.enum(['equal_calendar_months', 'actual_calendar_days']),
+    method: z.enum(['equal_calendar_months', 'actual_calendar_days', 'evidenced_monthly_amounts']),
+    benefits: benefitsSchema.optional(),
     priceUnchanged: z.literal(true),
     reason: z.string().trim().min(10).max(1000),
   })
-  .strict();
+  .strict()
+  .refine(
+    (value) =>
+      value.method === 'evidenced_monthly_amounts'
+        ? !!value.benefits
+        : value.benefits === undefined,
+    { message: 'Documentați noul plan lunar pentru metoda aleasă.', path: ['benefits'] },
+  );
 export const deferralRescheduleEffect = deferralRescheduleInput
-  .extend({
+  .safeExtend({
     kind: z.literal('deferrals.reschedule'),
     schemaVersion: z.literal(1),
     sequence: z.number().int().min(1).max(1000),
