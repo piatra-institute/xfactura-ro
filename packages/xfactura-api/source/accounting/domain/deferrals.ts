@@ -328,9 +328,20 @@ export type DeferralCreditInput = z.infer<typeof deferralCreditInput>;
 export const deferralScopeReductionInput = deferralCreditInput
   .extend({
     changeBasis: z.literal('cancelled_future_services'),
-    remainingServices: z.literal('uniform'),
+    remainingServices: z.enum(['uniform', 'documented_monthly_benefits']),
+    benefits: benefitsSchema.optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (value) =>
+      value.remainingServices === 'documented_monthly_benefits'
+        ? !!value.benefits
+        : value.benefits === undefined,
+    {
+      message: 'Documentați explicit beneficiile lunare rămase pentru planul neuniform.',
+      path: ['benefits'],
+    },
+  );
 export const deferralScopeReductionSchema = fullDeferralCreditSchema
   .extend({
     schemaVersion: z.literal(2),
@@ -344,8 +355,47 @@ export const deferralScopeReductionSchema = fullDeferralCreditSchema
 export const deferralCreditSchema = z.discriminatedUnion('schemaVersion', [
   fullDeferralCreditSchema,
   deferralScopeReductionSchema,
+  fullDeferralCreditSchema
+    .extend({
+      schemaVersion: z.literal(3),
+      changeBasis: z.literal('cancelled_future_services'),
+      remainingServices: z.literal('documented_monthly_benefits'),
+      method: z.literal('evidenced_monthly_amounts'),
+      beforeSchedule: z.array(deferralBenefitAllocationSchema).min(1).max(60),
+      afterSchedule: z.array(deferralBenefitAllocationSchema).min(1).max(60),
+    })
+    .strict(),
 ]);
 export type DeferralScopeReductionInput = z.infer<typeof deferralScopeReductionInput>;
+
+/** A pure scope reduction never moves value to another month or changes service dates. */
+export function reducedBenefitSchedule(
+  amount: string,
+  before: z.infer<typeof deferralScheduleRowSchema>[],
+  benefits: z.infer<typeof benefitsSchema>,
+) {
+  const previous = z.array(deferralBenefitAllocationSchema).min(1).max(60).parse(before);
+  const schedule = evidencedSchedule(
+    amount,
+    previous[0].serviceFrom,
+    previous.at(-1)!.serviceTo,
+    benefits,
+  );
+  requireCondition(
+    schedule.length === previous.length &&
+      schedule.every(
+        (row, index) =>
+          row.month === previous[index].month &&
+          row.date === previous[index].date &&
+          row.serviceFrom === previous[index].serviceFrom &&
+          row.serviceTo === previous[index].serviceTo &&
+          toBani(row.amount) <= toBani(previous[index].amount),
+      ),
+    'DEFERRAL_SCOPE_BENEFITS',
+    'Reducerea păstrează datele și nu poate crește valoarea niciunei luni.',
+  );
+  return schedule;
+}
 
 export const deferralDiscountInput = creditNoteInput
   .extend({

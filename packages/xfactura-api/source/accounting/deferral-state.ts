@@ -170,7 +170,8 @@ export async function loadDeferrals(tx: Transaction, companyId: string, ids: str
 export type DeferralState = Awaited<ReturnType<typeof loadDeferrals>>[number];
 export function deferralSchedule(state: DeferralState, date?: string) {
   if (
-    state.cancellation?.treatment.schemaVersion === 2 &&
+    state.cancellation &&
+    state.cancellation.treatment.schemaVersion !== 1 &&
     (!date || state.cancellation.date <= date)
   )
     return state.cancellation.treatment.afterSchedule;
@@ -284,7 +285,7 @@ export function deferralView(state: DeferralState, date: string) {
         : ('open' as const),
     cancellation: cancellation
       ? {
-          ...(cancellation.treatment.schemaVersion === 2
+          ...(cancellation.treatment.schemaVersion !== 1
             ? { kind: 'scope_reduction' as const }
             : {}),
           creditInvoiceId: cancellation.record.creditInvoiceId,
@@ -329,7 +330,7 @@ export function deferralReleaseSuperseded(tx: Transaction) {
           eq(deferralCancellations.companyId, proposals.companyId),
           sql`json_extract(${proposals.body}, '$.deferralRelease.deferralId')=${deferralCancellations.deferralId}`,
           sql`json_extract(${proposals.body}, '$.deferralRelease.month') between ${deferralCancellations.fromMonth} and ${deferralCancellations.toMonth}`,
-          sql`(json_extract(${creditProposal.body}, '$.invoice.deferralCredit.schemaVersion')<>2 or json_extract(${proposals.body}, '$.deferralRelease.cancellationJournalId') is not ${deferralCancellations.journalId})`,
+          sql`(json_extract(${creditProposal.body}, '$.invoice.deferralCredit.schemaVersion') not in (2,3) or json_extract(${proposals.body}, '$.deferralRelease.cancellationJournalId') is not ${deferralCancellations.journalId})`,
         ),
       ),
   );

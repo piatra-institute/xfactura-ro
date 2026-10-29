@@ -772,7 +772,7 @@ test('reviews a subscription schedule and next-year allocation, with a keyboard 
   await benefitCard.getByRole('button', { name: 'Aprobă această versiune', exact: true }).click();
   await benefitCard.getByRole('button', { name: 'Contabilizează', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('contabilizată');
-  await invoke('ledger.post', {
+  const benefitRootEntry = await invoke('ledger.post', {
     id: benefitRoot.id,
     version: benefitRoot.version,
     hash: benefitRoot.hash,
@@ -863,6 +863,124 @@ test('reviews a subscription schedule and next-year allocation, with a keyboard 
   expect(await invoke('vat.summary', { financialYearId: nextYear.id })).toMatchObject({
     status: 'reconciled',
     totals: { inputTax: '28.00', outputTax: '0.00' },
+  });
+  const benefitScopeAgreement = await source(
+      'acord-reducere-beneficii.txt',
+      'Partial cancellation of future services: January unchanged and each remaining monthly amount reduced explicitly',
+    ),
+    benefitScopeXml = await source(
+      'reducere-beneficii.xml',
+      invoiceXml({
+        credit: true,
+        number: 'BENEFICII-REDUCERE',
+        originalNumber: 'BENEFICII-2026',
+        date: '2026-02-01',
+        net: '20.00',
+        tax: '4.20',
+        gross: '24.20',
+      }),
+    ),
+    benefitScopeInvoice = await invoke('invoices.import', { evidenceId: benefitScopeXml.id }),
+    benefitScope = await invoke(
+      'deferrals.proposeScopeReduction',
+      {
+        financialYearId: nextYear.id,
+        invoiceId: benefitScopeInvoice.id,
+        originalInvoiceId: benefitInvoice.id,
+        recognitionDate: '2026-02-01',
+        decisionDate: '2026-02-01',
+        treatmentEvidenceId: benefitScopeAgreement.id,
+        kind: 'cancellation',
+        periodBasis: 'current_period_event',
+        cancelFrom: '2026-02-01',
+        changeBasis: 'cancelled_future_services',
+        remainingServices: 'documented_monthly_benefits',
+        benefits: ['2026-02-01', '2026-03-01', '2026-04-01'].map((month) => ({
+          month,
+          amount: '20.00',
+          benefit: 'Servicii rămase după reducerea documentată',
+        })),
+        reason:
+          'Anularea parțială a serviciilor viitoare, cu valori lunare mai mici și ianuarie păstrat',
+      },
+      grant.token,
+    );
+  await page.reload();
+  const benefitScopeCard = page.locator('.acc-review'),
+    benefitScopeTable = benefitScopeCard.getByRole('table', { name: 'Plan de alocare modificat' });
+  await expect(benefitScopeCard.getByRole('heading')).toHaveText(
+    'Diminuare servicii viitoare · BENEFICII-REDUCERE',
+  );
+  await expect(benefitScopeCard).toContainText('Sume lunare documentate');
+  await expect(benefitScopeTable.locator('tbody tr')).toHaveCount(4);
+  await expect(benefitScopeTable.locator('tbody tr').nth(0)).toContainText(benefits[0].benefit);
+  await expect(benefitScopeTable.locator('tbody tr').nth(1)).toContainText('30,00');
+  await expect(benefitScopeTable.locator('tbody tr').nth(1)).toContainText('20,00');
+  await expect(benefitScopeTable).toContainText('Servicii rămase după reducerea documentată');
+  await page.screenshot({
+    path: info.outputPath(`benefit-scope-${info.project.name}.png`),
+    fullPage: true,
+  });
+  const scopeDownload = await Promise.all([
+    page.waitForEvent('download'),
+    benefitScopeCard.getByRole('link', { name: 'Descarcă', exact: true }).click(),
+  ]);
+  expect(scopeDownload[0].suggestedFilename()).toBe('acord-reducere-beneficii.txt');
+  await benefitScopeCard.getByRole('button', { name: 'BENEFICII-2026', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator(`#journal-${benefitRootEntry.id}`)).toHaveAttribute('open', '');
+  await expect(page.locator(`#journal-${benefitRootEntry.id}`).locator('summary')).toBeFocused();
+  await page.goto(`/contabilitate?company=${companyId}&financialYearId=${nextYear.id}`);
+  await benefitScopeCard
+    .getByRole('button', { name: 'Aprobă această versiune', exact: true })
+    .click();
+  await benefitScopeCard.getByRole('button', { name: 'Contabilizează', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('contabilizată');
+  await invoke('ledger.post', {
+    id: benefitScope.id,
+    version: benefitScope.version,
+    hash: benefitScope.hash,
+  });
+  expect(await invoke('deferrals.get', { id: benefitRoot.id, date: '2026-02-01' })).toMatchObject({
+    amount: '100.00',
+    allocated: '20.00',
+    cancelled: '20.00',
+    remaining: '60.00',
+    cancellation: { kind: 'scope_reduction' },
+  });
+  for (const [month, date] of [
+    ['2026-02-01', '2026-02-28'],
+    ['2026-03-01', '2026-03-31'],
+    ['2026-04-01', '2026-04-10'],
+  ]) {
+    const confirmation = await source(
+      `confirmare-${month}.txt`,
+      `Remaining services performed and accepted on ${date}`,
+    );
+    await post(
+      await invoke(
+        'deferrals.proposeRelease',
+        {
+          financialYearId: nextYear.id,
+          deferralId: benefitRoot.id,
+          month,
+          benefitEvidence: { evidenceId: confirmation.id, evidenceDate: date },
+        },
+        grant.token,
+      ),
+    );
+  }
+  expect(await invoke('deferrals.get', { id: benefitRoot.id, date: '2026-04-30' })).toMatchObject({
+    allocated: '80.00',
+    cancelled: '20.00',
+    remaining: '0.00',
+  });
+  expect(
+    await invoke('deferrals.reconcile', { financialYearId: nextYear.id, date: '2026-04-30' }),
+  ).toMatchObject({ status: 'reconciled' });
+  expect(await invoke('vat.summary', { financialYearId: nextYear.id })).toMatchObject({
+    status: 'reconciled',
+    totals: { inputTax: '23.80', outputTax: '0.00' },
   });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   expect(errors).toEqual([]);

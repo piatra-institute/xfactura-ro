@@ -11,9 +11,59 @@ import {
   allocationSchedule,
   actualDaySchedule,
   evidencedSchedule,
+  reducedBenefitSchedule,
 } from '../../source/accounting/domain';
 
 describe('the A1 books', () => {
+  test('a documented scope reduction preserves dates and never increases a monthly benefit', () => {
+    const decimal = (v: bigint) => `${v / 100n}.${String(v % 100n).padStart(2, '0')}`;
+    fc.assert(
+      fc.property(
+        fc.array(
+          fc.tuple(fc.bigInt({ min: 1n, max: 99999999999999n }), fc.integer({ min: 0, max: 99 })),
+          { minLength: 1, maxLength: 60 },
+        ),
+        (values) => {
+          const original = values.map(([value], index) => ({
+              month: new Date(Date.UTC(2026, index, 1)).toISOString().slice(0, 10),
+              amount: decimal(value),
+              benefit: `Original monthly service ${index}`,
+            })),
+            reduced = values.map(([value, percent], index) => ({
+              ...original[index],
+              amount: decimal(value - (value * BigInt(percent)) / 100n),
+              benefit: `Remaining monthly service ${index}`,
+            })),
+            end = new Date(Date.UTC(2026, values.length - 1, 15)).toISOString().slice(0, 10),
+            before = evidencedSchedule(
+              decimal(values.reduce((a, [b]) => a + b, 0n)),
+              '2026-01-15',
+              end,
+              original,
+            ),
+            expected = reduced.reduce((sum, row) => sum + BigInt(row.amount.replace('.', '')), 0n),
+            after = reducedBenefitSchedule(decimal(expected), before, reduced);
+          expect(after.map(({ month, amount, benefit }) => ({ month, amount, benefit }))).toEqual(
+            reduced,
+          );
+          expect(after.map(({ amount: _amount, benefit: _benefit, ...dates }) => dates)).toEqual(
+            before.map(({ amount: _amount, benefit: _benefit, ...dates }) => dates),
+          );
+        },
+      ),
+      { seed: 20261030, numRuns: 500 },
+    );
+    const before = evidencedSchedule('80.00', '2026-02-01', '2026-03-15', [
+      { month: '2026-02-01', amount: '50.00', benefit: 'February service benefit' },
+      { month: '2026-03-01', amount: '30.00', benefit: 'March service benefit' },
+    ]);
+    expect(() =>
+      reducedBenefitSchedule('60.00', before, [
+        { month: '2026-02-01', amount: '10.00', benefit: 'February remaining benefit' },
+        { month: '2026-03-01', amount: '50.00', benefit: 'March remaining benefit' },
+      ]),
+    ).toThrow();
+  });
   test('documented benefits preserve explicit amounts, zero months and exact bani without proration', () => {
     const decimal = (value: bigint) => `${value / 100n}.${String(value % 100n).padStart(2, '0')}`;
     const benefits = [

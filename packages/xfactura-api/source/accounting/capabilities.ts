@@ -492,7 +492,7 @@ export class Capabilities {
         (actor, key, body) => service.deferrals.proposeCreditNote(actor, key, body),
       ),
       'deferrals.proposeScopeReduction': define(
-        'Prepare a separately evidenced partial cancellation of unprovided services using a linked credit note. Reduce 471/472 and original-rate VAT; preserve earned periods, calendar dates and allocation method, and redistribute the positive future remainder. Requires an equal-month or actual-day source and explicit uniform remaining services; documented-monthly benefit reductions need separate coverage. Requires exact human approval before ledger.post; one scope cancellation per source.',
+        'Prepare a separately evidenced partial cancellation of unprovided services using a linked credit note. Reduce 471/472 and original-rate VAT; preserve earned periods, dates and allocation method. Uniform sources require uniform remaining services. Evidenced monthly sources require remainingServices=documented_monthly_benefits and exact future benefits, with no month increased. Requires exact human approval before ledger.post; one scope cancellation per source.',
         deferralScopeReductionInput,
         proposalOutput,
         (actor, key, body) => service.deferrals.proposeScopeReduction(actor, key, body),
@@ -500,7 +500,7 @@ export class Capabilities {
       'deferrals.reviseScopeReduction': define(
         'Refresh an unposted future-service scope reduction after its source, credit or calendar snapshot changes. Earlier approval is invalidated; obtain fresh human approval.',
         deferralScopeReductionInput
-          .extend({ id: idSchema, version: z.number().int().positive() })
+          .safeExtend({ id: idSchema, version: z.number().int().positive() })
           .strict(),
         proposalOutput,
         (actor, key, { id, version, ...body }) =>

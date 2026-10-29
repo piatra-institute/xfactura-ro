@@ -5,6 +5,7 @@ import {
   canonical,
   actualDaySchedule,
   allocationSchedule,
+  reducedBenefitSchedule,
   deferralCreditInput,
   deferralCreditSchema,
   deferralScopeReductionInput,
@@ -19,7 +20,7 @@ import {
 import { interpretCreditNote } from './invoice-credits';
 import { checkDeferralHorizon, checkDeferralSource, openMonth } from './deferral-interpretation';
 import { deferralSchedule, loadDeferrals, rescheduleContext } from './deferral-state';
-import { evidence, periods } from './schema';
+import { evidence, periods, deferralReleases, journals } from './schema';
 
 /** Full or partial cancellation of future service scope; recognized benefits stay intact. */
 export async function interpretDeferralCredit(
@@ -32,9 +33,12 @@ export async function interpretDeferralCredit(
   const [state] = await loadDeferrals(tx, actor.companyId, [result.original.proposal.id]);
   requireCondition(state, 'NOT_FOUND', 'Abonamentul original nu este disponibil.', 404);
   requireCondition(
-    !scopeReduction || state.treatment.schemaVersion !== 3,
+    !scopeReduction ||
+      (state.treatment.schemaVersion === 3
+        ? input.remainingServices === 'documented_monthly_benefits'
+        : input.remainingServices === 'uniform'),
     'DEFERRAL_SCOPE_ALLOCATION',
-    'Diminuarea unui plan de beneficii documentate necesită un nou plan explicit; repartizarea uniformă nu se presupune.',
+    'Păstrați baza de alocare: plan explicit pentru beneficiile documentate sau servicii rămase uniforme.',
   );
   await checkDeferralSource(tx, actor, state);
   await openMonth(tx, actor.companyId, input.recognitionDate);
@@ -119,8 +123,27 @@ export async function interpretDeferralCredit(
   const beforeSchedule = deferralSchedule(state);
   let scope;
   if (scopeReduction) {
+    const [priorConfirmation] = await tx
+      .select({ id: journals.id })
+      .from(deferralReleases)
+      .innerJoin(
+        journals,
+        and(
+          eq(journals.companyId, deferralReleases.companyId),
+          eq(journals.id, deferralReleases.journalId),
+        ),
+      )
+      .where(
+        and(
+          eq(deferralReleases.companyId, actor.companyId),
+          eq(deferralReleases.deferralId, state.record.deferralId),
+          eq(journals.evidenceId, input.treatmentEvidenceId),
+        ),
+      )
+      .limit(1);
     requireCondition(
-      !state.reschedules.some((row) => row.evidenceId === input.treatmentEvidenceId),
+      !state.reschedules.some((row) => row.evidenceId === input.treatmentEvidenceId) &&
+        !priorConfirmation,
       'DEFERRAL_CANCELLATION_EVIDENCE',
       'Păstrați separat acordul privind diminuarea serviciilor viitoare.',
     );
@@ -129,17 +152,19 @@ export async function interpretDeferralCredit(
       remainingAmount = fromBani(futureAmount - amount),
       afterSchedule = [
         ...beforeSchedule.filter((row) => row.month < input.cancelFrom),
-        ...(state.treatment.method === 'actual_calendar_days'
-          ? actualDaySchedule(
-              remainingAmount,
-              'serviceFrom' in first && typeof first.serviceFrom === 'string'
-                ? first.serviceFrom
-                : first.month,
-              'serviceTo' in last && typeof last.serviceTo === 'string'
-                ? last.serviceTo
-                : last.date,
-            ).schedule
-          : allocationSchedule(remainingAmount, first.month, last.date)),
+        ...(state.treatment.method === 'evidenced_monthly_amounts'
+          ? reducedBenefitSchedule(remainingAmount, months, input.benefits ?? [])
+          : state.treatment.method === 'actual_calendar_days'
+            ? actualDaySchedule(
+                remainingAmount,
+                'serviceFrom' in first && typeof first.serviceFrom === 'string'
+                  ? first.serviceFrom
+                  : first.month,
+                'serviceTo' in last && typeof last.serviceTo === 'string'
+                  ? last.serviceTo
+                  : last.date,
+              ).schedule
+            : allocationSchedule(remainingAmount, first.month, last.date)),
       ];
     const released = new Set(state.releases.map((row) => row.record.month));
     requireCondition(
@@ -177,7 +202,7 @@ export async function interpretDeferralCredit(
       },
     });
     scope = {
-      schemaVersion: 2,
+      schemaVersion: state.treatment.schemaVersion === 3 ? 3 : 2,
       changeBasis: input.changeBasis,
       remainingServices: input.remainingServices,
       method: state.treatment.method,
@@ -226,7 +251,7 @@ export async function checkDeferralCreditPosting(tx: Transaction, actor: Actor, 
   const expected = await interpretDeferralCredit(
     tx,
     actor,
-    (cancellation.schemaVersion === 2 ? deferralScopeReductionInput : deferralCreditInput).parse({
+    (cancellation.schemaVersion !== 1 ? deferralScopeReductionInput : deferralCreditInput).parse({
       financialYearId: body.financialYearId,
       invoiceId: invoice.invoiceId,
       originalInvoiceId: credit.originalInvoiceId,
@@ -237,10 +262,17 @@ export async function checkDeferralCreditPosting(tx: Transaction, actor: Actor, 
       periodBasis: credit.periodBasis,
       reason: credit.reason,
       cancelFrom: cancellation.cancelFrom,
-      ...(cancellation.schemaVersion === 2
+      ...(cancellation.schemaVersion !== 1
         ? {
             changeBasis: cancellation.changeBasis,
             remainingServices: cancellation.remainingServices,
+          }
+        : {}),
+      ...(cancellation.schemaVersion === 3
+        ? {
+            benefits: cancellation.afterSchedule
+              .filter((row) => row.month >= cancellation.cancelFrom)
+              .map(({ month, amount, benefit }) => ({ month, amount, benefit })),
           }
         : {}),
     }),

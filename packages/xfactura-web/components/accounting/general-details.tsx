@@ -34,7 +34,7 @@ export default function GeneralDetails({
     settlement = body.settlement,
     credit = invoice?.credit,
     cancellation = invoice?.deferralCredit,
-    scopeReduction = cancellation?.schemaVersion === 2 ? cancellation : undefined,
+    scopeReduction = cancellation && cancellation.schemaVersion !== 1 ? cancellation : undefined,
     discount = invoice?.deferralDiscount,
     deferral = invoice?.deferral,
     supplement = deferral?.supplement,
@@ -298,7 +298,9 @@ export default function GeneralDetails({
                   <dd>
                     {scopeReduction.method === 'actual_calendar_days'
                       ? 'Pe zile calendaristice'
-                      : 'Lunar, în cote egale'}
+                      : scopeReduction.method === 'evidenced_monthly_amounts'
+                        ? 'Sume lunare documentate'
+                        : 'Lunar, în cote egale'}
                   </dd>
                 </div>
               ) : null}
@@ -452,12 +454,24 @@ export default function GeneralDetails({
               <tbody>
                 {scopeReduction.afterSchedule.map((row, index) => (
                   <tr key={row.month}>
-                    <td>{row.month.slice(0, 7)}</td>
+                    <td className="acc-month">{row.month.slice(0, 7)}</td>
                     {scopeReduction.method === 'actual_calendar_days' ? (
                       <td>{'days' in row ? row.days : ''}</td>
                     ) : null}
-                    <td>{formatMoney(scopeReduction.beforeSchedule[index].amount)}</td>
-                    <td>{formatMoney(row.amount)}</td>
+                    <td>
+                      {formatMoney(scopeReduction.beforeSchedule[index].amount)}
+                      {scopeReduction.schemaVersion === 3 ? (
+                        <span className="acc-benefit">
+                          {scopeReduction.beforeSchedule[index].benefit}
+                        </span>
+                      ) : null}
+                    </td>
+                    <td>
+                      {formatMoney(row.amount)}
+                      {'benefit' in row && typeof row.benefit === 'string' ? (
+                        <span className="acc-benefit">{row.benefit}</span>
+                      ) : null}
+                    </td>
                   </tr>
                 ))}
               </tbody>

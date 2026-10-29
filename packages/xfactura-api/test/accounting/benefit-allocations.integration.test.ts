@@ -25,6 +25,7 @@ import {
   type DeferralRescheduleEffect,
   type DeferralRescheduleInput,
   type GeneralBody,
+  type DeferralScopeReductionInput,
 } from '../../source/accounting/domain';
 import {
   facts,
@@ -33,6 +34,7 @@ import {
   actionReviews,
   deferralReschedules,
   deferralReleases,
+  deferralCancellations,
 } from '../../source/accounting/schema';
 import { postJournal } from '../../source/accounting/ledger';
 import { backup, restore } from '../../source/accounting/backup';
@@ -85,7 +87,7 @@ async function source(actor: Actor, text: string, filename = 'contract.txt') {
 async function post(
   actor: Actor,
   p: { id: string; version: number; hash: string },
-  commandKey = key(),
+  commandKey: string = key(),
 ) {
   const approval = await service.books.approve(actor, key(), p.id, {
       version: p.version,
@@ -221,6 +223,686 @@ async function apply(f: Fixture, review: { id: string; hash: string }) {
   await service.reviews.approve(f.actor, key(), { id: review.id, hash: review.hash });
   return service.reviews.execute(f.actor, key(), { id: review.id, hash: review.hash });
 }
+async function statement(
+  f: Fixture,
+  from: string,
+  to: string,
+  opening = '1000.00',
+  closing = opening,
+  rows = '',
+) {
+  const file = await source(
+    f.actor,
+    `movement_id,booking_date,amount,currency,reference\n${rows}`,
+    'statement.csv',
+  );
+  await service.bank.importStatement(f.actor, key(), {
+    evidenceId: file.id,
+    bankAccount: 'RO00BENEFITS',
+    statementId: key(),
+    from,
+    to,
+    opening,
+    closing,
+  });
+}
+async function proposeScope(f: Fixture, input: unknown) {
+  return service.deferrals.proposeScopeReduction(f.actor, key(), input);
+}
+async function scopeCredit(
+  f: Fixture,
+  root: Root,
+  changes: Partial<DeferralScopeReductionInput> = {},
+  xml: XmlInput = {},
+) {
+  const tax = root.invoice.body.taxes[0],
+    nonVat = tax.category === 'O',
+    agreement = await source(
+      f.actor,
+      `Separate signed agreement cancels future services with an explicit remaining monthly plan ${key()}`,
+    ),
+    file = await source(
+      f.actor,
+      invoiceXml({
+        credit: true,
+        direction: root.invoice.direction,
+        number: key(),
+        originalNumber: root.invoice.body.number,
+        date: '2026-02-01',
+        category: tax.category,
+        rate: tax.rate ?? undefined,
+        net: '20.00',
+        tax: nonVat ? '0.00' : '4.20',
+        gross: nonVat ? '20.00' : '24.20',
+        ...xml,
+      }),
+      'scope-credit.xml',
+    ),
+    invoice = await service.invoices.import(f.actor, key(), { evidenceId: file.id });
+  const input: DeferralScopeReductionInput = {
+    financialYearId: f.financialYear.id,
+    invoiceId: invoice.id,
+    originalInvoiceId: root.invoice.id,
+    recognitionDate: '2026-02-01',
+    decisionDate: '2026-02-01',
+    treatmentEvidenceId: agreement.id,
+    kind: 'cancellation',
+    periodBasis: 'current_period_event',
+    cancelFrom: '2026-02-01',
+    changeBasis: 'cancelled_future_services',
+    remainingServices: 'documented_monthly_benefits',
+    benefits: benefitRows(['40.00', '20.00'], 1),
+    reason:
+      'Cancel only unprovided future services and document the exact smaller benefit of each remaining month',
+    ...changes,
+  };
+  return { input, invoice, agreement };
+}
+
+async function postInjected(f: Fixture, body: GeneralBody) {
+  const factId = key(),
+    id = key(),
+    hash = sha256(canonical({ kind: 'general', version: 1, body, factId }));
+  await db.orm.insert(facts).values({
+    id: factId,
+    companyId: f.company.id,
+    kind: 'general',
+    evidenceId: body.evidenceId,
+    body,
+    createdBy: ownerId,
+  });
+  await db.orm.insert(proposals).values({
+    id,
+    companyId: f.company.id,
+    factId,
+    kind: 'general',
+    version: 1,
+    hash,
+    body,
+    sourceKey: key(),
+    createdBy: ownerId,
+  });
+  const approval = await service.books.approve(f.actor, key(), id, { version: 1, hash });
+  return db.write((tx) =>
+    postJournal(tx, f.actor, {
+      date: body.date,
+      kind: 'general',
+      sourceId: id,
+      evidenceId: body.evidenceId,
+      description: body.description,
+      lines: body.lines,
+      approvalId: approval.id,
+    }),
+  );
+}
+
+describe('partial cancellation of documented monthly benefits', () => {
+  test.each([
+    {
+      vat: 'normal_vat' as const,
+      direction: 'purchase' as const,
+      deduction: 'full' as const,
+      category: 'S',
+      amounts: ['20.00', '50.00', '30.00'],
+      remaining: ['40.00', '20.00'],
+      cancelled: '20.00',
+      inputTax: '16.80',
+      outputTax: '0.00',
+    },
+    {
+      vat: 'normal_vat' as const,
+      direction: 'purchase' as const,
+      deduction: 'none' as const,
+      category: 'S',
+      amounts: ['24.20', '60.50', '36.30'],
+      remaining: ['48.40', '24.20'],
+      cancelled: '24.20',
+      inputTax: '0.00',
+      outputTax: '0.00',
+    },
+    {
+      vat: 'normal_vat' as const,
+      direction: 'sale' as const,
+      deduction: 'none' as const,
+      category: 'S',
+      amounts: ['20.00', '50.00', '30.00'],
+      remaining: ['40.00', '20.00'],
+      cancelled: '20.00',
+      inputTax: '0.00',
+      outputTax: '16.80',
+    },
+    {
+      vat: 'non_vat' as const,
+      direction: 'purchase' as const,
+      deduction: 'none' as const,
+      category: 'S',
+      amounts: ['24.20', '60.50', '36.30'],
+      remaining: ['48.40', '24.20'],
+      cancelled: '24.20',
+      inputTax: '0.00',
+      outputTax: '0.00',
+    },
+    {
+      vat: 'non_vat' as const,
+      direction: 'sale' as const,
+      deduction: 'none' as const,
+      category: 'O',
+      amounts: ['20.00', '50.00', '30.00'],
+      remaining: ['40.00', '20.00'],
+      cancelled: '20.00',
+      inputTax: '0.00',
+      outputTax: '0.00',
+    },
+  ])(
+    '$vat $direction $deduction credits only the cancelled value and preserves earned benefits',
+    async (c) => {
+      const f = await fixture(c.vat),
+        root = await prepare(
+          f,
+          {
+            direction: c.direction,
+            category: c.category,
+            ...(c.category === 'O' ? { tax: '0.00', gross: '100.00' } : {}),
+          },
+          { deduction: c.deduction, benefits: benefitRows(c.amounts) },
+        );
+      await post(f.actor, root.proposal);
+      await release(f, root, '2026-01-01', '2026-01-31');
+      const credit = await scopeCredit(f, root, { benefits: benefitRows(c.remaining, 1) }),
+        p = await service.deferrals.proposeScopeReduction(f.actor, key(), credit.input);
+      expect(generalBodySchema.parse(p.body).invoice!.deferralCredit).toMatchObject({
+        schemaVersion: 3,
+        method: 'evidenced_monthly_amounts',
+        beforeSchedule: c.amounts.map((amount) => ({ amount })),
+        afterSchedule: [c.amounts[0], ...c.remaining].map((amount) => ({ amount })),
+      });
+      const [a, b] = await Promise.all([post(f.actor, p, p.id), post(f.actor, p, p.id)]);
+      expect(a.entry).toEqual(b.entry);
+      const state = await service.deferrals.get(f.actor, {
+        id: root.proposal.id,
+        date: '2026-02-01',
+      });
+      expect(state).toMatchObject({
+        allocated: c.amounts[0],
+        cancelled: c.cancelled,
+        cancellation: { kind: 'scope_reduction' },
+      });
+      expect(state.schedule.map((row) => row.amount)).toEqual([c.amounts[0], ...c.remaining]);
+      expect(
+        (await service.deferrals.get(f.actor, { id: root.proposal.id, date: '2026-01-31' }))
+          .cancelled,
+      ).toBe('0.00');
+      for (const proof of [credit.agreement.id, credit.invoice.evidenceId])
+        await expect(
+          service.deferrals.proposeRelease(f.actor, key(), {
+            financialYearId: f.financialYear.id,
+            deferralId: root.proposal.id,
+            month: '2026-02-01',
+            benefitEvidence: { evidenceId: proof, evidenceDate: '2026-02-28' },
+          }),
+        ).rejects.toMatchObject({ code: 'DEFERRAL_BENEFIT_EVIDENCE' });
+      await release(f, root, '2026-02-01', '2026-02-28');
+      await release(f, root, '2026-03-01', '2026-03-15');
+      expect(
+        await service.deferrals.get(f.actor, { id: root.proposal.id, date: '2026-03-31' }),
+      ).toMatchObject({ status: 'allocated', remaining: '0.00' });
+      expect(
+        await service.deferrals.reconcile(f.actor, {
+          financialYearId: f.financialYear.id,
+          date: '2026-03-31',
+        }),
+      ).toMatchObject({ status: 'reconciled' });
+      expect(
+        await service.vat.summary(f.actor, { financialYearId: f.financialYear.id }),
+      ).toMatchObject({
+        status: 'reconciled',
+        totals: { inputTax: c.inputTax, outputTax: c.outputTax },
+      });
+    },
+  );
+
+  test('explicit reductions reject redistribution, missing months, wrong sums, uniform claims and reused confirmations', async () => {
+    const f = await fixture(),
+      root = await prepare(f);
+    await post(f.actor, root.proposal);
+    const january = await release(f, root, '2026-01-01', '2026-01-31'),
+      credit = await scopeCredit(f, root);
+    for (const changes of [
+      { benefits: benefitRows(['10.00', '50.00'], 1) },
+      { benefits: benefitRows(['40.00', '19.99'], 1) },
+      { benefits: benefitRows(['60.00'], 1) },
+      { benefits: benefitRows(['20.00', '40.00'], 1).reverse() },
+      { benefits: undefined },
+      { remainingServices: 'uniform', benefits: undefined },
+      { treatmentEvidenceId: january.benefitEvidence.evidenceId },
+    ])
+      await expect(proposeScope(f, { ...credit.input, ...changes })).rejects.toThrow();
+    const other = await fixture(),
+      foreign = await source(other.actor, 'Another company scope agreement');
+    await expect(
+      service.deferrals.proposeScopeReduction(f.actor, key(), {
+        ...credit.input,
+        treatmentEvidenceId: foreign.id,
+      }),
+    ).rejects.toThrow();
+    await post(
+      f.actor,
+      await service.deferrals.proposeScopeReduction(f.actor, key(), credit.input),
+    );
+    await expect(
+      service.deferrals.proposeScopeReduction(f.actor, key(), credit.input),
+    ).rejects.toMatchObject({ code: 'DEFERRAL_ALREADY_CANCELLED' });
+    await expect(amend(f, root)).rejects.toMatchObject({ code: 'DEFERRAL_ALREADY_CANCELLED' });
+  });
+
+  test('a reduction follows the exact reviewed calendar and supersedes obsolete release approvals', async () => {
+    const f = await fixture(),
+      root = await prepare(f);
+    await post(f.actor, root.proposal);
+    await release(f, root, '2026-01-01', '2026-01-31');
+    const credit = await scopeCredit(f, root),
+      before = await service.deferrals.proposeScopeReduction(f.actor, key(), credit.input);
+    await service.books.approve(f.actor, key(), before.id, {
+      version: before.version,
+      hash: before.hash,
+    });
+    const amendment = await amend(f, root);
+    await apply(f, amendment.review);
+    await expect(service.ledger.post(f.actor, key(), exact(before))).rejects.toThrow();
+    const releaseInput = {
+        financialYearId: f.financialYear.id,
+        deferralId: root.proposal.id,
+        month: '2026-02-01',
+        benefitEvidence: await confirmation(f, '2026-02-28'),
+      },
+      oldRelease = await service.deferrals.proposeRelease(f.actor, key(), releaseInput);
+    await service.books.approve(f.actor, key(), oldRelease.id, {
+      version: oldRelease.version,
+      hash: oldRelease.hash,
+    });
+    const p = proposalOutput.parse(
+      await service.capabilities.invoke(f.actor, 'deferrals.reviseScopeReduction', key(), {
+        ...credit.input,
+        id: before.id,
+        version: before.version,
+        benefits: benefitRows(['20.00', '20.00', '20.00'], 1),
+      }),
+    );
+    await expect(service.ledger.post(f.actor, key(), exact(p))).rejects.toThrow();
+    await post(f.actor, p);
+    await expect(service.ledger.post(f.actor, key(), exact(oldRelease))).rejects.toThrow();
+    const queue = await service.capabilities.invoke(f.actor, 'proposals.list', key(), {
+      status: 'superseded',
+    });
+    expect(JSON.stringify(queue)).toContain(oldRelease.id);
+    const revised = proposalOutput.parse(
+      await service.capabilities.invoke(f.actor, 'deferrals.reviseRelease', key(), {
+        ...releaseInput,
+        id: oldRelease.id,
+        version: oldRelease.version,
+      }),
+    );
+    expect(generalBodySchema.parse(revised.body).deferralRelease).toMatchObject({
+      amount: '20.00',
+      cancellationJournalId: expect.any(String),
+      rescheduleId: amendment.review.id,
+    });
+    await post(f.actor, revised);
+    await release(f, root, '2026-03-01', '2026-03-31');
+    await release(f, root, '2026-04-01', '2026-04-10');
+    expect(
+      (await service.deferrals.get(f.actor, { id: root.proposal.id, date: '2026-04-30' }))
+        .remaining,
+    ).toBe('0.00');
+  });
+
+  test('balanced forged explicit reductions cannot change dates, prefix, months, budgets or monthly limits', async () => {
+    const f = await fixture(),
+      root = await prepare(f);
+    await post(f.actor, root.proposal);
+    await release(f, root, '2026-01-01', '2026-01-31');
+    const credit = await scopeCredit(f, root),
+      p = await service.deferrals.proposeScopeReduction(f.actor, key(), credit.input),
+      mutations: Array<(body: GeneralBody) => void> = [
+        (b) => {
+          const t = b.invoice!.deferralCredit!;
+          if (t.schemaVersion !== 1) t.afterSchedule[1].amount = '39.00';
+        },
+        (b) => {
+          const t = b.invoice!.deferralCredit!;
+          if (t.schemaVersion !== 1) {
+            t.afterSchedule[1].amount = '10.00';
+            t.afterSchedule[2].amount = '50.00';
+          }
+        },
+        (b) => {
+          const t = b.invoice!.deferralCredit!;
+          if (t.schemaVersion !== 1)
+            Object.assign(t.afterSchedule[0], { benefit: 'Forged recognized January services' });
+        },
+        (b) => {
+          const t = b.invoice!.deferralCredit!;
+          if (t.schemaVersion !== 1) Object.assign(t.afterSchedule[2], { serviceTo: '2026-03-14' });
+        },
+        (b) => {
+          const t = b.invoice!.deferralCredit!;
+          if (t.schemaVersion !== 1) t.afterSchedule.reverse();
+        },
+        (b) => {
+          const t = b.invoice!.deferralCredit!;
+          if (t.schemaVersion !== 1) Reflect.deleteProperty(t.afterSchedule[1], 'benefit');
+        },
+        (b) => {
+          Object.assign(b.invoice!.deferralCredit!, {
+            schemaVersion: 2,
+            remainingServices: 'uniform',
+          });
+        },
+        (b) => {
+          b.invoice!.deferralCredit!.evidenceHash = '0'.repeat(64);
+        },
+      ];
+    for (const mutate of mutations) {
+      const body = structuredClone(p.body) as GeneralBody;
+      mutate(body);
+      await expect(postInjected(f, body)).rejects.toThrow();
+    }
+    await post(f.actor, p);
+    const releaseInput = {
+        financialYearId: f.financialYear.id,
+        deferralId: root.proposal.id,
+        month: '2026-02-01',
+        benefitEvidence: await confirmation(f, '2026-02-28'),
+      },
+      allocation = await service.deferrals.proposeRelease(f.actor, key(), releaseInput);
+    for (const mutate of [
+      (b: GeneralBody) => {
+        Reflect.deleteProperty(b.deferralRelease!, 'cancellationJournalId');
+      },
+      (b: GeneralBody) => {
+        b.deferralRelease!.amount = '50.00';
+        b.lines[0].debit = '50.00';
+        b.lines[1].credit = '50.00';
+      },
+      (b: GeneralBody) => {
+        b.evidenceId = credit.agreement.id;
+        b.deferralRelease!.benefitEvidence!.evidenceId = credit.agreement.id;
+        b.deferralRelease!.benefitEvidence!.evidenceHash = credit.agreement.hash;
+      },
+    ]) {
+      const body = structuredClone(allocation.body) as GeneralBody;
+      mutate(body);
+      await expect(postInjected(f, body)).rejects.toThrow();
+    }
+    await post(f.actor, allocation);
+  });
+
+  test('cancelled zero months stay explicit while remaining positive benefits still block close', async () => {
+    const f = await fixture(),
+      root = await prepare(f);
+    await post(f.actor, root.proposal);
+    await release(f, root, '2026-01-01', '2026-01-31');
+    const credit = await scopeCredit(
+      f,
+      root,
+      { benefits: benefitRows(['50.00', '0.00'], 1) },
+      { net: '30.00', tax: '6.30', gross: '36.30' },
+    );
+    await post(
+      f.actor,
+      await service.deferrals.proposeScopeReduction(f.actor, key(), credit.input),
+    );
+    const state = await service.deferrals.get(f.actor, {
+      id: root.proposal.id,
+      date: '2026-03-31',
+    });
+    expect(state.schedule[2].status).toBe('not_required');
+    expect(state.nextDueMonth).toBe('2026-02-01');
+    await statement(f, '2026-02-01', '2026-02-28');
+    await expect(service.periods.close(f.actor, key(), '2026-02-01')).rejects.toMatchObject({
+      code: 'DEFERRAL_ALLOCATION_DUE',
+    });
+    await release(f, root, '2026-02-01', '2026-02-28');
+    await service.periods.close(f.actor, key(), '2026-02-01');
+    await expect(release(f, root, '2026-03-01', '2026-03-15')).rejects.toMatchObject({
+      code: 'NOTHING_DUE',
+    });
+    expect(
+      (await service.deferrals.get(f.actor, { id: root.proposal.id, date: '2026-03-31' }))
+        .remaining,
+    ).toBe('0.00');
+  });
+
+  test.each(['purchase', 'sale'] as const)(
+    'a paid %s credits only its refund while the remaining benefits stay due',
+    async (direction) => {
+      const f = await fixture(),
+        root = await prepare(f, { direction });
+      await post(f.actor, root.proposal);
+      const paidBalance = direction === 'purchase' ? '879.00' : '1121.00';
+      await statement(
+        f,
+        '2026-01-01',
+        '2026-01-31',
+        '1000.00',
+        paidBalance,
+        `${key()},2026-01-05,${direction === 'purchase' ? '-' : ''}121.00,RON,Invoice payment\n`,
+      );
+      const movement = (await service.queries.movements(f.actor, { matched: false })).items[0];
+      await post(
+        f.actor,
+        await service.settlements.propose(f.actor, key(), {
+          financialYearId: f.financialYear.id,
+          movementId: movement.id,
+          allocations: [{ invoiceId: root.invoice.id, amount: '121.00' }],
+        }),
+      );
+      await release(f, root, '2026-01-01', '2026-01-31');
+      await service.periods.close(f.actor, key(), '2026-01-01');
+      const credit = await scopeCredit(f, root);
+      await post(f.actor, await proposeScope(f, credit.input));
+      expect(
+        await service.positions.read(f.actor, { invoiceId: root.invoice.id, date: '2026-02-01' }),
+      ).toMatchObject({ balance: '-24.20', status: 'refund_due' });
+      const refundedBalance = direction === 'purchase' ? '903.20' : '1096.80';
+      await statement(
+        f,
+        '2026-02-01',
+        '2026-02-28',
+        paidBalance,
+        refundedBalance,
+        `${key()},2026-02-10,${direction === 'sale' ? '-' : ''}24.20,RON,Scope refund\n`,
+      );
+      const refund = (await service.queries.movements(f.actor, { matched: false })).items[0];
+      await post(
+        f.actor,
+        await service.settlements.propose(f.actor, key(), {
+          financialYearId: f.financialYear.id,
+          movementId: refund.id,
+          allocations: [{ invoiceId: root.invoice.id, amount: '-24.20' }],
+        }),
+      );
+      await expect(service.periods.close(f.actor, key(), '2026-02-01')).rejects.toMatchObject({
+        code: 'DEFERRAL_ALLOCATION_DUE',
+      });
+      await release(f, root, '2026-02-01', '2026-02-28');
+      await service.periods.close(f.actor, key(), '2026-02-01');
+      await release(f, root, '2026-03-01', '2026-03-15');
+      expect(
+        await service.positions.read(f.actor, { invoiceId: root.invoice.id, date: '2026-03-31' }),
+      ).toMatchObject({ balance: '0.00', status: 'settled' });
+    },
+  );
+
+  test('a reduction of the first partial service month preserves its actual start and original zero months', async () => {
+    const f = await fixture(),
+      root = await prepare(f, {}, { benefits: benefitRows(['20.00', '0.00', '80.00']) });
+    await post(f.actor, root.proposal);
+    const c = await scopeCredit(
+      f,
+      root,
+      {
+        recognitionDate: '2026-01-01',
+        decisionDate: '2026-01-01',
+        cancelFrom: '2026-01-01',
+        benefits: benefitRows(['10.00', '0.00', '70.00']),
+      },
+      { date: '2026-01-01' },
+    );
+    await post(f.actor, await proposeScope(f, c.input));
+    const state = await service.deferrals.get(f.actor, {
+      id: root.proposal.id,
+      date: '2026-01-01',
+    });
+    expect(state.schedule[0]).toMatchObject({
+      serviceFrom: '2026-01-16',
+      serviceTo: '2026-01-31',
+      amount: '10.00',
+    });
+    expect(state.schedule[1].status).toBe('not_required');
+    await release(f, root, '2026-01-01', '2026-01-31');
+    await release(f, root, '2026-03-01', '2026-03-15');
+    expect(
+      (await service.deferrals.get(f.actor, { id: root.proposal.id, date: '2026-03-31' }))
+        .remaining,
+    ).toBe('0.00');
+  });
+
+  test('exact large reductions and their cached results survive export and fresh restore', async () => {
+    const f = await fixture('non_vat'),
+      root = await prepare(
+        f,
+        {
+          direction: 'sale',
+          category: 'O',
+          net: '9007199254740999.95',
+          tax: '0.00',
+          gross: '9007199254740999.95',
+        },
+        { benefits: benefitRows(['9007199254740900.01', '60.00', '39.94']) },
+      );
+    await post(f.actor, root.proposal);
+    await release(f, root, '2026-01-01', '2026-01-31');
+    const c = await scopeCredit(f, root, { benefits: benefitRows(['50.00', '29.94'], 1) }),
+      prepareKey = key(),
+      p = await service.deferrals.proposeScopeReduction(f.actor, prepareKey, c.input),
+      postKey = key(),
+      posted = await post(f.actor, p, postKey),
+      state = await service.deferrals.get(f.actor, { id: root.proposal.id, date: '2026-02-01' });
+    expect(state).toMatchObject({
+      cancelled: '20.00',
+      remaining: '79.94',
+      allocated: '9007199254740900.01',
+    });
+    const job = await service.exports.request(f.actor, key());
+    await runOneExport(db, objects);
+    const exported = JSON.parse(
+      Buffer.from((await service.exports.download(f.actor, job.id)).bytes).toString(),
+    ).data;
+    expect(exported.deferralCancellations[0].amountBani).toBe('2000');
+    await backup(db, objects, join(directory, 'scope-backup'));
+    const restored = await restore(
+        join(directory, 'scope-backup'),
+        join(directory, 'scope-restored'),
+      ),
+      copyDb = new Database(restored.databaseUrl);
+    try {
+      await migrate(copyDb);
+      const copy = new Accounting(copyDb, new LocalObjectStore(restored.objectDir), secret);
+      expect(
+        await copy.deferrals.get(f.actor, { id: root.proposal.id, date: '2026-02-01' }),
+      ).toEqual(state);
+      expect(await copy.deferrals.proposeScopeReduction(f.actor, prepareKey, c.input)).toEqual(p);
+      expect(await copy.ledger.post(f.actor, postKey, exact(p))).toEqual(posted.entry);
+      expect((await copy.documents.read(f.actor, c.agreement.id)).bytes).toEqual(
+        (await service.documents.read(f.actor, c.agreement.id)).bytes,
+      );
+      await expect(
+        copyDb.orm
+          .delete(deferralCancellations)
+          .where(eq(deferralCancellations.companyId, f.company.id))
+          .execute(),
+      ).rejects.toThrow();
+    } finally {
+      await copyDb.close();
+    }
+  });
+
+  test('MCP prepares and revises an explicit scope credit but cannot approve or replay after revocation', async () => {
+    const f = await fixture(),
+      root = await prepare(f);
+    await post(f.actor, root.proposal);
+    await release(f, root, '2026-01-01', '2026-01-31');
+    const c = await scopeCredit(f, root),
+      grant = await service.agents.issue(f.actor, key(), {
+        name: 'Scope assistant',
+        scopes: [
+          'deferrals.proposeScopeReduction',
+          'deferrals.reviseScopeReduction',
+          'deferrals.get',
+          'ledger.post',
+        ],
+        expiresAt: new Date(Date.now() + 3600000).toISOString(),
+      }),
+      publicUrl = 'http://localhost:3000',
+      app = createApp(service, { publicUrl, authSecret: secret }).app,
+      client = new Client(
+        { name: 'benefit-scope-contract', version: '1' },
+        { versionNegotiation: { mode: { pin: '2026-07-28' } } },
+      );
+    await client.connect(
+      new StreamableHTTPClientTransport(
+        new URL(`${publicUrl}/api/accounting/v1/companies/${f.company.id}/mcp`),
+        {
+          authProvider: { token: async () => grant.token },
+          fetch: async (url, init) => {
+            const request = new Request(url, init);
+            request.headers.set('host', new URL(request.url).host);
+            return app.fetch(request);
+          },
+        },
+      ),
+    );
+    async function invoke(name: string, input: unknown, idempotencyKey = key()) {
+      return client.callTool({ name, arguments: { input, idempotencyKey } });
+    }
+    try {
+      expect((await client.listTools()).tools.map((tool) => tool.name)).not.toContain(
+        'books.approve',
+      );
+      const a = proposalOutput.parse(
+        (await invoke('deferrals.proposeScopeReduction', c.input)).structuredContent,
+      );
+      await service.books.approve(f.actor, key(), a.id, { version: a.version, hash: a.hash });
+      const b = proposalOutput.parse(
+        (
+          await invoke('deferrals.reviseScopeReduction', {
+            ...c.input,
+            id: a.id,
+            version: a.version,
+            benefits: benefitRows(['30.00', '30.00'], 1),
+          })
+        ).structuredContent,
+      );
+      expect((await invoke('ledger.post', exact(b))).isError).toBe(true);
+      await service.books.approve(f.actor, key(), b.id, { version: b.version, hash: b.hash });
+      const postKey = key();
+      expect((await invoke('ledger.post', exact(b), postKey)).isError).not.toBe(true);
+      expect(
+        deferralPositionOutput
+          .parse(
+            (await invoke('deferrals.get', { id: root.proposal.id, date: '2026-02-01' }))
+              .structuredContent,
+          )
+          .schedule.map((row) => row.amount),
+      ).toEqual(['20.00', '30.00', '30.00']);
+      await service.agents.revoke(f.actor, key(), grant.id);
+      await expect(invoke('ledger.post', exact(b), postKey)).rejects.toThrow();
+    } finally {
+      await client.close();
+    }
+  });
+});
 
 describe('documented monthly service benefits', () => {
   test.each([
@@ -438,42 +1120,6 @@ describe('documented monthly service benefits', () => {
   test('balanced malformed monthly plans and service proofs fail independent SQLite posting guards', async () => {
     const f = await fixture(),
       root = await prepare(f);
-    async function raw(body: GeneralBody) {
-      const factId = key(),
-        id = key(),
-        hash = sha256(canonical({ kind: 'general', version: 1, body, factId }));
-      await db.orm.insert(facts).values({
-        id: factId,
-        companyId: f.company.id,
-        kind: 'general',
-        evidenceId: body.evidenceId,
-        body,
-        createdBy: ownerId,
-      });
-      await db.orm.insert(proposals).values({
-        id,
-        companyId: f.company.id,
-        factId,
-        kind: 'general',
-        version: 1,
-        hash,
-        body,
-        sourceKey: key(),
-        createdBy: ownerId,
-      });
-      const approval = await service.books.approve(f.actor, key(), id, { version: 1, hash });
-      return db.write((tx) =>
-        postJournal(tx, f.actor, {
-          date: body.date,
-          kind: 'general',
-          sourceId: id,
-          evidenceId: body.evidenceId,
-          description: body.description,
-          lines: body.lines,
-          approvalId: approval.id,
-        }),
-      );
-    }
     const rootMutations: Array<(b: GeneralBody) => void> = [
       (b) => {
         b.invoice!.deferral!.schedule[0].amount = '21.00';
@@ -497,7 +1143,7 @@ describe('documented monthly service benefits', () => {
     for (const mutate of rootMutations) {
       const body = structuredClone(root.proposal.body) as GeneralBody;
       mutate(body);
-      await expect(raw(body)).rejects.toThrow();
+      await expect(postInjected(f, body)).rejects.toThrow();
     }
     await post(f.actor, root.proposal);
     const p = await service.deferrals.proposeRelease(f.actor, key(), {
@@ -527,7 +1173,7 @@ describe('documented monthly service benefits', () => {
     for (const mutate of releaseMutations) {
       const body = structuredClone(p.body) as GeneralBody;
       mutate(body);
-      await expect(raw(body)).rejects.toThrow();
+      await expect(postInjected(f, body)).rejects.toThrow();
     }
     await post(f.actor, p);
   });

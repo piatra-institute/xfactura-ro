@@ -115,7 +115,7 @@ export async function deferralControls(
     if (invoice.direction === 'purchase') prepaid += remaining;
     else deferredRevenue += remaining;
     const schedule =
-      cancellation?.treatment.schemaVersion === 2
+      cancellation && cancellation.treatment.schemaVersion !== 1
         ? cancellation.treatment.afterSchedule
         : (schedules.get(root.record.deferralId)?.body.afterSchedule ?? plan.schedule);
     dueCount += schedule.filter(
@@ -123,7 +123,7 @@ export async function deferralControls(
         row.date <= date &&
         row.amount !== '0.00' &&
         (!cancellation ||
-          cancellation.treatment.schemaVersion === 2 ||
+          cancellation.treatment.schemaVersion !== 1 ||
           row.month < cancellation.fromMonth) &&
         !months.has(`${root.record.deferralId}:${row.month}`),
     ).length;

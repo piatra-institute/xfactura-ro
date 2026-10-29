@@ -35,6 +35,7 @@ test.each([
   { baseline: 35 },
   { baseline: 36 },
   { baseline: 38 },
+  { baseline: 39 },
 ])(
   'populated 00$baseline subscription books and a pending exact approval survive later migrations',
   async ({ baseline }) => {
@@ -134,8 +135,17 @@ test.each([
           account: '628',
           deduction: 'full',
           counterpartyVatCollection: 'no',
-          basis: 'uniform_subscription',
-          method: 'equal_calendar_months',
+          basis: baseline === 39 ? 'documented_monthly_benefits' : 'uniform_subscription',
+          method: baseline === 39 ? 'evidenced_monthly_amounts' : 'equal_calendar_months',
+          ...(baseline === 39
+            ? {
+                benefits: ['33.33', '33.33', '33.34'].map((amount, index) => ({
+                  month: `2026-0${index + 1}-01`,
+                  amount,
+                  benefit: `Explicit monthly service ${index + 1} before the scope upgrade`,
+                })),
+              }
+            : {}),
           serviceFrom: '2026-01-01',
           serviceTo: '2026-03-31',
           evidenceDate: '2026-01-01',
@@ -145,36 +155,52 @@ test.each([
         interpretation = generalBodySchema.parse(root.body).invoice!;
       // Serialize the old contract against the old schema; the new cancellation table does not exist yet.
       async function oldRelease(month: string, date: string, shouldPost: boolean) {
-        const body = generalBody({
-          financialYearId: year.id,
-          evidenceId: proof.id,
-          date,
-          purpose: 'general',
-          description: `Cheltuială aferentă perioadei · PRE-UPGRADE · ${month.slice(0, 7)}`,
-          sourceReference: `deferral-release:${root.id}:${month}`,
-          lines: [
-            { account: '628', debit: '33.33', credit: '0.00' },
-            { account: '471', debit: '0.00', credit: '33.33' },
-          ],
-          deferralRelease: {
-            schemaVersion: 1,
-            deferralId: root.id,
-            month,
+        const confirmation =
+            baseline === 39
+              ? await retain(
+                  `confirmation-${month}.txt`,
+                  `Services completed and accepted on ${date} before upgrade`,
+                )
+              : undefined,
+          body = generalBody({
+            financialYearId: year.id,
+            evidenceId: confirmation?.id ?? proof.id,
             date,
-            amount: '33.33',
-            sourceInvoiceId: invoice.id,
-            sourceJournalId: rootEntry.id,
-            sourceFinancialYearId: year.id,
-            sourceProposalHash: root.hash,
-            evidenceHash: proof.hash,
-            direction: 'purchase',
-            account: '628',
-            controlAccount: '471',
-            ruleId: interpretation.ruleId,
-            ruleHash: interpretation.ruleHash,
-            registrationIds: interpretation.registrationIds,
-          },
-        });
+            purpose: 'general',
+            description: `Cheltuială aferentă perioadei · PRE-UPGRADE · ${month.slice(0, 7)}`,
+            sourceReference: `deferral-release:${root.id}:${month}`,
+            lines: [
+              { account: '628', debit: '33.33', credit: '0.00' },
+              { account: '471', debit: '0.00', credit: '33.33' },
+            ],
+            deferralRelease: {
+              schemaVersion: 1,
+              deferralId: root.id,
+              month,
+              date,
+              amount: '33.33',
+              sourceInvoiceId: invoice.id,
+              sourceJournalId: rootEntry.id,
+              sourceFinancialYearId: year.id,
+              sourceProposalHash: root.hash,
+              evidenceHash: proof.hash,
+              direction: 'purchase',
+              account: '628',
+              controlAccount: '471',
+              ruleId: interpretation.ruleId,
+              ruleHash: interpretation.ruleHash,
+              registrationIds: interpretation.registrationIds,
+              ...(confirmation
+                ? {
+                    benefitEvidence: {
+                      evidenceId: confirmation.id,
+                      evidenceDate: date,
+                      evidenceHash: confirmation.hash,
+                    },
+                  }
+                : {}),
+            },
+          });
         const proposal = await db.write(async (tx) => {
           const factId = key(),
             hash = sha256(canonical({ kind: 'general', version: 1, body, factId }));
@@ -182,7 +208,7 @@ test.each([
             id: factId,
             companyId: company.id,
             kind: 'general',
-            evidenceId: proof.id,
+            evidenceId: body.evidenceId,
             body,
             createdBy: actor.actorId,
           });
@@ -213,7 +239,7 @@ test.each([
               kind: 'general',
               sourceId: proposal.id,
               approvalId: approval.id,
-              evidenceId: proof.id,
+              evidenceId: body.evidenceId,
               description: body.description,
               lines: body.lines,
             }),

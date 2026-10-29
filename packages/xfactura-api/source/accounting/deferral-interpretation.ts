@@ -6,6 +6,7 @@ import {
   allocationSchedule,
   actualDaySchedule,
   evidencedSchedule,
+  generalBodySchema,
   canonical,
   deferralInput,
   deferralReleaseSchema,
@@ -254,7 +255,7 @@ export async function interpretDeferralRelease(
   requireCondition(allocation, 'DEFERRAL_MONTH', 'Luna nu aparține planului de alocare.');
   requireCondition(
     !state.cancellation ||
-      state.cancellation.treatment.schemaVersion === 2 ||
+      state.cancellation.treatment.schemaVersion !== 1 ||
       input.month < state.cancellation.record.fromMonth,
     'DEFERRAL_MONTH_CANCELLED',
     'Serviciile din această lună au fost anulate.',
@@ -281,6 +282,9 @@ export async function interpretDeferralRelease(
   await checkDeferralSource(tx, actor, state);
   let benefitEvidence;
   if (state.treatment.schemaVersion === 3) {
+    const cancellationBody = state.cancellation
+      ? generalBodySchema.parse(state.cancellation.body)
+      : undefined;
     requireCondition(
       input.benefitEvidence,
       'DEFERRAL_BENEFIT_EVIDENCE',
@@ -301,6 +305,8 @@ export async function interpretDeferralRelease(
         state.invoice.evidenceId,
         state.interpretation.treatmentEvidenceId,
         ...state.reschedules.map((row) => row.evidenceId),
+        cancellationBody?.evidenceId,
+        cancellationBody?.invoice?.treatmentEvidenceId,
       ].includes(source.id) &&
         input.benefitEvidence.evidenceDate >=
           ('serviceTo' in allocation && typeof allocation.serviceTo === 'string'
