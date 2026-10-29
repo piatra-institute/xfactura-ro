@@ -513,7 +513,7 @@ export class Capabilities {
         (actor, key, body) => service.deferrals.proposeDiscount(actor, key, body),
       ),
       'deferrals.proposeReschedule': define(
-        'Prepare a prospective service schedule from a separate agreement. Preserve the original method, price, recognized prefix and VAT. Evidenced monthly amounts require explicit benefits for the unchanged future value. Returns an exact action review; human approval and reviews.execute apply it without a journal entry.',
+        'Prepare a prospective service schedule from a separate agreement. Preserve the original method, recognized prefix, billed value, scope credits and VAT. After a partial cancellation, redistribute only the reduced future balance; full cancellation cannot be rescheduled. Evidenced monthly amounts require explicit benefits for that remaining value. Returns an exact action review; human approval and reviews.execute apply it without a journal entry.',
         deferralRescheduleInput,
         reviewOutput,
         (actor, key, body) =>

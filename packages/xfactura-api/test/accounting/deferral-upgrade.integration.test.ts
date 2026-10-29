@@ -17,6 +17,8 @@ import {
   commands,
   deferralPostings,
   deferralReleases,
+  actionReviews,
+  deferralReschedules,
   evidence,
   facts,
   invoiceDocuments,
@@ -36,8 +38,9 @@ test.each([
   { baseline: 36 },
   { baseline: 38 },
   { baseline: 39 },
+  { baseline: 40 },
 ])(
-  'populated 00$baseline subscription books and a pending exact approval survive later migrations',
+  'populated 00$baseline subscription books and exact approvals survive later migrations',
   async ({ baseline }) => {
     const directory = await mkdtemp(join(tmpdir(), 'xfactura-deferral-upgrade-')),
       db = new Database(`file:${directory}/books.db`),
@@ -247,8 +250,34 @@ test.each([
         return proposal;
       }
       await oldRelease('2026-01-01', '2026-01-31', true);
-      const pending = await oldRelease('2026-02-01', '2026-02-28', false),
-        tables = {
+      const pending = await oldRelease('2026-02-01', '2026-02-28', baseline === 40);
+      let pendingCalendar;
+      if (baseline === 40) {
+        const agreement = await retain(
+          'calendar.txt',
+          'Separate future calendar agreement approved before the database upgrade',
+        );
+        pendingCalendar = await service.reviews.request(actor, key(), {
+          operation: 'deferrals.reschedule',
+          input: {
+            financialYearId: year.id,
+            deferralId: root.id,
+            date: '2026-03-01',
+            effectiveFrom: '2026-03-01',
+            serviceTo: '2026-04-30',
+            evidenceId: agreement.id,
+            evidenceDate: '2026-03-01',
+            method: 'equal_calendar_months',
+            priceUnchanged: true,
+            reason: 'Preserve January and February while changing only future service dates',
+          },
+        });
+        await service.reviews.approve(actor, key(), {
+          id: pendingCalendar.id,
+          hash: pendingCalendar.hash,
+        });
+      }
+      const tables = {
           commands,
           evidence,
           facts,
@@ -260,6 +289,7 @@ test.each([
           invoicePostings,
           deferralPostings,
           deferralReleases,
+          ...(baseline === 40 ? { actionReviews, deferralReschedules } : {}),
         },
         preserved = new Map<string, unknown>();
       for (const [name, table] of Object.entries(tables))
@@ -272,6 +302,19 @@ test.each([
         input = { id: pending.id, version: pending.version, hash: pending.hash },
         entry = await service.ledger.post(actor, commandKey, input);
       expect(await service.ledger.post(actor, commandKey, input)).toEqual(entry);
+      if (pendingCalendar) {
+        const before = await db.orm.select().from(journals),
+          exact = { id: pendingCalendar.id, hash: pendingCalendar.hash },
+          executeKey = key(),
+          result = await service.reviews.execute(actor, executeKey, exact);
+        expect(await service.reviews.execute(actor, executeKey, exact)).toEqual(result);
+        expect(await db.orm.select().from(journals)).toEqual(before);
+        expect(
+          (await service.deferrals.get(actor, { id: root.id, date: '2026-04-30' })).schedule.map(
+            (row) => row.amount,
+          ),
+        ).toEqual(['33.33', '33.33', '16.67', '16.67']);
+      }
       expect(await service.deferrals.get(actor, { id: root.id, date: '2026-02-28' })).toMatchObject(
         {
           allocated: '66.66',

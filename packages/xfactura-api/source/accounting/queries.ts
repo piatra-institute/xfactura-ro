@@ -279,8 +279,17 @@ export function overview(runner: Commands, actor: Actor, financialYearId?: strin
       : [];
     const invoiceIds = [
       ...new Set([
-        ...scheduleReviews.map((row) => deferralRescheduleEffect.parse(row.effect).sourceInvoiceId),
-        ...scheduleHistory.map((row) => row.body.sourceInvoiceId),
+        ...scheduleReviews.flatMap((row) => {
+          const effect = deferralRescheduleEffect.parse(row.effect);
+          return [
+            effect.sourceInvoiceId,
+            ...(effect.scopeCredit ? [effect.scopeCredit.invoiceId] : []),
+          ];
+        }),
+        ...scheduleHistory.flatMap((row) => [
+          row.body.sourceInvoiceId,
+          ...(row.body.scopeCredit ? [row.body.scopeCredit.invoiceId] : []),
+        ]),
         ...proposed.flatMap(({ body }) => [
           ...('deferralRelease' in body && body.deferralRelease
             ? [body.deferralRelease.sourceInvoiceId]

@@ -1,6 +1,6 @@
 import { and, eq, gte, lte, sql } from 'drizzle-orm';
 import type { Transaction } from './db';
-import { fromBani, generalBodySchema, toBani } from './domain';
+import { effectiveDeferralSchedule, fromBani, generalBodySchema, toBani } from './domain';
 import {
   deferralPostings,
   deferralReleases,
@@ -114,10 +114,16 @@ export async function deferralControls(
       (cancellation?.amountBani ?? 0n);
     if (invoice.direction === 'purchase') prepaid += remaining;
     else deferredRevenue += remaining;
-    const schedule =
-      cancellation && cancellation.treatment.schemaVersion !== 1
-        ? cancellation.treatment.afterSchedule
-        : (schedules.get(root.record.deferralId)?.body.afterSchedule ?? plan.schedule);
+    const schedule = effectiveDeferralSchedule(
+      plan.schedule,
+      schedules.get(root.record.deferralId)?.body,
+      cancellation
+        ? {
+            journalId: cancellation.journalId,
+            treatment: cancellation.treatment,
+          }
+        : undefined,
+    );
     dueCount += schedule.filter(
       (row) =>
         row.date <= date &&

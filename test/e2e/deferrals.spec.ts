@@ -936,7 +936,7 @@ test('reviews a subscription schedule and next-year allocation, with a keyboard 
     .click();
   await benefitScopeCard.getByRole('button', { name: 'Contabilizează', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('contabilizată');
-  await invoke('ledger.post', {
+  const benefitScopeEntry = await invoke('ledger.post', {
     id: benefitScope.id,
     version: benefitScope.version,
     hash: benefitScope.hash,
@@ -948,10 +948,61 @@ test('reviews a subscription schedule and next-year allocation, with a keyboard 
     remaining: '60.00',
     cancellation: { kind: 'scope_reduction' },
   });
+  const reducedCalendarAgreement = await source(
+    'calendar-sold-redus.txt',
+    'Separate timing agreement redistributes only the reduced future balance and preserves the posted credit and January',
+  );
+  await invoke(
+    'deferrals.proposeReschedule',
+    {
+      financialYearId: nextYear.id,
+      deferralId: benefitRoot.id,
+      date: '2026-02-01',
+      effectiveFrom: '2026-02-01',
+      serviceTo: '2026-05-10',
+      evidenceId: reducedCalendarAgreement.id,
+      evidenceDate: '2026-02-01',
+      method: 'evidenced_monthly_amounts',
+      benefits: ['2026-02-01', '2026-03-01', '2026-04-01', '2026-05-01'].map((month) => ({
+        month,
+        amount: '15.00',
+        benefit: 'Servicii reprogramate după reducerea documentată',
+      })),
+      priceUnchanged: true,
+      reason: 'Reprogramarea soldului redus de 60 RON, cu factura, reducerea și ianuarie păstrate',
+    },
+    grant.token,
+  );
+  await page.reload();
+  const reducedCalendarCard = page.locator('[data-review-kind="reschedule"]'),
+    reducedCalendarTable = reducedCalendarCard.getByRole('table', { name: 'Calendar de alocare' });
+  await expect(reducedCalendarCard).toContainText('Reducere înregistrată');
+  await expect(reducedCalendarCard).toContainText('60,00');
+  await expect(reducedCalendarTable.locator('tbody tr')).toHaveCount(5);
+  await expect(reducedCalendarTable.locator('tbody tr').nth(0)).toContainText(benefits[0].benefit);
+  await expect(reducedCalendarTable.locator('tbody tr').nth(1)).toContainText('20,00');
+  await expect(reducedCalendarTable.locator('tbody tr').nth(1)).toContainText('15,00');
+  await page.screenshot({
+    path: info.outputPath(`reduced-calendar-${info.project.name}.png`),
+    fullPage: true,
+  });
+  await reducedCalendarCard
+    .getByRole('button', { name: 'BENEFICII-REDUCERE', exact: true })
+    .focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator(`#journal-${benefitScopeEntry.id}`)).toHaveAttribute('open', '');
+  await expect(page.locator(`#journal-${benefitScopeEntry.id}`).locator('summary')).toBeFocused();
+  await page.goto(`/contabilitate?company=${companyId}&financialYearId=${nextYear.id}`);
+  const entriesBeforeCalendar = (await invoke('journals.list', { limit: 100 })).items.length;
+  await reducedCalendarCard.getByRole('button', { name: 'Aprobă acest plan', exact: true }).click();
+  await reducedCalendarCard.getByRole('button', { name: 'Aplică planul', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Calendarul de alocare a fost actualizat');
+  expect((await invoke('journals.list', { limit: 100 })).items).toHaveLength(entriesBeforeCalendar);
   for (const [month, date] of [
     ['2026-02-01', '2026-02-28'],
     ['2026-03-01', '2026-03-31'],
-    ['2026-04-01', '2026-04-10'],
+    ['2026-04-01', '2026-04-30'],
+    ['2026-05-01', '2026-05-10'],
   ]) {
     const confirmation = await source(
       `confirmare-${month}.txt`,
@@ -970,13 +1021,13 @@ test('reviews a subscription schedule and next-year allocation, with a keyboard 
       ),
     );
   }
-  expect(await invoke('deferrals.get', { id: benefitRoot.id, date: '2026-04-30' })).toMatchObject({
+  expect(await invoke('deferrals.get', { id: benefitRoot.id, date: '2026-05-31' })).toMatchObject({
     allocated: '80.00',
     cancelled: '20.00',
     remaining: '0.00',
   });
   expect(
-    await invoke('deferrals.reconcile', { financialYearId: nextYear.id, date: '2026-04-30' }),
+    await invoke('deferrals.reconcile', { financialYearId: nextYear.id, date: '2026-05-31' }),
   ).toMatchObject({ status: 'reconciled' });
   expect(await invoke('vat.summary', { financialYearId: nextYear.id })).toMatchObject({
     status: 'reconciled',

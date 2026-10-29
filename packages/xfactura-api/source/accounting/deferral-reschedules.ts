@@ -5,6 +5,7 @@ import {
   allocationSchedule,
   actualDaySchedule,
   evidencedSchedule,
+  generalBodySchema,
   canonical,
   deferralRescheduleEffect,
   deferralRescheduleInput,
@@ -17,7 +18,7 @@ import { deferralSchedule, loadDeferrals } from './deferral-state';
 import { checkDeferralHorizon, checkDeferralSource, openMonth } from './deferral-interpretation';
 import { creditSnapshot, invoicePosition } from './invoice-positions';
 import { financialYearForDate, regimesAt } from './foundation';
-import { deferralReschedules, evidence, periods } from './schema';
+import { deferralReschedules, deferralReleases, journals, evidence, periods } from './schema';
 
 /** Prospective benefit timing only: no new price, VAT, invoice position or journal entry. */
 export async function previewDeferralReschedule(tx: Transaction, actor: Actor, input: unknown) {
@@ -38,9 +39,9 @@ export async function previewDeferralReschedule(tx: Transaction, actor: Actor, i
   await openMonth(tx, actor.companyId, body.date);
   await checkDeferralSource(tx, actor, state);
   requireCondition(
-    !state.cancellation,
+    !state.cancellation || state.cancellation.treatment.schemaVersion !== 1,
     'DEFERRAL_ALREADY_CANCELLED',
-    'Serviciile au deja o anulare totală sau parțială. O altă modificare necesită un tratament distinct.',
+    'Serviciile viitoare sunt anulate integral; calendarul nu mai poate fi modificat.',
     409,
   );
   const latest = state.reschedules.at(-1),
@@ -78,6 +79,36 @@ export async function previewDeferralReschedule(tx: Transaction, actor: Actor, i
     'DEFERRAL_RESCHEDULE_EVIDENCE',
     'Păstrați separat noul acord privind perioada serviciilor.',
   );
+  const cancellationBody = state.cancellation
+    ? generalBodySchema.parse(state.cancellation.body)
+    : undefined;
+  if (state.cancellation) {
+    const [priorConfirmation] = await tx
+      .select({ id: journals.id })
+      .from(deferralReleases)
+      .innerJoin(
+        journals,
+        and(
+          eq(journals.companyId, deferralReleases.companyId),
+          eq(journals.id, deferralReleases.journalId),
+        ),
+      )
+      .where(
+        and(
+          eq(deferralReleases.companyId, actor.companyId),
+          eq(deferralReleases.deferralId, body.deferralId),
+          eq(journals.evidenceId, body.evidenceId),
+        ),
+      )
+      .limit(1);
+    requireCondition(
+      ![cancellationBody?.evidenceId, cancellationBody?.invoice?.treatmentEvidenceId].includes(
+        body.evidenceId,
+      ) && !priorConfirmation,
+      'DEFERRAL_RESCHEDULE_EVIDENCE',
+      'Păstrați noul acord separat de reducere și de confirmările serviciilor.',
+    );
+  }
   const released = new Set(state.releases.map((row) => row.record.month));
   requireCondition(
     !state.releases.some((row) => row.record.month >= body.effectiveFrom),
@@ -167,6 +198,16 @@ export async function previewDeferralReschedule(tx: Transaction, actor: Actor, i
     registrationIds: [...registrationIds].sort(),
     beforeSchedule,
     afterSchedule,
+    ...(state.cancellation && cancellationBody
+      ? {
+          scopeCredit: {
+            journalId: state.cancellation.record.journalId,
+            invoiceId: state.cancellation.record.creditInvoiceId,
+            financialYearId: cancellationBody.financialYearId,
+            amount: fromBani(state.cancellation.record.amountBani),
+          },
+        }
+      : {}),
   });
 }
 

@@ -467,7 +467,31 @@ export const deferralRescheduleEffect = deferralRescheduleInput
     registrationIds: z.array(idSchema).min(1).max(128),
     beforeSchedule: z.array(deferralScheduleRowSchema).min(1).max(60),
     afterSchedule: z.array(deferralScheduleRowSchema).min(1).max(60),
+    scopeCredit: z
+      .object({
+        journalId: idSchema,
+        invoiceId: idSchema,
+        financialYearId: idSchema,
+        amount: moneySchema,
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type DeferralRescheduleInput = z.infer<typeof deferralRescheduleInput>;
 export type DeferralRescheduleEffect = z.infer<typeof deferralRescheduleEffect>;
+
+/** A calendar can replace a reduced plan only when it explicitly binds that posted scope credit. */
+export function effectiveDeferralSchedule(
+  original: z.infer<typeof deferralScheduleRowSchema>[],
+  amendment: DeferralRescheduleEffect | undefined,
+  cancellation?: { journalId: string; treatment: z.infer<typeof deferralCreditSchema> },
+) {
+  if (
+    cancellation &&
+    cancellation.treatment.schemaVersion !== 1 &&
+    amendment?.scopeCredit?.journalId !== cancellation.journalId
+  )
+    return cancellation.treatment.afterSchedule;
+  return amendment?.afterSchedule ?? original;
+}

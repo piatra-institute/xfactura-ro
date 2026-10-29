@@ -32,6 +32,7 @@ function AllocationValue({ row }: { row?: DeferralRescheduleEffect['beforeSchedu
 }
 
 export function RescheduleDetails({ state, effect, showJournal }: Props) {
+  const scopeCredit = effect.scopeCredit;
   const before = new Map(effect.beforeSchedule.map((row) => [row.month, row]));
   const after = new Map(effect.afterSchedule.map((row) => [row.month, row]));
   const months = [...new Set([...before.keys(), ...after.keys()])].sort();
@@ -66,6 +67,12 @@ export function RescheduleDetails({ state, effect, showJournal }: Props) {
           <dt>Preț și TVA</dt>
           <dd>Neschimbate</dd>
         </div>
+        {scopeCredit ? (
+          <div>
+            <dt>Reducere înregistrată</dt>
+            <dd>{formatMoney(scopeCredit.amount)}</dd>
+          </div>
+        ) : null}
         {effect.method === 'actual_calendar_days' ? (
           <div>
             <dt>Alocare</dt>
@@ -93,6 +100,14 @@ export function RescheduleDetails({ state, effect, showJournal }: Props) {
         >
           {state.invoiceLabels[effect.sourceInvoiceId]?.number ?? 'Factura originală'}
         </button>
+        {scopeCredit ? (
+          <button
+            className="acc-secondary"
+            onClick={() => showJournal(scopeCredit.journalId, scopeCredit.financialYearId)}
+          >
+            {state.invoiceLabels[scopeCredit.invoiceId]?.number ?? 'Factura de reducere'}
+          </button>
+        ) : null}
       </div>
       <div className="acc-table-scroll">
         <table>

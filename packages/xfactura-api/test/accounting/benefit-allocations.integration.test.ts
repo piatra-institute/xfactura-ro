@@ -492,7 +492,7 @@ describe('partial cancellation of documented monthly benefits', () => {
     await expect(
       service.deferrals.proposeScopeReduction(f.actor, key(), credit.input),
     ).rejects.toMatchObject({ code: 'DEFERRAL_ALREADY_CANCELLED' });
-    await expect(amend(f, root)).rejects.toMatchObject({ code: 'DEFERRAL_ALREADY_CANCELLED' });
+    await expect(amend(f, root)).rejects.toMatchObject({ code: 'DEFERRAL_BENEFIT_AMOUNT' });
   });
 
   test('a reduction follows the exact reviewed calendar and supersedes obsolete release approvals', async () => {
@@ -787,8 +787,37 @@ describe('partial cancellation of documented monthly benefits', () => {
       prepareKey = key(),
       p = await service.deferrals.proposeScopeReduction(f.actor, prepareKey, c.input),
       postKey = key(),
-      posted = await post(f.actor, p, postKey),
-      state = await service.deferrals.get(f.actor, { id: root.proposal.id, date: '2026-02-01' });
+      posted = await post(f.actor, p, postKey);
+    const timing = await source(
+        f.actor,
+        'Separate agreement changes only the calendar of the large reduced balance',
+      ),
+      calendar = reviewOutput.parse(
+        await service.capabilities.invoke(f.actor, 'deferrals.proposeReschedule', key(), {
+          financialYearId: f.financialYear.id,
+          deferralId: root.proposal.id,
+          date: '2026-02-01',
+          effectiveFrom: '2026-02-01',
+          serviceTo: '2026-04-10',
+          evidenceId: timing.id,
+          evidenceDate: '2026-02-01',
+          method: 'evidenced_monthly_amounts',
+          benefits: benefitRows(['40.00', '20.00', '19.94'], 1),
+          priceUnchanged: true,
+          reason: 'Preserve the exact large recognized prefix and the posted scope credit',
+        }),
+      );
+    await apply(f, calendar);
+    const state = await service.deferrals.get(f.actor, {
+      id: root.proposal.id,
+      date: '2026-02-01',
+    });
+    expect(state.schedule.map((row) => row.amount)).toEqual([
+      '9007199254740900.01',
+      '40.00',
+      '20.00',
+      '19.94',
+    ]);
     expect(state).toMatchObject({
       cancelled: '20.00',
       remaining: '79.94',

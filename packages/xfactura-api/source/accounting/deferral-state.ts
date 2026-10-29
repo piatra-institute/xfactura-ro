@@ -1,9 +1,10 @@
-import { and, asc, eq, exists, gte, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, exists, gte, inArray, isNull, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
 import type { Transaction } from './db';
 import {
   canonical,
   deferralRescheduleEffect,
+  effectiveDeferralSchedule,
   fromBani,
   generalBodySchema,
   requireCondition,
@@ -169,14 +170,21 @@ export async function loadDeferrals(tx: Transaction, companyId: string, ids: str
 }
 export type DeferralState = Awaited<ReturnType<typeof loadDeferrals>>[number];
 export function deferralSchedule(state: DeferralState, date?: string) {
-  if (
-    state.cancellation &&
-    state.cancellation.treatment.schemaVersion !== 1 &&
-    (!date || state.cancellation.date <= date)
-  )
-    return state.cancellation.treatment.afterSchedule;
   const latest = state.reschedules.filter((row) => !date || row.date <= date).at(-1);
-  return latest?.body.afterSchedule ?? state.treatment.schedule;
+  const cancellation =
+    state.cancellation && (!date || state.cancellation.date <= date)
+      ? state.cancellation
+      : undefined;
+  return effectiveDeferralSchedule(
+    state.treatment.schedule,
+    latest?.body,
+    cancellation
+      ? {
+          journalId: cancellation.record.journalId,
+          treatment: cancellation.treatment,
+        }
+      : undefined,
+  );
 }
 export function rescheduleContext(state: DeferralState) {
   const latest = state.reschedules.at(-1);
@@ -186,20 +194,46 @@ export function rescheduleReviewSuperseded(tx: Transaction) {
   return and(
     eq(actionReviews.operation, 'deferrals.reschedule'),
     isNull(actionReviews.executedAt),
-    exists(
-      tx
-        .select({ id: deferralReschedules.id })
-        .from(deferralReschedules)
-        .where(
-          and(
-            eq(deferralReschedules.companyId, actionReviews.companyId),
-            sql`${deferralReschedules.deferralId}=json_extract(${actionReviews.effect},'$.deferralId')`,
-            gte(
-              deferralReschedules.sequence,
-              sql<number>`json_extract(${actionReviews.effect},'$.sequence')`,
+    or(
+      exists(
+        tx
+          .select({ id: deferralReschedules.id })
+          .from(deferralReschedules)
+          .where(
+            and(
+              eq(deferralReschedules.companyId, actionReviews.companyId),
+              sql`${deferralReschedules.deferralId}=json_extract(${actionReviews.effect},'$.deferralId')`,
+              gte(
+                deferralReschedules.sequence,
+                sql<number>`json_extract(${actionReviews.effect},'$.sequence')`,
+              ),
             ),
           ),
-        ),
+      ),
+      exists(
+        tx
+          .select({ id: deferralCancellations.journalId })
+          .from(deferralCancellations)
+          .innerJoin(
+            journals,
+            and(
+              eq(journals.companyId, deferralCancellations.companyId),
+              eq(journals.id, deferralCancellations.journalId),
+            ),
+          )
+          .innerJoin(
+            proposals,
+            and(eq(proposals.companyId, journals.companyId), eq(proposals.id, journals.sourceId)),
+          )
+          .where(
+            and(
+              eq(deferralCancellations.companyId, actionReviews.companyId),
+              sql`${deferralCancellations.deferralId}=json_extract(${actionReviews.effect},'$.deferralId')`,
+              sql`json_extract(${proposals.body},'$.invoice.deferralCredit.schemaVersion') in (2,3)`,
+              sql`json_extract(${actionReviews.effect},'$.scopeCredit.journalId') is not ${deferralCancellations.journalId}`,
+            ),
+          ),
+      ),
     ),
   )!;
 }

@@ -682,8 +682,12 @@ describe('credit-backed future-service scope reductions', () => {
     expect(
       await service.deferrals.get(f.actor, { id: root.proposal.id, date: '2026-03-01' }),
     ).toMatchObject({ serviceTo: '2026-04-10', allocation: { serviceDays: 85 } });
-    await expect(amend(f, root, { serviceTo: '2026-05-10' })).rejects.toMatchObject({
-      code: 'DEFERRAL_ALREADY_CANCELLED',
+    const later = await amend(f, root, { serviceTo: '2026-05-10' });
+    expect(later.effect.scopeCredit?.amount).toBe('20.00');
+    await service.reviews.reject(f.actor, key(), {
+      id: later.review.id,
+      hash: later.review.hash,
+      reason: 'The later extension is not agreed; preserve the current reduced calendar',
     });
     const again = await scopeCredit(f, root);
     await expect(
