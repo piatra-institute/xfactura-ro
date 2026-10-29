@@ -64,6 +64,20 @@
       "when": 1793301318830,
       "tag": "0008_employee_details",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1793303042471,
+      "tag": "0009_anaf_connections",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1793303194828,
+      "tag": "0010_party_cnps",
+      "breakpoints": true
     }
   ]
 }

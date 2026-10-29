@@ -9,6 +9,7 @@ import {
   actionExecutions,
   actionRequests,
   agentGrants,
+  anafConnections,
   artifactEvents,
   assetEvents,
   assets,
@@ -30,6 +31,7 @@ import {
   lines,
   memberships,
   parties,
+  partyCnps,
   partyVersions,
   payrollLines,
   payrollRunEvents,
@@ -1788,6 +1790,35 @@ describe('append-only records', () => {
     await spv.step(await spv.submit(), 1, 'authorized');
     await (await payrollRecords(world)).line();
     await (await assetRecord(world)).dispose(1, '2026-06-30');
+    const shareholder = randomUUID();
+    await world.db.write(async (tx) => {
+      await tx.insert(parties).values({
+        id: shareholder,
+        companyId: world.company,
+        kind: 'ro_individual',
+        country: 'RO',
+        name: 'Asociat',
+        createdBy: world.owner,
+      });
+      await tx.insert(partyCnps).values({
+        companyId: world.company,
+        partyId: shareholder,
+        cnpSealed: 'v1.a.b.c',
+        createdBy: world.owner,
+      });
+    });
+    await world.db.write((tx) =>
+      tx.insert(anafConnections).values({
+        companyId: world.company,
+        seq: 1,
+        environment: 'test',
+        accessSealed: 'v1.a.b.c',
+        refreshSealed: 'v1.a.b.c',
+        accessExpiresAt: 1,
+        refreshExpiresAt: 1,
+        createdBy: world.owner,
+      }),
+    );
     await world.db.write(async (tx) => {
       await tx.insert(spvSyncWindows).values({
         companyId: world.company,

@@ -21,7 +21,14 @@ export type DeductionTable = z.infer<typeof deductionTable>;
 export const supplementaryDeduction = z.object({ youngPercent: percent, perChild: lei }).strict();
 export type SupplementaryDeduction = z.infer<typeof supplementaryDeduction>;
 
-export const minimumWageRelief = z.object({ amount: lei, grossCeiling: lei }).strict();
+export const minimumWageRelief = z
+  .object({
+    amount: lei,
+    grossCeiling: lei,
+    /** A base salary lowered on or after this date loses the relief. */
+    baseFrozenSince: z.iso.date(),
+  })
+  .strict();
 export type MinimumWageRelief = z.infer<typeof minimumWageRelief>;
 
 const rate = (key: string, description: string): ParameterDefinition => ({
@@ -197,15 +204,22 @@ export const payrollVersions: ParameterVersion[] = [
   ]),
   version(
     'ro.payroll.minimum_wage_relief',
-    { amount: '300', grossCeiling: '4300' },
-    ['OUG156/2024:salariul-minim', 'ANAF/D112-0726:salariul-minim'],
+    { amount: '300', grossCeiling: '4300', baseFrozenSince: '2024-12-31' },
+    ['OUG156/2024:art.LXVI'],
+    '2025-01-01',
+    '2025-12-31',
+  ),
+  version(
+    'ro.payroll.minimum_wage_relief',
+    { amount: '300', grossCeiling: '4300', baseFrozenSince: '2025-12-24' },
+    ['OUG89/2025:art.III', 'ANAF/D112-0726:salariul-minim'],
     '2026-01-01',
     '2026-06-30',
   ),
   version(
     'ro.payroll.minimum_wage_relief',
-    { amount: '200', grossCeiling: '4600' },
-    ['OUG89/2025:salariul-minim', 'ANAF/D112-0726:salariul-minim'],
+    { amount: '200', grossCeiling: '4600', baseFrozenSince: '2025-12-24' },
+    ['OUG89/2025:art.III', 'ANAF/D112-0726:salariul-minim'],
     '2026-07-01',
     '2026-12-31',
   ),

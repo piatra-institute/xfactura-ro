@@ -32,5 +32,21 @@ export function config() {
     anafValidatorDir: resolve(
       process.env.ACCOUNTING_ANAF_VALIDATOR_DIR ?? resolve(root, '.validators/anaf/dist'),
     ),
+    /** The application registered on ANAF's portal for OAuth; without it the SPV stays offline.
+     * ANAF's test environment unless ACCOUNTING_ANAF_ENVIRONMENT is `prod`. */
+    anaf:
+      process.env.ACCOUNTING_ANAF_CLIENT_ID &&
+      process.env.ACCOUNTING_ANAF_CLIENT_SECRET &&
+      process.env.ACCOUNTING_ANAF_REDIRECT_URI
+        ? {
+            client: {
+              clientId: process.env.ACCOUNTING_ANAF_CLIENT_ID,
+              clientSecret: process.env.ACCOUNTING_ANAF_CLIENT_SECRET,
+              redirectUri: process.env.ACCOUNTING_ANAF_REDIRECT_URI,
+            },
+            environment: (process.env.ACCOUNTING_ANAF_ENVIRONMENT === 'prod' ? 'prod' : 'test') as
+              'prod' | 'test',
+          }
+        : null,
   };
 }

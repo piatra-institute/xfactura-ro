@@ -44,7 +44,10 @@
     "./ro/treatments/micro-tax": "./src/ro/treatments/micro-tax.ts",
     "./ro/dividends": "./src/ro/dividends.ts",
     "./ro/treatments/dividends": "./src/ro/treatments/dividends.ts",
-    "./ro/treatments/assets": "./src/ro/treatments/assets.ts"
+    "./ro/treatments/assets": "./src/ro/treatments/assets.ts",
+    "./ro/etva": "./src/ro/etva.ts",
+    "./ro/declarations/d205": "./src/ro/declarations/d205.ts",
+    "./ro/declarations/d100": "./src/ro/declarations/d100.ts"
   },
   "dependencies": {
     "@noble/hashes": "2.4.0",

@@ -67,6 +67,32 @@
       "extract": ["D112/D112Validator.jar", "D112/D112Pdf.jar"],
       "into": "dist/lib",
       "flatten": true
+    },
+    {
+      "name": "anaf",
+      "description": "ANAF D100 validator and PDF generator (structure of 14.09.2026, periods from 01/2024)",
+      "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/D100_14092026.zip",
+      "sha256": "92cc8156e3522abc0fef055236598908c2bade3c233f72ff9aaba394e455e24a",
+      "extract": ["D100/D100Validator.jar", "D100/D100Pdf.jar"],
+      "into": "dist/lib",
+      "flatten": true
+    },
+    {
+      "name": "anaf",
+      "description": "ANAF D205 validator and PDF generator (structure of 12.02.2026, reporting years from 2024)",
+      "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/D205_J905.zip",
+      "sha256": "248ef793db0185e336bff76641d7a3288c466a77a141b340c213d890e259b46e",
+      "extract": ["D205Validator.jar", "D205Pdf.jar"],
+      "into": "dist/lib"
+    },
+    {
+      "name": "anaf",
+      "description": "ANAF D406 (SAF-T) validators and PDF generator (16.02.2026)",
+      "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/D406_20260216.zip",
+      "sha256": "ec9c1d1970b7c0560fb76e8c65812f65c79098805f910ec1b6c2a890b8f5c8df",
+      "extract": ["D406/D406Validator.jar", "D406/D406TValidator.jar", "D406/D406Pdf.jar"],
+      "into": "dist/lib",
+      "flatten": true
     }
   ],
   "manual": [

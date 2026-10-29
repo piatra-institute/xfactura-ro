@@ -7,6 +7,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { $ } from 'bun';
+import { anaf, validateAnaf } from './anaf';
 import {
   calculateInvoice,
   fromInvoicer,
@@ -215,9 +216,6 @@ describe('official EN 16931 validation', () => {
 });
 
 // ANAF's DUKIntegrator with the D300, D394 and D112 validators, as installed by `bun run validators:fetch`.
-const duk = path.join(root, '.validators/anaf/dist');
-const anaf =
-  existsSync(path.join(duk, 'DUKIntegrator.jar')) && Bun.which('java') !== null ? test : test.skip;
 
 const vatReturn = (rows: D300['rows'], extra: Partial<D300> = {}): D300 => ({
   period: { year: 2026, month: 9 },
@@ -275,31 +273,6 @@ const vatReturns: Record<string, D300> = {
     { period: { year: 2025, month: 10 } },
   ),
 };
-
-/** DUKIntegrator's verdict per document: "ok", or its errors (E:) and warnings (A:). */
-async function validateAnaf(
-  declaration: 'D300' | 'D394' | 'D112',
-  documents: Record<string, string>,
-) {
-  const directory = await mkdtemp(path.join(tmpdir(), `xfactura-${declaration.toLowerCase()}-`));
-  try {
-    const results = await Promise.all(
-      Object.entries(documents).map(async ([name, xml]) => {
-        const file = path.join(directory, `${name}.xml`);
-        const result = path.join(directory, `${name}.txt`);
-        await writeFile(file, xml);
-        await $`java -Djava.awt.headless=true -jar DUKIntegrator.jar -v ${declaration} ${file} ${result}`
-          .cwd(duk)
-          .nothrow()
-          .quiet();
-        return [name, existsSync(result) ? readFileSync(result, 'utf8').trim() : ''] as const;
-      }),
-    );
-    return Object.fromEntries(results);
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-}
 
 describe('official D300 validation', () => {
   anaf(

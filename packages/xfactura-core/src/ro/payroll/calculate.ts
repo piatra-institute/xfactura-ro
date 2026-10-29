@@ -4,12 +4,20 @@ import { monthStart, type Month } from '../../time';
 import type { DeductionTable, MinimumWageRelief, SupplementaryDeduction } from './parameters';
 
 /**
- * Pay items by how the Fiscal Code treats them: salary in money is in every base; meal and
- * holiday vouchers are salary income for the tax (art. 76 alin. (3) lit. h)) and in the CASS
- * base (art. 157), but not in the CAS or CAM bases (art. 142 lit. r), art. 220^4). Leave pay,
- * sick leave and benefits in kind have their own rules and are not modelled yet.
+ * Pay items by how the Fiscal Code treats them: money paid as salary, bonuses or annual leave pay
+ * is in every base; meal and holiday vouchers are salary income for the tax (art. 76 alin. (3)
+ * lit. h)) and in the CASS base (art. 157), but not in the CAS or CAM bases (art. 142 lit. r),
+ * art. 220^4). Bonuses are kept apart because annual leave pay is averaged without them. Sick
+ * leave and benefits in kind have their own rules and are not modelled yet.
  */
-export const payItemKinds = ['salary', 'meal_vouchers', 'holiday_vouchers'] as const;
+export const payItemKinds = [
+  'salary',
+  'bonus',
+  'leave',
+  'meal_vouchers',
+  'holiday_vouchers',
+] as const;
+const moneyKinds: readonly PayItemKind[] = ['salary', 'bonus', 'leave'];
 export type PayItemKind = (typeof payItemKinds)[number];
 
 /** Why the minimum contribution for the contract's active days does not apply (art. 146 alin.
@@ -42,6 +50,8 @@ export interface PayInput {
   childrenInSchool: number;
   /** Union dues withheld this month, in bani. */
   unionDues: bigint;
+  /** The base salary was lowered since the minimum-wage relief's ordinance: no relief. */
+  baseReduced?: boolean;
   minimumExemption: MinimumExemption | null;
 }
 
@@ -155,9 +165,11 @@ function compute(input: PayInput, rules: RuleContext) {
     return amount;
   };
 
-  const cash = sum(input.items.filter((item) => item.kind === 'salary').map((item) => item.amount));
+  const cash = sum(
+    input.items.filter((item) => moneyKinds.includes(item.kind)).map((item) => item.amount),
+  );
   const vouchers = sum(
-    input.items.filter((item) => item.kind !== 'salary').map((item) => item.amount),
+    input.items.filter((item) => !moneyKinds.includes(item.kind)).map((item) => item.amount),
   );
   const gross = step('gross', cash + vouchers, [code('art.76(3)(h)')]);
   const fullTime = input.dailyHours === 8;
@@ -170,19 +182,21 @@ function compute(input: PayInput, rules: RuleContext) {
       message: 'Salariul de bază este sub salariul minim brut pe țară pentru norma contractului.',
     });
 
-  // The minimum-wage relief: only where the text to obtain (OUG 89/2025) is unambiguous, a full
-  // month of a full-time contract whose base salary is the minimum wage.
+  // The minimum-wage relief (OUG 156/2024 art. LXVI for 2025, OUG 89/2025 art. III for 2026): a
+  // full-time contract at the main job whose base salary is the minimum wage, not lowered since
+  // the ordinance, with salary in money up to the ceiling. For part of a month the law lists what
+  // reduces the amount but not how, so such a month is left to the expert.
   let relief = 0n;
-  if (input.baseSalary * 8n === minimumWage * hours) {
-    if (!fullTime || !input.mainJob || input.activeDays !== input.workingDays)
-      issues.push({
-        code: 'RELIEF_UNSETTLED',
-        message:
-          'Suma neimpozabilă pentru salariul minim, la timp parțial, în afara funcției de bază sau pentru o lună incompletă, se stabilește după textul OUG nr. 89/2025, încă neobținut.',
-      });
-    else {
-      const { amount, grossCeiling } = param<MinimumWageRelief>('ro.payroll.minimum_wage_relief');
-      if (cash <= BigInt(grossCeiling) * 100n) relief = min(BigInt(amount) * 100n, cash);
+  if (fullTime && input.mainJob && !input.baseReduced && input.baseSalary === minimumWage) {
+    const { amount, grossCeiling } = param<MinimumWageRelief>('ro.payroll.minimum_wage_relief');
+    if (cash <= BigInt(grossCeiling) * 100n) {
+      if (input.activeDays !== input.workingDays)
+        issues.push({
+          code: 'RELIEF_UNSETTLED',
+          message:
+            'Suma neimpozabilă pentru salariul minim se diminuează pentru o lună incompletă (OUG nr. 89/2025 art. III alin. (4)), fără ca textul să arate cum: stabiliți-o cu expertul contabil.',
+        });
+      else relief = min(BigInt(amount) * 100n, cash);
     }
   }
   if (relief) step('relief', relief, [D112]);

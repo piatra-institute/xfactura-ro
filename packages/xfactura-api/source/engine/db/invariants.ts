@@ -64,6 +64,8 @@ const appendOnly = [
   'acc_payroll_lines',
   'acc_assets',
   'acc_asset_events',
+  'acc_anaf_connections',
+  'acc_party_cnps',
   'ref_fx_rates',
 ];
 // Tables with narrowly guarded updates (below) that are never deleted from.

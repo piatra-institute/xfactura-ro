@@ -9,11 +9,12 @@ import {
   calculatePay,
   minimumExemptions,
   payItemKinds,
+  type MinimumWageRelief,
   type PayInput,
   type PayIssue,
   type PayResult,
 } from 'xfactura-core/ro/payroll';
-import type { RuleContext } from 'xfactura-core/rules';
+import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
 import { monthEnd, monthStart, type Month } from 'xfactura-core/time';
 import { sha256 } from '../adapters/object-store';
 import type { Transaction } from '../db/database';
@@ -23,10 +24,12 @@ import {
   entries,
   evidence,
   parties,
+  partyCnps,
   payrollLines,
   payrollRunEvents,
   payrollRuns,
   proposals,
+  proposalVersions,
 } from '../db/schema';
 import { appendAudit, type Actor, type Commands } from '../kernel/commands';
 
@@ -45,6 +48,10 @@ export const employeeInput = z
      * OPSNAJ. */
     healthFund: z.string().regex(/^(RO-[A-Z]{1,2}|OPSNAJ)$/),
   })
+  .strict();
+
+export const partyCnpInput = z
+  .object({ partyId: z.uuid(), cnp: z.string().regex(/^\d{13}$/) })
   .strict();
 
 export const termsInput = z
@@ -97,6 +104,9 @@ export const runInput = z
               .optional(),
             /** Only in the month the employee turns 26: whether the young deduction applies. */
             under26: z.boolean().optional(),
+            /** Working days of annual leave, within the active days: without `items`, the leave
+             * pay is computed from the contract's previous three posted months. */
+            leaveDays: z.number().int().min(1).max(23).optional(),
           })
           .strict(),
       )
@@ -113,8 +123,8 @@ export const runIdInput = z.object({ runId: z.uuid() }).strict();
 export class Sealer {
   private readonly key: Buffer;
 
-  constructor(secret: string) {
-    this.key = Buffer.from(hkdfSync('sha256', secret, 'xfactura', 'payroll personal data v1', 32));
+  constructor(secret: string, purpose = 'payroll personal data v1') {
+    this.key = Buffer.from(hkdfSync('sha256', secret, 'xfactura', purpose, 32));
   }
 
   seal(companyId: string, text: string) {
@@ -138,6 +148,39 @@ export class Sealer {
     ]).toString('utf8');
   }
 }
+
+/** The month's posted payroll run: the one its posting read. */
+export async function postedRun(tx: Transaction, companyId: string, month: string) {
+  const [row] = await tx
+    .select({ input: proposalVersions.input })
+    .from(entries)
+    .innerJoin(
+      proposals,
+      and(eq(proposals.companyId, entries.companyId), eq(proposals.id, entries.proposalId)),
+    )
+    .innerJoin(
+      proposalVersions,
+      and(
+        eq(proposalVersions.companyId, entries.companyId),
+        eq(proposalVersions.proposalId, entries.proposalId),
+        eq(proposalVersions.version, entries.version),
+      ),
+    )
+    .where(and(eq(entries.companyId, companyId), eq(proposals.subjectKey, `payroll:${month}:1`)));
+  return row ? (JSON.parse(row.input) as { runId: string }).runId : undefined;
+}
+
+const previousMonth = (month: string, back: number) => {
+  const index = Number(month.slice(0, 4)) * 12 + Number(month.slice(5, 7)) - 1 - back;
+  return `${Math.floor(index / 12)}-${String((index % 12) + 1).padStart(2, '0')}`;
+};
+
+/** `numerator / denominator` bani in whole lei, half up. */
+const wholeLei = (numerator: bigint, denominator: bigint) => {
+  const whole = numerator / (denominator * 100n);
+  const rest = numerator - whole * denominator * 100n;
+  return (2n * rest >= denominator * 100n ? whole + 1n : whole) * 100n;
+};
 
 /** The birth date a CNP encodes, or null when its first digit does not give the century. */
 export function birthDateOf(cnp: string): string | null {
@@ -226,6 +269,53 @@ export class Payroll {
       });
       return { id, partyId, name: existing?.name ?? name };
     });
+  }
+
+  /** An individual partner's CNP (a shareholder's, for D205), sealed. */
+  recordPartyCnp(actor: Actor, key: string, input: z.infer<typeof partyCnpInput>) {
+    return this.commands.run(
+      actor,
+      key,
+      'parties.recordCnp',
+      { partyId: input.partyId },
+      'write',
+      async (tx) => {
+        requireCondition(isValidCnp(input.cnp), 'CNP', 'CNP-ul nu este valid.');
+        const [party] = await tx
+          .select()
+          .from(parties)
+          .where(and(eq(parties.companyId, actor.companyId), eq(parties.id, input.partyId)));
+        requireCondition(
+          party?.kind === 'ro_individual',
+          'PARTY',
+          'Partenerul trebuie să fie o persoană fizică.',
+        );
+        requireCondition(
+          !party.taxId || party.taxId === `cnp:${sha256(new TextEncoder().encode(input.cnp))}`,
+          'CNP_MISMATCH',
+          'CNP-ul nu corespunde partenerului.',
+        );
+        const [existing] = await tx
+          .select({ partyId: partyCnps.partyId })
+          .from(partyCnps)
+          .where(
+            and(eq(partyCnps.companyId, actor.companyId), eq(partyCnps.partyId, input.partyId)),
+          );
+        requireCondition(
+          !existing,
+          'CNP_RECORDED',
+          'CNP-ul partenerului este deja înregistrat.',
+          409,
+        );
+        await tx.insert(partyCnps).values({
+          companyId: actor.companyId,
+          partyId: input.partyId,
+          cnpSealed: this.sealer.seal(actor.companyId, input.cnp),
+          createdBy: actor.actorId,
+        });
+        return { partyId: input.partyId };
+      },
+    );
   }
 
   /** A contract's terms: a new contract, or a new version of an existing one. */
@@ -357,6 +447,17 @@ export class Payroll {
       const start = monthStart(input.month as Month);
       const end = monthEnd(input.month as Month);
       const rules = await this.rules(tx, actor.companyId);
+      // Since when a lowered base salary loses the minimum-wage relief, if the month has one.
+      let frozenSince: string | null = null;
+      try {
+        frozenSince = rules.param<MinimumWageRelief>(
+          'ro.payroll.minimum_wage_relief',
+          'payroll_month_start',
+          start,
+        ).baseFrozenSince;
+      } catch (error) {
+        if (!(error instanceof RuleGapError)) throw error;
+      }
       const allTerms = await tx
         .select()
         .from(employmentTerms)
@@ -413,7 +514,49 @@ export class Payroll {
           });
         else if (activeDays > input.workingDays)
           issues.push({ code: 'DAYS', message: 'Zilele active depășesc zilele lucrătoare.' });
+        let leave: Record<string, string | number> | null = null;
+        let leaveItems: PayInput['items'] | undefined;
+        if (entry?.leaveDays && activeDays !== undefined) {
+          if (entry.leaveDays > activeDays)
+            issues.push({
+              code: 'LEAVE_DAYS',
+              message: 'Zilele de concediu depășesc zilele active.',
+            });
+          else if (!entry.items) {
+            // Codul muncii art. 150: the daily average of the previous three months' pay, at
+            // least the base salary for the leave days; bonuses are not averaged.
+            const history = await this.leaveHistory(tx, actor.companyId, contractId, input.month);
+            const base = terms.baseSalaryBani;
+            const days = BigInt(input.workingDays);
+            const leaveDays = BigInt(entry.leaveDays);
+            const averaged =
+              history.days > 0 && history.amount * days > base * BigInt(history.days);
+            const pay = averaged
+              ? wholeLei(history.amount * leaveDays, BigInt(history.days))
+              : wholeLei(base * leaveDays, days);
+            const worked = wholeLei(base * BigInt(activeDays - entry.leaveDays), days);
+            leaveItems = [
+              ...(worked
+                ? [{ kind: 'salary' as const, amount: worked, label: 'Salariu de bază' }]
+                : []),
+              {
+                kind: 'leave' as const,
+                amount: pay,
+                label: `Concediu de odihnă, ${entry.leaveDays} zile`,
+              },
+            ];
+            leave = {
+              days: entry.leaveDays,
+              basis: averaged ? 'average' : 'base',
+              historyAmount: String(history.amount),
+              historyDays: history.days,
+              months: history.months,
+              clause: 'L53/2003:art.150',
+            };
+          }
+        }
         const items =
+          leaveItems ??
           entry?.items?.map((item) => ({
             kind: item.kind,
             amount: parseMoney(item.amount, 'RON'),
@@ -453,6 +596,15 @@ export class Payroll {
             childrenInSchool: terms.childrenInSchool,
             unionDues: terms.unionDuesBani,
             minimumExemption: (terms.minimumExemption as PayInput['minimumExemption']) ?? null,
+            baseReduced: frozenSince
+              ? versions.some(
+                  (version, index) =>
+                    index > 0 &&
+                    version.effectiveFrom >= frozenSince &&
+                    version.effectiveFrom <= end &&
+                    version.baseSalaryBani < versions[index - 1]!.baseSalaryBani,
+                )
+              : false,
           };
           computed = calculatePay(payInput, rules);
         }
@@ -464,7 +616,10 @@ export class Payroll {
           termsSeq: terms.seq,
           employeeId: terms.employeeId,
           partyId: person.partyId,
-          input: canonical(payInput ?? { activeDays: activeDays ?? null, items: items ?? null }),
+          input: canonical({
+            ...(payInput ?? { activeDays: activeDays ?? null, items: items ?? null }),
+            ...(leave ? { leave } : {}),
+          }),
           result: canonical(
             computed.result
               ? { steps: computed.result.steps, deduction: computed.result.deduction }
@@ -529,6 +684,45 @@ export class Payroll {
       });
       return this.view(tx, actor.companyId, id);
     });
+  }
+
+  /** A contract's pay in money (salary and leave, without bonuses) and active days over the
+   * three months before `month`, from their posted runs. */
+  private async leaveHistory(
+    tx: Transaction,
+    companyId: string,
+    contractId: string,
+    month: string,
+  ) {
+    let amount = 0n;
+    let days = 0;
+    const months: string[] = [];
+    for (const back of [1, 2, 3]) {
+      const previous = previousMonth(month, back);
+      const runId = await postedRun(tx, companyId, previous);
+      if (!runId) continue;
+      const [line] = await tx
+        .select({ input: payrollLines.input, issues: payrollLines.issues })
+        .from(payrollLines)
+        .where(
+          and(
+            eq(payrollLines.companyId, companyId),
+            eq(payrollLines.runId, runId),
+            eq(payrollLines.contractId, contractId),
+          ),
+        );
+      if (!line || line.issues) continue;
+      const stored = JSON.parse(line.input) as {
+        activeDays: number;
+        items: { kind: string; amount: string }[];
+      };
+      amount += stored.items
+        .filter((item) => item.kind === 'salary' || item.kind === 'leave')
+        .reduce((total, item) => total + BigInt(item.amount), 0n);
+      days += stored.activeDays;
+      months.push(previous);
+    }
+    return { amount, days, months: months.join(',') };
   }
 
   getRun(actor: Actor, runId: string) {

@@ -320,6 +320,83 @@ describe('payroll', () => {
     expect((await s.refused(s.post(approved)))?.code).toBe('STALE');
   });
 
+  test('a base salary lowered since the ordinance loses the minimum-wage relief', async () => {
+    const { s, hire, prepare } = await employer();
+    const employee = await hire(['Popa', 'Ion'], cnp('187030412345'), { baseSalary: '4500' });
+    await s.invoke(s.owner, 'payroll.contracts.record', {
+      contractId: employee.contractId,
+      employeeId: employee.id,
+      number: 'CIM-Popa',
+      startDate: '2026-01-05',
+      effectiveFrom: '2026-03-01',
+      baseSalary: '4325',
+      dailyHours: 8,
+      mainJob: true,
+      occupation: '251201',
+    });
+    const [line] = (await prepare()).lines;
+    expect(line).toMatchObject({ cas: '1081.00', cass: '433.00' });
+  });
+
+  test("annual leave is paid at the three months' average, at least the base salary", async () => {
+    const { s, anaf, hire } = await employer();
+    const steady = await hire(['Ene', 'Ana'], cnp('290050112345'), {
+      baseSalary: '6000',
+      startDate: '2026-07-01',
+      effectiveFrom: '2026-07-01',
+    });
+    const lowered = await hire(['Toma', 'Ion'], cnp('188020312345'), {
+      baseSalary: '6600',
+      startDate: '2026-07-01',
+      effectiveFrom: '2026-07-01',
+    });
+    const post = async (month: string, workingDays: number, entries: unknown[] = []) => {
+      const run = await s.invoke<Run>(s.owner, 'payroll.runs.prepare', {
+        month,
+        workingDays,
+        entries,
+      });
+      await s.book('payroll.recognize', { runId: run.id, month, round: 1, authorityId: anaf.id });
+    };
+    await post('2026-07', 23);
+    await post('2026-08', 21);
+    // A bonus is paid but not averaged into the leave pay.
+    await post('2026-09', 22, [
+      {
+        contractId: steady.contractId,
+        items: [
+          { kind: 'salary', amount: '6000', label: 'Salariu de bază' },
+          { kind: 'bonus', amount: '1000', label: 'Primă' },
+        ],
+      },
+    ]);
+    await s.invoke(s.owner, 'payroll.contracts.record', {
+      contractId: lowered.contractId,
+      employeeId: lowered.id,
+      number: 'CIM-Toma',
+      startDate: '2026-07-01',
+      effectiveFrom: '2026-10-01',
+      baseSalary: '6000',
+      dailyHours: 8,
+      mainJob: true,
+      occupation: '251201',
+    });
+    const october = await s.invoke<Run>(s.owner, 'payroll.runs.prepare', {
+      month: '2026-10',
+      workingDays: 22,
+      entries: [
+        { contractId: steady.contractId, leaveDays: 5 },
+        { contractId: lowered.contractId, leaveDays: 5 },
+      ],
+    });
+    // Ene: 6,000 × 17 / 22 = 4,636 worked; leave at the base, 6,000 × 5 / 22 = 1,364.
+    // Toma: 4,636 worked; leave at the average, 19,800 × 5 / 66 = 1,500.
+    expect(october.lines.map((line) => [line.name, line.cash])).toEqual([
+      ['Ene Ana', '6000.00'],
+      ['Toma Ion', '6136.00'],
+    ]);
+  });
+
   test('the month an employee turns 26 asks whether the young deduction applies', async () => {
     const { hire, prepare } = await employer();
     const young = await hire(['Dinu', 'Elena'], cnp('600101512345'), { baseSalary: '5000' });

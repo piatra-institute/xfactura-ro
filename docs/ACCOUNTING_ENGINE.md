@@ -157,6 +157,10 @@ The chart is OMFP 1802/2014 as published, plus the accounts later orders added, 
 - **Disposal:** `assets.dispose` records that an asset left use, with its record; `assets.derecognize` then takes it off the books (Dr 28x depreciation booked, Dr 6583 the value not recovered / Cr its account). Whether the disposal month is depreciated is the company's policy `policy.assets.disposal_month` (included or excluded); without it, depreciation and derecognition of that asset stop. A sale is invoiced separately.
 - Fiscal depreciation (art. 28), revaluation and impairment are not built yet.
 
+### RO e-TVA
+
+`vat.etva.check` compares the period's latest VAT return with the pre-filled return RO e-TVA (P300), row by row: a row differs significantly at both 20% and 1,000 lei (`ro.etva.significance`, OUG 70/2024 art. 5, still in force after OUG 89/2025), on its VAT, or its value where it has none, leaving out regularization rows. Which amount the 20% is taken of the ordinance does not say; the pre-filled one is this engine's reading. The pre-filled amounts are given by hand from the P300 until a P300 file can be read (its format is not published). It also lists the e-Factura invoices of the period that are not in its VAT ledger, and the invoices in the ledger that did not come through e-Factura.
+
 ### `fx.revalue`: month-end revaluation
 
 - **Input:** a month-end date and a round number (a later round re-revalues after further entries).
@@ -208,7 +212,9 @@ The calculation (`xfactura-core/src/ro/payroll`) follows the Fiscal Code article
 - CAS and CASS at least on the minimum wage less the minimum-wage relief, for the contract's active working days and in whole lei, as ANAF's D112 structure computes the limit (4,325 − 200 lei from July 2026), the difference borne by the employer, except in the cases of art. 146 alin. (5^7);
 - the tax base rounded to whole lei with 50 bani and less dropped (the methodological norms), contributions and tax half up (the procedure code's rule, pending its text).
 
-The minimum wage (4,050 lei until June 2026, 4,325 lei from July 2026) and the minimum-wage relief (300 lei up to 4,300 lei gross until June 2026, 200 lei up to 4,600 lei from July) are read in ANAF's D112 structure for 2026; their acts (HG 1506/2024, HG 146/2026, OUG 156/2024, OUG 89/2025) are still to obtain. The relief is applied only where it is unambiguous (a full month of a full-time main-job contract at the minimum wage); otherwise the line is stopped. The Fiscal Code values apply from 2026-01-01, the snapshot's date; earlier months are a rule gap. Leave pay, sick leave and benefits in kind are not built yet.
+The minimum wage is 4,050 lei from 2025 (HG 1506/2024 art. 1) and 4,325 lei from July 2026 (HG 146/2026 art. 1). The minimum-wage relief (OUG 156/2024 art. LXVI for 2025, OUG 89/2025 art. III for 2026) leaves 300 lei a month (200 lei from July 2026) out of every base for a full-time contract at the main job whose base salary is the minimum wage, not lowered since the ordinance, with salary in money (vouchers excluded) up to 4,300 lei (4,600 lei from July 2026). For part of a month the ordinance lists what reduces the amount but not how, so such a month is stopped for the expert. The Fiscal Code values apply from 2026-01-01, the snapshot's date; earlier months are a rule gap.
+
+Annual leave: a run entry gives the leave days; without the month's amounts, the run pays the worked days at the base salary and the leave at the daily average of the contract's previous three posted months (salary and leave pay, without bonuses), at least the base salary for the leave days, both in whole lei (Codul muncii art. 150, a text still to obtain). The computation is kept with the line. Sick leave and benefits in kind are not built yet: sick leave needs OUG 158/2005 as amended in 2026.
 
 CAM is posted on the employer's total base, rounded once, as D112 declares it.
 
@@ -248,11 +254,15 @@ Services across the border are not in it (D390 and D300 report them); acquisitio
 
 **D112 (contributions, wage tax and the insured)** is written by `xfactura-core/src/ro/declarations/d112.ts` from ANAF's structure for months from 07/2026 (namespace v7). From the books it declares the month's posted payroll run: each employee's insured type (51 with the minimum-wage relief), contract and hours, days, bases, contributions withheld and borne by the employer (obligations 458 and 459), deductions, tax and the amount paid, the CNP opened from its seal for the declaration only; CAM is computed once on the employer's total. Amounts must be whole lei. It locks no tax ledger. The unemployment base (A_9) is declared as the salary paid in money, an interpretation awaiting the expert's review.
 
+**D100 (obligations to the state budget)** is written by `xfactura-core/src/ro/declarations/d100.ts` (namespace v2, periods from 01/2026) and prepared for a month from the books: the micro-enterprise tax posted for the quarter (121), in its last month, and the dividend tax withheld in the month, for individuals (604) and companies (150), with, in December, the tax on dividends unpaid at year end. The fourth quarter's micro tax is due by 25 January in ANAF's structure and by 25 June in its validator; the company chooses (`fourthQuarterDue`). A correction of a filed D100 is a separate form (D710), not built yet.
+
+**D205 (tax withheld, by beneficiary)** is written by `xfactura-core/src/ro/declarations/d205.ts` (namespace v3, years 2025–2026) and prepared for a year from the posted dividend withholdings: one record per individual shareholder, with the dividends distributed, paid and unpaid at year end and their tax; companies are not declared in it. An individual's CNP is recorded once (`parties.recordCnp`, kept sealed like employees'). Whether the dividends paid are declared gross or net the instructions do not say: the company chooses (`paidAs`).
+
 Steps are recorded in order, and the database allows only the documented transitions; a tax period is locked only in the name of an authorized return of that tax and period. A rectification is a new return that supersedes the earlier one.
 
 ## e-Factura through the SPV
 
-The engine talks to ANAF through an e-Factura port (upload, status, message list, download). Only a deterministic simulator implements it so far; the live client, with its OAuth authorization, is not built.
+The engine talks to ANAF through an e-Factura port (upload, status, message list, download). The live client (`adapters/anaf-efactura.ts`) calls ANAF's API over OAuth, as the Ministry's presentation of the web services documents it (the upload and status replies' attributes and the list's paging follow the services' Swagger pages and are to be confirmed against a first live response), and keeps ANAF's published call limits itself: 1,000 calls a minute, 100 status questions and 10 downloads a day per message, 100,000 paginated lists a day per CUI. A lost connection or a server error leaves an upload uncertain until the inbox is synced; ANAF's refusal carries its message. With an application registered on ANAF's portal (`ACCOUNTING_ANAF_CLIENT_ID`, `_SECRET`, `_REDIRECT_URI`, `_ENVIRONMENT`), `spv.connect.start` gives the address where the company's representative signs in on logincert.anaf.ro with their certificate, and `spv.connect.finish` keeps the tokens ANAF returns, sealed, renewing the access token before its 90 days end. The engine never sees the certificate. Without it, a deterministic simulator stands in.
 
 - **Submission.** `spv.submit` is human-only and sends an issued document's kept XML. Its steps are recorded in order, and `submitting` is written before the request leaves:
 
@@ -322,8 +332,8 @@ A close records closing balances per account and currency and joins a hash chain
   - invoice-level allowances and charges as separate treatments;
   - CSV bank statements.
 - **Not built yet:**
-  - the live ANAF client and its OAuth authorization, and verification of the Ministry's signature; B2C identification;
-  - VAT categories other than S/O, TVA la încasare, domestic reverse charge, goods across the border, pro-rata; D394 for TVA la încasare, simplified invoices and receipts; e-TVA;
+  - verification of the Ministry's signature; B2C identification;
+  - VAT categories other than S/O, TVA la încasare, domestic reverse charge, goods across the border, pro-rata; D394 for TVA la încasare, simplified invoices and receipts; reading the P300 file;
   - payroll beyond salary in money and vouchers (leave pay, sick leave, benefits in kind, union dues), and corrections of a posted month;
   - asset disposal, revaluation and fiscal depreciation; leasing and loans;
   - stock;

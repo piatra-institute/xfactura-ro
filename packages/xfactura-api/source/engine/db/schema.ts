@@ -1304,6 +1304,44 @@ export const assetEvents = sqliteTable(
   ],
 );
 
+/** The CNP of an individual partner (a shareholder, a buyer), sealed, for the declarations that
+ * must carry it; the party itself keeps only its hash. */
+export const partyCnps = sqliteTable(
+  'acc_party_cnps',
+  {
+    companyId: companyId(),
+    partyId: text('party_id').notNull(),
+    cnpSealed: text('cnp_sealed').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.partyId] }),
+    foreignKey({
+      columns: [t.companyId, t.partyId],
+      foreignColumns: [parties.companyId, parties.id],
+    }),
+  ],
+);
+
+/** A company's connection to ANAF's APIs: OAuth tokens, sealed, one version per grant or
+ * refresh. The certificate that obtained them never reaches the engine. */
+export const anafConnections = sqliteTable(
+  'acc_anaf_connections',
+  {
+    companyId: companyId(),
+    seq: counter('seq').notNull(),
+    environment: text('environment', { enum: ['test', 'prod'] }).notNull(),
+    accessSealed: text('access_sealed').notNull(),
+    refreshSealed: text('refresh_sealed').notNull(),
+    accessExpiresAt: counter('access_expires_at').notNull(),
+    refreshExpiresAt: counter('refresh_expires_at').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.companyId, t.seq] })],
+);
+
 // Payroll: personal data. The CNP is kept sealed (encrypted with the server's key); its hash is
 // the employee's party identity, as for buyers who are individuals.
 

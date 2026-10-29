@@ -17,6 +17,7 @@ export async function mountAccounting(server: Express) {
       ...(DukIntegrator.available(options.anafValidatorDir)
         ? { declarationValidator: new DukIntegrator(options.anafValidatorDir) }
         : {}),
+      ...(options.anaf ? { anaf: options.anaf } : {}),
     }),
     options,
   );

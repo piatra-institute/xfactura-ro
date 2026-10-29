@@ -1,4 +1,6 @@
 import { afterAll, describe, expect, test } from 'bun:test';
+import path from 'node:path';
+import { DukIntegrator } from '../../source/engine/adapters/declaration-validator';
 import type { ProposalView } from '../../source/engine/kernel/views';
 import { invoiceXml } from './fixtures/invoice';
 import { journal, scenario, type Scenario } from './scenario';
@@ -16,8 +18,14 @@ const bnr = `<?xml version="1.0" encoding="utf-8"?>
 <Cube date="2025-12-31"><Rate currency="EUR">5.0800</Rate></Cube>
 </Body></DataSet>`;
 
-async function micro(incomeTax: 'micro' | 'profit' = 'micro') {
-  const s = await scenario();
+const dist = path.join(import.meta.dir, '../../../..', '.validators/anaf/dist');
+const official = DukIntegrator.available(dist) && Bun.which('java') ? test : test.skip;
+
+async function micro(incomeTax: 'micro' | 'profit' = 'micro', validator?: DukIntegrator) {
+  const s = await scenario({
+    cui: '18547290',
+    ...(validator ? { declarationValidator: validator } : {}),
+  });
   open.push(s);
   const record = async (axis: string, value: string) =>
     s.invoke(s.owner, 'profile.record', {
@@ -45,7 +53,15 @@ async function micro(incomeTax: 'micro' | 'profit' = 'micro') {
       filename: `${number}.xml`,
       mediaType: 'application/xml',
       base64: Buffer.from(
-        invoiceXml({ number, direction: 'sale', date: '2026-11-10', net, tax, gross }),
+        invoiceXml({
+          company: '18547290',
+          number,
+          direction: 'sale',
+          date: '2026-11-10',
+          net,
+          tax,
+          gross,
+        }),
       ).toString('base64'),
     });
     const document = await s.invoke<{ id: string }>(s.owner, 'invoices.import', { evidenceId: id });
@@ -112,4 +128,49 @@ describe('micro-enterprise tax', () => {
     await profit.sell('V-3', '1000.00', '210.00', '1210.00');
     expect(codes(await profit.tax())).toContain('NOT_MICRO');
   });
+});
+
+describe('D100 from the books', () => {
+  official(
+    "declares the quarter's micro tax in its last month and passes ANAF's validator",
+    async () => {
+      const { s, sell, tax } = await micro('micro', new DukIntegrator(dist));
+      await s.invoke(s.owner, 'sales.seller.record', {
+        details: {
+          name: 'Exemplu Servicii SRL',
+          vatId: 'RO18547290',
+          address: {
+            lines: ['Str. Lungă 10'],
+            city: 'Galați',
+            subdivision: 'RO-GL',
+            country: 'RO',
+          },
+        },
+      });
+      await sell('V-9', '120000.00', '25200.00', '145200.00');
+      const proposal = await tax();
+      await s.post(await s.approve(proposal, s.reviewer, ['MICRO_EMPLOYEE']));
+      const prepare = (options: Record<string, unknown>) =>
+        s.invoke<{ state: string; steps: { detail: string | null }[] }>(
+          s.owner,
+          'declarations.prepare',
+          {
+            kind: 'D100',
+            period: '2026-12',
+            options: {
+              declarant: { lastName: 'Popescu', firstName: 'Ana', role: 'Administrator' },
+              ...options,
+            },
+          },
+        );
+      expect(JSON.stringify(await s.refused(prepare({})))).toContain('D100_DUE');
+      const prepared = await prepare({ fourthQuarterDue: 'june' });
+      expect(JSON.parse(prepared.steps[0]!.detail!).obligations).toEqual(['micro']);
+      expect([prepared.state, prepared.steps.at(-1)?.detail ?? null]).toEqual([
+        'validated_official',
+        null,
+      ]);
+    },
+    120_000,
+  );
 });

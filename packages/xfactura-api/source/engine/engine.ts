@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
+import { requireCondition } from 'xfactura-core/errors';
 import type { Treatment } from 'xfactura-core/kernel';
 import { vatDefinitions, vatVersions } from 'xfactura-core/ro/vat';
 import { fxDefinitions, fxVersions } from 'xfactura-core/ro/fx';
@@ -16,6 +17,7 @@ import { microTax } from 'xfactura-core/ro/treatments/micro-tax';
 import { assetDepreciation, assetDerecognition } from 'xfactura-core/ro/treatments/assets';
 import { microDefinitions, microVersions } from 'xfactura-core/ro/micro';
 import { dividendDefinitions, dividendVersions } from 'xfactura-core/ro/dividends';
+import { etvaDefinitions, etvaVersions } from 'xfactura-core/ro/etva';
 import { dividendDistribution, dividendWithholding } from 'xfactura-core/ro/treatments/dividends';
 import { ParameterRegister } from 'xfactura-core/rules';
 import { clause, sourceOf } from 'xfactura-core/ro/sources';
@@ -73,6 +75,8 @@ import { d300Declaration } from './modules/d300';
 import { d390Declaration } from './modules/d390';
 import { d394Declaration } from './modules/d394';
 import { d112Declaration } from './modules/d112';
+import { d205Declaration } from './modules/d205';
+import { d100Declaration } from './modules/d100';
 import {
   artifactInput,
   artifactView,
@@ -84,8 +88,18 @@ import {
   submissionInput as filingInput,
   type DeclarationKind,
 } from './modules/declarations';
-import { employeeInput, Payroll, runIdInput, runInput, termsInput } from './modules/payroll';
+import {
+  employeeInput,
+  partyCnpInput,
+  Payroll,
+  runIdInput,
+  runInput,
+  termsInput,
+} from './modules/payroll';
 import { assetInput, Assets, disposalInput } from './modules/assets';
+import { Etva, etvaInput } from './modules/etva';
+import { AnafConnections, connectFinishInput } from './modules/anaf-connection';
+import { AnafEFactura, type AnafClient, type AnafEnvironment } from './adapters/anaf-efactura';
 import {
   issueInput,
   issueView,
@@ -166,6 +180,7 @@ export const defaultRegister = () =>
       ...payrollDefinitions,
       ...microDefinitions,
       ...dividendDefinitions,
+      ...etvaDefinitions,
     ],
     [
       ...vatVersions,
@@ -174,6 +189,7 @@ export const defaultRegister = () =>
       ...payrollVersions,
       ...microVersions,
       ...dividendVersions,
+      ...etvaVersions,
     ],
   );
 
@@ -203,6 +219,8 @@ export class Engine {
   readonly declarations: Declarations;
   readonly payroll: Payroll;
   readonly assets: Assets;
+  readonly etva: Etva;
+  readonly anaf: AnafConnections | null;
 
   constructor(
     readonly db: Database,
@@ -219,6 +237,9 @@ export class Engine {
       /** ANAF's declaration validator; without it, returns stay prepared until validated. */
       declarationValidator?: DeclarationValidator;
       declarations?: DeclarationKind[];
+      /** ANAF's OAuth application: with it, companies connect to ANAF and, unless `efactura` is
+       * given, the SPV uses the live e-Factura API. */
+      anaf?: { client: AnafClient; environment: AnafEnvironment; fetch?: typeof fetch };
     } = {},
   ) {
     this.commands = new Commands(db, this.operations.policy);
@@ -265,22 +286,60 @@ export class Engine {
     this.positions = new Positions(this.commands);
     this.sales = new Sales(this.commands, objects, this.proposals);
     this.invoicerImport = new InvoicerImport(this.commands, objects);
-    this.spv = new Spv(this.commands, objects, options.efactura, options.clock);
+    this.anaf = options.anaf
+      ? new AnafConnections(
+          this.commands,
+          secret,
+          options.anaf.client,
+          options.anaf.environment,
+          options.anaf.fetch,
+          options.clock,
+        )
+      : null;
+    const anaf = this.anaf;
+    this.spv = new Spv(
+      this.commands,
+      objects,
+      options.efactura ??
+        (anaf && options.anaf
+          ? new AnafEFactura({
+              environment: options.anaf.environment,
+              token: (cif) => anaf.tokenFor(cif),
+              ...(options.anaf.fetch ? { fetch: options.anaf.fetch } : {}),
+            })
+          : undefined),
+      options.clock,
+    );
     this.declarations = new Declarations(this.commands, objects, options.declarationValidator);
     this.declarations.add(
       d300Declaration((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
       d390Declaration((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
       d394Declaration((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
       d112Declaration(secret),
+      d205Declaration(secret),
+      d100Declaration(),
       ...(options.declarations ?? []),
     );
     this.actions.add(this.declarations.authorizeHandler());
     this.actions.add(this.declarations.reopenHandler());
     this.assets = new Assets(this.commands);
+    this.etva = new Etva(this.commands, (tx, companyId) =>
+      this.proposals.ruleContext(tx, companyId),
+    );
     this.payroll = new Payroll(this.commands, secret, (tx, companyId) =>
       this.proposals.ruleContext(tx, companyId),
     );
     this.operations.add(...this.catalogue());
+  }
+
+  private anafConnections() {
+    requireCondition(
+      this.anaf,
+      'ANAF_NOT_CONFIGURED',
+      'Aplicația nu este înregistrată la ANAF (client OAuth).',
+      503,
+    );
+    return this.anaf;
   }
 
   /** The operations available to this principal right now, with their contracts. */
@@ -727,6 +786,18 @@ export class Engine {
         run: (actor, key, input) => this.actions.request(actor, key, 'declarations.reopen', input),
       }),
       define({
+        id: 'vat.etva.check',
+        description:
+          'Compară decontul D300 al perioadei cu decontul precompletat RO e-TVA, rând cu rând, la pragul diferențelor semnificative, și arată facturile e-Factura neînregistrate și cele înregistrate în afara e-Factura.',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: etvaInput,
+        output: z.unknown(),
+        run: (actor, _key, input) => this.etva.check(actor, input),
+      }),
+      define({
         id: 'assets.register',
         description:
           'Înregistrează un mijloc fix în registru: cont, cod din catalog, valoare, durate contabilă și fiscală, punere în funcțiune.',
@@ -772,6 +843,18 @@ export class Engine {
         input: employeeInput,
         output: z.object({ id: z.string(), partyId: z.string(), name: z.string() }),
         run: (actor, key, input) => this.payroll.recordEmployee(actor, key, input),
+      }),
+      define({
+        id: 'parties.recordCnp',
+        description:
+          'Păstrează criptat CNP-ul unui partener persoană fizică (un asociat), pentru declarațiile care îl cer (D205).',
+        permission: 'write',
+        agent: false,
+        effect: 'prepare',
+        approval: 'none',
+        input: partyCnpInput,
+        output: z.object({ partyId: z.string() }),
+        run: (actor, key, input) => this.payroll.recordPartyCnp(actor, key, input),
       }),
       define({
         id: 'payroll.employees.list',
@@ -851,6 +934,40 @@ export class Engine {
         input: z.object({}).strict(),
         output: z.array(artifactView),
         run: (actor) => this.declarations.list(actor),
+      }),
+      define({
+        id: 'spv.connect.start',
+        description:
+          'Adresa la care reprezentantul companiei autorizează aplicația la ANAF (logincert.anaf.ro), cu certificatul său.',
+        permission: 'manage',
+        agent: false,
+        effect: 'prepare',
+        approval: 'human',
+        input: z.object({}).strict(),
+        output: z.object({ url: z.string(), environment: z.string() }),
+        run: (actor, key) => this.anafConnections().start(actor, key),
+      }),
+      define({
+        id: 'spv.connect.finish',
+        description: 'Primește codul de autorizare de la ANAF și păstrează tokenurile, sigilate.',
+        permission: 'manage',
+        agent: false,
+        effect: 'execute',
+        approval: 'human',
+        input: connectFinishInput,
+        output: z.object({ environment: z.string(), accessExpiresAt: z.string() }),
+        run: (actor, key, input) => this.anafConnections().finish(actor, key, input),
+      }),
+      define({
+        id: 'spv.connection',
+        description: 'Starea conectării companiei la ANAF: mediul și expirarea autorizării.',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: z.object({}).strict(),
+        output: z.unknown(),
+        run: (actor) => this.anafConnections().status(actor),
       }),
       define({
         id: 'spv.submit',

@@ -28,6 +28,11 @@ export async function scenario(
     clock?: () => number;
     declarations?: DeclarationKind[];
     declarationValidator?: DeclarationValidator;
+    anaf?: ConstructorParameters<typeof Engine>[3] extends infer O
+      ? O extends { anaf?: infer A }
+        ? A
+        : never
+      : never;
   } = {},
 ) {
   const directory = await mkdtemp(join(tmpdir(), 'xfactura-scenario-'));
@@ -39,6 +44,7 @@ export async function scenario(
     ...(options.clock ? { clock: options.clock } : {}),
     ...(options.declarations ? { declarations: options.declarations } : {}),
     ...(options.declarationValidator ? { declarationValidator: options.declarationValidator } : {}),
+    ...(options.anaf ? { anaf: options.anaf } : {}),
   });
   const people = async (...names: string[]) => {
     const ids = names.map(() => randomUUID());

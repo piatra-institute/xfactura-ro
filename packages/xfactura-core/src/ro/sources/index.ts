@@ -205,10 +205,118 @@ export const legalSources: readonly LegalSource[] = [
     kind: 'act',
     title: 'Ordonanța de urgență a Guvernului nr. 156/2024',
     issuer: 'Guvernul României',
+    publication: 'Monitorul Oficial nr. 1334 din 31 decembrie 2024',
+    urls: ['https://static.anaf.ro/static/10/Anaf/legislatie/OUG_156_2024.pdf'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/legislatie/OUG_156_2024.pdf',
+        sha256: '1e52bf2722bbb7d19ea8ba2868fad591684277957923891aa9e92cc0f3fecccf',
+        retrievedOn: '2026-10-29',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
+    id: 'MF/eFactura-API',
+    kind: 'official_document',
+    title:
+      'Prezentare servicii web pentru Sistemul național privind factura electronică RO e-Factura',
+    issuer: 'Ministerul Finanțelor',
     publication: null,
-    urls: [],
+    urls: ['https://mfinante.gov.ro/static/10/eFactura/prezentare%20api%20efactura.pdf'],
+    fetch: false,
+    snapshots: [
+      {
+        url: 'https://mfinante.gov.ro/static/10/eFactura/prezentare%20api%20efactura.pdf',
+        sha256: 'cabd5fa5b45a8fe75071632a4b09317f30613f8ca49f05c323ab82ca87cc67c9',
+        retrievedOn: '2026-10-29',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
+    id: 'MF/eFactura-limite',
+    kind: 'official_document',
+    title: 'Limite la apelarea API eFactura',
+    issuer: 'Ministerul Finanțelor',
+    publication: null,
+    urls: ['https://mfinante.gov.ro/static/10/eFactura/limiteApeluriAPI.txt'],
+    fetch: false,
+    // The owner's copy of the text, pasted; the published file's bytes may differ in whitespace.
+    snapshots: [
+      {
+        url: 'https://mfinante.gov.ro/static/10/eFactura/limiteApeluriAPI.txt',
+        sha256: 'b3808456840215551c469e72355e318ebb2c2c4e5c7a98adfaa5a040a682b284',
+        retrievedOn: '2026-10-29',
+        mediaType: 'text/plain',
+      },
+    ],
+  },
+  {
+    id: 'MF/eFactura-institutii-2021',
+    kind: 'official_document',
+    title:
+      'Sistemul național privind factura electronică RO e-Factura pentru instituții publice, versiunea 0.1 (draft, 13.09.2021)',
+    issuer: 'Ministerul Finanțelor',
+    publication: null,
+    urls: ['https://mfinante.gov.ro/static/10/eFactura/PrezentareE-factura.pdf'],
+    fetch: false,
+    snapshots: [
+      {
+        url: 'https://mfinante.gov.ro/static/10/eFactura/PrezentareE-factura.pdf',
+        sha256: '122a53f00a104d1178ab0f9bc3d542e2a05c8f0d3e44ea237638dafc34731a0b',
+        retrievedOn: '2026-10-29',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
+    id: 'ANAF/OAuth',
+    kind: 'official_document',
+    title: 'Procedura de înregistrare a aplicațiilor în portalul ANAF și obținerea tokenului OAuth',
+    issuer: 'ANAF',
+    publication: null,
+    urls: [
+      'https://static.anaf.ro/static/10/Anaf/Informatii_R/API/Oauth_procedura_inregistrare_aplicatii_portal_ANAF.pdf',
+    ],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/Informatii_R/API/Oauth_procedura_inregistrare_aplicatii_portal_ANAF.pdf',
+        sha256: 'ea6880e6198c69150dae32db98a9c1111d468086d0a7e7fb9ec89ebf8d385fb5',
+        retrievedOn: '2026-10-29',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
+    id: 'L53/2003',
+    kind: 'act',
+    title: 'Legea nr. 53/2003 – Codul muncii, republicată',
+    issuer: 'Parlamentul României',
+    publication: null,
+    urls: ['https://legislatie.just.ro/Public/DetaliiDocument/41627'],
     fetch: false,
     snapshots: [],
+  },
+  {
+    id: 'OUG70/2024',
+    kind: 'act',
+    title:
+      'Ordonanța de urgență a Guvernului nr. 70/2024 privind unele măsuri de implementare și utilizare a decontului precompletat RO e-TVA',
+    issuer: 'Guvernul României',
+    publication: 'Monitorul Oficial nr. 582 din 21 iunie 2024',
+    urls: ['https://static.anaf.ro/static/10/Anaf/legislatie/OUG_70_2024.pdf'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/legislatie/OUG_70_2024.pdf',
+        sha256: 'b1e06964d39805e51bfcea345b35f38209aa5a90d6d6d8707d7ba6d2a18e4ff0',
+        retrievedOn: '2026-10-29',
+        mediaType: 'application/pdf',
+      },
+    ],
   },
   {
     id: 'HG2139/2004',
@@ -227,10 +335,17 @@ export const legalSources: readonly LegalSource[] = [
     title:
       'Hotărârea Guvernului nr. 1.506/2024 pentru stabilirea salariului de bază minim brut pe țară garantat în plată',
     issuer: 'Guvernul României',
-    publication: null,
-    urls: [],
-    fetch: false,
-    snapshots: [],
+    publication: 'Monitorul Oficial nr. 1185 din 28 noiembrie 2024',
+    urls: ['https://static.anaf.ro/static/10/Anaf/legislatie/HG_1506_2024.pdf'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/legislatie/HG_1506_2024.pdf',
+        sha256: 'c829e477306d69e8f1e1d523baf2b6375cda7961dd34219bc36a9d6ae4d5e4f5',
+        retrievedOn: '2026-10-29',
+        mediaType: 'application/pdf',
+      },
+    ],
   },
   {
     id: 'HG146/2026',
@@ -238,20 +353,34 @@ export const legalSources: readonly LegalSource[] = [
     title:
       'Hotărârea Guvernului nr. 146/2026 pentru stabilirea salariului de bază minim brut pe țară garantat în plată',
     issuer: 'Guvernul României',
-    publication: null,
-    urls: [],
-    fetch: false,
-    snapshots: [],
+    publication: 'Monitorul Oficial nr. 196 din 13 martie 2026',
+    urls: ['https://static.anaf.ro/static/10/Anaf/legislatie/HG_146_2026.pdf'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/legislatie/HG_146_2026.pdf',
+        sha256: '3dce4be85c2330ff6c79049014c538081c2e55de647125072e8b6937cc8f2488',
+        retrievedOn: '2026-10-29',
+        mediaType: 'application/pdf',
+      },
+    ],
   },
   {
     id: 'OUG89/2025',
     kind: 'act',
     title: 'Ordonanța de urgență a Guvernului nr. 89/2025',
     issuer: 'Guvernul României',
-    publication: null,
-    urls: [],
-    fetch: false,
-    snapshots: [],
+    publication: 'Monitorul Oficial nr. 1203 din 24 decembrie 2025',
+    urls: ['https://static.anaf.ro/static/10/Anaf/legislatie/OUG_89_2025.pdf'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/legislatie/OUG_89_2025.pdf',
+        sha256: '135051fde8008bcddc8982586827fbfaddc49a57c1fa50b25d8dc4521e7ba728',
+        retrievedOn: '2026-10-29',
+        mediaType: 'application/pdf',
+      },
+    ],
   },
 ];
 
@@ -471,6 +600,30 @@ export const clauses: readonly Clause[] = [
       'Amortizarea se aplică valorii de intrare, începe cu luna următoare punerii în funcțiune și continuă până la recuperarea integrală; duratele contabile, stabilite prin politicile contabile, pot diferi de cele fiscale.',
   },
   {
+    id: 'L53/2003:art.150',
+    source: 'L53/2003',
+    locator: 'art. 150',
+    status: 'pending',
+    summary:
+      'Indemnizația de concediu de odihnă: media zilnică a salariului de bază, a indemnizațiilor și sporurilor cu caracter permanent din ultimele 3 luni, înmulțită cu zilele de concediu, cel puțin salariul de bază pentru perioada respectivă.',
+  },
+  {
+    id: 'OUG70/2024:art.5',
+    source: 'OUG70/2024',
+    locator: 'art. 5 alin. (1)–(3)',
+    status: 'located',
+    summary:
+      'Diferențe semnificative între decont și decontul precompletat RO e-TVA: cel puțin 20% și cel puțin 1.000 lei, cumulativ, pe rândurile decontului, la coloana TVA (sau Valoare, unde nu există TVA), fără rândurile de regularizări.',
+  },
+  {
+    id: 'OUG89/2025:art.XII-XIII',
+    source: 'OUG89/2025',
+    locator: 'art. XII și art. XIII',
+    status: 'located',
+    summary:
+      'De la 1 ianuarie 2026 se abrogă art. 5 alin. (8) și (10), art. 7 și art. 8 alin. (1) și (3) din OUG nr. 70/2024; pentru persoanele care aplică TVA la încasare, art. 5 și 8 se suspendă până la 30 septembrie 2026.',
+  },
+  {
     id: 'HG2139/2004:catalog',
     source: 'HG2139/2004',
     locator:
@@ -493,38 +646,39 @@ export const clauses: readonly Clause[] = [
     locator: 'modificări: Suma300, Suma200, salMin și suma limită B2_5P',
     status: 'located',
     summary:
-      'Salariul minim 4.050 lei (01–06/2026) și 4.325 lei (07–12/2026); suma care nu se include în baze 300 lei (OUG 156/2024, 01–06/2026) și 200 lei (OUG 89/2025, 07–12/2026), cu plafonul venitului de 4.300, respectiv 4.600 lei; suma limită pentru contribuția minimă: (salariul minim − suma) / zile lucrătoare × zile, la leu.',
+      'Salariul minim 4.050 lei (01–06/2026) și 4.325 lei (07–12/2026); suma care nu se include în baze 300 lei (01–06/2026) și 200 lei (07–12/2026), cu plafonul venitului de 4.300, respectiv 4.600 lei; suma limită pentru contribuția minimă: (salariul minim − suma) / zile lucrătoare × zile, la leu.',
   },
   {
-    id: 'OUG156/2024:salariul-minim',
+    id: 'OUG156/2024:art.LXVI',
     source: 'OUG156/2024',
-    locator: 'dispozițiile privind suma care nu se include în bazele de calcul (de localizat)',
-    status: 'pending',
+    locator: 'art. LXVI',
+    status: 'located',
     summary:
-      'Suma de 300 lei care nu se include în bazele de calcul pentru salariații plătiți cu salariul minim.',
+      'În 2025, pentru salariații cu normă întreagă, la funcția de bază, cu salariul de bază egal cu salariul minim (nediminuat după intrarea în vigoare a ordonanței) și venitul brut fără tichete de cel mult 4.300 lei, nu se datorează impozit și contribuții pentru 300 lei pe lună; salariul minim pentru contribuția minimă se diminuează cu 300 lei.',
   },
   {
     id: 'HG1506/2024:art.1',
     source: 'HG1506/2024',
     locator: 'art. 1',
-    status: 'pending',
-    summary: 'Salariul minim brut pe țară este 4.050 lei lunar de la 1 ianuarie 2025.',
+    status: 'located',
+    summary:
+      'Salariul de bază minim brut pe țară garantat în plată este 4.050 lei lunar de la 1 ianuarie 2025.',
   },
   {
     id: 'HG146/2026:art.1',
     source: 'HG146/2026',
-    locator: 'art. 1',
-    status: 'pending',
+    locator: 'art. 1 și art. 2',
+    status: 'located',
     summary:
-      'Salariul minim brut pe țară este 4.325 lei lunar de la 1 iulie 2026 (cunoscut din presă; textul de obținut).',
+      'Salariul de bază minim brut pe țară garantat în plată este 4.325 lei lunar de la 1 iulie 2026; la aceeași dată se abrogă HG nr. 1.506/2024.',
   },
   {
-    id: 'OUG89/2025:salariul-minim',
+    id: 'OUG89/2025:art.III',
     source: 'OUG89/2025',
-    locator: 'dispozițiile privind suma care nu se include în bazele de calcul (de localizat)',
-    status: 'pending',
+    locator: 'art. III',
+    status: 'located',
     summary:
-      'Pentru salariații cu salariul de bază egal cu salariul minim și venitul brut până la un plafon, o sumă lunară (300 lei până în iunie 2026, plafon 4.300 lei; 200 lei din iulie 2026, plafon 4.600 lei) nu se include în bazele de calcul (cunoscut din presă; textul de obținut).',
+      'Pentru salariații cu normă întreagă, la funcția de bază, cu salariul de bază egal cu salariul minim (și nediminuat de la intrarea în vigoare a ordonanței) și venitul brut fără tichete și indemnizația de hrană de cel mult 4.300 lei (01–06/2026), respectiv 4.600 lei (07–12/2026), nu se datorează impozit și contribuții pentru 300 lei, respectiv 200 lei pe lună, diminuați în funcție de perioada lucrată; salariul minim pentru contribuția minimă se diminuează cu aceeași sumă.',
   },
   {
     id: 'L227/2015:art.291(1)(a)',

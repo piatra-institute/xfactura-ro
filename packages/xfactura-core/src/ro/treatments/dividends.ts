@@ -141,6 +141,9 @@ export const withholdingInput = z
     /** The gross dividend paid now. */
     gross: amount,
     authorityId: z.uuid(),
+    /** The tax on dividends distributed and still unpaid at the end of the distribution's year,
+     * withheld on its last day (art. 43 alin. (3), art. 97 alin. (7)); nothing is paid. */
+    unpaidAtYearEnd: z.boolean().default(false),
   })
   .strict();
 export type WithholdingInput = z.infer<typeof withholdingInput>;
@@ -194,6 +197,14 @@ export const dividendWithholding: Treatment<WithholdingInput> = {
       );
     if (input.date < entry.date)
       issues.push(block('DATE', 'Dividendul se plătește după hotărârea de repartizare.', 'date'));
+    if (input.unpaidAtYearEnd && input.date !== `${entry.date.slice(0, 4)}-12-31`)
+      issues.push(
+        block(
+          'DATE',
+          'Impozitul pe dividendele neplătite se reține în ultima zi a anului repartizării.',
+          'date',
+        ),
+      );
     const gross = parseMoney(input.gross, 'RON');
     // A payable's balance is signed: credit, the dividend still owed, is negative.
     const owed = -item.balanceBani;

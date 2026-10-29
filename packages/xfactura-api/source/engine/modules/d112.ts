@@ -13,19 +13,11 @@ import {
 import { counties } from 'xfactura-core/ro/geo';
 import type { MinimumExemption } from 'xfactura-core/ro/payroll';
 import type { Transaction } from '../db/database';
-import {
-  companies,
-  employees,
-  employmentTerms,
-  entries,
-  payrollLines,
-  proposals,
-  proposalVersions,
-} from '../db/schema';
+import { companies, employees, employmentTerms, payrollLines } from '../db/schema';
 import { loadState } from '../kernel/state';
 import { sellerDetails } from './d300';
 import type { DeclarationKind, DeclarationProblem } from './declarations';
-import { Sealer } from './payroll';
+import { postedRun, Sealer } from './payroll';
 
 export const d112Options = z
   .object({
@@ -53,27 +45,6 @@ type PayLineInput = {
   unionDues: string;
   minimumExemption: MinimumExemption | null;
 };
-
-/** The month's posted payroll run: the one its posting read. */
-async function postedRun(tx: Transaction, companyId: string, month: string) {
-  const [row] = await tx
-    .select({ input: proposalVersions.input })
-    .from(entries)
-    .innerJoin(
-      proposals,
-      and(eq(proposals.companyId, entries.companyId), eq(proposals.id, entries.proposalId)),
-    )
-    .innerJoin(
-      proposalVersions,
-      and(
-        eq(proposalVersions.companyId, entries.companyId),
-        eq(proposalVersions.proposalId, entries.proposalId),
-        eq(proposalVersions.version, entries.version),
-      ),
-    )
-    .where(and(eq(entries.companyId, companyId), eq(proposals.subjectKey, `payroll:${month}:1`)));
-  return row ? (JSON.parse(row.input) as { runId: string }).runId : undefined;
-}
 
 async function inputsOf(tx: Transaction, companyId: string, month: string) {
   const runId = await postedRun(tx, companyId, month);

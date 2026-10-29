@@ -172,6 +172,21 @@ describe('payroll: gross to net', () => {
     expect(slip(student.result)).toMatchObject({ casEmployer: 0, cassEmployer: 0, cost: 2556 });
   });
 
+  test('no relief once the base salary was lowered, or above the ceiling', () => {
+    expect(slip(pay({ salary: 4325, baseReduced: true }).result)).toMatchObject({
+      relief: 0,
+      cas: 1081,
+    });
+    const above = pay({
+      salary: 4325,
+      items: [
+        { kind: 'salary', amount: lei(4325), label: 'Salariu de bază' },
+        { kind: 'salary', amount: lei(300), label: 'Prima' },
+      ],
+    });
+    expect(slip(above.result)).toMatchObject({ gross: 4625, relief: 0 });
+  });
+
   test('the minimum is for the days the contract was active', () => {
     // Active 11 of 22 days: the floor is on half the minimum wage.
     const { result } = pay({ salary: 2500, dailyHours: 4, activeDays: 11 });
@@ -193,7 +208,8 @@ describe('payroll: gross to net', () => {
     expect(codes({ month: '2025-12' as Month, salary: 5000 })).toEqual(['RULE_GAP']);
     expect(codes({ salary: 4000 })).toEqual(['BELOW_MINIMUM_WAGE']);
     expect(codes({ salary: 4325, activeDays: 10 })).toEqual(['RELIEF_UNSETTLED']);
-    expect(codes({ salary: 2162.5, dailyHours: 4 })).toEqual(['RELIEF_UNSETTLED']);
+    // Part time at the minimum wage for its hours has no relief: full-time contracts only.
+    expect(codes({ salary: 2162.5, dailyHours: 4 })).toEqual([]);
     expect(codes({ salary: 5000, activeDays: 23 })).toEqual(['DAYS']);
     expect(codes({ salary: 5000, vouchers: 20000 })).toEqual(['NEGATIVE_NET']);
   });

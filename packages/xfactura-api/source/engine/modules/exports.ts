@@ -145,6 +145,11 @@ export async function companyRecords(tx: Tx, companyId: string) {
       .from(s.artifactEvents)
       .where(eq(s.artifactEvents.companyId, companyId)),
     acc_assets: await tx.select().from(s.assets).where(eq(s.assets.companyId, companyId)),
+    acc_party_cnps: await tx.select().from(s.partyCnps).where(eq(s.partyCnps.companyId, companyId)),
+    acc_anaf_connections: await tx
+      .select()
+      .from(s.anafConnections)
+      .where(eq(s.anafConnections.companyId, companyId)),
     acc_asset_events: await tx
       .select()
       .from(s.assetEvents)
