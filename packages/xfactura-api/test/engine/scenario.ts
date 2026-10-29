@@ -13,12 +13,22 @@ import { user } from '../../source/engine/db/schema';
 import { LocalObjectStore } from '../../source/engine/adapters/object-store';
 import { Engine } from '../../source/engine/engine';
 import type { EFacturaPort } from '../../source/engine/adapters/efactura';
+import type { DeclarationValidator } from '../../source/engine/adapters/declaration-validator';
+import type { DeclarationKind } from '../../source/engine/modules/declarations';
 
 export const secret = 'synthetic-engine-secret-at-least-32-characters';
 
 /** A company on a fresh engine, with an owner, a reviewer and a viewer. */
 export async function scenario(
-  options: { year?: number; efactura?: EFacturaPort; clock?: () => number } = {},
+  options: {
+    year?: number;
+    /** The company's CUI; 12345678 unless a test needs a valid checksum. */
+    cui?: string;
+    efactura?: EFacturaPort;
+    clock?: () => number;
+    declarations?: DeclarationKind[];
+    declarationValidator?: DeclarationValidator;
+  } = {},
 ) {
   const directory = await mkdtemp(join(tmpdir(), 'xfactura-scenario-'));
   const db = new Database(`file:${directory}/books.db`);
@@ -27,6 +37,8 @@ export async function scenario(
   const engine = new Engine(db, objects, secret, {
     ...(options.efactura ? { efactura: options.efactura } : {}),
     ...(options.clock ? { clock: options.clock } : {}),
+    ...(options.declarations ? { declarations: options.declarations } : {}),
+    ...(options.declarationValidator ? { declarationValidator: options.declarationValidator } : {}),
   });
   const people = async (...names: string[]) => {
     const ids = names.map(() => randomUUID());
@@ -47,7 +59,7 @@ export async function scenario(
   const [ownerId, reviewerId, viewerId] = await people('owner', 'reviewer', 'viewer');
   const company = await engine.companies.create(ownerId!, randomUUID(), {
     name: 'Pilot SRL',
-    cui: '12345678',
+    cui: options.cui ?? '12345678',
     year: options.year ?? 2026,
   });
   const owner: Actor = { actorId: ownerId!, companyId: company.id };

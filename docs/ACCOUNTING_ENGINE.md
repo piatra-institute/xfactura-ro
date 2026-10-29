@@ -152,6 +152,25 @@ The company's own invoices are issued through the books, so the number, the XML 
 
 Documents are what the export states, converted as the invoicer now writes them; the export, not regenerated XML, is their evidence. The SPV archives are the authority on what was issued: syncing the inbox confirms or contradicts each document (`spv.messages`). Individuals are recorded by a hash of their CNP, without invoicing details.
 
+## Declarations
+
+Tax returns are artifacts of the books:
+
+1. `declarations.prepare` reads what the return is computed from (for example the VAT tax period) and writes its XML in ANAF's format for the reporting period. A period with no pinned format is a `FORMAT_GAP`. The XML is kept as evidence with the hash of the inputs read.
+2. ANAF's own validator (DUKIntegrator with the declaration's package, pinned by `bun run validators:fetch`) runs on the exact XML: `validated_official`, or `validation_failed` with ANAF's messages.
+3. `declarations.authorize.request` is a reviewed action on the exact XML. Its preview recomputes the inputs; if the books changed since preparation, or the return is not validated, it blocks. Executing it locks the tax period: from then on, an entry adding tax to that period is refused, by the proposal and by the database.
+4. `declarations.pdf` produces ANAF's PDF from the authorized XML. The company signs and files it; importing the signed PDF and the receipt comes next.
+
+**D300 (VAT return)** is the first kind. It is written by `xfactura-core/src/ro/declarations/d300.ts` from ANAF's structure 12.0.0, in namespace `v11` for 08–12/2025 and `v12` from 01/2026, and computes the totals, the settlement rows, the control sum and the payment evidence number as ANAF's validator does. From the books:
+- collected VAT goes by rate to rows 9 (21%) and 10 (11%), and 9.1 (19%) for 2025 periods;
+- purchases go by rate to rows 24 and 25 (24.1 for 2025) with all their VAT, and row 31 holds the VAT actually deducted. Whether non-deductible purchases belong on rows 24–25 is an interpretation awaiting the expert's review;
+- every row is rounded to whole lei by the cited rule `ro.declaration.rounding` (half up at 50 bani);
+- the header comes from the company's invoicing details and the options given when preparing (declarant, CAEN, bank account; pro-rata 100 as the printed form pre-fills it, unless given).
+
+Operations without a row yet (reverse charge, intra-EU, exempt, imports) block the return rather than being left out. Monthly returns are type L and quarterly ones type T; semiannual and annual returns are not produced.
+
+Steps are recorded in order, and the database allows only the documented transitions; a tax period is locked only in the name of an authorized return of that tax and period. A rectification is a new return that supersedes the earlier one.
+
 ## e-Factura through the SPV
 
 The engine talks to ANAF through an e-Factura port (upload, status, message list, download). Only a deterministic simulator implements it so far; the live client, with its OAuth authorization, is not built.

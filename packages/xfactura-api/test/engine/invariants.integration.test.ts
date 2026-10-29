@@ -9,6 +9,7 @@ import {
   actionExecutions,
   actionRequests,
   agentGrants,
+  artifactEvents,
   audit,
   bankMovements,
   bankStatements,
@@ -40,6 +41,7 @@ import {
   treasuryAccounts,
   withdrawals,
 } from '../../source/engine/db/schema';
+import { authorizedDeclaration, lockTaxPeriod } from './fixtures/locks';
 import {
   approve,
   approvedAction,
@@ -741,17 +743,7 @@ const attacks: Attack[] = [
     code: 'tax_period_locked',
     name: 'adding VAT to a filed period',
     run: async (world) => {
-      await world.db.write((tx) =>
-        tx.insert(taxPeriodEvents).values({
-          companyId: world.company,
-          tax: 'VAT',
-          period: '2026-03',
-          seq: 1,
-          kind: 'lock',
-          reference: 'D300 2026-03',
-          createdBy: world.owner,
-        }),
-      );
+      await lockTaxPeriod(world.db, world.company, world.owner, 'VAT', '2026-03');
       const { proposed, approvalId } = await approved(world, sale(world));
       return post(world, proposed, { approvalId });
     },
@@ -1122,6 +1114,31 @@ const attacks: Attack[] = [
     trigger: 'inv_tax_period_event_guard',
     code: 'tax_period_sequence',
     name: 'unlocking a tax period that was never locked',
+    run: async (world) => {
+      const reference = await authorizedDeclaration(
+        world.db,
+        world.company,
+        world.owner,
+        'VAT',
+        '2026-03',
+      );
+      return world.db.write((tx) =>
+        tx.insert(taxPeriodEvents).values({
+          companyId: world.company,
+          tax: 'VAT',
+          period: '2026-03',
+          seq: 1,
+          kind: 'unlock',
+          reference,
+          createdBy: world.owner,
+        }),
+      );
+    },
+  },
+  {
+    trigger: 'inv_tax_period_event_guard',
+    code: 'lock_artifact',
+    name: 'locking a tax period without an authorized return',
     run: async (world) =>
       world.db.write((tx) =>
         tx.insert(taxPeriodEvents).values({
@@ -1129,11 +1146,57 @@ const attacks: Attack[] = [
           tax: 'VAT',
           period: '2026-03',
           seq: 1,
-          kind: 'unlock',
-          reference: 'test',
+          kind: 'lock',
+          reference: 'D300 2026-03',
           createdBy: world.owner,
         }),
       ),
+  },
+  {
+    trigger: 'inv_artifact_event_guard',
+    code: 'artifact_sequence',
+    name: 'a declaration step out of sequence',
+    run: async (world) => {
+      const id = await authorizedDeclaration(
+        world.db,
+        world.company,
+        world.owner,
+        'VAT',
+        '2026-03',
+      );
+      return world.db.write((tx) =>
+        tx.insert(artifactEvents).values({
+          companyId: world.company,
+          artifactId: id,
+          seq: 9,
+          state: 'exported_for_signing',
+          createdBy: world.owner,
+        }),
+      );
+    },
+  },
+  {
+    trigger: 'inv_artifact_event_guard',
+    code: 'artifact_transition',
+    name: 'authorizing a declaration that failed validation',
+    run: async (world) => {
+      const id = await authorizedDeclaration(
+        world.db,
+        world.company,
+        world.owner,
+        'VAT',
+        '2026-03',
+      );
+      return world.db.write((tx) =>
+        tx.insert(artifactEvents).values({
+          companyId: world.company,
+          artifactId: id,
+          seq: 4,
+          state: 'validation_failed',
+          createdBy: world.owner,
+        }),
+      );
+    },
   },
   {
     trigger: 'inv_membership_update',
@@ -1481,6 +1544,7 @@ describe('append-only records', () => {
     await book(world, prepaid(world));
     await periodEvent(world, '2026-03');
     await (await issuing(world)).issue(1, { date: '2026-04-02' });
+    await lockTaxPeriod(world.db, world.company, world.owner, 'VAT', '2026-03');
     const spv = await submittable(world);
     await spv.step(await spv.submit(), 1, 'authorized');
     await world.db.write(async (tx) => {
@@ -1561,15 +1625,6 @@ describe('append-only records', () => {
         body: '{}',
         prevHash: '',
         hash: 'h',
-      });
-      await tx.insert(taxPeriodEvents).values({
-        companyId: world.company,
-        tax: 'VAT',
-        period: '2026-03',
-        seq: 1,
-        kind: 'lock',
-        reference: 'D300',
-        createdBy: world.owner,
       });
       await tx.insert(periodBalances).values({
         companyId: world.company,

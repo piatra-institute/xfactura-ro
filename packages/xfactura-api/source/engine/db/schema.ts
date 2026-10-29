@@ -436,6 +436,81 @@ export const issuedNumbers = sqliteTable(
   ],
 );
 
+// Declarations: tax returns prepared from the books, validated, authorized and filed
+
+/** A tax return prepared from the books: its kind, period, format version, the XML kept as
+ * evidence and the hash of what it was computed from. Rectifications supersede earlier ones. */
+export const artifacts = sqliteTable(
+  'acc_artifacts',
+  {
+    id: text('id').notNull(),
+    companyId: companyId(),
+    /** The declaration, e.g. D300. */
+    kind: text('kind').notNull(),
+    /** The tax period or year it reports, e.g. 2026-10, 2026-Q4, 2026. */
+    period: text('period').notNull(),
+    /** The tax ledger its authorization locks for the period (VAT for D300); none for
+     * informative returns. */
+    tax: text('tax'),
+    /** ANAF's format the XML follows, chosen by the reporting period. */
+    format: text('format').notNull(),
+    /** Hash of the inputs read (tax periods, profile): a later change makes the return stale. */
+    inputHash: text('input_hash').notNull(),
+    evidenceId: text('evidence_id').notNull(),
+    xmlHash: text('xml_hash').notNull(),
+    supersedesId: text('supersedes_id'),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.id] }),
+    index('artifact_period').on(t.companyId, t.kind, t.period),
+    foreignKey({
+      columns: [t.companyId, t.evidenceId],
+      foreignColumns: [evidence.companyId, evidence.id],
+    }),
+  ],
+);
+export const artifactStates = [
+  'prepared',
+  'validation_failed',
+  'validated_official',
+  'authorized',
+  'exported_for_signing',
+  'signed_imported',
+  'submitted',
+  'accepted',
+  'rejected',
+  'superseded',
+] as const;
+/** Each step of a return, in order, with the validator's or ANAF's answer. */
+export const artifactEvents = sqliteTable(
+  'acc_artifact_events',
+  {
+    companyId: companyId(),
+    artifactId: text('artifact_id').notNull(),
+    seq: counter('seq').notNull(),
+    state: text('state', { enum: artifactStates }).notNull(),
+    /** The validator and version that ran, or the receipt's reference. */
+    actor: text('actor'),
+    detail: text('detail'),
+    evidenceId: text('evidence_id'),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.artifactId, t.seq] }),
+    foreignKey({
+      columns: [t.companyId, t.artifactId],
+      foreignColumns: [artifacts.companyId, artifacts.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.evidenceId],
+      foreignColumns: [evidence.companyId, evidence.id],
+    }),
+  ],
+);
+
 // SPV: submissions to e-Factura, messages read from it and the windows synced
 
 /** An authorized upload of one issued document's XML (the evidence with hash `xmlHash`). */

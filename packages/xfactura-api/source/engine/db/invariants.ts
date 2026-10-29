@@ -55,6 +55,8 @@ const appendOnly = [
   'acc_submission_events',
   'acc_spv_messages',
   'acc_spv_sync_windows',
+  'acc_artifacts',
+  'acc_artifact_events',
   'ref_fx_rates',
 ];
 // Tables with narrowly guarded updates (below) that are never deleted from.
@@ -644,6 +646,35 @@ const submissionEventChecks: Check[] = [
   },
 ];
 
+/** The latest state of a declaration artifact, or NULL before its first event. */
+const artifactState = (artifact: string) => `(
+      SELECT state FROM acc_artifact_events
+      WHERE company_id = NEW.company_id AND artifact_id = ${artifact} ORDER BY seq DESC LIMIT 1)`;
+const artifactEventChecks: Check[] = [
+  {
+    code: 'artifact_sequence',
+    rule: 'Declaration steps are numbered from 1 without gaps.',
+    violation: `NEW.seq <> 1 + COALESCE((
+        SELECT max(seq) FROM acc_artifact_events
+        WHERE company_id = NEW.company_id AND artifact_id = NEW.artifact_id), 0)`,
+  },
+  {
+    code: 'artifact_transition',
+    rule: "A declaration is prepared, passes ANAF's validator, is authorized, exported for signing, imported signed, submitted and answered; only a validated one is authorized, and a superseded one ends.",
+    violation: `NOT CASE ${artifactState('NEW.artifact_id')}
+        WHEN 'prepared' THEN NEW.state IN ('validation_failed', 'validated_official', 'superseded')
+        WHEN 'validation_failed' THEN NEW.state = 'superseded'
+        WHEN 'validated_official' THEN NEW.state IN ('authorized', 'superseded')
+        WHEN 'authorized' THEN NEW.state = 'exported_for_signing'
+        WHEN 'exported_for_signing' THEN NEW.state = 'signed_imported'
+        WHEN 'signed_imported' THEN NEW.state = 'submitted'
+        WHEN 'submitted' THEN NEW.state IN ('accepted', 'rejected')
+        WHEN 'rejected' THEN NEW.state = 'superseded'
+        WHEN 'accepted' THEN NEW.state = 'superseded'
+        ELSE ${artifactState('NEW.artifact_id')} IS NULL AND NEW.state = 'prepared' END`,
+  },
+];
+
 // 3. Triggers
 
 type Trigger = { name: string; on: string; checks: Check[] };
@@ -775,6 +806,15 @@ const triggers: Trigger[] = [
     name: 'inv_tax_period_event_guard',
     on: 'BEFORE INSERT ON acc_tax_period_events',
     checks: [
+      {
+        code: 'lock_artifact',
+        rule: 'A tax period is locked only by authorizing a declaration of that tax and period, and unlocked only in the name of one.',
+        violation: `NOT EXISTS (
+          SELECT 1 FROM acc_artifacts a
+          WHERE a.company_id = NEW.company_id AND a.id = NEW.reference
+            AND a.tax = NEW.tax AND a.period = NEW.period
+            AND (NEW.kind = 'unlock' OR ${artifactState('a.id')} = 'authorized'))`,
+      },
       {
         code: 'tax_period_sequence',
         rule: 'Lock and unlock events of a tax period are numbered without gaps and alternate, starting with a lock.',
@@ -916,6 +956,11 @@ const triggers: Trigger[] = [
           SELECT max(seq) FROM acc_spv_sync_windows WHERE company_id = NEW.company_id), 0)`,
       },
     ],
+  },
+  {
+    name: 'inv_artifact_event_guard',
+    on: 'BEFORE INSERT ON acc_artifact_events',
+    checks: artifactEventChecks,
   },
   {
     name: 'inv_audit_chain',

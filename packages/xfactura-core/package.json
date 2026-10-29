@@ -31,7 +31,9 @@
     "./ro/geo": "./src/ro/geo.ts",
     "./ro/identifiers": "./src/ro/identifiers.ts",
     "./ro/sources": "./src/ro/sources/index.ts",
-    "./ro/treatments/vat-settlement": "./src/ro/treatments/vat-settlement.ts"
+    "./ro/treatments/vat-settlement": "./src/ro/treatments/vat-settlement.ts",
+    "./ro/declarations/d300": "./src/ro/declarations/d300.ts",
+    "./ro/procedure": "./src/ro/procedure.ts"
   },
   "dependencies": {
     "@noble/hashes": "2.4.0",

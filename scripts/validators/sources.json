@@ -26,6 +26,21 @@
       "description": "XML Resolver 5.3.3, required by Saxon-HE 12 (Apache-2.0)",
       "url": "https://repo1.maven.org/maven2/org/xmlresolver/xmlresolver/5.3.3/xmlresolver-5.3.3.jar",
       "sha256": "1fe4d5b92f708dcdb82dbce12919e0171e6b5ca62c6dca6220483625098feb5f"
+    },
+    {
+      "name": "anaf",
+      "description": "ANAF DUKIntegrator 1.4.17.3.3 (validation and PDF generation of declarations); only the jars and configuration are extracted, not the bundled Windows JRE",
+      "url": "https://static.anaf.ro/static/DUKIntegrator/dist_javaInclus20200203.zip",
+      "sha256": "dddd3c7d743b4347e56b03d40637ee870e724f5df78fa0e5636ba427e3bc01c9",
+      "extract": ["dist/DUKIntegrator.jar", "dist/lib/", "dist/config/"]
+    },
+    {
+      "name": "anaf",
+      "description": "ANAF D300 validator and PDF generator, structure 12.0.0 (VAT return from 08/2025)",
+      "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/D300Validator_11022026_2.zip",
+      "sha256": "95f58433495c57012a76ee4c773250e6100d54310896cef856bf988f6839b11c",
+      "extract": ["D300Validator.jar", "D300Pdf.jar"],
+      "into": "dist/lib"
     }
   ],
   "manual": [

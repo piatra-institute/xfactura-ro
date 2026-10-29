@@ -52,6 +52,16 @@ export const legalSources: readonly LegalSource[] = [
     snapshots: [],
   },
   {
+    id: 'L207/2015',
+    kind: 'act',
+    title: 'Legea nr. 207/2015 privind Codul de procedură fiscală',
+    issuer: 'Parlamentul României',
+    publication: null,
+    urls: [],
+    fetch: false,
+    snapshots: [],
+  },
+  {
     id: 'L141/2025',
     kind: 'act',
     title: 'Legea nr. 141/2025 privind unele măsuri fiscal-bugetare',
@@ -157,6 +167,14 @@ export const clauses: readonly Clause[] = [
     locator: 'art. 290',
     status: 'pending',
     summary: 'Cursul de schimb pentru baza de impozitare a operațiunilor în valută.',
+  },
+  {
+    id: 'L207/2015:rounding',
+    source: 'L207/2015',
+    locator: 'rotunjirea creanțelor fiscale la leu (articolul de localizat)',
+    status: 'pending',
+    summary:
+      'Creanțele fiscale se rotunjesc la leu: sub 50 de bani prin reducere, de la 50 de bani prin majorare.',
   },
   {
     id: 'L141/2025:rates',

@@ -6,7 +6,7 @@ import { $ } from 'bun';
 
 const root = path.join(import.meta.dir, '../..', '.validators');
 const { sources } = (await Bun.file(path.join(import.meta.dir, 'sources.json')).json()) as {
-  sources: { name: string; url: string; sha256: string; extract?: string[] }[];
+  sources: { name: string; url: string; sha256: string; extract?: string[]; into?: string }[];
 };
 
 for (const source of sources) {
@@ -25,9 +25,13 @@ for (const source of sources) {
     );
   await writeFile(file, bytes);
   if (source.extract) {
+    // Members land under `into` when the archive keeps them at its root (declaration packages).
+    const target = path.join(directory, source.into ?? '');
+    await mkdir(target, { recursive: true });
     for (const prefix of source.extract)
-      await rm(path.join(directory, prefix), { recursive: true, force: true });
-    await $`unzip -q -o ${file} ${source.extract.map((prefix) => `${prefix}*`)} -d ${directory}`;
+      if (prefix.endsWith('/'))
+        await rm(path.join(target, prefix), { recursive: true, force: true });
+    await $`unzip -q -o ${file} ${source.extract.map((prefix) => `${prefix}*`)} -d ${target}`;
     await rm(file);
   }
   await writeFile(marker, `${source.sha256}\n`);

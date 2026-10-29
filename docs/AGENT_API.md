@@ -77,6 +77,9 @@ Reviewed actions (month close and reopen) follow the same pattern: request, appr
 | `sales.issue` | write | no | human | Issue an invoice or credit note with the next number and propose its recognition. |
 | `parties.recordDetails` | write | yes | — | A new version of a partner's invoicing details. |
 | `parties.get` | read | yes | — | A partner with its current invoicing details. |
+| `declarations.prepare`, `declarations.validate` | write | yes | — | Prepare a return from the books in ANAF's format; run ANAF's validator. |
+| `declarations.authorize.request` | review | no | — | Request the reviewed authorization that locks the tax period. |
+| `declarations.pdf`, `declarations.list` | write / read | yes | — | ANAF's PDF of an authorized return; returns with their steps. |
 | `spv.submit` | write | no | human | Authorize and send an issued document's XML to the SPV, once. |
 | `spv.refresh` | write | yes | — | Ask how a submitted upload was processed. |
 | `spv.sync` | write | yes | — | Read the SPV inbox for a window; import, confirm and resolve. |

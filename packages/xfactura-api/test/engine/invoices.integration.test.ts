@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import type { ProposalView } from '../../source/engine/kernel/views';
-import { taxPeriodEvents } from '../../source/engine/db/schema';
+import { lockTaxPeriod } from './fixtures/locks';
 import { invoiceXml, type XmlInput } from './fixtures/invoice';
 import { scenario, type Scenario } from './scenario';
 
@@ -280,17 +280,7 @@ describe('VAT journals', () => {
     );
     expect(journal.rows.map((row) => `${row.taxPeriod} ${row.document}`)).toEqual(['2026-Q4 V-40']);
 
-    await s.db.write((tx) =>
-      tx.insert(taxPeriodEvents).values({
-        companyId: s.company.id,
-        tax: 'VAT',
-        period: '2026-Q4',
-        seq: 1,
-        kind: 'lock',
-        reference: 'D300 2026-Q4',
-        createdBy: s.owner.actorId,
-      }),
-    );
+    await lockTaxPeriod(s.db, s.company.id, s.owner.actorId, 'VAT', '2026-Q4');
     const late = await importInvoice(s, { number: 'V-41', direction: 'sale', date: '2026-12-01' });
     const proposal = await s.propose('invoices.recognize', { documentId: late.id, account: '704' });
     expect(proposal.issues.map((issue) => issue.code)).toContain('TAX_PERIOD_LOCKED');

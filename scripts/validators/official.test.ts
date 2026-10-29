@@ -14,6 +14,7 @@ import {
   type InvoiceDraft,
   type InvoicerInvoice,
 } from '../../packages/xfactura-core/src/einvoice';
+import { writeD300, type D300 } from '../../packages/xfactura-core/src/ro/declarations/d300';
 
 const root = path.join(import.meta.dir, '../..');
 const ready =
@@ -193,6 +194,126 @@ describe('official EN 16931 validation', () => {
       expect(findings['tax-point-twice']!.length).toBeGreaterThan(0);
       expect(findings['no-seller-vat-id']!.length).toBeGreaterThan(0);
       expect(findings['element-order']).toContain('XSD');
+    },
+    120_000,
+  );
+});
+
+// ANAF's DUKIntegrator with the D300 validator, as installed by `bun run validators:fetch`.
+const duk = path.join(root, '.validators/anaf/dist');
+const anaf =
+  existsSync(path.join(duk, 'DUKIntegrator.jar')) && Bun.which('java') !== null ? test : test.skip;
+
+const vatReturn = (rows: D300['rows'], extra: Partial<D300> = {}): D300 => ({
+  period: { year: 2026, month: 9 },
+  type: 'L',
+  company: {
+    cui: '18547290',
+    name: 'Exemplu Servicii SRL',
+    address: 'Str. Lungă nr. 10, Galați, jud. Galați',
+    phone: '0236000000',
+    email: 'contabilitate@exemplu.ro',
+    bank: 'Banca Exemplu',
+    account: 'RO49AAAA1B31007593840000',
+    caen: '6201',
+  },
+  declarant: { lastName: 'Popescu', firstName: 'Ana', role: 'Administrator' },
+  groupRepresentative: false,
+  simplifiedDomestic: false,
+  afterReserveCancellation: false,
+  proRata: '100',
+  reverseCharge: {
+    cereals: false,
+    mobilePhones: false,
+    integratedCircuits: false,
+    consoles: false,
+  },
+  refundRequested: false,
+  rows,
+  ...extra,
+});
+
+const vatReturns: Record<string, D300> = {
+  nil: vatReturn({}),
+  payable: vatReturn({ R9_1: 1000, R9_2: 210, R22_1: 500, R22_2: 105, R28_2: 105 }),
+  recoverable: vatReturn(
+    { R22_1: 2000, R22_2: 420, R28_2: 420 },
+    { period: { year: 2026, month: 8 } },
+  ),
+  'two-rates': vatReturn({
+    R9_1: 1000,
+    R9_2: 210,
+    R10_1: 500,
+    R10_2: 55,
+    R22_1: 300,
+    R22_2: 63,
+    R28_2: 63,
+  }),
+  // Quarterly returns end in months 3, 6, 9, 12 (or 2, 5, 8, 11 with intra-community acquisitions).
+  quarterly: vatReturn(
+    { R9_1: 30000, R9_2: 6300, R22_1: 10000, R22_2: 2100, R28_2: 2100 },
+    { type: 'T' },
+  ),
+  // 08–12/2025: namespace v11 and a transitional 19% row.
+  'transitional-2025': vatReturn(
+    { R9_1: 1000, R9_2: 210, R69_1: 500, R69_2: 95, R74_1: 200, R74_2: 38, R28_2: 38 },
+    { period: { year: 2025, month: 10 } },
+  ),
+};
+
+async function validateD300(documents: Record<string, string>) {
+  const directory = await mkdtemp(path.join(tmpdir(), 'xfactura-d300-'));
+  try {
+    const results = await Promise.all(
+      Object.entries(documents).map(async ([name, xml]) => {
+        const file = path.join(directory, `${name}.xml`);
+        const result = path.join(directory, `${name}.txt`);
+        await writeFile(file, xml);
+        await $`java -jar DUKIntegrator.jar -v D300 ${file} ${result}`.cwd(duk).nothrow().quiet();
+        return [name, existsSync(result) ? readFileSync(result, 'utf8').trim() : ''] as const;
+      }),
+    );
+    return Object.fromEntries(results);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+describe('official D300 validation', () => {
+  anaf(
+    'DUKIntegrator accepts every synthetic return without errors or warnings',
+    async () => {
+      const results = await validateD300(
+        Object.fromEntries(
+          Object.entries(vatReturns).map(([name, model]) => [name, writeD300(model)]),
+        ),
+      );
+      expect(results).toEqual(
+        Object.fromEntries(Object.keys(vatReturns).map((name) => [name, 'ok'])),
+      );
+    },
+    120_000,
+  );
+
+  anaf(
+    'DUKIntegrator rejects a wrong control sum or payment number',
+    async () => {
+      const xml = writeD300(vatReturns.payable!);
+      const mutate = (from: string, to: string) => {
+        expect(xml).toContain(from);
+        return xml.replace(from, to);
+      };
+      const results = await validateD300({
+        'control-sum': mutate('totalPlata_A="4155"', 'totalPlata_A="4156"'),
+        'payment-number': mutate(
+          'nr_evid="10301010926251026000039"',
+          'nr_evid="10301010926251026000038"',
+        ),
+      });
+      expect(results['control-sum']).toStartWith('E:');
+      expect(results['control-sum']).toContain('totalPlata_A');
+      expect(results['payment-number']).toStartWith('E:');
+      expect(results['payment-number']).toContain('nr_evid');
     },
     120_000,
   );

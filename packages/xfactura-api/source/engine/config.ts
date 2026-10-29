@@ -28,5 +28,9 @@ export function config() {
       .filter(Boolean),
     authToken: process.env.DATABASE_AUTH_TOKEN,
     objectDir: resolve(process.env.ACCOUNTING_OBJECT_DIR ?? resolve(root, '.accounting/objects')),
+    /** ANAF's DUKIntegrator with the declaration packages (`bun run validators:fetch`). */
+    anafValidatorDir: resolve(
+      process.env.ACCOUNTING_ANAF_VALIDATOR_DIR ?? resolve(root, '.validators/anaf/dist'),
+    ),
   };
 }

@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { citationProblems, clauses, legalSources, unsourced } from '../src/ro/sources';
 import { fxVersions } from '../src/ro/fx';
+import { procedureVersions } from '../src/ro/procedure';
 import { vatVersions } from '../src/ro/vat';
 
-const versions = [...vatVersions, ...fxVersions];
+const versions = [...vatVersions, ...fxVersions, ...procedureVersions];
 
 describe('source register', () => {
   test('every parameter version cites registered clauses, and located clauses have snapshots', () => {
@@ -18,10 +19,11 @@ describe('source register', () => {
   });
 
   test('reports the parameters still cited only to texts nobody has read', () => {
-    // The FX rate-date conventions cite the law and the accounting order, neither snapshotted.
+    // The FX rate-date conventions and the rounding of declarations cite acts not yet snapshotted.
     expect(unsourced(versions).map((version) => version.id)).toEqual([
       'ro.fx.rate_date.accounting/2024-01-01',
       'ro.fx.rate_date.vat/2024-01-01',
+      'ro.declaration.rounding/2016-01-01',
     ]);
   });
 

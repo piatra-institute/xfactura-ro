@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { Treatment } from 'xfactura-core/kernel';
 import { vatDefinitions, vatVersions } from 'xfactura-core/ro/vat';
 import { fxDefinitions, fxVersions } from 'xfactura-core/ro/fx';
+import { procedureDefinitions, procedureVersions } from 'xfactura-core/ro/procedure';
 import { generalJournal, reversal } from 'xfactura-core/ro/treatments/ledger';
 import { creditRecognition, invoiceRecognition } from 'xfactura-core/ro/treatments/invoices';
 import { settlement } from 'xfactura-core/ro/treatments/settlement';
@@ -59,6 +60,15 @@ import {
   syncView,
 } from './modules/spv';
 import type { EFacturaPort } from './adapters/efactura';
+import type { DeclarationValidator } from './adapters/declaration-validator';
+import { d300Declaration } from './modules/d300';
+import {
+  artifactInput,
+  artifactView,
+  Declarations,
+  prepareInput,
+  type DeclarationKind,
+} from './modules/declarations';
 import {
   issueInput,
   issueView,
@@ -131,7 +141,10 @@ function parameters(register: ParameterRegister) {
 }
 
 export const defaultRegister = () =>
-  new ParameterRegister([...vatDefinitions, ...fxDefinitions], [...vatVersions, ...fxVersions]);
+  new ParameterRegister(
+    [...vatDefinitions, ...fxDefinitions, ...procedureDefinitions],
+    [...vatVersions, ...fxVersions, ...procedureVersions],
+  );
 
 /** The accounting engine: one kernel, its modules and the operation catalogue they expose. */
 export class Engine {
@@ -156,6 +169,7 @@ export class Engine {
   readonly sales: Sales;
   readonly invoicerImport: InvoicerImport;
   readonly spv: Spv;
+  readonly declarations: Declarations;
 
   constructor(
     readonly db: Database,
@@ -169,6 +183,9 @@ export class Engine {
       efactura?: EFacturaPort;
       /** The time the SPV module reasons with (upload horizons, synced windows). */
       clock?: () => number;
+      /** ANAF's declaration validator; without it, returns stay prepared until validated. */
+      declarationValidator?: DeclarationValidator;
+      declarations?: DeclarationKind[];
     } = {},
   ) {
     this.commands = new Commands(db, this.operations.policy);
@@ -209,6 +226,12 @@ export class Engine {
     this.sales = new Sales(this.commands, objects, this.proposals);
     this.invoicerImport = new InvoicerImport(this.commands, objects);
     this.spv = new Spv(this.commands, objects, options.efactura, options.clock);
+    this.declarations = new Declarations(this.commands, objects, options.declarationValidator);
+    this.declarations.add(
+      d300Declaration((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
+      ...(options.declarations ?? []),
+    );
+    this.actions.add(this.declarations.authorizeHandler());
     this.operations.add(...this.catalogue());
   }
 
@@ -558,6 +581,65 @@ export class Engine {
         input: invoicerImportInput,
         output: invoicerImportView,
         run: (actor, key, input) => this.invoicerImport.run(actor, key, input),
+      }),
+      define({
+        id: 'declarations.prepare',
+        description:
+          'Pregătește o declarație din registre, în formatul ANAF al perioadei, și o validează cu validatorul ANAF.',
+        permission: 'write',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: prepareInput,
+        output: artifactView,
+        run: (actor, key, input) => this.declarations.prepare(actor, key, input),
+      }),
+      define({
+        id: 'declarations.validate',
+        description: 'Rulează validatorul ANAF pe XML-ul exact al unei declarații pregătite.',
+        permission: 'write',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: artifactInput,
+        output: artifactView,
+        run: (actor, _key, input) => this.declarations.validate(actor, input),
+      }),
+      define({
+        id: 'declarations.authorize.request',
+        description:
+          'Cere autorizarea unei declarații validate: o persoană aprobă XML-ul exact, iar execuția blochează perioada fiscală.',
+        permission: 'review',
+        agent: false,
+        effect: 'prepare',
+        approval: 'none',
+        input: artifactInput,
+        output: actionView,
+        run: (actor, key, input) =>
+          this.actions.request(actor, key, 'declarations.authorize', input),
+      }),
+      define({
+        id: 'declarations.pdf',
+        description:
+          'Produce PDF-ul ANAF al unei declarații autorizate, pentru semnare și depunere.',
+        permission: 'write',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: artifactInput,
+        output: artifactView,
+        run: (actor, _key, input) => this.declarations.exportPdf(actor, input),
+      }),
+      define({
+        id: 'declarations.list',
+        description: 'Declarațiile pregătite, cu pașii și starea fiecăreia.',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: z.object({}).strict(),
+        output: z.array(artifactView),
+        run: (actor) => this.declarations.list(actor),
       }),
       define({
         id: 'spv.submit',

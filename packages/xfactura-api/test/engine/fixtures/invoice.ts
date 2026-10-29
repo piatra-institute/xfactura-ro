@@ -1,4 +1,6 @@
 export type XmlInput = {
+  /** The company's CUI (default 12345678); the counterparty is 87654321. */
+  company?: string;
   direction?: 'purchase' | 'sale';
   date?: string;
   taxPointDate?: string;
@@ -22,8 +24,9 @@ export function invoiceXml(input: XmlInput = {}) {
     gross = input.gross ?? '121.00',
     net = input.net ?? '100.00',
     currency = input.currency ?? 'RON';
-  const supplierId = input.direction === 'sale' ? '12345678' : '87654321';
-  const customerId = input.direction === 'sale' ? '87654321' : '12345678';
+  const company = input.company ?? '12345678';
+  const supplierId = input.direction === 'sale' ? company : '87654321';
+  const customerId = input.direction === 'sale' ? '87654321' : company;
   const party = (role: string, id: string, country = 'RO') =>
     `<cac:${role}><cac:Party><cac:PartyName><cbc:Name>Companie ${id}</cbc:Name></cac:PartyName><cac:PostalAddress><cac:Country><cbc:IdentificationCode>${country}</cbc:IdentificationCode></cac:Country></cac:PostalAddress><cac:PartyLegalEntity><cbc:RegistrationName>Companie ${id}</cbc:RegistrationName><cbc:CompanyID>${id}</cbc:CompanyID></cac:PartyLegalEntity></cac:Party></cac:${role}>`;
   const root = input.credit ? 'CreditNote' : 'Invoice';
