@@ -351,6 +351,13 @@
       "when": 1793253910154,
       "tag": "0049_split_advance_invoice_guards",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "6",
+      "when": 1793256403870,
+      "tag": "0050_invoice_allowance_guards",
+      "breakpoints": true
     }
   ]
 }

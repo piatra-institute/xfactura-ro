@@ -16,7 +16,25 @@ const rateSchema = z
   .transform((value) => new Amount(value).toString());
 export const invoiceDocumentSchema = z
   .object({
-    parserVersion: z.enum([invoiceParserVersion, 'ubl-invoice-2']),
+    parserVersion: z.enum([invoiceParserVersion, 'ubl-invoice-2', 'ubl-invoice-3']),
+    documentAdjustments: z
+      .array(
+        z
+          .object({
+            charge: z.boolean(),
+            amount: moneySchema,
+            base: moneySchema.nullable(),
+            percentage: rateSchema.nullable(),
+            reason: z.string().min(1).max(1000).nullable(),
+            reasonCode: z.string().min(1).max(20).nullable(),
+            vatCategory: z.string().min(1).max(10),
+            vatRate: rateSchema.nullable(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(100)
+      .optional(),
     invoiceTypeCode: z.enum(['380', '386']).optional(),
     invoiceReferences: z
       .array(
@@ -171,6 +189,61 @@ export function invoiceDocumentFromXml(root: Element): InvoiceDocument {
     'Totalul TVA în moneda facturii lipsește sau este ambiguu.',
   );
   const totals = one(root, 'LegalMonetaryTotal')!;
+  const adjustmentNodes = children(root, 'AllowanceCharge');
+  requireCondition(
+    adjustmentNodes.length <= 100,
+    'XML_ALLOWANCE_LIMIT',
+    'Prea multe reduceri sau majorări la nivelul facturii.',
+  );
+  const adjustments = adjustmentNodes.map((node) => {
+    const indicator = value(node, 'ChargeIndicator'),
+      category = one(node, 'TaxCategory')!,
+      baseNode = one(node, 'BaseAmount', cbc, true),
+      percentage = value(node, 'MultiplierFactorNumeric', true),
+      reason = value(node, 'AllowanceChargeReason', true),
+      reasonCode = value(node, 'AllowanceChargeReasonCode', true);
+    requireCondition(
+      indicator === 'true' || indicator === 'false' || indicator === '1' || indicator === '0',
+      'XML_ALLOWANCE',
+      'Indicatorul reducerii sau majorării este invalid.',
+    );
+    requireCondition(
+      !!reason || !!reasonCode,
+      'XML_ALLOWANCE_REASON',
+      'Documentați motivul reducerii sau majorării.',
+    );
+    requireCondition(
+      value(one(category, 'TaxScheme')!, 'ID') === 'VAT',
+      'XML_TAX',
+      'Schema de taxare nu este TVA.',
+    );
+    requireCondition(
+      !!baseNode === (percentage !== null),
+      'XML_ALLOWANCE_PERCENTAGE',
+      'Baza și procentul reducerii sau majorării se furnizează împreună.',
+    );
+    const row = {
+      charge: indicator === 'true' || indicator === '1',
+      amount: amount(node, 'Amount', currency),
+      base: baseNode ? amount(node, 'BaseAmount', currency) : null,
+      percentage: percentage === null ? null : rateSchema.parse(percentage),
+      reason,
+      reasonCode,
+      vatCategory: value(category, 'ID')!,
+      vatRate: value(category, 'Percent', true),
+    };
+    requireCondition(
+      row.base === null ||
+        new Amount(row.base)
+          .mul(row.percentage!)
+          .div(100)
+          .toDecimalPlaces(2, Amount.ROUND_HALF_UP)
+          .eq(row.amount),
+      'XML_ALLOWANCE_PERCENTAGE',
+      'Suma reducerii sau majorării nu corespunde bazei și procentului.',
+    );
+    return row;
+  });
   const references = children(root, 'BillingReference').map((billing) => {
     const original = one(billing, 'InvoiceDocumentReference')!;
     return { number: value(original, 'ID')!, issueDate: value(original, 'IssueDate', true) };
@@ -197,12 +270,14 @@ export function invoiceDocumentFromXml(root: Element): InvoiceDocument {
     };
   });
   const document = invoiceDocumentSchema.parse({
-    parserVersion:
-      typeCode === '386' ||
-      references.length > 1 ||
-      lines.some((line) => new Amount(line.net).lt(0))
+    parserVersion: adjustments.length
+      ? 'ubl-invoice-3'
+      : typeCode === '386' ||
+          references.length > 1 ||
+          lines.some((line) => new Amount(line.net).lt(0))
         ? 'ubl-invoice-2'
         : invoiceParserVersion,
+    ...(adjustments.length ? { documentAdjustments: adjustments } : {}),
     ...(typeCode === '386' ||
     references.length > 1 ||
     lines.some((line) => new Amount(line.net).lt(0))
@@ -248,6 +323,13 @@ export function invoiceDocumentFromXml(root: Element): InvoiceDocument {
     },
   });
   const t = document.totals;
+  requireCondition(
+    !adjustments.length ||
+      (sum(adjustments.filter((row) => !row.charge).map((row) => row.amount)).eq(t.allowances) &&
+        sum(adjustments.filter((row) => row.charge).map((row) => row.amount)).eq(t.charges)),
+    'INVOICE_ALLOWANCE_TOTALS',
+    'Reducerile și majorările nu se reconciliază cu totalurile XML.',
+  );
   requireCondition(
     new Set(lines.map((line) => line.id)).size === lines.length,
     'XML_LINE_ID',

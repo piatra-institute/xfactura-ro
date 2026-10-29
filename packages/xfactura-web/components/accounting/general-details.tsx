@@ -222,6 +222,22 @@ export default function GeneralDetails({
           />
         ) : null}
         <dl className="acc-review-meta">
+          {invoice.documentAllowance ? (
+            <>
+              <div>
+                <dt>Servicii înainte de reducere</dt>
+                <dd>{formatMoney(invoice.documentAllowance.lineNet)}</dd>
+              </div>
+              <div>
+                <dt>Reducere comercială în factură</dt>
+                <dd>{formatMoney(invoice.documentAllowance.total)}</dd>
+              </div>
+              <div>
+                <dt>Servicii după reducere, fără TVA</dt>
+                <dd>{formatMoney(invoice.documentAllowance.net)}</dd>
+              </div>
+            </>
+          ) : null}
           {invoice.accrualMatch ? (
             <div>
               <dt>Factura primită la</dt>

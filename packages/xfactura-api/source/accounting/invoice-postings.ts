@@ -37,6 +37,7 @@ export const invoicePostingInput = z
     deduction: z.enum(['full', 'none']),
     counterpartyVatCollection: z.literal('no'),
     account: accountCodeSchema,
+    documentAllowance: z.literal('commercial_price_reduction').optional(),
   })
   .strict();
 export type InvoicePostingInput = z.infer<typeof invoicePostingInput>;
@@ -99,7 +100,7 @@ export async function interpretInvoice(
     'Perioadele diferite necesită tratarea explicită a angajamentelor și a exigibilității.',
   );
   requireCondition(
-    totals.allowances === '0.00' &&
+    (timing === 'service' || totals.allowances === '0.00') &&
       totals.charges === '0.00' &&
       totals.prepaid === '0.00' &&
       totals.rounding === '0.00' &&
@@ -114,6 +115,32 @@ export async function interpretInvoice(
   );
   const tax = doc.taxes[0],
     rule = invoiceRule(input.taxPointDate, tax.category);
+  requireCondition(
+    (totals.allowances === '0.00' &&
+      input.documentAllowance === undefined &&
+      !doc.documentAdjustments?.length) ||
+      (timing === 'service' &&
+        new Amount(totals.allowances).gt(0) &&
+        input.documentAllowance === 'commercial_price_reduction'),
+    'INVOICE_ALLOWANCE_TREATMENT',
+    'Confirmați reducerea comercială din factura inițială; sconturile financiare necesită un tratament separat.',
+  );
+  if (totals.allowances !== '0.00')
+    requireCondition(
+      doc.parserVersion === 'ubl-invoice-3' &&
+        (!doc.invoiceTypeCode || doc.invoiceTypeCode === '380') &&
+        doc.lines.every((row) => new Amount(row.net).gte(0)) &&
+        doc.documentAdjustments?.length &&
+        doc.documentAdjustments.every(
+          (row) =>
+            !row.charge &&
+            new Amount(row.amount).gt(0) &&
+            row.vatCategory === tax.category &&
+            (row.vatRate ?? '0') === (tax.rate ?? '0'),
+        ),
+      'INVOICE_ALLOWANCE_DETAILS',
+      'Reducerile necesită detalii XML păstrate, cu aceeași categorie și cotă TVA ca serviciile.',
+    );
   requireCondition(
     (tax.rate ?? '0') === rule.rate &&
       doc.lines.every(
@@ -212,6 +239,17 @@ export async function interpretInvoice(
     tax: totals.tax,
     gross: totals.gross,
     deductibleTax,
+    ...(input.documentAllowance
+      ? {
+          documentAllowance: {
+            schemaVersion: 1,
+            kind: input.documentAllowance,
+            lineNet: totals.lineNet,
+            total: totals.allowances,
+            net: totals.net,
+          },
+        }
+      : {}),
   });
   return { invoice, lines, treatment };
 }
@@ -264,6 +302,7 @@ export async function checkInvoicePosting(tx: Transaction, actor: Actor, body: G
     deduction: input.deduction,
     counterpartyVatCollection: input.counterpartyVatCollection,
     account: input.account,
+    ...(input.documentAllowance ? { documentAllowance: input.documentAllowance.kind } : {}),
   });
   requireCondition(
     canonical(expected.treatment) === canonical(input) &&

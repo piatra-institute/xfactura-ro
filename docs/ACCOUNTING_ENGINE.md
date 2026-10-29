@@ -36,6 +36,8 @@ Direction is derived from the company's identity in the supplier/customer fields
 
 Line totals, allowances/charges, tax bases, tax totals, gross, prepayments, rounding and payable reconcile using decimal arithmetic. XML parsing rejects DTDs/entities, malformed UTF-8, ambiguous critical fields, wrong namespaces/currencies and bounded-complexity violations. It does not fetch external resources.
 
+The additive v3 format retains document-level `AllowanceCharge` facts: allowance/charge indicator, exact amount, optional paired base/percentage, reason/code and VAT category/rate. Currency, duplicate critical fields, bounded detail count, percentage arithmetic and sums against the header allowance/charge totals are checked. Ordinary documents without these details keep their v1/v2 normalization and hashes.
+
 Parsing is not official CIUS-RO validation, ANAF acceptance/signature verification, evidence of delivery or a deductibility decision. Other invoice types and unsupported negative-line patterns need further coverage. Other currencies, foreign counterparties and reduced categories can be retained when they fit this parser, while their automatic accounting remains unsupported. A bounded linked-credit workflow is described below.
 
 ## ZIP archives and source provenance
@@ -66,6 +68,20 @@ Draft standard-rate references distinguish 19% through July 2025 and 21% from Au
 The source tax must match the declared rate and category base at two-decimal half-up precision. Missing registration evidence blocks the proposal. A normal-VAT company also needs evidenced non-cash-VAT status. Registration IDs, rule ID/hash, source hash, amounts and explicit treatment evidence form part of the approved proposal; posting recalculates and rechecks them. Later historical facts cannot silently reuse an earlier approval.
 
 The result is a general proposal. The human reviews its original XML, treatment evidence, dates and exact lines in the existing screen. Approval and posting follow the ordinary exact-version contract. Agents can import/propose and execute an approved version under the appropriate separate scopes; they cannot approve or change company configuration.
+
+## Commercial discounts in the original invoice
+
+Ordinary domestic RON service invoices may include positive commercial allowances at document level. `invoices.propose` requires the explicit `documentAllowance: "commercial_price_reduction"` classification, alongside the existing service/tax-point dates, evidence and full/no deduction decision. Importing the document never establishes that classification. Charges, financial settlement discounts and reductions granted after the original invoice remain separate treatments.
+
+The source must retain v3 allowance details, all belonging to the invoice's single supported S/O category and rate. The exact detail amounts must total the header allowance, and `lineNet - allowances = net`; VAT is checked on that reduced net amount. A 100.00 service less 20.00 commercial allowance therefore recognizes 80.00 net, 16.80 standard VAT and 96.80 payable in the supported 21% period. Purchases without deduction recognize 96.80 cost; a non-VAT sale has no output VAT. The initial invoice posts its net service amount rather than a second subsequent-discount entry in 609/709. Later linked credits use the reduced original capacity and their separate commercial-event treatment.
+
+The approved interpretation retains `documentAllowance: {schemaVersion: 1, kind, lineNet, total, net}`. Posting recalculates the treatment from the immutable source and current historical registrations. The existing review shows service value before reduction, commercial allowance and net service value after reduction, alongside VAT and exact lines. API/MCP prepares the interpretation; a human approves the exact version. No entry form was added.
+
+This treatment excludes mixed categories/rates, document charges, financial settlement discounts, advances, deferred-service schedules, accrual invoice matching, zero/free invoices, FX and regime transitions. Existing specialized workflows continue to reject global allowances. Header-only retained legacy documents remain evidence but cannot authorize invented allowance details. When a previously retained v1/v2 invoice is reimported under the new parser, only byte-identical source evidence plus an identical old normalized projection permits returning that unchanged record. A differing source remains a conflict. There is no automatic normalization rewrite; legacy records without retained details need a separate reviewed enrichment/migration before this treatment.
+
+Drizzle-generated custom `0050` adds only the unsupported SQLite posting trigger; there is no table, index or column change. The trigger independently checks source/proof amounts, supported ordinary-service origin and exact ledger effects, rejecting balanced attempts to post the undiscounted amount. A populated `0049` upgrade preserves posted records, existing exact approvals, cached results and v1/v2 source hashes; a pending ordinary invoice still posts after the upgrade. Export and fresh restore retain v3 facts, proof and guards. Earlier applied migrations remain unchanged.
+
+References: [UBL document-level allowance/charge structure](https://docs.peppol.eu/poacc/billing/3.0/syntax/ubl-invoice/cac-AllowanceCharge/), [amount and percentage arithmetic](https://docs.peppol.eu/poacc/billing/3.0/syntax/ubl-invoice/cac-AllowanceCharge/cbc-Amount/), and [OMFP 1802/2014, points 76–77, commercial versus financial reductions](https://static.anaf.ro/static/10/Anaf/legislatie/OMFP_1802_2014.pdf). These bound the implemented design; they do not replace official CIUS validation or independent current fiscal review.
 
 ## Linked credit notes and invoice positions
 
@@ -352,7 +368,7 @@ The summary reconciles deductible input/output VAT to non-opening period movemen
 
 `vat.advancePayments` pages pre-invoice bank advances and their full/partial refunds. Customer receipt/refund rows contribute signed base/output VAT in their actual periods; supplier cash rows contribute no deductible VAT. A later matched sales advance invoice contributes zero extra VAT and retains `previousAdvanceRecognition` references. Final invoices contribute only residual base/VAT, so advance plus final equals the full service. `advancePaymentEntryCount` identifies these rows in the summary. These working rows do not implement official D300/D394 mappings.
 
-VAT deductions/pro-rata beyond full/no deduction, cash VAT, advance rate/registration transitions, global allowances, broader period treatments and FX/EU treatment remain step-2/3 work. Generic journals do not constitute a complete inventory, payroll or tax subsystem.
+VAT deductions/pro-rata beyond full/no deduction, cash VAT, advance rate/registration transitions, financial discounts, document charges/mixed-category allowances and broader period treatments and FX/EU treatment remain step-2/3 work. Generic journals do not constitute a complete inventory, payroll or tax subsystem.
 
 ## Closing, preservation and upgrade
 

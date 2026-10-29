@@ -115,7 +115,7 @@ export class InvoiceArchives {
       for (const member of parsed) {
         if (!member.invoice) continue;
         try {
-          const plan = await inspectInvoice(tx, actor, member.invoice),
+          const plan = await inspectInvoice(tx, actor, member.invoice, sha256(member.bytes)),
             prior = identities.get(plan.sourceKey);
           requireCondition(
             !prior || prior === plan.hash,

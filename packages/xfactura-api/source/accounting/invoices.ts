@@ -20,7 +20,12 @@ export const invoicePage = pageInput
 const cui = (value: string) => value.trim().replace(/^RO/i, '');
 
 /** The XML and archive paths share invoice identity, conflict detection and persistence. */
-export async function inspectInvoice(tx: Transaction, actor: Actor, parsed: InvoiceDocument) {
+export async function inspectInvoice(
+  tx: Transaction,
+  actor: Actor,
+  parsed: InvoiceDocument,
+  sourceHash?: string,
+) {
   const [company] = await tx.select().from(companies).where(eq(companies.id, actor.companyId));
   const sale = parsed.supplier.country === 'RO' && cui(parsed.supplier.taxId) === company.cui;
   const purchase = parsed.customer.country === 'RO' && cui(parsed.customer.taxId) === company.cui;
@@ -50,8 +55,26 @@ export async function inspectInvoice(tx: Transaction, actor: Actor, parsed: Invo
         eq(invoiceDocuments.sourceKey, sourceKey),
       ),
     );
+  let sameLegacySource = false;
+  if (
+    duplicate &&
+    duplicate.hash !== hash &&
+    parsed.parserVersion === 'ubl-invoice-3' &&
+    duplicate.body.parserVersion !== 'ubl-invoice-3' &&
+    sourceHash
+  ) {
+    const { documentAdjustments: _adjustments, ...previousShape } = parsed;
+    const [source] = await tx
+      .select({ hash: evidence.hash })
+      .from(evidence)
+      .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.id, duplicate.evidenceId)));
+    sameLegacySource =
+      source?.hash === sourceHash &&
+      sha256(canonical({ ...previousShape, parserVersion: duplicate.body.parserVersion })) ===
+        duplicate.hash;
+  }
   requireCondition(
-    !duplicate || duplicate.hash === hash,
+    !duplicate || duplicate.hash === hash || sameLegacySource,
     'INVOICE_SOURCE_CONFLICT',
     'Aceeași factură are conținut diferit. Verificați ambele surse.',
     409,
@@ -64,7 +87,17 @@ export async function retainInvoice(
   evidenceId: string,
   parsed: InvoiceDocument,
 ) {
-  const { direction, sourceKey, hash, duplicate } = await inspectInvoice(tx, actor, parsed);
+  const [source] = await tx
+    .select({ hash: evidence.hash })
+    .from(evidence)
+    .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.id, evidenceId)));
+  requireCondition(source, 'NOT_FOUND', 'Documentul original nu este disponibil.', 404);
+  const { direction, sourceKey, hash, duplicate } = await inspectInvoice(
+    tx,
+    actor,
+    parsed,
+    source.hash,
+  );
   if (duplicate) return duplicate;
   const [invoice] = await tx
     .insert(invoiceDocuments)

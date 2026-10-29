@@ -157,6 +157,16 @@ export const invoiceTreatmentSchema = z
     tax: moneySchema,
     gross: moneySchema,
     deductibleTax: moneySchema,
+    documentAllowance: z
+      .object({
+        schemaVersion: z.literal(1),
+        kind: z.literal('commercial_price_reduction'),
+        lineNet: moneySchema,
+        total: moneySchema,
+        net: moneySchema,
+      })
+      .strict()
+      .optional(),
     credit: creditDetailsSchema.optional(),
     accrualMatch: accrualInvoiceMatchSchema.optional(),
     unbilledSaleMatch: unbilledSaleMatchSchema.optional(),
