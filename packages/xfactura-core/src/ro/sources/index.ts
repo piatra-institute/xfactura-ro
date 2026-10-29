@@ -293,10 +293,10 @@ export const legalSources: readonly LegalSource[] = [
   {
     id: 'L53/2003',
     kind: 'act',
-    title: 'Legea nr. 53/2003 – Codul muncii, republicată',
+    title: 'Legea nr. 53/2003 – Codul muncii, republicată (forma consolidată din 27.04.2026)',
     issuer: 'Parlamentul României',
-    publication: null,
-    urls: ['https://legislatie.just.ro/Public/DetaliiDocument/41627'],
+    publication: 'Monitorul Oficial nr. 345 din 18 mai 2011 (republicare)',
+    urls: ['https://legislatie.just.ro/Public/DetaliiDocument/128647'],
     fetch: false,
     snapshots: [],
   },
@@ -317,6 +317,49 @@ export const legalSources: readonly LegalSource[] = [
         mediaType: 'application/pdf',
       },
     ],
+  },
+  {
+    id: 'OUG158/2005',
+    kind: 'act',
+    title:
+      'Ordonanța de urgență a Guvernului nr. 158/2005 privind concediile și indemnizațiile de asigurări sociale de sănătate (forma consolidată din 01.07.2026)',
+    issuer: 'Guvernul României',
+    publication: 'Monitorul Oficial nr. 1074 din 29 noiembrie 2005',
+    urls: ['https://legislatie.just.ro/Public/DetaliiDocument/66305'],
+    fetch: false,
+    snapshots: [],
+  },
+  {
+    id: 'OUG91/2025',
+    kind: 'act',
+    title:
+      'Ordonanța de urgență a Guvernului nr. 91/2025, aprobată cu modificări prin Legea nr. 64/2026 (Monitorul Oficial din 15 mai 2026)',
+    issuer: 'Guvernul României',
+    publication: 'Monitorul Oficial din 31 decembrie 2025',
+    urls: ['https://legislatie.just.ro/Public/DetaliiDocument/66305'],
+    fetch: false,
+    snapshots: [],
+  },
+  {
+    id: 'Norme-OUG158/2005',
+    kind: 'act',
+    title:
+      'Normele de aplicare a OUG nr. 158/2005, aprobate prin Ordinul nr. 15/2018/1.311/2017 al ministrului sănătății și al președintelui CNAS, modificate prin Ordinul nr. 506/1.030/2026 (Monitorul Oficial nr. 507 din 19 iunie 2026, după o sursă secundară)',
+    issuer: 'Ministerul Sănătății și Casa Națională de Asigurări de Sănătate',
+    publication: 'Monitorul Oficial nr. 31 din 12 ianuarie 2018',
+    urls: [],
+    fetch: false,
+    snapshots: [],
+  },
+  {
+    id: 'L31/1990',
+    kind: 'act',
+    title: 'Legea nr. 31/1990 privind societățile, republicată (forma consolidată din 18.12.2025)',
+    issuer: 'Parlamentul României',
+    publication: 'Monitorul Oficial nr. 1066 din 17 noiembrie 2004 (republicare)',
+    urls: ['https://legislatie.just.ro/Public/DetaliiDocument/798'],
+    fetch: false,
+    snapshots: [],
   },
   {
     id: 'HG2139/2004',
@@ -446,6 +489,38 @@ export const clauses: readonly Clause[] = [
     locator: 'art. 139 alin. (1)',
     status: 'located',
     summary: 'Baza lunară a CAS este câștigul brut din salarii și venituri asimilate.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.76(1)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 76 alin. (1)',
+    status: 'located',
+    summary:
+      'Venituri din salarii sunt toate veniturile obținute în baza contractului individual de muncă, indiferent de denumirea lor.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.139(1)(o)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 139 alin. (1) lit. o)',
+    status: 'located',
+    summary:
+      'Baza CAS cuprinde indemnizațiile de asigurări sociale de sănătate suportate de angajator sau din FNUASS.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.157(1)(v)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 157 alin. (1) lit. v) și art. 155 alin. (1) lit. i)',
+    status: 'located',
+    summary:
+      'Baza CASS cuprinde indemnizațiile de asigurări sociale de sănătate pentru codurile de indemnizație 01, 07 și 10.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.220^5',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 220^5',
+    status: 'located',
+    summary:
+      'CAM nu se datorează pentru prestațiile suportate din bugetul asigurărilor sociale de stat, al asigurărilor pentru șomaj și din FNUASS.',
   },
   {
     id: 'ANAF/Cod-fiscal-consolidat:art.142(r)',
@@ -600,9 +675,17 @@ export const clauses: readonly Clause[] = [
       'Amortizarea se aplică valorii de intrare, începe cu luna următoare punerii în funcțiune și continuă până la recuperarea integrală; duratele contabile, stabilite prin politicile contabile, pot diferi de cele fiscale.',
   },
   {
+    id: 'L53/2003:art.139',
+    source: 'L53/2003',
+    locator: 'art. 139 alin. (1) (citit pe portalul legislativ, forma din 27.04.2026)',
+    status: 'pending',
+    summary:
+      'Zilele de sărbătoare legală nelucrătoare: 1, 2, 6, 7 și 24 ianuarie, Vinerea Mare, prima și a doua zi de Paști, 1 mai, 1 iunie, prima și a doua zi de Rusalii, 15 august, 30 noiembrie, 1 decembrie, prima și a doua zi de Crăciun.',
+  },
+  {
     id: 'L53/2003:art.150',
     source: 'L53/2003',
-    locator: 'art. 150',
+    locator: 'art. 150 (citit pe portalul legislativ, forma din 27.04.2026)',
     status: 'pending',
     summary:
       'Indemnizația de concediu de odihnă: media zilnică a salariului de bază, a indemnizațiilor și sporurilor cu caracter permanent din ultimele 3 luni, înmulțită cu zilele de concediu, cel puțin salariul de bază pentru perioada respectivă.',
@@ -622,6 +705,56 @@ export const clauses: readonly Clause[] = [
     status: 'located',
     summary:
       'De la 1 ianuarie 2026 se abrogă art. 5 alin. (8) și (10), art. 7 și art. 8 alin. (1) și (3) din OUG nr. 70/2024; pentru persoanele care aplică TVA la încasare, art. 5 și 8 se suspendă până la 30 septembrie 2026.',
+  },
+  {
+    id: 'OUG158/2005:art.10(1)',
+    source: 'OUG158/2005',
+    locator: 'art. 10 alin. (1) și (8) (citit pe portalul legislativ, forma din 01.07.2026)',
+    status: 'pending',
+    summary:
+      'Baza de calcul a indemnizației este media veniturilor brute lunare din ultimele 6 luni din cele 12 ale stagiului, până la 12 salarii minime brute pe țară lunar; din durata concediului, în zile calendaristice, se plătesc zilele lucrătoare.',
+  },
+  {
+    id: 'OUG158/2005:art.12',
+    source: 'OUG158/2005',
+    locator: 'art. 12 (citit pe portalul legislativ, forma din 01.07.2026)',
+    status: 'pending',
+    summary:
+      'Indemnizația pentru incapacitate temporară de muncă se suportă de angajator din prima până în a 5-a zi și din FNUASS din ziua următoare.',
+  },
+  {
+    id: 'OUG158/2005:art.17(1)',
+    source: 'OUG158/2005',
+    locator: 'art. 17 alin. (1), (1^2) și (2) (citit pe portalul legislativ, forma din 01.07.2026)',
+    status: 'pending',
+    summary:
+      '55% din baza de calcul pentru certificatele de până la 7 zile, 65% pentru cele între 8 și 14 zile, 75% pentru cele de peste 15 zile; 100% pentru afecțiunile de la alin. (2). Din 1 iulie 2026, diferențele rezultate din recalcularea unui episod prelungit în luna următoare se includ în veniturile lunii în care se determină (alin. (1^2)).',
+  },
+  {
+    id: 'OUG91/2025:art.II',
+    source: 'OUG91/2025',
+    locator:
+      'art. II alin. (1), (1^1), (4) și (5), modificat prin Legea nr. 64/2026 (citit în notele formei consolidate a OUG nr. 158/2005 din 01.07.2026)',
+    status: 'pending',
+    summary:
+      'Pentru certificatele eliberate între 1 februarie 2026 și 31 decembrie 2027 indemnizația se diminuează cu o zi, o singură dată pe episod; angajatorul suportă zilele 2–6, FNUASS de a doua zi după acestea. Nu se diminuează concediile de la art. 2 alin. (1) lit. c), d^1) și e), pentru pacienții din programele naționale de sănătate și pentru cei internați.',
+  },
+  {
+    id: 'Norme-OUG158/2005:art.73',
+    source: 'Norme-OUG158/2005',
+    locator:
+      'art. 73 alin. (1) (citit doar într-o sursă secundară; textul oficial este de obținut)',
+    status: 'pending',
+    summary:
+      'Media zilnică a bazei de calcul este raportul dintre veniturile din ultimele 6 luni pentru care s-a plătit contribuția și numărul zilelor de stagiu din acestea, cel mult zilele lucrătoare ale fiecărei luni; indemnizația este media zilnică × procentul × (zilele lucrătoare ale concediului minus prima zi lucrătoare, când se diminuează).',
+  },
+  {
+    id: 'L31/1990:art.183',
+    source: 'L31/1990',
+    locator: 'art. 183 alin. (1)–(2) (citit pe portalul legislativ, forma din 18.12.2025)',
+    status: 'pending',
+    summary:
+      'Din profitul societății se preiau în fiecare an cel puțin 5% pentru fondul de rezervă, până ce acesta atinge cel puțin o cincime din capitalul social; un fond micșorat se completează.',
   },
   {
     id: 'HG2139/2004:catalog',

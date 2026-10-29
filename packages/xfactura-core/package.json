@@ -47,7 +47,10 @@
     "./ro/treatments/assets": "./src/ro/treatments/assets.ts",
     "./ro/etva": "./src/ro/etva.ts",
     "./ro/declarations/d205": "./src/ro/declarations/d205.ts",
-    "./ro/declarations/d100": "./src/ro/declarations/d100.ts"
+    "./ro/declarations/d100": "./src/ro/declarations/d100.ts",
+    "./ro/calendar": "./src/ro/calendar.ts",
+    "./ro/treatments/year-end": "./src/ro/treatments/year-end.ts",
+    "./ro/payroll/sick-leave": "./src/ro/payroll/sick-leave.ts"
   },
   "dependencies": {
     "@noble/hashes": "2.4.0",

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { requireCondition } from 'xfactura-core/errors';
 import { canonical, hashOf } from 'xfactura-core/hash';
 import { formatMoney, parseMoney } from 'xfactura-core/money';
+import { workingDays } from 'xfactura-core/ro/calendar';
 import { isValidCnp } from 'xfactura-core/ro/identifiers';
 import {
   calculatePay,
@@ -14,8 +15,15 @@ import {
   type PayIssue,
   type PayResult,
 } from 'xfactura-core/ro/payroll';
+import {
+  cappedIncome,
+  sickIndemnity,
+  type SickBase,
+  type SickCertificate,
+  type SickEpisode,
+} from 'xfactura-core/ro/payroll/sick-leave';
 import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
-import { monthEnd, monthStart, type Month } from 'xfactura-core/time';
+import { addDays, monthEnd, monthStart, type LocalDate, type Month } from 'xfactura-core/time';
 import { sha256 } from '../adapters/object-store';
 import type { Transaction } from '../db/database';
 import {
@@ -80,8 +88,9 @@ export const termsInput = z
 export const runInput = z
   .object({
     month,
-    /** Working days in the month by the company's calendar: weekdays less public holidays. */
-    workingDays: z.number().int().min(1).max(23),
+    /** Working days in the month: weekdays less the public holidays of Codul muncii art. 139,
+     * unless the company's calendar differs. */
+    workingDays: z.number().int().min(1).max(23).optional(),
     /** What differs from the contract's terms; a contract without an entry worked the full
      * month at its base salary, which needs no entry only when its terms cover the month. */
     entries: z
@@ -107,6 +116,39 @@ export const runInput = z
             /** Working days of annual leave, within the active days: without `items`, the leave
              * pay is computed from the contract's previous three posted months. */
             leaveDays: z.number().int().min(1).max(23).optional(),
+            /** The medical certificates of the month, in date order: the contract is suspended
+             * on their working days, and the sick pay is computed. */
+            sickLeave: z
+              .array(
+                z
+                  .object({
+                    series: z.string().trim().min(1).max(10),
+                    number: z.string().trim().min(1).max(20),
+                    code: z.string().regex(/^\d{2}$/),
+                    issued: localDate,
+                    from: localDate,
+                    to: localDate,
+                    /** The certificate it continues, of the same episode. */
+                    continues: z
+                      .object({
+                        series: z.string().trim().min(1).max(10),
+                        number: z.string().trim().min(1).max(20),
+                      })
+                      .strict()
+                      .optional(),
+                    hospitalized: z.boolean().default(false),
+                  })
+                  .strict(),
+              )
+              .max(10)
+              .optional(),
+            /** The base of an episode starting this month when the payroll does not hold six of
+             * the previous twelve months: from the employee's stage certificate (adeverința de
+             * stagiu), the insured incomes, each month capped, and the insured working days. */
+            sickBase: z
+              .object({ income: money, days: z.number().int().min(1).max(140) })
+              .strict()
+              .optional(),
           })
           .strict(),
       )
@@ -189,6 +231,17 @@ export function birthDateOf(cnp: string): string | null {
 }
 
 type Terms = typeof employmentTerms.$inferSelect;
+/** A certificate as the run keeps it, with its episode for the next month's continuation. */
+type StoredSick = {
+  series: string;
+  number: string;
+  episode: SickEpisode & {
+    base: { income: string; days: number };
+    days: number;
+    percent: string;
+    to: string;
+  };
+};
 const lei = (bani: bigint) => formatMoney(bani, 'RON');
 const zero = {
   cash: 0n,
@@ -426,6 +479,7 @@ export class Payroll {
   prepareRun(actor: Actor, key: string, input: z.infer<typeof runInput>) {
     return this.commands.run(actor, key, 'payroll.runs.prepare', input, 'write', async (tx) => {
       const round = 1;
+      const monthDays = input.workingDays ?? workingDays(input.month as Month);
       const [posted] = await tx
         .select({ id: entries.id })
         .from(entries)
@@ -506,14 +560,23 @@ export class Payroll {
         const changed = versions.some(
           (version) => version.effectiveFrom > start && version.effectiveFrom <= end,
         );
-        const activeDays = entry?.activeDays ?? (full ? input.workingDays : undefined);
+        // Sick leave suspends the contract on the certificates' working days.
+        const sick = entry?.sickLeave?.length
+          ? await this.sickPay(tx, actor.companyId, contractId, input.month, entry, rules)
+          : null;
+        if (sick) issues.push(...sick.issues);
+        const suspended = sick?.suspendedDays ?? 0;
+        const activeDays = entry?.activeDays ?? (full ? monthDays - suspended : undefined);
         if (activeDays === undefined)
           issues.push({
             code: 'PARTIAL_MONTH',
             message: 'Contractul începe sau se încheie în lună: completați zilele active.',
           });
-        else if (activeDays > input.workingDays)
-          issues.push({ code: 'DAYS', message: 'Zilele active depășesc zilele lucrătoare.' });
+        else if (activeDays + suspended > monthDays)
+          issues.push({
+            code: 'DAYS',
+            message: 'Zilele active și cele de concediu medical depășesc zilele lucrătoare.',
+          });
         let leave: Record<string, string | number> | null = null;
         let leaveItems: PayInput['items'] | undefined;
         if (entry?.leaveDays && activeDays !== undefined) {
@@ -527,7 +590,7 @@ export class Payroll {
             // least the base salary for the leave days; bonuses are not averaged.
             const history = await this.leaveHistory(tx, actor.companyId, contractId, input.month);
             const base = terms.baseSalaryBani;
-            const days = BigInt(input.workingDays);
+            const days = BigInt(monthDays);
             const leaveDays = BigInt(entry.leaveDays);
             const averaged =
               history.days > 0 && history.amount * days > base * BigInt(history.days);
@@ -555,16 +618,37 @@ export class Payroll {
             };
           }
         }
-        const items =
+        if (sick && entry?.items?.some((item) => item.kind.startsWith('sick_')))
+          issues.push({
+            code: 'SICK_ITEMS',
+            message:
+              'Indemnizațiile de concediu medical se calculează din certificate: nu le completați și în sumele lunii.',
+          });
+        const worked =
+          sick && !leaveItems && !entry?.items && full && !changed && activeDays !== undefined
+            ? wholeLei(terms.baseSalaryBani * BigInt(activeDays), BigInt(monthDays))
+            : null;
+        const ownItems =
           leaveItems ??
           entry?.items?.map((item) => ({
             kind: item.kind,
             amount: parseMoney(item.amount, 'RON'),
             label: item.label,
           })) ??
-          (full && !changed && activeDays === input.workingDays
-            ? [{ kind: 'salary' as const, amount: terms.baseSalaryBani, label: 'Salariu de bază' }]
-            : undefined);
+          (worked !== null
+            ? worked
+              ? [{ kind: 'salary' as const, amount: worked, label: 'Salariu de bază' }]
+              : []
+            : full && !changed && activeDays === monthDays
+              ? [
+                  {
+                    kind: 'salary' as const,
+                    amount: terms.baseSalaryBani,
+                    label: 'Salariu de bază',
+                  },
+                ]
+              : undefined);
+        const items = ownItems && sick ? [...ownItems, ...sick.items] : ownItems;
         if (!items)
           issues.push({
             code: 'SALARY_ITEMS',
@@ -588,7 +672,7 @@ export class Payroll {
             baseSalary: terms.baseSalaryBani,
             dailyHours: terms.dailyHours,
             mainJob: terms.mainJob,
-            workingDays: input.workingDays,
+            workingDays: monthDays,
             activeDays: activeDays!,
             items: items!,
             dependents: terms.dependents,
@@ -619,6 +703,7 @@ export class Payroll {
           input: canonical({
             ...(payInput ?? { activeDays: activeDays ?? null, items: items ?? null }),
             ...(leave ? { leave } : {}),
+            ...(sick ? { sick: sick.record } : {}),
           }),
           result: canonical(
             computed.result
@@ -652,7 +737,7 @@ export class Payroll {
         companyId: actor.companyId,
         month: input.month,
         round,
-        workingDays: input.workingDays,
+        workingDays: monthDays,
         resultHash,
         issues: issueCount,
         createdBy: actor.actorId,
@@ -684,6 +769,215 @@ export class Payroll {
       });
       return this.view(tx, actor.companyId, id);
     });
+  }
+
+  /**
+   * The sick pay of a month's certificates (OUG 158/2005, code 01): each episode's base from the
+   * six most recent of the twelve months before it, from the posted runs (or from the stage
+   * certificate when the payroll does not hold six), carried with the employer's days and the
+   * reduced day to the certificates that continue it, in this month or the next.
+   */
+  private async sickPay(
+    tx: Transaction,
+    companyId: string,
+    contractId: string,
+    month: string,
+    entry: NonNullable<z.infer<typeof runInput>['entries']>[number],
+    rules: RuleContext,
+  ) {
+    const issues: PayIssue[] = [];
+    const items: PayInput['items'][number][] = [];
+    const record: Record<string, unknown>[] = [];
+    let suspendedDays = 0;
+    type Episode = SickEpisode & { base: SickBase; days: number; percent: string; to: string };
+    const episodes = new Map<string, Episode>();
+    const key = (series: string, number: string) => `${series}/${number}`;
+    // Certificates of the previous month that this month's may continue.
+    const previousRun = await postedRun(tx, companyId, previousMonth(month, 1));
+    if (previousRun) {
+      const [line] = await tx
+        .select({ input: payrollLines.input })
+        .from(payrollLines)
+        .where(
+          and(
+            eq(payrollLines.companyId, companyId),
+            eq(payrollLines.runId, previousRun),
+            eq(payrollLines.contractId, contractId),
+          ),
+        );
+      const stored = line ? (JSON.parse(line.input) as { sick?: StoredSick[] }) : {};
+      for (const item of stored.sick ?? [])
+        episodes.set(key(item.series, item.number), {
+          ...item.episode,
+          base: { income: BigInt(item.episode.base.income), days: item.episode.base.days },
+        });
+    }
+    for (const given of entry.sickLeave ?? []) {
+      const certificate: SickCertificate = {
+        series: given.series,
+        number: given.number,
+        code: given.code,
+        issued: given.issued as LocalDate,
+        from: given.from as LocalDate,
+        to: given.to as LocalDate,
+        continuation: Boolean(given.continues),
+        hospitalized: given.hospitalized,
+      };
+      if (!given.from.startsWith(month)) {
+        issues.push({
+          code: 'SICK_DATES',
+          message: `Certificatul ${given.series} ${given.number} nu este din ${month}.`,
+        });
+        continue;
+      }
+      const earlier = given.continues
+        ? episodes.get(key(given.continues.series, given.continues.number))
+        : undefined;
+      if (given.continues && !earlier) {
+        issues.push({
+          code: 'SICK_CONTINUES',
+          message: `Certificatul ${given.series} ${given.number} continuă un certificat care nu este în statul acestei luni sau al lunii trecute.`,
+        });
+        continue;
+      }
+      if (earlier && addDays(earlier.to as LocalDate, 1) !== given.from) {
+        issues.push({
+          code: 'SICK_CONTINUES',
+          message: `Certificatul ${given.series} ${given.number} nu începe a doua zi după certificatul pe care îl continuă.`,
+        });
+        continue;
+      }
+      let base = earlier?.base;
+      if (!base) {
+        const history = await this.sickHistory(tx, companyId, contractId, month, rules);
+        base = entry.sickBase
+          ? { income: parseMoney(entry.sickBase.income, 'RON'), days: entry.sickBase.days }
+          : history.months.length === 6
+            ? history
+            : undefined;
+        if (!base) {
+          issues.push({
+            code: 'SICK_BASE',
+            message: `Statul are ${history.months.length} din cele 6 luni ale bazei de calcul: completați baza din adeverința de stagiu (sickBase).`,
+          });
+          continue;
+        }
+      }
+      const { result, issues: found } = sickIndemnity(
+        certificate,
+        base,
+        earlier ?? { reduced: false, employerDays: 0 },
+        rules,
+      );
+      issues.push(...found);
+      if (!result) continue;
+      const length =
+        Math.round(
+          (Date.parse(`${given.to}T00:00:00Z`) - Date.parse(`${given.from}T00:00:00Z`)) /
+            86_400_000,
+        ) + 1;
+      const days = (earlier?.days ?? 0) + length;
+      // A continuation whose episode reaches another percentage than its own certificate: art.
+      // 17 alin. (1^2) recalculates the earlier month from July 2026, which is not built yet.
+      const tier = (value: number) => (value <= 7 ? 1 : value <= 14 ? 2 : 3);
+      if (earlier && tier(days) !== tier(length)) {
+        issues.push({
+          code: 'SICK_RECALCULATION',
+          message: `Episodul certificatului ${given.series} ${given.number} ajunge la ${days} zile: procentul și recalcularea lunii anterioare (art. 17 alin. (1^2)) se stabilesc cu expertul contabil.`,
+        });
+        continue;
+      }
+      suspendedDays += result.days;
+      const label = `Concediu medical ${given.series} ${given.number}, cod ${given.code}`;
+      if (result.employer)
+        items.push({
+          kind: 'sick_employer',
+          amount: result.employer,
+          label: `${label} (angajator)`,
+        });
+      if (result.fund)
+        items.push({ kind: 'sick_fund', amount: result.fund, label: `${label} (FNUASS)` });
+      const episode: Episode = {
+        reduced: (earlier?.reduced ?? false) || result.unpaidDays > 0 || given.hospitalized,
+        employerDays: (earlier?.employerDays ?? 0) + result.employerDays,
+        base,
+        days,
+        percent: result.percent,
+        to: given.to,
+      };
+      episodes.set(key(given.series, given.number), episode);
+      record.push({
+        series: given.series,
+        number: given.number,
+        code: given.code,
+        issued: given.issued,
+        from: given.from,
+        to: given.to,
+        ...(given.continues ? { continues: given.continues } : {}),
+        days: result.days,
+        unpaidDays: result.unpaidDays,
+        employerDays: result.employerDays,
+        fundDays: result.fundDays,
+        dailyAverage: String(result.dailyAverage),
+        percent: result.percent,
+        employer: String(result.employer),
+        fund: String(result.fund),
+        episode: { ...episode, base: { income: String(base.income), days: base.days } },
+      });
+    }
+    return { issues, items, record, suspendedDays };
+  }
+
+  /** The base of an episode starting in `month`: the six most recent of the twelve previous
+   * months in the posted runs, each month's CAM base capped at 12 minimum wages, and its active
+   * days. */
+  private async sickHistory(
+    tx: Transaction,
+    companyId: string,
+    contractId: string,
+    month: string,
+    rules: RuleContext,
+  ) {
+    let income = 0n;
+    let days = 0;
+    const months: string[] = [];
+    for (let back = 1; back <= 12 && months.length < 6; back += 1) {
+      const previous = previousMonth(month, back);
+      const runId = await postedRun(tx, companyId, previous);
+      if (!runId) continue;
+      const [line] = await tx
+        .select({ input: payrollLines.input, result: payrollLines.result })
+        .from(payrollLines)
+        .where(
+          and(
+            eq(payrollLines.companyId, companyId),
+            eq(payrollLines.runId, runId),
+            eq(payrollLines.contractId, contractId),
+          ),
+        );
+      if (!line) continue;
+      const stored = JSON.parse(line.input) as { activeDays: number; month: string };
+      const steps =
+        (JSON.parse(line.result) as { steps?: { code: string; amount: string }[] }).steps ?? [];
+      const camBase = BigInt(steps.find((step) => step.code === 'cam.base')?.amount ?? '0');
+      const cap = rules.param<string>(
+        'ro.sick.base_cap',
+        'medical_certificate_issue_date',
+        `${month}-01` as LocalDate,
+      );
+      const minimumWage =
+        BigInt(
+          rules.param<string>(
+            'ro.payroll.minimum_wage',
+            'payroll_month_start',
+            monthStart(previous as Month),
+          ),
+        ) * 100n;
+      income += cappedIncome(camBase, minimumWage, cap);
+      days += stored.activeDays;
+      months.push(previous);
+    }
+    return { income, days, months };
   }
 
   /** A contract's pay in money (salary and leave, without bonuses) and active days over the

@@ -90,6 +90,7 @@ Reviewed actions (month close and reopen) follow the same pattern: request, appr
 | `payroll.runs.get`, `payroll.runs.list` | read | no | — | Payroll runs with their lines and problems. |
 | `assets.register`, `assets.list` | write / read | yes | — | A fixed asset's card; the register with depreciation booked. |
 | `assets.dispose` | write | no | — | Record that an asset left use, before derecognizing it. |
+| `ledger.generalLedger`, `ledger.inventoryRegister` | read | yes | — | Cartea mare for a month; Registrul-inventar at a date. |
 | `vat.etva.check` | read | yes | — | The VAT return against the pre-filled RO e-TVA return, and the invoices behind the differences. |
 | `parties.recordCnp` | write | no | — | An individual partner's CNP, kept sealed, for D205. |
 | `spv.connect.start`, `spv.connect.finish` | manage | no | human | Connect the company to ANAF over OAuth; the tokens are kept sealed. |

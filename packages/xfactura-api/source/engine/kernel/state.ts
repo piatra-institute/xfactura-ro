@@ -523,11 +523,10 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
         unionDues: row.unionDues,
         net: row.net,
         cam: row.cam,
-        camBase: BigInt(
-          (JSON.parse(row.result) as { steps?: { code: string; amount: string }[] }).steps?.find(
-            (step) => step.code === 'cam.base',
-          )?.amount ?? '0',
-        ),
+        ...((steps) => ({
+          camBase: BigInt(steps.find((step) => step.code === 'cam.base')?.amount ?? '0'),
+          sickFund: BigInt(steps.find((step) => step.code === 'sick.fund')?.amount ?? '0'),
+        }))((JSON.parse(row.result) as { steps?: { code: string; amount: string }[] }).steps ?? []),
       })),
     });
     readSet.push({ kind: 'payrollRun', id, version: `${run.resultHash}/${last!.state}` });

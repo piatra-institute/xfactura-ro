@@ -34,7 +34,8 @@ export type DateAxis =
   | 'dividend_payment_date'
   | 'distribution_decision_date'
   | 'submission_date'
-  | 'asset_commissioning_date';
+  | 'asset_commissioning_date'
+  | 'medical_certificate_issue_date';
 
 export interface ParameterDefinition<T = unknown> {
   key: string;

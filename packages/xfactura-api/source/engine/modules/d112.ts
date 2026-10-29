@@ -44,6 +44,7 @@ type PayLineInput = {
   dependents: number;
   unionDues: string;
   minimumExemption: MinimumExemption | null;
+  sick?: unknown[];
 };
 
 async function inputsOf(tx: Transaction, companyId: string, month: string) {
@@ -138,6 +139,13 @@ export function d112Declaration(secret: string): DeclarationKind {
           problems.push({
             code: 'D112_EMPLOYEE',
             message: `Salariatul ${name}: completați numele, prenumele și casa de asigurări de sănătate.`,
+          });
+        // Medical leave is declared per certificate (the insured's section E), not written yet:
+        // a declaration without it would understate the month.
+        if (pay.sick?.length || pay.items.some((item) => item.kind.startsWith('sick_')))
+          problems.push({
+            code: 'D112_SICK_LEAVE',
+            message: `Salariatul ${name} are concediu medical în lună: certificatele nu sunt încă declarate în D112.`,
           });
         const items = (kind: string) =>
           pay.items

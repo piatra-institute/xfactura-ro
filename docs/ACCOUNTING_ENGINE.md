@@ -161,6 +161,14 @@ The chart is OMFP 1802/2014 as published, plus the accounts later orders added, 
 
 `vat.etva.check` compares the period's latest VAT return with the pre-filled return RO e-TVA (P300), row by row: a row differs significantly at both 20% and 1,000 lei (`ro.etva.significance`, OUG 70/2024 art. 5, still in force after OUG 89/2025), on its VAT, or its value where it has none, leaving out regularization rows. Which amount the 20% is taken of the ordinance does not say; the pre-filled one is this engine's reading. The pre-filled amounts are given by hand from the P300 until a P300 file can be read (its format is not published). It also lists the e-Factura invoices of the period that are not in its VAT ledger, and the invoices in the ledger that did not come through e-Factura.
 
+### Year-end: `year.closeResult`, `year.legalReserve`, `year.transferResult`
+
+- **Closing:** on the financial year's last day, every expense (6xx) and revenue (7xx) account is brought to zero against 121 in the closing journal (INCHIDERE), so the next year opens without them; the ledger is continuous, and every other balance carries over. A year's result is closed once; modified financial years are not supported yet.
+- **Legal reserve:** on the same day, Dr 129 / Cr 1061 for the amount the company sets aside. Legea 31/1990 art. 183 asks for at least 5% of the profit each year until the reserve reaches a fifth of the share capital (1012), without saying whether before or after income tax: an amount below 5% of the result in 121, while under the cap, asks the reviewer to confirm.
+- **Transfer:** once the shareholders approve the financial statements, the allocations already made (129) are cleared against 121 and the rest of the result goes to retained earnings (1171), from which `dividends.distribute` pays; a loss is carried there too.
+- **Registers** (OMFP 2634/2015 pct. 44–47): `ledger.journal` (Registrul-jurnal) gives every entry in recording order with its justifying document's type, number and date; `ledger.generalLedger` (Cartea mare) gives, for a month, each synthetic account's opening balance, debit and credit turnover by corresponding account (`%` lists several) and closing balance; `ledger.inventoryRegister` (Registrul-inventar) gives, at a date, every asset, liability and equity account with a balance and what makes it up (open items by partner, fixed assets by inventory number), at the books' value until inventory differences are recorded.
+- Not built yet: the physical inventory and its differences, provisions, and the annual financial statements.
+
 ### `fx.revalue`: month-end revaluation
 
 - **Input:** a month-end date and a round number (a later round re-revalues after further entries).
@@ -204,7 +212,7 @@ Payroll data is personal: employees' CNPs are encrypted at rest (AES-256-GCM und
 
 - `payroll.employees.record` records an employee (name, CNP; the birth date comes from the CNP).
 - `payroll.contracts.record` records a contract's terms, or a new version of them from a date: base salary, daily hours, main job (funcția de bază), COR code, dependents, children in school, union dues, and the reason the part-time minimum does not apply.
-- `payroll.runs.prepare` computes a month from the contracts in force and what differs this month (active days, the month's amounts, the 26th-birthday decision), given the month's working days. A contract that starts, ends or changes during the month needs its days and amounts; the run keeps every line with its inputs, the calculation's steps and their clauses, or the problems that stopped it. Computing the month again supersedes the earlier run.
+- `payroll.runs.prepare` computes a month from the contracts in force and what differs this month (active days, the month's amounts, leave days, the 26th-birthday decision). The month's working days are the weekdays less the public holidays of Codul muncii art. 139 (Easter, Good Friday and Pentecost by the Orthodox calendar), unless given. A contract that starts, ends or changes during the month needs its days and amounts; the run keeps every line with its inputs, the calculation's steps and their clauses, or the problems that stopped it. Computing the month again supersedes the earlier run.
 
 The calculation (`xfactura-core/src/ro/payroll`) follows the Fiscal Code articles it cites, read in ANAF's consolidated text:
 - CAS 25% on salary in money, CASS 10% also on meal and holiday vouchers, tax 10% on the net income less the personal deduction and union dues at the main job, CAM 2.25% on salary in money;
@@ -214,7 +222,17 @@ The calculation (`xfactura-core/src/ro/payroll`) follows the Fiscal Code article
 
 The minimum wage is 4,050 lei from 2025 (HG 1506/2024 art. 1) and 4,325 lei from July 2026 (HG 146/2026 art. 1). The minimum-wage relief (OUG 156/2024 art. LXVI for 2025, OUG 89/2025 art. III for 2026) leaves 300 lei a month (200 lei from July 2026) out of every base for a full-time contract at the main job whose base salary is the minimum wage, not lowered since the ordinance, with salary in money (vouchers excluded) up to 4,300 lei (4,600 lei from July 2026). For part of a month the ordinance lists what reduces the amount but not how, so such a month is stopped for the expert. The Fiscal Code values apply from 2026-01-01, the snapshot's date; earlier months are a rule gap.
 
-Annual leave: a run entry gives the leave days; without the month's amounts, the run pays the worked days at the base salary and the leave at the daily average of the contract's previous three posted months (salary and leave pay, without bonuses), at least the base salary for the leave days, both in whole lei (Codul muncii art. 150, a text still to obtain). The computation is kept with the line. Sick leave and benefits in kind are not built yet: sick leave needs OUG 158/2005 as amended in 2026.
+Annual leave: a run entry gives the leave days; without the month's amounts, the run pays the worked days at the base salary and the leave at the daily average of the contract's previous three posted months (salary and leave pay, without bonuses), at least the base salary for the leave days, both in whole lei (Codul muncii art. 150, a text still to obtain). The computation is kept with the line. Benefits in kind are not built yet.
+
+Sick leave (OUG 158/2005 as consolidated on 1 July 2026, with OUG 91/2025 art. II as amended by Legea 64/2026; all read on the portal and still pending a stored copy):
+
+- **Input:** a run entry lists the month's medical certificates (series, number, indemnity code, issue date, first and last day, the certificate it continues, hospitalization). A certificate covers days of one month. Only code 01 (ordinary illness) is computed; any other code stops the line.
+- **Base:** the six most recent of the twelve months before the episode, from the posted runs: each month's CAM base capped at 12 minimum wages, over its active days. When the payroll holds fewer than six, the base comes from the employee's stage certificate (`sickBase`). The daily average is truncated to the ban, as the norms' worked example does (the norms, Ordin 15/2018/1.311/2017 as amended in June 2026, were read only in a secondary source).
+- **Amount:** the daily average × the certificate's percentage (55% up to 7 days, 65% for 8–14, 75% over 15), for its working days. For certificates issued from 1 February 2026 to 31 December 2027, the episode's first working day is not paid, unless the patient is hospitalized. The employer pays the next five working days and FNUASS the rest. A continuation keeps the episode's base, loses no further day and carries the employer's days over. Each part is rounded to whole lei.
+- **What stops the line:** a 15-day certificate (the law's tiers skip it); a continuation whose episode reaches another percentage than its own certificate (art. 17 alin. (1^2) recalculates the earlier month from July 2026, not built); a continuation that does not follow on; sick amounts also given by hand.
+- **Contributions:** both parts are salary income for the tax and in the CAS and CASS bases (code 01); the fund's part is not in the CAM base (Codul fiscal art. 76 alin. (1), 139 alin. (1) lit. o), 157 alin. (1) lit. v), 220^5). Sick pay does not count towards the minimum contribution, which is for the active days.
+- **Booking:** the contract is suspended on the certificates' working days. The employer's part is on 641; the fund's part is a claim on FNUASS (Dr 4382), recovered on the employer's request (art. 38), its receipt booked by a journal entry.
+- **D112:** a month with sick leave is refused (D112_SICK_LEAVE) until the certificates are declared in the insured's section E.
 
 CAM is posted on the employer's total base, rounded once, as D112 declares it.
 
@@ -334,7 +352,7 @@ A close records closing balances per account and currency and joins a hash chain
 - **Not built yet:**
   - verification of the Ministry's signature; B2C identification;
   - VAT categories other than S/O, TVA la încasare, domestic reverse charge, goods across the border, pro-rata; D394 for TVA la încasare, simplified invoices and receipts; reading the P300 file;
-  - payroll beyond salary in money and vouchers (leave pay, sick leave, benefits in kind, union dues), and corrections of a posted month;
+  - payroll beyond salary in money, vouchers, annual leave and sick leave for ordinary illness (other indemnity codes, benefits in kind, sick leave in D112), and corrections of a posted month;
   - asset disposal, revaluation and fiscal depreciation; leasing and loans;
   - stock;
   - profit tax, interim dividends, dividends to non-residents, and the D100 and D205 returns;

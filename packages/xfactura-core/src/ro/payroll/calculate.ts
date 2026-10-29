@@ -7,8 +7,11 @@ import type { DeductionTable, MinimumWageRelief, SupplementaryDeduction } from '
  * Pay items by how the Fiscal Code treats them: money paid as salary, bonuses or annual leave pay
  * is in every base; meal and holiday vouchers are salary income for the tax (art. 76 alin. (3)
  * lit. h)) and in the CASS base (art. 157), but not in the CAS or CAM bases (art. 142 lit. r),
- * art. 220^4). Bonuses are kept apart because annual leave pay is averaged without them. Sick
- * leave and benefits in kind have their own rules and are not modelled yet.
+ * art. 220^4). Bonuses are kept apart because annual leave pay is averaged without them. The sick
+ * pay for ordinary illness (code 01), the employer's part and the fund's, is salary income for the
+ * tax (art. 76 alin. (1)) and in the CAS and CASS bases (art. 139 alin. (1) lit. o), art. 157
+ * alin. (1) lit. v)); the fund's part is not in the CAM base (art. 220^5). Benefits in kind have
+ * their own rules and are not modelled yet.
  */
 export const payItemKinds = [
   'salary',
@@ -16,8 +19,17 @@ export const payItemKinds = [
   'leave',
   'meal_vouchers',
   'holiday_vouchers',
+  'sick_employer',
+  'sick_fund',
 ] as const;
-const moneyKinds: readonly PayItemKind[] = ['salary', 'bonus', 'leave'];
+const moneyKinds: readonly PayItemKind[] = [
+  'salary',
+  'bonus',
+  'leave',
+  'sick_employer',
+  'sick_fund',
+];
+const sickKinds: readonly PayItemKind[] = ['sick_employer', 'sick_fund'];
 export type PayItemKind = (typeof payItemKinds)[number];
 
 /** Why the minimum contribution for the contract's active days does not apply (art. 146 alin.
@@ -69,6 +81,10 @@ export interface PayResult {
   casBase: bigint;
   cassBase: bigint;
   camBase: bigint;
+  /** The sick pay borne by the employer and by the health insurance fund (FNUASS), which the
+   * employer pays and recovers. */
+  sickEmployer: bigint;
+  sickFund: bigint;
   /** Withheld from the employee. */
   cas: bigint;
   cass: bigint;
@@ -171,7 +187,15 @@ function compute(input: PayInput, rules: RuleContext) {
   const vouchers = sum(
     input.items.filter((item) => !moneyKinds.includes(item.kind)).map((item) => item.amount),
   );
-  const gross = step('gross', cash + vouchers, [code('art.76(3)(h)')]);
+  const ofKind = (kinds: readonly PayItemKind[]) =>
+    sum(input.items.filter((item) => kinds.includes(item.kind)).map((item) => item.amount));
+  const sick = ofKind(sickKinds);
+  const sickEmployer = ofKind(['sick_employer']);
+  const sickFund = ofKind(['sick_fund']);
+  const gross = step('gross', cash + vouchers, [
+    code('art.76(3)(h)'),
+    ...(sick ? [code('art.76(1)')] : []),
+  ]);
   const fullTime = input.dailyHours === 8;
   const hours = BigInt(input.dailyHours);
 
@@ -203,25 +227,43 @@ function compute(input: PayInput, rules: RuleContext) {
 
   const casRate = param<string>('ro.payroll.cas.rate');
   const cassRate = param<string>('ro.payroll.cass.rate');
-  const casBase = step('cas.base', cash - relief, [code('art.139(1)'), code('art.142(r)')]);
-  const cassBase = step('cass.base', gross - relief, [code('art.157')]);
-  const camBase = step('cam.base', cash - relief, [code('art.220^4')]);
+  if (sickEmployer) step('sick.employer', sickEmployer, [code('art.139(1)(o)')]);
+  if (sickFund) step('sick.fund', sickFund, [code('art.139(1)(o)')]);
+  const casBase = step('cas.base', cash - relief, [
+    code('art.139(1)'),
+    code('art.142(r)'),
+    ...(sick ? [code('art.139(1)(o)')] : []),
+  ]);
+  const cassBase = step('cass.base', gross - relief, [
+    code('art.157'),
+    ...(sick ? [code('art.157(1)(v)')] : []),
+  ]);
+  const camBase = step('cam.base', cash - relief - sickFund, [
+    code('art.220^4'),
+    ...(sickFund ? [code('art.220^5')] : []),
+  ]);
   const cas = step('cas', contribution(casBase, casRate), [code('art.138(a)')]);
   const cass = step('cass', contribution(cassBase, cassRate), [code('art.156')]);
 
   // The minimum contribution, for the contract's active working days: on the minimum wage less
   // the minimum-wage relief, in whole lei, as ANAF's D112 structure computes it. The relief only
-  // lowers it, so it is read only when the contributions could fall below the minimum's.
+  // lowers it, so it is read only when the contributions could fall below the minimum's. Sick
+  // pay is for the days the contract is suspended, so it does not count towards the minimum.
   let casEmployer = 0n;
   let cassEmployer = 0n;
   if (!input.minimumExemption && input.activeDays > 0) {
     const days = BigInt(input.activeDays);
     const of = BigInt(input.workingDays);
-    if (casBase * of < minimumWage * days || cassBase * of < minimumWage * days) {
+    const activeCas = casBase - sick;
+    const activeCass = cassBase - sick;
+    if (activeCas * of < minimumWage * days || activeCass * of < minimumWage * days) {
       const { amount } = param<MinimumWageRelief>('ro.payroll.minimum_wage_relief');
       const minimumBase = toLeu((minimumWage - BigInt(amount) * 100n) * days, of, amountRounding);
-      casEmployer = max(0n, contribution(minimumBase, casRate) - cas);
-      cassEmployer = max(0n, contribution(minimumBase, cassRate) - cass);
+      casEmployer = max(0n, contribution(minimumBase, casRate) - contribution(activeCas, casRate));
+      cassEmployer = max(
+        0n,
+        contribution(minimumBase, cassRate) - contribution(activeCass, cassRate),
+      );
       if (casEmployer || cassEmployer) step('minimum.base', minimumBase, [D112]);
     }
     if (casEmployer) step('cas.employer', casEmployer, [code('art.146(5^6)-(5^9)')]);
@@ -287,6 +329,8 @@ function compute(input: PayInput, rules: RuleContext) {
     casBase,
     cassBase,
     camBase,
+    sickEmployer,
+    sickFund,
     cas,
     cass,
     casEmployer,

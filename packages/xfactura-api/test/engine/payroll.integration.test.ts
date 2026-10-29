@@ -397,6 +397,121 @@ describe('payroll', () => {
     ]);
   });
 
+  test('sick leave: the base from six posted months, the first day unpaid, the fund’s part a claim on FNUASS', async () => {
+    const { s, anaf, hire } = await employer({ policy: '635' });
+    const short = await hire(['Ene', 'Ana'], cnp('290050112345'), { baseSalary: '6000' });
+    const long = await hire(['Toma', 'Ion'], cnp('188020312345'), { baseSalary: '6000' });
+    // April to September 2026: 20 + 20 + 21 + 23 + 21 + 22 = 127 working days at 6,000 a month.
+    for (const month of ['2026-04', '2026-05', '2026-06', '2026-07', '2026-08', '2026-09']) {
+      const run = await s.invoke<Run>(s.owner, 'payroll.runs.prepare', { month });
+      await s.book('payroll.recognize', { runId: run.id, month, round: 1, authorityId: anaf.id });
+    }
+    const certificate = (number: string, from: string, to: string) => ({
+      series: 'CCMAM',
+      number,
+      code: '01',
+      issued: from,
+      from,
+      to,
+    });
+    const october = await s.invoke<Run>(s.owner, 'payroll.runs.prepare', {
+      month: '2026-10',
+      entries: [
+        {
+          contractId: short.contractId,
+          sickLeave: [certificate('1001', '2026-10-05', '2026-10-09')],
+        },
+        {
+          contractId: long.contractId,
+          sickLeave: [certificate('1002', '2026-10-19', '2026-10-31')],
+        },
+      ],
+    });
+    expect(october.issues).toBe(0);
+    // The daily average: 36,000 / 127 = 283.46. Ene: 5 days at 55%, the first unpaid, 4 by the
+    // employer (624); worked 6,000 × 17 / 22 = 4,636. Toma: 13 days at 65%, 10 working, the
+    // first unpaid, 5 by the employer (921) and 4 by the fund (737); worked 6,000 × 12 / 22 = 3,273.
+    expect(october.lines.map((line) => [line.name, line.cash])).toEqual([
+      ['Ene Ana', '5260.00'],
+      ['Toma Ion', '4931.00'],
+    ]);
+    const recognized = await s.propose('payroll.recognize', {
+      runId: october.id,
+      month: '2026-10',
+      round: 1,
+      authorityId: anaf.id,
+    });
+    expect(lines(recognized)?.slice(0, 2)).toEqual(['D 641 9454.00', 'D 4382 737.00']);
+    expect(recognized.issues).toEqual([]);
+
+    // A continuation into November keeps the base and the employer's days, and loses no day.
+    await s.post(await s.approve(recognized));
+    const november = await s.invoke<Run>(s.owner, 'payroll.runs.prepare', {
+      month: '2026-11',
+      entries: [
+        {
+          contractId: long.contractId,
+          sickLeave: [
+            {
+              ...certificate('1003', '2026-11-01', '2026-11-06'),
+              continues: { series: 'CCMAM', number: '1002' },
+            },
+          ],
+        },
+      ],
+    });
+    // 13 + 6 days crosses to the over-15 percentage: the recalculation is left to the expert.
+    expect(
+      november.lines.find((line) => line.name === 'Toma Ion')?.issues.map((i) => i.code),
+    ).toEqual(['SICK_RECALCULATION']);
+  });
+
+  test('sick leave the payroll cannot compute stops the run', async () => {
+    const { s, hire } = await employer();
+    const newcomer = await hire(['Ene', 'Ana'], cnp('290050112345'), { baseSalary: '6000' });
+    const run = (extra: Record<string, unknown>) =>
+      s.invoke<Run>(s.owner, 'payroll.runs.prepare', {
+        month: '2026-10',
+        entries: [
+          {
+            contractId: newcomer.contractId,
+            sickLeave: [
+              {
+                series: 'CCMAM',
+                number: '7',
+                code: '01',
+                issued: '2026-10-05',
+                from: '2026-10-05',
+                to: '2026-10-09',
+              },
+            ],
+            ...extra,
+          },
+        ],
+      });
+    const codes = async (extra: Record<string, unknown>) =>
+      (await run(extra)).lines[0]!.issues.map((issue) => issue.code);
+    // No posted months: the base comes from the stage certificate.
+    expect(await codes({})).toEqual(['SICK_BASE']);
+    expect(await codes({ sickBase: { income: '24300', days: 121 } })).toEqual([]);
+    expect(
+      await codes({
+        sickBase: { income: '24300', days: 121 },
+        items: [{ kind: 'sick_employer', amount: '100', label: 'Manual' }],
+      }),
+    ).toContain('SICK_ITEMS');
+  });
+
+  test("a month's working days come from the public holidays unless given", async () => {
+    const { s, hire } = await employer();
+    await hire(['Ene', 'Ana'], cnp('290050112345'), { baseSalary: '6000' });
+    // November 2026: 21 weekdays, less 30 November.
+    const run = await s.invoke<Run & { workingDays: number }>(s.owner, 'payroll.runs.prepare', {
+      month: '2026-11',
+    });
+    expect(run.workingDays).toBe(20);
+  });
+
   test('the month an employee turns 26 asks whether the young deduction applies', async () => {
     const { hire, prepare } = await employer();
     const young = await hire(['Dinu', 'Elena'], cnp('600101512345'), { baseSalary: '5000' });

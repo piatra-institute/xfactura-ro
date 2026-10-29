@@ -93,6 +93,15 @@
       "extract": ["D406/D406Validator.jar", "D406/D406TValidator.jar", "D406/D406Pdf.jar"],
       "into": "dist/lib",
       "flatten": true
+    },
+    {
+      "name": "anaf",
+      "description": "ANAF S1005 validator and PDF generator: microentities' annual financial statements for 2025 (J14.0.3, 17.03.2026)",
+      "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/S1005_20260317.zip",
+      "sha256": "3c9357f6206801bf16a8ef2f04d2c51aa923df7829c07f44f49d5789b7248857",
+      "extract": ["S1005/S1005Validator.jar", "S1005/S1005Pdf.jar"],
+      "into": "dist/lib",
+      "flatten": true
     }
   ],
   "manual": [

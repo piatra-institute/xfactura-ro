@@ -242,6 +242,9 @@ export interface PayrollLineState {
   cam: bigint;
   /** The CAM base: CAM is owed on the employer's total, rounded once. */
   camBase: bigint;
+  /** The sick pay borne by the health insurance fund, within `cash`: the employer pays it and
+   * recovers it from the fund. */
+  sickFund: bigint;
 }
 
 export interface PayrollRunState {

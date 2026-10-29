@@ -99,7 +99,22 @@ export const payrollRecognition: Treatment<PayrollInput> = {
       mayReverse: false,
     });
     const openItems: OpenItemSpec[] = [];
-    const lines: LineSpec[] = [{ account: '641', side: 'D', bani: total((line) => line.cash) }];
+    // The sick pay the fund bears is a claim on it (4382), recovered on the employer's request
+    // (OUG 158/2005 art. 38), not an expense.
+    const sickFund = total((line) => line.sickFund);
+    const lines: LineSpec[] = [
+      { account: '641', side: 'D', bani: total((line) => line.cash) - sickFund },
+      ...(sickFund
+        ? [
+            {
+              account: '4382',
+              side: 'D' as const,
+              bani: sickFund,
+              memo: 'Indemnizații de concediu medical de recuperat din FNUASS',
+            },
+          ]
+        : []),
+    ];
     for (const line of run.lines) {
       const ref = `employee:${line.contractId}`;
       openItems.push({

@@ -6,6 +6,7 @@ import { vatDefinitions, vatVersions } from 'xfactura-core/ro/vat';
 import { fxDefinitions, fxVersions } from 'xfactura-core/ro/fx';
 import { procedureDefinitions, procedureVersions } from 'xfactura-core/ro/procedure';
 import { payrollDefinitions, payrollVersions } from 'xfactura-core/ro/payroll';
+import { sickLeaveDefinitions, sickLeaveVersions } from 'xfactura-core/ro/payroll/sick-leave';
 import { generalJournal, reversal } from 'xfactura-core/ro/treatments/ledger';
 import { creditRecognition, invoiceRecognition } from 'xfactura-core/ro/treatments/invoices';
 import { settlement } from 'xfactura-core/ro/treatments/settlement';
@@ -15,6 +16,7 @@ import { crossBorderRecognition } from 'xfactura-core/ro/treatments/cross-border
 import { payrollRecognition } from 'xfactura-core/ro/treatments/payroll';
 import { microTax } from 'xfactura-core/ro/treatments/micro-tax';
 import { assetDepreciation, assetDerecognition } from 'xfactura-core/ro/treatments/assets';
+import { legalReserve, resultClosing, resultTransfer } from 'xfactura-core/ro/treatments/year-end';
 import { microDefinitions, microVersions } from 'xfactura-core/ro/micro';
 import { dividendDefinitions, dividendVersions } from 'xfactura-core/ro/dividends';
 import { etvaDefinitions, etvaVersions } from 'xfactura-core/ro/etva';
@@ -38,7 +40,14 @@ import {
 } from './kernel/periods';
 import { PostingPolicies, policyInput, policyView } from './kernel/policies';
 import { Proposals } from './kernel/proposals';
-import { journalInput, Reports, trialBalanceInput, trialBalanceView } from './kernel/reports';
+import {
+  generalLedgerInput,
+  inventoryInput,
+  journalInput,
+  Reports,
+  trialBalanceInput,
+  trialBalanceView,
+} from './kernel/reports';
 import { proposalView } from './kernel/views';
 import { Agents, grantView, issueAgentInput } from './modules/agents';
 import {
@@ -178,6 +187,7 @@ export const defaultRegister = () =>
       ...fxDefinitions,
       ...procedureDefinitions,
       ...payrollDefinitions,
+      ...sickLeaveDefinitions,
       ...microDefinitions,
       ...dividendDefinitions,
       ...etvaDefinitions,
@@ -187,6 +197,7 @@ export const defaultRegister = () =>
       ...fxVersions,
       ...procedureVersions,
       ...payrollVersions,
+      ...sickLeaveVersions,
       ...microVersions,
       ...dividendVersions,
       ...etvaVersions,
@@ -261,6 +272,9 @@ export class Engine {
       dividendWithholding,
       assetDepreciation,
       assetDerecognition,
+      resultClosing,
+      legalReserve,
+      resultTransfer,
       ...(options.treatments ?? []),
     );
     this.actions = new Actions(this.commands);
@@ -549,6 +563,30 @@ export class Engine {
         input: journalInput,
         output: ok({ entries: z.array(z.unknown()), next: z.number().nullable() }),
         run: (actor, _, input) => this.reports.journal(actor, input),
+      }),
+      define({
+        id: 'ledger.generalLedger',
+        description:
+          'Cartea mare: pentru o lună, fiecare cont sintetic cu soldul inițial, rulajele pe conturi corespondente și soldul final.',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: generalLedgerInput,
+        output: z.array(z.unknown()),
+        run: (actor, _, input) => this.reports.generalLedger(actor, input),
+      }),
+      define({
+        id: 'ledger.inventoryRegister',
+        description:
+          'Registrul-inventar: la o dată, conturile de active, datorii și capitaluri proprii cu soldurile și elementele lor.',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: inventoryInput,
+        output: z.array(z.unknown()),
+        run: (actor, _, input) => this.reports.inventoryRegister(actor, input),
       }),
       define({
         id: 'policies.create',

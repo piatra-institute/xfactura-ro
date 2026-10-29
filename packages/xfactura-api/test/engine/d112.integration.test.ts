@@ -53,7 +53,7 @@ async function employer(validator?: DukIntegrator) {
       cnp: code,
       healthFund: 'RO-GL',
     });
-    await s.invoke(s.owner, 'payroll.contracts.record', {
+    return s.invoke<{ contractId: string }>(s.owner, 'payroll.contracts.record', {
       employeeId: employee.id,
       number: `CIM-${name[0]}`,
       startDate: '2025-02-15',
@@ -64,10 +64,11 @@ async function employer(validator?: DukIntegrator) {
       ...terms,
     });
   };
-  const payroll = async () => {
+  const payroll = async (entries: unknown[] = []) => {
     const run = await s.invoke<{ id: string }>(s.owner, 'payroll.runs.prepare', {
       month: '2026-10',
       workingDays: 22,
+      entries,
     });
     await s.book('payroll.recognize', {
       runId: run.id,
@@ -90,6 +91,31 @@ async function employer(validator?: DukIntegrator) {
 }
 
 describe('D112 from the books', () => {
+  test('refuses a month with sick leave until the certificates are declared', async () => {
+    const { s, hire, payroll, prepare } = await employer();
+    // Above the minimum wage: a partial month on it leaves the relief to the expert.
+    const { contractId } = await hire(['Popescu', 'Ana'], cnp('290050117002'), {
+      baseSalary: '5000',
+    });
+    await payroll([
+      {
+        contractId,
+        sickLeave: [
+          {
+            series: 'CCMAM',
+            number: '9',
+            code: '01',
+            issued: '2026-10-05',
+            from: '2026-10-05',
+            to: '2026-10-09',
+          },
+        ],
+        sickBase: { income: '24300', days: 121 },
+      },
+    ]);
+    expect(JSON.stringify(await s.refused(prepare()))).toContain('D112_SICK_LEAVE');
+  });
+
   test('needs the month posted', async () => {
     const { s, hire, prepare } = await employer();
     await hire(['Popescu', 'Ana'], cnp('290050117002'), { baseSalary: '4325' });
