@@ -27,7 +27,8 @@
     "build:api": "bun run --cwd packages/xfactura-api build",
     "format:check": "prettier --check packages/xfactura-core packages/xfactura-api/source/engine packages/xfactura-api/test/engine packages/xfactura-api/source/accounting/*.ts packages/xfactura-api/source/accounting/domain/*.ts packages/xfactura-web/components/accounting packages/xfactura-web/app/contabilitate scripts",
     "backup": "bun run packages/xfactura-api/source/accounting/backup.ts backup",
-    "restore": "bun run packages/xfactura-api/source/accounting/backup.ts restore"
+    "restore": "bun run packages/xfactura-api/source/accounting/backup.ts restore",
+    "test:perf": "bun test --timeout 600000 packages/xfactura-api/test/engine/*.perf.test.ts"
   },
   "devDependencies": {
     "@playwright/test": "1.64.1",

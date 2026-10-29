@@ -1,0 +1,149 @@
+import type { ZodType } from 'zod';
+import type { RuleContext } from '../rules';
+import type { LocalDate } from '../time';
+import type { Effect, Issue, JsonValue, LineSpec, OpenItemKind, TaxEntrySpec } from './effect';
+import type { OpenItemInfo } from './validate';
+
+/**
+ * What a treatment reads before it evaluates. The kernel loads exactly this, records what it
+ * read as the proposal's read-set, and rechecks the read-set when the proposal is posted.
+ */
+export interface ReadPlan {
+  /** Retained source files the effect cites. */
+  evidence?: string[];
+  documents?: string[];
+  /** Posted entries, with their lines and tax entries (for reversals and corrections). */
+  entries?: string[];
+  openItems?: OpenItemQuery[];
+  parties?: string[];
+  /** Dates at which the company profile (VAT status, regimes, …) is needed. */
+  profileAt?: LocalDate[];
+}
+
+export interface OpenItemQuery {
+  ids?: string[];
+  /** Open items that lines of this posted entry touched. */
+  touchedBy?: string;
+  documentId?: string;
+  partyId?: string;
+  kind?: OpenItemKind;
+  /** Only items whose balance is not zero. */
+  openOnly?: boolean;
+}
+
+/** One recorded read. `version` identifies the state read: for an open item, its number of
+ * posted lines; for an immutable record, its content hash. */
+export interface ReadSetEntry {
+  kind: 'evidence' | 'document' | 'entry' | 'openItem' | 'party' | 'profile';
+  id: string;
+  version: string;
+}
+
+export interface DocumentRecord {
+  id: string;
+  kind: string;
+  schema: string;
+  body: JsonValue;
+  bodyHash: string;
+  docDate: LocalDate;
+  partyId: string | null;
+  currency: string | null;
+  number: string | null;
+  evidenceId: string | null;
+}
+
+export interface OpenItemState extends OpenItemInfo {
+  documentId: string | null;
+  dueDate: LocalDate | null;
+  /** Number of posted lines; the item's version in the read-set. */
+  movements: number;
+}
+
+export interface EvidenceRecord {
+  id: string;
+  hash: string;
+  filename: string;
+  mediaType: string;
+}
+
+export interface PartyRecord {
+  id: string;
+  kind: string;
+  country: string;
+  taxId: string | null;
+  name: string;
+}
+
+export interface FiscalYear {
+  id: string;
+  kind: 'financial' | 'fiscal';
+  from: LocalDate;
+  to: LocalDate;
+}
+
+/** A posted entry as treatments see it: the effect it recorded. */
+export interface PostedEntry {
+  id: string;
+  number: number;
+  date: LocalDate;
+  journalCode: string;
+  description: string;
+  lines: LineSpec[];
+  taxEntries: TaxEntrySpec[];
+}
+
+export interface ProfileFact {
+  axis: string;
+  value: string;
+  effectiveFrom: LocalDate;
+}
+
+/** What the kernel loaded for a plan, ordered deterministically. */
+export interface Loaded {
+  years: readonly FiscalYear[];
+  evidence: ReadonlyMap<string, EvidenceRecord>;
+  documents: ReadonlyMap<string, DocumentRecord>;
+  entries: ReadonlyMap<string, PostedEntry>;
+  openItems: ReadonlyMap<string, OpenItemState>;
+  parties: ReadonlyMap<string, PartyRecord>;
+  profile: readonly ProfileFact[];
+}
+
+/** The company profile value on an axis at a date, or null when nothing is recorded. */
+export function profileAt(loaded: Loaded, axis: string, date: LocalDate): string | null {
+  let value: string | null = null;
+  for (const fact of loaded.profile)
+    if (fact.axis === axis && fact.effectiveFrom <= date) value = fact.value;
+  return value;
+}
+
+export interface Evaluation {
+  effect: Effect | null;
+  issues: Issue[];
+}
+
+/**
+ * A pure accounting treatment: the same input, loaded state and rules always give the same
+ * evaluation. It may not read the clock, randomness or anything outside `loaded` and `rules`.
+ * Open items and schedules it creates are named by refs the kernel turns into stable ids.
+ */
+export interface Treatment<Input = unknown> {
+  id: string;
+  version: number;
+  description: string;
+  input: ZodType<Input>;
+  /** Identifies what the proposal recognizes; a company recognizes each subject once. */
+  subject(input: Input): string;
+  plan(input: Input): ReadPlan;
+  evaluate(input: Input, loaded: Loaded, rules: RuleContext): Evaluation;
+  /** Whether an agent credential may propose this treatment. */
+  agent: boolean;
+}
+
+/** The financial year containing a date, if exactly one does. */
+export function financialYearOf(loaded: Loaded, date: LocalDate): FiscalYear | undefined {
+  const years = loaded.years.filter(
+    (year) => year.kind === 'financial' && year.from <= date && date <= year.to,
+  );
+  return years.length === 1 ? years[0] : undefined;
+}

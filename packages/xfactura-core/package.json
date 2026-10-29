@@ -13,7 +13,9 @@
     "./time": "./src/time/index.ts",
     "./kernel": "./src/kernel/index.ts",
     "./rules": "./src/rules/index.ts",
-    "./ro/vat": "./src/ro/vat.ts"
+    "./ro/vat": "./src/ro/vat.ts",
+    "./ro/chart": "./src/ro/chart.ts",
+    "./ro/treatments/ledger": "./src/ro/treatments/ledger.ts"
   },
   "dependencies": {
     "@noble/hashes": "2.4.0",
