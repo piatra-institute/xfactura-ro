@@ -50,7 +50,11 @@
     "./ro/declarations/d100": "./src/ro/declarations/d100.ts",
     "./ro/calendar": "./src/ro/calendar.ts",
     "./ro/treatments/year-end": "./src/ro/treatments/year-end.ts",
-    "./ro/payroll/sick-leave": "./src/ro/payroll/sick-leave.ts"
+    "./ro/payroll/sick-leave": "./src/ro/payroll/sick-leave.ts",
+    "./ro/annual/s1005": "./src/ro/annual/s1005.ts",
+    "./ro/annual/s1005-accounts": "./src/ro/annual/s1005-accounts.ts",
+    "./ro/saft/d406": "./src/ro/saft/d406.ts",
+    "./ro/saft/accounts": "./src/ro/saft/accounts.ts"
   },
   "dependencies": {
     "@noble/hashes": "2.4.0",

@@ -2,6 +2,7 @@ import { DomainError } from '../../errors';
 import { element, serializeXml } from '../../xml/write';
 import { isValidCnp, isValidCui } from '../identifiers';
 import {
+  s1005CaenClasses,
   s1005F10Rows,
   s1005F20Rows,
   s1005F30Rows,
@@ -14,6 +15,7 @@ import {
 } from './s1005-rows';
 
 export {
+  s1005CaenClasses,
   s1005F10Rows,
   s1005F20Rows,
   s1005F30Rows,
@@ -38,12 +40,16 @@ export {
  * the namespace `mfp:anaf:dgti:s1005:declaratie:v15`; the later schema of 15.07.2026 declares the
  * same namespace and the same F10, F20, F30 and F40, and ANAF's PDF form for 2025
  * (bilant_SC_1225_XML_270326) writes v15 too ("an 2025 :v15"; 2024 was v14). Only 2025 is
- * supported: another year is refused, never guessed.
+ * supported: another year is refused, never guessed. (J14.0.3 also accepts an="2026" under its
+ * 2025 rules, but ANAF has published no format for 2026.) The schema leaves out the null rows the
+ * validator still knows (F20_3051/3052, F30_3421/3422); they are never written.
  *
  * F10, F20 and F30 are required by OMF nr. 2036/2025 anexa nr. 1 pct. 2.1, F40 accompanies them;
- * the four are always written. Every F10 and F20 field is written, an absent one as 0; F30 and F40
- * fields only when present or computed. The rows the form computes (totals, profit or loss,
- * chapter I of F30 from F20) are filled by completeS1005 when absent and checked when given.
+ * the four are always written, and the validator ties F30 to F20 (F20_F30_1–10) and F40 to F10
+ * (F10_F40_1–6) whether or not they are present. Every F10 and F20 field is written, an absent one
+ * as 0; F30 and F40 fields only when present or computed. The rows the form computes (totals,
+ * profit or loss, chapter I of F30 from F20) are filled by completeS1005 when absent and checked
+ * when given. totalPlata_A is F10 rd. 29 col. 2, as the structure says; J14.0.3 does not check it.
  *
  * Amounts are whole lei, N(15), and may be negative where the schema allows; the percentages of
  * F30 chapter XII have at most two decimals.
@@ -345,6 +351,9 @@ type Rule =
       profit: string;
       loss: string;
       terms: Term[];
+      /** The validator's F30_125–128 and F30_147–150 add the case to the code: .1 when the row
+       * takes the sum, .2 when it must be 0; the loss of F30_127, 128 takes it from 0 included. */
+      cases?: 'loss>=0' | 'loss>0';
     }
   | { kind: 'nonNegative'; id: string; field: string }
   | { kind: 'exclusive'; id: string; fields: [string, string] }
@@ -394,7 +403,13 @@ function compare(id: string, text: string, options: Options = {}) {
 function columns(ids: readonly string[], template: string, options: Options = {}) {
   ids.forEach((id, index) => compare(id, template.replace(/#/g, String(index + 1)), options));
 }
-function split(ids: [string, string], profit: string, loss: string, terms: string) {
+function split(
+  ids: [string, string],
+  profit: string,
+  loss: string,
+  terms: string,
+  cases?: 'loss>=0' | 'loss>0',
+) {
   rules.push({
     kind: 'split',
     ids,
@@ -402,6 +417,7 @@ function split(ids: [string, string], profit: string, loss: string, terms: strin
     profit,
     loss,
     terms: parseSide(terms),
+    ...(cases ? { cases } : {}),
   });
 }
 const total = { defines: true } as const;
@@ -641,8 +657,8 @@ columns(
   'F30_208# = F30_183# + F30_184# + F30_185# + F30_186# - F30_187# + F30_188# + F30_191# + F30_194# + F30_197# + F30_205#',
   total,
 );
-split(['F30_125', 'F30_127'], 'F30_2091', 'F30_2101', 'F30_1821 - F30_2081');
-split(['F30_126', 'F30_128'], 'F30_2092', 'F30_2102', 'F30_1822 - F30_2082');
+split(['F30_125', 'F30_127'], 'F30_2091', 'F30_2101', 'F30_1821 - F30_2081', 'loss>=0');
+split(['F30_126', 'F30_128'], 'F30_2092', 'F30_2102', 'F30_1822 - F30_2082', 'loss>=0');
 columns(['F30_129', 'F30_130'], 'F30_218# = F30_211# + F30_213# + F30_215# + F30_216#', total);
 columns(['F30_131', 'F30_132'], 'F30_219# = F30_220# - F30_221#', total);
 columns(['F30_133', 'F30_134'], 'F30_225# = F30_219# + F30_222# + F30_224#', total);
@@ -657,12 +673,14 @@ split(
   'F30_2351',
   'F30_2361',
   'F30_2301 - F30_2311 - F30_2321 - F30_3411 - F30_2341 - F30_3281 + F30_3291',
+  'loss>0',
 );
 split(
   ['F30_148', 'F30_150'],
   'F30_2352',
   'F30_2362',
   'F30_2302 - F30_2312 - F30_2322 - F30_3412 - F30_2342 - F30_3282 + F30_3292',
+  'loss>0',
 );
 columns(['F30a_cif', 'F30b_cif'], 'F30_325# <= F20_001#');
 
@@ -828,7 +846,13 @@ export const s1005Controls: readonly { code: string; text: string; severity: Sev
       case 'compare':
         return [{ code: rule.id, text: rule.text, severity: rule.severity }];
       case 'split':
-        return rule.ids.map((code) => ({ code, text: rule.text, severity: 'error' as const }));
+        return rule.ids.flatMap((code) =>
+          (rule.cases ? [`${code}.1`, `${code}.2`] : [code]).map((suffixed) => ({
+            code: suffixed,
+            text: rule.text,
+            severity: 'error' as const,
+          })),
+        );
       case 'nonNegative':
         return [{ code: rule.id, text: `${rule.field} >= 0`, severity: 'error' as const }];
       case 'exclusive':
@@ -856,7 +880,7 @@ const isPercent = (value: unknown): value is number =>
   typeof value === 'number' &&
   Number.isFinite(value) &&
   value >= 0 &&
-  value <= 100 &&
+  value < 1000 &&
   Math.abs(Math.round(value * 100) - value * 100) < 1e-9;
 
 /** Rows, columns and values calculations cannot use. */
@@ -899,7 +923,7 @@ function inputProblems(model: S1005): Problem[] {
             problems.push({
               code: 'S1005_PERCENT',
               path,
-              message: `${field}: un procent între 0 și 100, cu cel mult două zecimale.`,
+              message: `${field}: un procent, N(3.2): cel mult trei cifre și două zecimale.`,
             });
         } else if (!isAmount(value))
           problems.push({
@@ -1123,14 +1147,16 @@ function headerChecks(model: S1005, add: (check: S1005Check) => void) {
       'entity.ownership',
       'Forma de proprietate nu este în nomenclatorul ANAF (codPP).',
     );
-  if (!/^\d{4}$/.test(entity.caen))
-    error('S1005_CAEN', 'entity.caen', 'Codul CAEN al activității preponderente are patru cifre.');
-  if (!/^\d{4}$/.test(entity.caenActual))
-    error(
-      'S1005_CAEN',
-      'entity.caenActual',
-      'Codul CAEN al activității efectiv desfășurate are patru cifre.',
-    );
+  for (const [path, value, label] of [
+    ['entity.caen', entity.caen, 'activității preponderente'],
+    ['entity.caenActual', entity.caenActual, 'activității preponderente efectiv desfășurate'],
+  ] as const)
+    if (!s1005CaenClasses.has(value))
+      error(
+        'S1005_CAEN',
+        path,
+        `Codul CAEN al ${label} (${value}) nu este în lista ANAF (CAEN 2024 și 2025).`,
+      );
   if (entity.caenVersion !== 2024 && entity.caenVersion !== 2025)
     error('S1005_CAEN', 'entity.caenVersion', 'Anul CAEN (AN_CAEN) este 2024 sau 2025.');
   if (entity.lei !== undefined && entity.lei.length !== 20)
@@ -1225,10 +1251,11 @@ function ruleChecks(fields: ReadonlyMap<string, number>, add: (check: S1005Check
       case 'split': {
         const sum = sumTerms(fields, rule.terms);
         const expected = [sum > 0n ? sum : 0n, sum < 0n ? -sum : 0n];
+        const takes = [sum > 0n, rule.cases === 'loss>=0' ? sum <= 0n : sum < 0n];
         [rule.profit, rule.loss].forEach((field, i) => {
           if (value(field) !== expected[i])
             add({
-              code: rule.ids[i]!,
+              code: rule.cases ? `${rule.ids[i]}.${takes[i] ? 1 : 2}` : rule.ids[i]!,
               severity: 'error',
               path: pathOf(field),
               message: `${field} (${shown(fields, field)}) trebuie să fie ${expected[i]}: ${rule.terms

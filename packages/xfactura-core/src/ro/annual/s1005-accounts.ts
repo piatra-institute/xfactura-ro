@@ -331,7 +331,7 @@ export const s1005F30Formulas: readonly S1005Formula[] = [
   xix('234', 'expense', '698'),
 ];
 
-/** Rows by ANAF's numbering are F30 rows; the order's row numbers are in s1005F30Rows. */
+/** Every account formula, by ANAF's row numbers (the order's are in the row catalogs). */
 export const s1005Formulas: readonly S1005Formula[] = [
   ...s1005F10Formulas,
   ...s1005F20Formulas,
@@ -602,7 +602,7 @@ export function s1005FromLedger(year: S1005LedgerYear): S1005LedgerRows {
       path: 'closing',
       message: `Soldurile claselor 1–5 nu se echilibrează: debitoare minus creditoare = ${sum(balances)} bani.`,
     });
-  if (turnover.length && sum(result) !== sum(flow))
+  if (turnover.length && closing.length && sum(result) !== sum(flow))
     issues.push({
       code: 'S1005_RESULT',
       severity: 'error',

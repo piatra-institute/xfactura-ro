@@ -330,6 +330,24 @@ export const legalSources: readonly LegalSource[] = [
     snapshots: [],
   },
   {
+    id: 'OMF2036/2025',
+    kind: 'act',
+    title:
+      'Ordinul ministrului finanțelor nr. 2.036/2025 privind principalele aspecte legate de întocmirea și depunerea situațiilor financiare anuale și a raportărilor contabile anuale ale operatorilor economici la ANAF',
+    issuer: 'Ministerul Finanțelor',
+    publication: 'Monitorul Oficial nr. 41 din 20 ianuarie 2026',
+    urls: ['https://static.anaf.ro/static/10/Anaf/legislatie/OMF_2036_2025.pdf'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/legislatie/OMF_2036_2025.pdf',
+        sha256: '29352567d60f380bd82e73a52c3438d8777596b928773341f982343acb1e710f',
+        retrievedOn: '2026-10-29',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
     id: 'OUG91/2025',
     kind: 'act',
     title:
@@ -729,6 +747,14 @@ export const clauses: readonly Clause[] = [
     status: 'pending',
     summary:
       '55% din baza de calcul pentru certificatele de până la 7 zile, 65% pentru cele între 8 și 14 zile, 75% pentru cele de peste 15 zile; 100% pentru afecțiunile de la alin. (2). Din 1 iulie 2026, diferențele rezultate din recalcularea unui episod prelungit în luna următoare se includ în veniturile lunii în care se determină (alin. (1^2)).',
+  },
+  {
+    id: 'OMF2036/2025:anexa4.pct6',
+    source: 'OMF2036/2025',
+    locator: 'anexa nr. 4 pct. 6, cap. XIX din datele informative (F30)',
+    status: 'located',
+    summary:
+      'Situația veniturilor și cheltuielilor din datele informative ale microentităților, cu conturile fiecărui rând; legată de contul de profit și pierdere (F20) prin regulile validatorului S1005.',
   },
   {
     id: 'OUG91/2025:art.II',
