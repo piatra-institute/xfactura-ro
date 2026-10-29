@@ -1,113 +1,60 @@
 import {
+    calculateInvoice,
+    checkInvoice,
+    fromInvoicer,
+    invoicerAmounts,
+    writeInvoice,
+} from 'xfactura-core/einvoice';
+
+import {
     Invoice,
 } from '@/data';
 
 import {
-    normalizeUserCountry,
-    normalizeUserCounty,
-    normalizeUserCity,
-    normalizeVatNumber,
-} from '@/logic/validation';
-
-import {
     downloadTextFile,
-    getDateFormat,
 } from '@/logic/utilities';
 
-import webContainerRunner from '@/logic/node-php';
-
-import {
-    getEInvoice,
-} from '@/logic/requests';
 
 
-
+/**
+ * Writes the e-Factura XML in the browser, so the invoice never leaves the device. Throws an
+ * error with a Romanian message when the invoice cannot be a valid e-Factura.
+ */
 export const generateEinvoice = async (
     setLoadingEInvoice: (value: boolean) => void,
     setShowLoading: (value: boolean) => void,
     newInvoice: Invoice,
-    generateEinvoiceLocally: boolean,
 ) => {
     setShowLoading(true);
     setLoadingEInvoice(true);
 
-    const invoice = {
-        metadata: {
-            ...newInvoice.metadata,
-            issueDate: getDateFormat(newInvoice.metadata.issueDate),
-            dueDate: getDateFormat(newInvoice.metadata.dueDate),
-        },
-        seller: {
-            ...newInvoice.seller,
-            vatNumber: normalizeVatNumber(newInvoice.seller.vatNumber, newInvoice.seller.vatPayer),
-            country: normalizeUserCountry(newInvoice.seller.country),
-            subdivision: normalizeUserCounty(newInvoice.seller.county, newInvoice.seller.country),
-            city: normalizeUserCity(newInvoice.seller.city, newInvoice.seller.county),
-        },
-        buyer: {
-            ...newInvoice.buyer,
-            vatNumber: normalizeVatNumber(newInvoice.buyer.vatNumber, newInvoice.buyer.vatPayer),
-            country: normalizeUserCountry(newInvoice.buyer.country),
-            subdivision: normalizeUserCounty(newInvoice.buyer.county, newInvoice.buyer.country),
-            city: normalizeUserCity(newInvoice.buyer.city, newInvoice.buyer.county),
-        },
-        lines: [
-            ...newInvoice.products.map(product => {
-                return {
-                    ...product,
-                    price: product.vatIncluded
-                        ? product.price / (1 + product.vatRate / 100)
-                        : product.price,
-                };
-            }),
-        ],
-    };
+    try {
+        const invoice = calculateInvoice(fromInvoicer(newInvoice).draft);
+        const [problem] = checkInvoice(invoice);
+        if (problem) {
+            throw new Error(problem.message);
+        }
 
-    const filename = `efactura-${newInvoice.metadata.number}-${newInvoice.seller.name}-${newInvoice.buyer.name}.xml`;
-
-    if (generateEinvoiceLocally) {
-        await webContainerRunner.writeData(invoice);
-        await webContainerRunner.startNodePHPServer(
-            (value) => {
-                setLoadingEInvoice(false);
-                setShowLoading(false);
-
-                downloadTextFile(
-                    filename,
-                    value,
-                );
-            },
+        downloadTextFile(
+            `efactura-${newInvoice.metadata.number}-${newInvoice.seller.name}-${newInvoice.buyer.name}.xml`,
+            writeInvoice(invoice),
         );
-    } else {
-        const response = await getEInvoice(invoice);
+
+        return invoice;
+    } finally {
         setLoadingEInvoice(false);
         setShowLoading(false);
-
-        if (response && response.status) {
-            downloadTextFile(
-                filename,
-                response.data,
-            );
-        }
     }
-
-    return invoice;
 }
 
 
+/** The amount payable, computed exactly as on the e-Factura; NaN while a line is incomplete. */
 export const invoiceTotal = (
     invoice: Invoice,
 ) => {
-    const total = invoice.products.reduce(
-        (accumulator, product) => {
-            if (product.vatIncluded) {
-                return accumulator + product.quantity * product.price;
-            }
-
-            return accumulator + product.quantity * product.price * (1 + product.vatRate / 100);
-        },
-        0,
-    );
-
-    return total;
+    try {
+        return Number(invoicerAmounts(invoice.products).totals.payable);
+    } catch {
+        return NaN;
+    }
 }

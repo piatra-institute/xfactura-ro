@@ -39,8 +39,6 @@ export default function Invoice() {
 
     // #region state
     const {
-        generateEinvoiceLocally,
-
         lastInvoiceSeries,
         setLastInvoiceSeries,
 
@@ -85,7 +83,6 @@ export default function Invoice() {
             setLoadingEInvoice,
             setShowLoading,
             newInvoice,
-            generateEinvoiceLocally,
         );
 
         addInvoice({

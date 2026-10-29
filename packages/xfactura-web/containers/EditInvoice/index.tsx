@@ -37,8 +37,6 @@ export default function EditInvoice({
         removeInvoice,
         lastInvoiceSeries,
         setLastInvoiceSeries,
-
-        generateEinvoiceLocally,
     } = useStore();
 
     const {
@@ -122,14 +120,11 @@ export default function EditInvoice({
                     }}
                     generateEinvoice={(
                         setLoadingEInvoice,
-                    ) => {
-                        generateEinvoice(
-                            setLoadingEInvoice,
-                            setShowLoading,
-                            invoiceItem,
-                            generateEinvoiceLocally,
-                        );
-                    }}
+                    ) => generateEinvoice(
+                        setLoadingEInvoice,
+                        setShowLoading,
+                        invoiceItem,
+                    )}
                 />
 
                 <PureButton

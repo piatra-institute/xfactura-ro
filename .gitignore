@@ -42,3 +42,9 @@ coverage/
 *.tsbuildinfo
 **/.next-e2e/
 **/.next-verify-*/
+
+# Real company data and anything derived from it; never commit
+.private/
+
+# Downloaded official validation artifacts (pinned in scripts/validators/sources.json)
+.validators/

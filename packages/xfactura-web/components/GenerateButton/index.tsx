@@ -11,10 +11,12 @@ import {
 export default function GenerateButton({
     loadingEInvoice,
     validData,
+    error,
     generateEinvoice,
 }: {
     loadingEInvoice: boolean;
     validData: boolean;
+    error?: string;
     generateEinvoice: () => void;
 }) {
     return (
@@ -32,6 +34,15 @@ export default function GenerateButton({
             >
                 generare efactura
             </button>
+
+            {error && (
+                <p
+                    role="alert"
+                    className="max-w-[400px] mt-4 text-center text-red-400"
+                >
+                    {error}
+                </p>
+            )}
         </div>
     );
 }

@@ -42,9 +42,6 @@ export default function Settings({
         usingLocalStorage,
         toggleUsingLocalStorage,
 
-        generateEinvoiceLocally,
-        toggleGenerateEinvoiceLocally,
-
         smartActs,
         setSmartActs,
 
@@ -173,28 +170,6 @@ export default function Settings({
                     toggle={() => {
                         toggleUsingLocalStorage();
                     }}
-                />
-
-                <Toggle
-                    text="generare efactura local"
-                    value={generateEinvoiceLocally}
-                    toggle={() => {
-                        toggleGenerateEinvoiceLocally();
-
-                        reload();
-                    }}
-                    tooltip={(
-                        <>
-                            <p>
-                                dacă această opțiune este activată, efactura se va genera în browser, fără a fi trimisă către serverul xfactura.ro · recomandat în browser-ul Chrome sau Firefox pe desktop
-                            </p>
-                            <p
-                                className="mb-0"
-                            >
-                                dacă această opțiune este dezactivată, efactura se va genera pe serverul xfactura.ro fără a fi stocate datele
-                            </p>
-                        </>
-                    )}
                 />
 
                 <Dropdown

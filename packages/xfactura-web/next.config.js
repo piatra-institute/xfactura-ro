@@ -6,8 +6,7 @@ const nextConfig = {
       ? require('node:path').relative(__dirname, process.env.NEXT_TSCONFIG_PATH)
       : 'tsconfig.json',
   },
-  transpilePackages: ['xfactura-api'],
-  serverExternalPackages: ['@php-wasm/node'],
+  transpilePackages: ['xfactura-api', 'xfactura-core'],
   outputFileTracingRoot: require('node:path').join(__dirname, '../..'),
   async rewrites() {
     const backend = process.env.ACCOUNTING_API_URL || 'http://127.0.0.1:8089';

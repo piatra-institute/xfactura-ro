@@ -7,7 +7,7 @@ async function contents(download: Download) {
   return Buffer.concat(chunks);
 }
 
-test('existing invoicer retains imported data and generates JSON, PDF and XML without provider keys', async ({
+test('existing invoicer retains imported data and generates JSON, PDF and XML in the browser', async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -41,12 +41,21 @@ test('existing invoicer retains imported data and generates JSON, PDF and XML wi
       { name: 'Serviciu fixture', price: 100, quantity: 1, vatRate: 0, vatIncluded: false },
     ],
   };
+  // A Bucharest address without a sector cannot be a valid e-Factura.
+  const unplaced = {
+    ...invoice,
+    id: 'invoice-unplaced',
+    buyer: { ...buyer, county: 'București', city: 'București' },
+    metadata: { ...invoice.metadata, number: 'REG-002' },
+  };
   const fixture = {
     defaultSeller: seller.vatNumber,
     companies: { [seller.vatNumber]: seller, [buyer.vatNumber]: buyer },
-    invoices: { [invoice.id]: invoice },
+    invoices: { [invoice.id]: invoice, [unplaced.id]: unplaced },
     inventory: {},
   };
+  const requests: string[] = [];
+  page.on('request', (request) => requests.push(request.url()));
   await page.goto('/');
   await page.getByRole('button', { name: 'setări', exact: true }).click();
   await Promise.all([
@@ -79,23 +88,24 @@ test('existing invoicer retains imported data and generates JSON, PDF and XML wi
     editor.getByRole('button', { name: 'export pdf', exact: true }).click(),
   ]);
   expect((await contents(pdf)).subarray(0, 5).toString()).toBe('%PDF-');
-  const xmlResponse = page.waitForResponse(
-    (response) =>
-      response.url().endsWith('/api/einvoice') && response.request().method() === 'POST',
-  );
-  const [xml, response] = await Promise.all([
+  const [xml] = await Promise.all([
     page.waitForEvent('download'),
-    xmlResponse,
     editor.getByRole('button', { name: 'generare efactura', exact: true }).click(),
   ]);
-  expect(response.ok()).toBe(true);
-  const submitted = response.request().postDataJSON();
-  expect(submitted.seller.vatPayer).toBe(false);
-  expect(submitted.buyer.vatPayer).toBe(false);
-  expect(submitted.lines[0].vatRate).toBe(0);
   const xmlText = (await contents(xml)).toString();
   expect(xmlText).toContain('<cbc:ID>REG-001</cbc:ID>');
   expect(xmlText).toContain('urn:oasis:names:specification:ubl:schema:xsd:Invoice-2');
   expect(xmlText).toContain('Furnizor Fixture SRL');
+  expect(xmlText).toContain('<cbc:IssueDate>2026-10-01</cbc:IssueDate>');
+  expect(xmlText).toContain('<cbc:CountrySubentity>RO-CJ</cbc:CountrySubentity>');
+  // A seller without a VAT code invoices outside the scope of VAT (category O).
+  expect(xmlText).toMatch(/<cac:ClassifiedTaxCategory>\s*<cbc:ID>O<\/cbc:ID>/);
+  expect(requests.filter((url) => url.includes('/api/einvoice'))).toEqual([]);
+
+  await editor.getByRole('button', { name: 'înapoi', exact: true }).click();
+  const unplacedRow = page.locator('.scrollable-view > div').filter({ hasText: 'REG-002' });
+  await unplacedRow.getByRole('button').click();
+  await editor.getByRole('button', { name: 'generare efactura', exact: true }).click();
+  await expect(editor.getByRole('alert')).toContainText('Pentru București');
   expect(errors).toEqual([]);
 });

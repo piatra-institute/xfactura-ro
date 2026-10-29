@@ -1,7 +1,6 @@
 import {
     ENVIRONMENT,
     COMPANY_DETAILS_API,
-    EINVOICE_API,
     UPLOAD_AUDIO_API,
     UPLOAD_FILE_API,
     UPLOAD_TEXT_API,
@@ -56,27 +55,6 @@ export const getUser = async () => {
         credentials: 'include',
     })
         .then((response) => response.json())
-        .catch((error) => {
-            logger('error', error);
-        });
-}
-
-
-export const getEInvoice = async (
-    data: any,
-) => {
-    return fetch(EINVOICE_API, {
-        method: 'POST',
-        credentials: 'omit',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(data),
-    })
-        .then((response) => response.json())
-        .then((data) => {
-            return data;
-        })
         .catch((error) => {
             logger('error', error);
         });

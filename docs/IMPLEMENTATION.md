@@ -31,6 +31,7 @@ Delivery remains within step 2 of the nine steps in [ROADMAP.md](ROADMAP.md). Th
 | Area | Available now | Boundary |
 |---|---|---|
 | Ledger | Gap-free journal numbering per year; company-wide sequence; signed lines (red or black storno); open items enforced on control accounts; trial balance (balanța de verificare) and Registrul-jurnal. | Statutory layouts of the registers, Cartea mare, Registrul-inventar, year-end closing entries. |
+| e-Factura documents | One EN 16931 model with CIUS-RO customization: an exact calculator (rounding once at each defined amount), a canonical UBL 2.1 writer and a reader for invoices (380) and credit notes (381), with VAT categories S, Z, E, AE, K, G and O, line and document allowances and charges, prepaid amounts, and foreign currency with lei VAT (BT-6, BT-111). The browser invoicer writes its XML with it, on the device. Conversion of stored invoicer documents records every interpretation (Romanian calendar date, RO-prefixed codes as VAT identifiers, CNP buyers, net prices from VAT-inclusive prices). | The CIUS-RO schematron is not installed (published only by the Ministry of Finance). Issuing through the books (series, numbering at issue), SPV upload and status, B2C identification rules, types 384/389/751/386, and lei VAT for foreign-currency invoices in the invoicer. |
 | Invoices | Single-category domestic service invoices and credit notes; foreign currency with BT-111 VAT and BNR rates. | Goods, assets, mixed rates, reverse charge, exempt categories, advances, allowances or charges as separate treatments, accruals and deferrals. |
 | Bank and cash | Statement import with exact balance and movement identity; partial or grouped settlement; fees and transfers on explicit accounts; FX differences. | CSV statements, cash register (registru de casă) workflow, cross-currency settlement. |
 | Tax | Tax entries with semantic codes, periods and lineage; working VAT journals; tax-period locks in the database. | VAT settlement and every declaration; micro and profit tax. |
@@ -57,7 +58,8 @@ Checked on 29 October 2026 on macOS with Bun 1.4.2.
 
 | Check | Command | Result |
 |---|---|---|
-| Core unit and property tests (money, hashing, dates, effect validation, rules, parsers) | `bun run test` | 48 pass |
+| Core unit and property tests (money, hashing, dates, effect validation, rules, parsers, e-Factura calculation, writing and reading, agreement with the previous PHP generator) | `bun run test` | 76 pass |
+| Official e-Factura validation: 19 synthetic documents pass the UBL 2.1 schema and every fatal CEN EN 16931 1.3.17 rule; five broken documents are rejected | `bun run test:official` | 2 pass (CIUS-RO skipped, not installed) |
 | Engine integration: invariants with mutation testing; kernel scenarios; invoices; bank; FX; HTTP and MCP; exports and backup | `bun run test:integration` | 131 pass |
 | Close at scale: 100,080 posted lines, each month closed through the full review | `bun run test:perf` | slowest month 91–148 ms across runs (target: under 1 s) |
 | Browser, desktop and mobile: opening to month close; invoice and bank settlement; public invoicer | `bun run test:e2e` | 6 pass |

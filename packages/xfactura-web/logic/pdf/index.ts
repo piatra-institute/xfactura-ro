@@ -9,6 +9,10 @@ import {
 } from '@/data';
 
 import {
+    invoicerAmounts,
+} from 'xfactura-core/einvoice';
+
+import {
     formatNumber,
 } from '@/logic/utilities';
 
@@ -205,20 +209,30 @@ export const generatePdf = async (
     await drawMetadata(doc, data, fontName);
 
 
-    const headers = ['Nume', 'Cantitate', 'Preț', 'TVA', 'Total'];
-    const body = data.products.map((product) => {
-        const productTotal = product.vatIncluded
-            ? product.price * product.quantity
-            : product.price * product.quantity * (1 + product.vatRate / 100);
-
-        return [
-            product.name,
-            product.quantity,
-            formatNumber(product.price).replace('RON', '').trim(),
-            formatNumber(product.price * product.vatRate / 100).replace('RON', '').trim(),
-            formatNumber(productTotal).replace('RON', '').trim(),
-        ];
-    });
+    // The same amounts as the e-Factura: net prices, line allowances, VAT per rate.
+    const amounts = invoicerAmounts(data.products);
+    const money = (value: string) => formatNumber(Number(value), data.metadata.currency)
+        .replace(data.metadata.currency, '')
+        .trim();
+    const headers = ['Nume', 'Cantitate', 'Preț fără TVA', 'Reducere', 'Valoare fără TVA', 'TVA'];
+    const body: RowInput[] = amounts.lines.map((line) => [
+        line.name,
+        line.quantity,
+        money(line.price),
+        line.adjustments.length
+            ? money(line.adjustments.reduce((total, item) => total + Number(item.amount), 0).toFixed(2))
+            : '',
+        money(line.netAmount),
+        line.vat.rate ? `${line.vat.rate}%` : 'neimpozabil',
+    ]);
+    const totals: RowInput[] = [
+        ['Total fără TVA', money(amounts.totals.taxExclusive)],
+        ...amounts.vatBreakdown.map((item) => [
+            item.rate ? `TVA ${item.rate}% din ${money(item.taxable)}` : `Neimpozabil ${money(item.taxable)}`,
+            money(item.tax),
+        ]),
+        ['Total de plată', `${money(amounts.totals.payable)} ${data.metadata.currency}`],
+    ];
     autoTable(doc, {
         head: [headers],
         body: [
@@ -236,21 +250,42 @@ export const generatePdf = async (
         },
         columnStyles: {
             0: {
-                cellWidth: 220,
+                cellWidth: 170,
             },
             1: {
-                cellWidth: 60,
+                cellWidth: 55,
                 halign: 'center',
             },
             2: {
-                cellWidth: 90,
+                cellWidth: 75,
                 halign: 'right',
             },
             3: {
-                cellWidth: 70,
+                cellWidth: 65,
                 halign: 'right',
             },
             4: {
+                cellWidth: 85,
+                halign: 'right',
+            },
+            5: {
+                halign: 'right',
+            },
+        },
+    });
+
+
+    autoTable(doc, {
+        body: totals,
+        styles: {
+            font: fontName,
+        },
+        columnStyles: {
+            0: {
+                halign: 'right',
+            },
+            1: {
+                cellWidth: 120,
                 halign: 'right',
             },
         },

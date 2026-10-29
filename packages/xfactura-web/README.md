@@ -3,7 +3,7 @@
 
 [`xfactura.ro`](https://xfactura.ro) is a web service for generating electronic invoices based on the EU specification (EN 16931), Romanian Core Invoice Usage Specifications (CIUS)
 
-`xfactura.ro` is using [josemmo/einvoicing](https://github.com/josemmo/einvoicing) for the generation of the `xml`
+`xfactura.ro` writes the `xml` in the browser with `xfactura-core`, so invoices never leave the device; earlier versions used [josemmo/einvoicing](https://github.com/josemmo/einvoicing)
 
 `xfactura.ro` is not associated with any public institution
 

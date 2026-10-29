@@ -23,8 +23,6 @@ import Audio from '@/containers/Audio';
 
 import Invoice from '@/containers/Invoice';
 
-import webContainerRunner from '@/logic/node-php';
-
 import {
     verifyInputVatNumber,
     verifyInputUserName,
@@ -76,8 +74,6 @@ export default function Home({
     const {
         user: storeUser,
         setUser,
-
-        generateEinvoiceLocally,
     } = useStore();
 
     const {
@@ -236,26 +232,14 @@ export default function Home({
         storeUser,
     ]);
 
-    /** web container */
+    /** loading */
     useEffect(() => {
         if (mounted.current) {
             return;
         }
         mounted.current = true;
 
-        if (generateEinvoiceLocally) {
-            webContainerRunner.load()
-                .then((loaded) => {
-                    setShowLoading(false);
-
-                    if (!loaded) {
-                        // TODO
-                        // notify error
-                    }
-                });
-        } else {
-            setShowLoading(false);
-        }
+        setShowLoading(false);
 
         // Let effect run only once.
         // eslint-disable-next-line

@@ -56,7 +56,7 @@ export default function InvoiceItem({
     updateProducts: (data: InvoiceLine[]) => void;
     generateEinvoice: (
         setLoadingEInvoice: (value: boolean) => void,
-    ) => void;
+    ) => Promise<unknown>;
 }) {
     // #region state
     const [
@@ -68,6 +68,11 @@ export default function InvoiceItem({
         validData,
         setValidData,
     ] = useState(false);
+
+    const [
+        einvoiceError,
+        setEinvoiceError,
+    ] = useState('');
     // #endregion state
 
 
@@ -143,7 +148,13 @@ export default function InvoiceItem({
             <GenerateButton
                 loadingEInvoice={loadingEInvoice}
                 validData={validData}
-                generateEinvoice={() => generateEinvoice(setLoadingEInvoice)}
+                error={einvoiceError}
+                generateEinvoice={() => {
+                    setEinvoiceError('');
+                    generateEinvoice(setLoadingEInvoice).catch((error: Error) => {
+                        setEinvoiceError(error.message);
+                    });
+                }}
             />
 
             <PureButton

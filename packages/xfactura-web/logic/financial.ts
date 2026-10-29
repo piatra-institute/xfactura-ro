@@ -1,13 +1,14 @@
 import {
+    invoicerAmounts,
+} from 'xfactura-core/einvoice';
+
+import {
     InvoiceLine,
 } from '@/data';
 
-import {
-    financial,
-} from '@/logic/utilities';
 
 
-
+/** The line allowance in currency, computed exactly as on the e-Factura. */
 export const computeAllowance = (
     line: InvoiceLine,
 ) => {
@@ -15,9 +16,9 @@ export const computeAllowance = (
         return 0;
     }
 
-    if (line.allowance.fixedAmount) {
-        return line.allowance.amount || 0;
+    try {
+        return Number(invoicerAmounts([line]).lines[0]?.adjustments[0]?.amount ?? 0);
+    } catch {
+        return 0;
     }
-
-    return financial(line.price * line.quantity * (line.allowance.amount || 0) / 100);
 }

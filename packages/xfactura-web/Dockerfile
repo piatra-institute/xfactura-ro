@@ -3,9 +3,11 @@ FROM node:24-bookworm-slim AS builder
 COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 WORKDIR /app
 COPY package.json bun.lock ./
+COPY packages/xfactura-core/package.json packages/xfactura-core/package.json
 COPY packages/xfactura-api/package.json packages/xfactura-api/package.json
 COPY packages/xfactura-web/package.json packages/xfactura-web/package.json
 RUN bun install --frozen-lockfile
+COPY packages/xfactura-core packages/xfactura-core
 COPY packages/xfactura-api packages/xfactura-api
 COPY packages/xfactura-web packages/xfactura-web
 COPY tsconfig.json LICENSE ./
@@ -18,7 +20,7 @@ FROM node:24-bookworm-slim AS runner
 ENV NODE_ENV=production
 ENV PORT=3000
 WORKDIR /app
-# Include public assets and the PHP/vendor files used by the existing XML endpoint.
+# Include the built app, public assets and the workspace packages it transpiles.
 COPY --from=builder --chown=node:node /app /app
 USER node
 WORKDIR /app/packages/xfactura-web

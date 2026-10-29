@@ -26,8 +26,6 @@ export interface State {
     setUser: (user: User | null) => void;
     usingLocalStorage: boolean;
     toggleUsingLocalStorage: () => void;
-    generateEinvoiceLocally: boolean;
-    toggleGenerateEinvoiceLocally: () => void;
     lastInvoiceSeries: string;
     setLastInvoiceSeries: (series: string) => void;
     smartActs: string;
@@ -74,8 +72,6 @@ const useStore = create<State>()(
             setUser: (user: User | null) => set({ user }),
             usingLocalStorage: true,
             toggleUsingLocalStorage: () => set((state) => ({ usingLocalStorage: !state.usingLocalStorage })),
-            generateEinvoiceLocally: false,
-            toggleGenerateEinvoiceLocally: () => set((state) => ({ generateEinvoiceLocally: !state.generateEinvoiceLocally })),
             lastInvoiceSeries: '',
             setLastInvoiceSeries: (series: string) => set({ lastInvoiceSeries: series }),
             smartActs: 'unspecified',
@@ -96,14 +92,15 @@ const useStore = create<State>()(
                     return;
                 }
                 const vatNumber = normalizeVatNumber(company.vatNumber, company.vatPayer);
-                if (state.companies[vatNumber]) {
+                // Older records are keyed by the code as typed.
+                if (state.companies[vatNumber] || state.companies[company.vatNumber]) {
                     return;
                 }
 
                 return {
                     companies: {
                         ...state.companies,
-                        [company.vatNumber]: {
+                        [vatNumber]: {
                             ...company,
                         },
                     },
@@ -114,7 +111,8 @@ const useStore = create<State>()(
                 if (!validData) {
                     return;
                 }
-                const vatNumber = normalizeVatNumber(company.vatNumber, company.vatPayer);
+                const normalized = normalizeVatNumber(company.vatNumber, company.vatPayer);
+                const vatNumber = state.companies[normalized] ? normalized : company.vatNumber;
                 if (!state.companies[vatNumber]) {
                     return;
                 }
@@ -122,7 +120,7 @@ const useStore = create<State>()(
                 return {
                     companies: {
                         ...state.companies,
-                        [company.vatNumber]: {
+                        [vatNumber]: {
                             ...company,
                         },
                     },
@@ -184,7 +182,6 @@ const useStore = create<State>()(
             clearStore: () => set(() => ({
                 user: null,
                 usingLocalStorage: true,
-                generateEinvoiceLocally: false,
                 lastInvoiceSeries: '',
                 smartActs: 'unspecified',
                 defaultSeller: '',

@@ -1,0 +1,14 @@
+{
+  "name": "xfactura-php-oracle",
+  "version": "0.0.1",
+  "description": "The previous PHP e-Factura generator, kept only to produce reference XML for the core writer's tests",
+  "private": true,
+  "license": "MPL-2.0",
+  "type": "module",
+  "scripts": {
+    "generate": "bun generate.ts"
+  },
+  "dependencies": {
+    "@php-wasm/node": "0.5.4"
+  }
+}

@@ -26,7 +26,10 @@
     "./ro/treatments/settlement": "./src/ro/treatments/settlement.ts",
     "./fx/bnr": "./src/fx/bnr.ts",
     "./ro/fx": "./src/ro/fx.ts",
-    "./ro/treatments/revaluation": "./src/ro/treatments/revaluation.ts"
+    "./ro/treatments/revaluation": "./src/ro/treatments/revaluation.ts",
+    "./einvoice": "./src/einvoice/index.ts",
+    "./ro/geo": "./src/ro/geo.ts",
+    "./ro/identifiers": "./src/ro/identifiers.ts"
   },
   "dependencies": {
     "@noble/hashes": "2.4.0",

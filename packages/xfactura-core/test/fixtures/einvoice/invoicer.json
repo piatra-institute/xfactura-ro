@@ -1,0 +1,540 @@
+[
+  {
+    "id": "single-19",
+    "metadata": {
+      "number": "20250001",
+      "currency": "RON",
+      "issueDate": 1741946400000,
+      "dueDate": 1744538400000
+    },
+    "seller": {
+      "name": "Exemplu Servicii SRL",
+      "vatNumber": "RO18547290",
+      "vatPayer": true,
+      "address": "Str. Lungă 10",
+      "city": "Galați",
+      "county": "Galați",
+      "country": "România",
+      "IBAN": "RO49AAAA1B31007593840000"
+    },
+    "buyer": {
+      "name": "Client Test SRL",
+      "vatNumber": "14399840",
+      "vatPayer": true,
+      "address": "Bd. Unirii 5",
+      "city": "Brașov",
+      "county": "Brașov",
+      "country": "România"
+    },
+    "products": [
+      {
+        "name": "Servicii de consultanță martie 2025",
+        "price": 1000,
+        "quantity": 1,
+        "vatRate": 19,
+        "vatIncluded": false
+      }
+    ]
+  },
+  {
+    "id": "two-lines-21-nonpayer-buyer",
+    "metadata": {
+      "number": "20250002",
+      "currency": "RON",
+      "issueDate": 1756807200000,
+      "dueDate": 1759399200000
+    },
+    "seller": {
+      "name": "Exemplu Servicii SRL",
+      "vatNumber": "RO18547290",
+      "vatPayer": true,
+      "address": "Str. Lungă 10",
+      "city": "Galați",
+      "county": "Galați",
+      "country": "România",
+      "IBAN": "RO49AAAA1B31007593840000"
+    },
+    "buyer": {
+      "name": "Client Test SRL",
+      "vatNumber": "14399840",
+      "vatPayer": false,
+      "address": "Bd. Unirii 5",
+      "city": "Brașov",
+      "county": "Brașov",
+      "country": "România"
+    },
+    "products": [
+      {
+        "name": "Dezvoltare software",
+        "price": 2500,
+        "quantity": 1,
+        "vatRate": 21,
+        "vatIncluded": false
+      },
+      {
+        "name": "Mentenanță",
+        "price": 350.5,
+        "quantity": 2,
+        "vatRate": 21,
+        "vatIncluded": false
+      }
+    ]
+  },
+  {
+    "id": "fixed-allowance",
+    "metadata": {
+      "number": "20250003",
+      "currency": "RON",
+      "issueDate": 1760436000000,
+      "dueDate": 1763028000000
+    },
+    "seller": {
+      "name": "Exemplu Servicii SRL",
+      "vatNumber": "RO18547290",
+      "vatPayer": true,
+      "address": "Str. Lungă 10",
+      "city": "Galați",
+      "county": "Galați",
+      "country": "România",
+      "IBAN": "RO49AAAA1B31007593840000"
+    },
+    "buyer": {
+      "name": "Client Test SRL",
+      "vatNumber": "14399840",
+      "vatPayer": true,
+      "address": "Bd. Unirii 5",
+      "city": "Brașov",
+      "county": "Brașov",
+      "country": "România"
+    },
+    "products": [
+      {
+        "name": "Servicii octombrie",
+        "price": 5000,
+        "quantity": 1,
+        "vatRate": 21,
+        "vatIncluded": false,
+        "allowance": {
+          "amount": 3000,
+          "fixedAmount": true,
+          "reason": "Storno Avans"
+        }
+      }
+    ]
+  },
+  {
+    "id": "percent-allowance",
+    "metadata": {
+      "number": "20250004",
+      "currency": "RON",
+      "issueDate": 1749549600000,
+      "dueDate": 1752141600000
+    },
+    "seller": {
+      "name": "Exemplu Servicii SRL",
+      "vatNumber": "RO18547290",
+      "vatPayer": true,
+      "address": "Str. Lungă 10",
+      "city": "Galați",
+      "county": "Galați",
+      "country": "România",
+      "IBAN": "RO49AAAA1B31007593840000"
+    },
+    "buyer": {
+      "name": "Client Test SRL",
+      "vatNumber": "14399840",
+      "vatPayer": true,
+      "address": "Bd. Unirii 5",
+      "city": "Brașov",
+      "county": "Brașov",
+      "country": "România"
+    },
+    "products": [
+      {
+        "name": "Licențe",
+        "price": 199.99,
+        "quantity": 3,
+        "vatRate": 19,
+        "vatIncluded": false,
+        "allowance": {
+          "amount": 10,
+          "fixedAmount": false,
+          "reason": "Discount volum"
+        }
+      }
+    ]
+  },
+  {
+    "id": "vat-included",
+    "metadata": {
+      "number": "20250005",
+      "currency": "RON",
+      "issueDate": 1747735200000,
+      "dueDate": 1750327200000
+    },
+    "seller": {
+      "name": "Exemplu Servicii SRL",
+      "vatNumber": "RO18547290",
+      "vatPayer": true,
+      "address": "Str. Lungă 10",
+      "city": "Galați",
+      "county": "Galați",
+      "country": "România",
+      "IBAN": "RO49AAAA1B31007593840000"
+    },
+    "buyer": {
+      "name": "Client Test SRL",
+      "vatNumber": "14399840",
+      "vatPayer": true,
+      "address": "Bd. Unirii 5",
+      "city": "Brașov",
+      "county": "Brașov",
+      "country": "România"
+    },
+    "products": [
+      {
+        "name": "Abonament",
+        "price": 119,
+        "quantity": 1,
+        "vatRate": 19,
+        "vatIncluded": true
+      },
+      {
+        "name": "Suport",
+        "price": 100,
+        "quantity": 3,
+        "vatRate": 19,
+        "vatIncluded": true
+      }
+    ]
+  },
+  {
+    "id": "bucharest-sector",
+    "metadata": {
+      "number": "20250006",
+      "currency": "RON",
+      "issueDate": 1744020000000,
+      "dueDate": 1746612000000
+    },
+    "seller": {
+      "name": "Exemplu Servicii SRL",
+      "vatNumber": "RO18547290",
+      "vatPayer": true,
+      "address": "Str. Lungă 10",
+      "city": "Galați",
+      "county": "Galați",
+      "country": "România",
+      "IBAN": "RO49AAAA1B31007593840000"
+    },
+    "buyer": {
+      "name": "Client Test SRL",
+      "vatNumber": "14399840",
+      "vatPayer": true,
+      "address": "Bd. Unirii 5",
+      "city": "Sector 3",
+      "county": "Municipiul București",
+      "country": "România"
+    },
+    "products": [
+      {
+        "name": "Audit",
+        "price": 2490,
+        "quantity": 1,
+        "vatRate": 19,
+        "vatIncluded": false
+      }
+    ]
+  },
+  {
+    "id": "decimal-quantity",
+    "metadata": {
+      "number": "20250007",
+      "currency": "RON",
+      "issueDate": 1751968800000,
+      "dueDate": 1754560800000
+    },
+    "seller": {
+      "name": "Exemplu Servicii SRL",
+      "vatNumber": "RO18547290",
+      "vatPayer": true,
+      "address": "Str. Lungă 10",
+      "city": "Galați",
+      "county": "Galați",
+      "country": "România",
+      "IBAN": "RO49AAAA1B31007593840000"
+    },
+    "buyer": {
+      "name": "Client Test SRL",
+      "vatNumber": "14399840",
+      "vatPayer": true,
+      "address": "Bd. Unirii 5",
+      "city": "Brașov",
+      "county": "Brașov",
+      "country": "România"
+    },
+    "products": [
+      {
+        "name": "Ore suplimentare",
+        "price": 12.345,
+        "quantity": 2.5,
+        "vatRate": 19,
+        "vatIncluded": false
+      },
+      {
+        "name": "Deplasare",
+        "price": 10.005,
+        "quantity": 1,
+        "vatRate": 19,
+        "vatIncluded": false
+      }
+    ]
+  },
+  {
+    "id": "seller-vat-payer-absent",
+    "metadata": {
+      "number": "20250008",
+      "currency": "RON",
+      "issueDate": 1739786400000,
+      "dueDate": 1742378400000
+    },
+    "seller": {
+      "name": "Exemplu Servicii SRL",
+      "vatNumber": "RO18547290",
+      "address": "Str. Lungă 10",
+      "city": "Galați",
+      "county": "Galați",
+      "country": "România",
+      "IBAN": "RO49AAAA1B31007593840000"
+    },
+    "buyer": {
+      "name": "Client Test SRL",
+      "vatNumber": "14399840",
+      "address": "Bd. Unirii 5",
+      "city": "Brașov",
+      "county": "Brașov",
+      "country": "România"
+    },
+    "products": [
+      {
+        "name": "Servicii",
+        "price": 1472.17,
+        "quantity": 1,
+        "vatRate": 19,
+        "vatIncluded": false
+      }
+    ]
+  },
+  {
+    "id": "mixed-rates",
+    "metadata": {
+      "number": "20250009",
+      "currency": "RON",
+      "issueDate": 1754042400000,
+      "dueDate": 1756634400000
+    },
+    "seller": {
+      "name": "Exemplu Servicii SRL",
+      "vatNumber": "RO18547290",
+      "vatPayer": true,
+      "address": "Str. Lungă 10",
+      "city": "Galați",
+      "county": "Galați",
+      "country": "România",
+      "IBAN": "RO49AAAA1B31007593840000"
+    },
+    "buyer": {
+      "name": "Client Test SRL",
+      "vatNumber": "14399840",
+      "vatPayer": true,
+      "address": "Bd. Unirii 5",
+      "city": "Brașov",
+      "county": "Brașov",
+      "country": "România"
+    },
+    "products": [
+      {
+        "name": "Servicii iulie",
+        "price": 1000,
+        "quantity": 1,
+        "vatRate": 19,
+        "vatIncluded": false
+      },
+      {
+        "name": "Servicii august",
+        "price": 1000,
+        "quantity": 1,
+        "vatRate": 21,
+        "vatIncluded": false
+      }
+    ]
+  },
+  {
+    "id": "rounding-many-lines",
+    "metadata": {
+      "number": "20250010",
+      "currency": "RON",
+      "issueDate": 1762164000000,
+      "dueDate": 1764756000000
+    },
+    "seller": {
+      "name": "Exemplu Servicii SRL",
+      "vatNumber": "RO18547290",
+      "vatPayer": true,
+      "address": "Str. Lungă 10",
+      "city": "Galați",
+      "county": "Galați",
+      "country": "România",
+      "IBAN": "RO49AAAA1B31007593840000"
+    },
+    "buyer": {
+      "name": "Client Test SRL",
+      "vatNumber": "14399840",
+      "vatPayer": true,
+      "address": "Bd. Unirii 5",
+      "city": "Brașov",
+      "county": "Brașov",
+      "country": "România"
+    },
+    "products": [
+      {
+        "name": "A",
+        "price": 0.335,
+        "quantity": 1,
+        "vatRate": 21,
+        "vatIncluded": false
+      },
+      {
+        "name": "B",
+        "price": 0.335,
+        "quantity": 1,
+        "vatRate": 21,
+        "vatIncluded": false
+      },
+      {
+        "name": "C",
+        "price": 0.335,
+        "quantity": 1,
+        "vatRate": 21,
+        "vatIncluded": false
+      },
+      {
+        "name": "D",
+        "price": 33.333,
+        "quantity": 3,
+        "vatRate": 21,
+        "vatIncluded": false
+      }
+    ]
+  },
+  {
+    "id": "local-midnight",
+    "metadata": {
+      "number": "20250011",
+      "currency": "RON",
+      "issueDate": 1767218400000,
+      "dueDate": 1769810400000
+    },
+    "seller": {
+      "name": "Exemplu Servicii SRL",
+      "vatNumber": "RO18547290",
+      "vatPayer": true,
+      "address": "Str. Lungă 10",
+      "city": "Galați",
+      "county": "Galați",
+      "country": "România",
+      "IBAN": "RO49AAAA1B31007593840000"
+    },
+    "buyer": {
+      "name": "Client Test SRL",
+      "vatNumber": "14399840",
+      "vatPayer": true,
+      "address": "Bd. Unirii 5",
+      "city": "Brașov",
+      "county": "Brașov",
+      "country": "România"
+    },
+    "products": [
+      {
+        "name": "Servicii decembrie",
+        "price": 1500,
+        "quantity": 1,
+        "vatRate": 21,
+        "vatIncluded": false
+      }
+    ]
+  },
+  {
+    "id": "string-amounts",
+    "metadata": {
+      "number": "20260001",
+      "currency": "RON",
+      "issueDate": 1768471200000,
+      "dueDate": 1771063200000
+    },
+    "seller": {
+      "name": "Exemplu Servicii SRL",
+      "vatNumber": "RO18547290",
+      "vatPayer": true,
+      "address": "Str. Lungă 10",
+      "city": "Galați",
+      "county": "Galați",
+      "country": "România",
+      "IBAN": "RO49AAAA1B31007593840000"
+    },
+    "buyer": {
+      "name": "Client Test SRL",
+      "vatNumber": "14399840",
+      "vatPayer": true,
+      "address": "Bd. Unirii 5",
+      "city": "Brașov",
+      "county": "Brașov",
+      "country": "România"
+    },
+    "products": [
+      {
+        "name": "Servicii",
+        "price": "150.50",
+        "quantity": "2",
+        "vatRate": 21,
+        "vatIncluded": false
+      }
+    ]
+  },
+  {
+    "id": "euro",
+    "metadata": {
+      "number": "20260002",
+      "currency": "EUR",
+      "issueDate": 1770112800000,
+      "dueDate": 1772704800000
+    },
+    "seller": {
+      "name": "Exemplu Servicii SRL",
+      "vatNumber": "RO18547290",
+      "vatPayer": true,
+      "address": "Str. Lungă 10",
+      "city": "Galați",
+      "county": "Galați",
+      "country": "România",
+      "IBAN": "RO49AAAA1B31007593840000"
+    },
+    "buyer": {
+      "name": "Client Test SRL",
+      "vatNumber": "DE123456789",
+      "vatPayer": true,
+      "address": "Bd. Unirii 5",
+      "city": "Berlin",
+      "county": "",
+      "country": "Germania"
+    },
+    "products": [
+      {
+        "name": "Consulting",
+        "price": 800,
+        "quantity": 1,
+        "vatRate": 21,
+        "vatIncluded": false
+      }
+    ]
+  }
+]

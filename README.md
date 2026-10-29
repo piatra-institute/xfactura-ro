@@ -98,7 +98,11 @@ bun run format:check
 bun run build:api
 bun run build
 bun run test:e2e
+bun run validators:fetch   # once: pinned official UBL, EN 16931 and Saxon artifacts
+bun run test:official
 ```
+
+`test:official` validates the e-Factura writer against the UBL 2.1 schema (with `xmllint`) and the CEN EN 16931 rules (with Java and Saxon-HE), and checks that broken documents are rejected. Without the artifacts, Java or `xmllint` it reports skipped, not passed. The national CIUS-RO rules are published only by the Ministry of Finance; place them in `.validators/cius-ro/` as [sources.json](scripts/validators/sources.json) describes. `bun run validate:official <files or directories>` validates any XML the same way.
 
 Browser tests use isolated temporary books, API port 8189 and web port 3100. Each viewport gets a fresh server/database run so the growing suite respects local authentication rate limits. They exercise accounting and the existing invoicer without provider keys; artifacts are grouped under `test-results/desktop` and `test-results/mobile`. macOS uses installed Chrome; other systems need Playwright Chromium (`bunx playwright install chromium`). Keep these ports available during the tests.
 
@@ -108,4 +112,4 @@ Scoped accounting agents use the shared capability API or MCP at `/api/accountin
 
 ## License and credits
 
-MPL-2.0; see [LICENSE](LICENSE) and [OPEN_SOURCE.md](docs/OPEN_SOURCE.md). The existing UBL generator uses [josemmo/einvoicing](https://github.com/josemmo/einvoicing). Inter is self-hosted under the [SIL Open Font License](packages/xfactura-web/public/notices/inter-OFL.txt). xFactura is independent of public institutions.
+MPL-2.0; see [LICENSE](LICENSE) and [OPEN_SOURCE.md](docs/OPEN_SOURCE.md). e-Factura XML is written by `xfactura-core`; the previous generator, [josemmo/einvoicing](https://github.com/josemmo/einvoicing), remains only as the test oracle in `tools/php-oracle`. Inter is self-hosted under the [SIL Open Font License](packages/xfactura-web/public/notices/inter-OFL.txt). xFactura is independent of public institutions.
