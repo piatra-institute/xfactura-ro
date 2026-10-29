@@ -12,7 +12,8 @@
     "dev": "bun --watch source/index.ts",
     "start": "bun source/index.ts",
     "db.push": "drizzle-kit push:sqlite",
-    "db:generate": "drizzle-kit generate --config=drizzle.accounting.config.ts"
+    "db:generate": "drizzle-kit generate --config=drizzle.accounting.config.ts",
+    "db:generate:engine": "drizzle-kit generate --config=drizzle.engine.config.ts"
   },
   "dependencies": {
     "@better-auth/drizzle-adapter": "1.7.13",
@@ -35,6 +36,7 @@
     "stripe": "^14.14.0",
     "typescript": "6.0.3",
     "uuid": "^9.0.1",
+    "xfactura-core": "workspace:*",
     "yauzl": "3.4.0",
     "zod": "4.6.7"
   },

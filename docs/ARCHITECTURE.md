@@ -4,7 +4,7 @@ This document contains both implemented invariants and the target contracts need
 
 ## Runtime and ports
 
-Accounting is an internal module of the existing `xfactura-api` package, with Hono routes mounted in its Express server and a worker process from the same package. Use Bun, SQLite/libSQL, Drizzle, Zod and `decimal.js`. Local SQLite is the default; the existing libSQL configuration also accepts Turso. Domain calculations depend on neither HTTP, React, provider SDKs, nor Piatra identity. Shared contracts use explicit API-package exports, not separate accounting-core/server packages. [ADR 0008](adr/0008-existing-api-sqlite-drizzle.md) records this boundary.
+Accounting is an internal module of the existing `xfactura-api` package, with Hono routes mounted in its Express server and a worker process from the same package. Use Bun, SQLite/libSQL, Drizzle, Zod and `decimal.js`. Local SQLite is the default; the existing libSQL configuration also accepts Turso. Domain calculations depend on neither HTTP, React, provider SDKs, nor Piatra identity. Code shared by the API and the browser invoicer (money, documents, UBL, kernel contracts, rule packages) lives in the pure `packages/xfactura-core` package; persistence and transports stay in the API package. [ADR 0008](adr/0008-existing-api-sqlite-drizzle.md) and [ADR 0009](adr/0009-pure-core-package.md) record this boundary.
 
 Retain Next.js for the web surface; package manifests and the lockfile own tested versions. Apply the [Next.js support policy](https://nextjs.org/support-policy) when scheduling framework maintenance.
 

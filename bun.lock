@@ -38,6 +38,7 @@
         "stripe": "^14.14.0",
         "typescript": "6.0.3",
         "uuid": "^9.0.1",
+        "xfactura-core": "workspace:*",
         "yauzl": "3.4.0",
         "zod": "4.6.7",
       },
@@ -54,6 +55,18 @@
         "fflate": "0.8.3",
         "nodemon": "^3.0.3",
         "rimraf": "^5.0.5",
+      },
+    },
+    "packages/xfactura-core": {
+      "name": "xfactura-core",
+      "version": "0.0.1",
+      "dependencies": {
+        "@noble/hashes": "2.4.0",
+        "zod": "4.6.7",
+      },
+      "devDependencies": {
+        "decimal.js": "10.6.0",
+        "fast-check": "4.10.2",
       },
     },
     "packages/xfactura-web": {
@@ -1541,6 +1554,8 @@
     "ws": ["ws@8.13.0", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-x9vcZYTrFPC7aSIbj7sRCYo7L/Xb8Iy+pW0ng0wt2vCJv7M9HOMy0UoN3rr+IFC7hb7vXoqS+P9ktyLLLhO+LA=="],
 
     "xfactura-api": ["xfactura-api@workspace:packages/xfactura-api"],
+
+    "xfactura-core": ["xfactura-core@workspace:packages/xfactura-core"],
 
     "xfactura-web": ["xfactura-web@workspace:packages/xfactura-web"],
 
