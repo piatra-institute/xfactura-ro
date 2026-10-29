@@ -20,14 +20,18 @@ import {
   fiscalYears,
   fxRates,
   invitations,
+  issuedNumbers,
   ledgerAccounts,
   lines,
   memberships,
+  parties,
+  partyVersions,
   periodBalances,
   policyRevocations,
   postingPolicies,
   profileFacts,
   proposals,
+  series,
   taxPeriodEvents,
   treasuryAccounts,
   withdrawals,
@@ -167,8 +171,154 @@ function prepaid(world: World) {
   );
 }
 
+/** The company's own details, the client's, series XF (invoices only) and a way to number. */
+async function issuing(world: World) {
+  const self = randomUUID();
+  const seriesId = randomUUID();
+  await world.db.write(async (tx) => {
+    await tx.insert(parties).values({
+      id: self,
+      companyId: world.company,
+      kind: 'self',
+      country: 'RO',
+      taxId: '12345678',
+      name: 'Test SRL',
+      createdBy: world.owner,
+    });
+    await tx.insert(partyVersions).values(
+      [self, world.client].map((partyId) => ({
+        companyId: world.company,
+        partyId,
+        version: 1,
+        details: '{}',
+        detailsHash: partyId,
+        createdBy: world.owner,
+      })),
+    );
+    await tx.insert(series).values({
+      id: seriesId,
+      companyId: world.company,
+      code: 'XF',
+      prefix: 'XF',
+      width: 4,
+      firstNumber: 1,
+      typeCodes: canonical(['380']),
+      revenueAccount: '704',
+      createdBy: world.owner,
+    });
+  });
+  /** A sales document numbered `text`, dated `date`, outside any series. */
+  const document = async (text: string, date = '2026-03-10', kind = 'invoice.issued') => {
+    const id = randomUUID();
+    await world.db.write((tx) =>
+      tx.insert(documents).values({
+        id,
+        companyId: world.company,
+        kind,
+        schema: 'test',
+        body: '{}',
+        bodyHash: id,
+        sourceKey: id,
+        origin: 'issued',
+        docDate: date,
+        partyId: world.client,
+        number: text,
+        createdBy: world.owner,
+      }),
+    );
+    return id;
+  };
+  const issue = async (
+    number: number,
+    options: { text?: string; date?: string; typeCode?: string; buyerVersion?: number } = {},
+  ) => {
+    const date = options.date ?? '2026-03-10';
+    const typeCode = options.typeCode ?? '380';
+    const documentId = await document(
+      options.text ?? `XF${String(number).padStart(4, '0')}`,
+      date,
+      typeCode === '381' ? 'creditNote.issued' : 'invoice.issued',
+    );
+    await world.db.write((tx) =>
+      tx.insert(issuedNumbers).values({
+        companyId: world.company,
+        seriesId,
+        number,
+        typeCode,
+        issueDate: date,
+        documentId,
+        sellerVersion: 1,
+        buyerVersion: options.buyerVersion ?? 1,
+        createdBy: world.owner,
+      }),
+    );
+  };
+  return { document, issue };
+}
+
 const entry = 'inv_entry_guard';
+const numbering = 'inv_issued_number_guard';
 const attacks: Attack[] = [
+  {
+    trigger: 'inv_party_version_guard',
+    code: 'party_version_sequence',
+    name: 'a party details version that skips a number',
+    run: async (world) =>
+      world.db.write((tx) =>
+        tx.insert(partyVersions).values({
+          companyId: world.company,
+          partyId: world.client,
+          version: 2,
+          details: '{}',
+          detailsHash: 'h',
+          createdBy: world.owner,
+        }),
+      ),
+  },
+  {
+    trigger: numbering,
+    code: 'series_sequence',
+    name: 'a gap in a series',
+    run: async (world) => (await issuing(world)).issue(2),
+  },
+  {
+    trigger: numbering,
+    code: 'series_date_order',
+    name: 'a later number with an earlier date',
+    run: async (world) => {
+      const { issue } = await issuing(world);
+      await issue(1, { date: '2026-03-10' });
+      await issue(2, { date: '2026-03-09' });
+    },
+  },
+  {
+    trigger: numbering,
+    code: 'series_type',
+    name: 'a credit note from an invoice-only series',
+    run: async (world) => (await issuing(world)).issue(1, { typeCode: '381' }),
+  },
+  {
+    trigger: numbering,
+    code: 'series_document',
+    name: 'a number the document does not carry',
+    run: async (world) => (await issuing(world)).issue(1, { text: 'XF1' }),
+  },
+  {
+    trigger: numbering,
+    code: 'number_reused',
+    name: 'issuing a number an imported sale already carries',
+    run: async (world) => {
+      const { document, issue } = await issuing(world);
+      await document('XF0001', '2026-01-15');
+      await issue(1);
+    },
+  },
+  {
+    trigger: numbering,
+    code: 'party_versions',
+    name: 'an invoice citing buyer details that were never recorded',
+    run: async (world) => (await issuing(world)).issue(1, { buyerVersion: 5 }),
+  },
   {
     trigger: entry,
     code: 'subject_posted',
@@ -1186,6 +1336,7 @@ describe('append-only records', () => {
     await book(world, sale(world, item));
     await book(world, prepaid(world));
     await periodEvent(world, '2026-03');
+    await (await issuing(world)).issue(1, { date: '2026-04-02' });
     const evidenceId = randomUUID();
     const documentIds = [randomUUID(), randomUUID()];
     await world.db.write(async (tx) => {

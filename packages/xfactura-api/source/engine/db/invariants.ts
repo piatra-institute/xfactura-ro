@@ -48,6 +48,9 @@ const appendOnly = [
   'acc_treasury_accounts',
   'acc_bank_statements',
   'acc_bank_movements',
+  'acc_party_versions',
+  'acc_series',
+  'acc_issued_numbers',
   'ref_fx_rates',
 ];
 // Tables with narrowly guarded updates (below) that are never deleted from.
@@ -516,6 +519,61 @@ const periodEventChecks: Check[] = [
   },
 ];
 
+const issuedKind = `CASE NEW.type_code WHEN '381' THEN 'creditNote.issued' ELSE 'invoice.issued' END`;
+const issuedNumberChecks: Check[] = [
+  {
+    code: 'series_sequence',
+    rule: 'A series issues consecutive numbers from its first number, without gaps.',
+    violation: `NEW.number IS NOT COALESCE(
+        (SELECT max(number) + 1 FROM acc_issued_numbers
+          WHERE company_id = NEW.company_id AND series_id = NEW.series_id),
+        (SELECT first_number FROM acc_series WHERE company_id = NEW.company_id AND id = NEW.series_id))`,
+  },
+  {
+    code: 'series_date_order',
+    rule: 'Within a series, a later number never has an earlier issue date.',
+    violation: `NEW.issue_date < COALESCE((
+        SELECT max(issue_date) FROM acc_issued_numbers
+        WHERE company_id = NEW.company_id AND series_id = NEW.series_id), '')`,
+  },
+  {
+    code: 'series_type',
+    rule: 'A series issues only the document types it was created for.',
+    violation: `NOT EXISTS (
+        SELECT 1 FROM acc_series s, json_each(s.type_codes_json) t
+        WHERE s.company_id = NEW.company_id AND s.id = NEW.series_id AND t.value = NEW.type_code)`,
+  },
+  {
+    code: 'series_document',
+    rule: 'The numbered document is an issued invoice or credit note of that type, dated on the issue date and carrying the series prefix and padded number.',
+    violation: `NOT EXISTS (
+        SELECT 1 FROM acc_documents d
+        JOIN acc_series s ON s.company_id = d.company_id AND s.id = NEW.series_id
+        WHERE d.company_id = NEW.company_id AND d.id = NEW.document_id
+          AND d.kind = ${issuedKind} AND d.doc_date = NEW.issue_date
+          AND d.number = s.prefix || printf('%0' || s.width || 'd', NEW.number))`,
+  },
+  {
+    code: 'number_reused',
+    rule: 'No other sales document, issued or imported, carries the same number.',
+    violation: `EXISTS (
+        SELECT 1 FROM acc_documents d
+        JOIN acc_documents numbered ON numbered.company_id = d.company_id AND numbered.id = NEW.document_id
+        WHERE d.company_id = NEW.company_id AND d.id <> NEW.document_id
+          AND d.kind IN ('invoice.issued', 'creditNote.issued') AND d.number = numbered.number)`,
+  },
+  {
+    code: 'party_versions',
+    rule: "The invoice records the versions of the company's own details and of the buyer's that it used.",
+    violation: `NOT EXISTS (
+        SELECT 1 FROM acc_party_versions v JOIN acc_parties p ON p.company_id = v.company_id AND p.id = v.party_id
+        WHERE v.company_id = NEW.company_id AND p.kind = 'self' AND v.version = NEW.seller_version)
+      OR NOT EXISTS (
+        SELECT 1 FROM acc_party_versions v JOIN acc_documents d ON d.company_id = v.company_id AND d.party_id = v.party_id
+        WHERE v.company_id = NEW.company_id AND d.id = NEW.document_id AND v.version = NEW.buyer_version)`,
+  },
+];
+
 // 3. Triggers
 
 type Trigger = { name: string; on: string; checks: Check[] };
@@ -748,6 +806,24 @@ const triggers: Trigger[] = [
             AND y.date_from <= NEW.date_to AND NEW.date_from <= y.date_to)`,
       },
     ],
+  },
+  {
+    name: 'inv_party_version_guard',
+    on: 'BEFORE INSERT ON acc_party_versions',
+    checks: [
+      {
+        code: 'party_version_sequence',
+        rule: "A party's detail versions are numbered from 1 without gaps.",
+        violation: `NEW.version <> 1 + COALESCE((
+          SELECT max(version) FROM acc_party_versions
+          WHERE company_id = NEW.company_id AND party_id = NEW.party_id), 0)`,
+      },
+    ],
+  },
+  {
+    name: 'inv_issued_number_guard',
+    on: 'BEFORE INSERT ON acc_issued_numbers',
+    checks: issuedNumberChecks,
   },
   {
     name: 'inv_audit_chain',

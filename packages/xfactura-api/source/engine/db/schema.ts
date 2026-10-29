@@ -326,6 +326,7 @@ export const documents = sqliteTable(
     primaryKey({ columns: [t.companyId, t.id] }),
     uniqueIndex('document_source').on(t.companyId, t.sourceKey),
     index('document_date').on(t.companyId, t.docDate),
+    index('document_number').on(t.companyId, t.number),
     foreignKey({
       columns: [t.companyId, t.evidenceId],
       foreignColumns: [evidence.companyId, evidence.id],
@@ -354,6 +355,82 @@ export const documentLinks = sqliteTable(
     }),
     foreignKey({
       columns: [t.companyId, t.toId],
+      foreignColumns: [documents.companyId, documents.id],
+    }),
+  ],
+);
+
+// Sales: party details, series and issued numbers
+
+/** Dated snapshots of a party's invoicing details (the core e-Factura `Party`); the latest
+ * version applies to new documents, and each issued invoice keeps the one it used. */
+export const partyVersions = sqliteTable(
+  'acc_party_versions',
+  {
+    companyId: companyId(),
+    partyId: text('party_id').notNull(),
+    version: counter('version').notNull(),
+    details: canonicalJson('details_json'),
+    detailsHash: text('details_hash').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.partyId, t.version] }),
+    foreignKey({
+      columns: [t.companyId, t.partyId],
+      foreignColumns: [parties.companyId, parties.id],
+    }),
+  ],
+);
+/** An invoice series: numbers are the prefix and the counter padded to `width` digits. */
+export const series = sqliteTable(
+  'acc_series',
+  {
+    id: text('id').notNull(),
+    companyId: companyId(),
+    code: text('code').notNull(),
+    prefix: text('prefix').notNull(),
+    width: counter('width').notNull(),
+    firstNumber: counter('first_number').notNull(),
+    /** e-Factura type codes this series issues (380, 381). */
+    typeCodes: canonicalJson('type_codes_json'),
+    /** The revenue account issued invoices are recognized on, unless the issue names another. */
+    revenueAccount: text('revenue_account').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.id] }),
+    uniqueIndex('series_code').on(t.companyId, t.code),
+    check('series_width', sql`${t.width} between 1 and 12`),
+    check('series_first', sql`${t.firstNumber} >= 1`),
+  ],
+);
+/** Every number a series has issued, without gaps, with the document it numbers. */
+export const issuedNumbers = sqliteTable(
+  'acc_issued_numbers',
+  {
+    companyId: companyId(),
+    seriesId: text('series_id').notNull(),
+    number: counter('number').notNull(),
+    typeCode: text('type_code').notNull(),
+    issueDate: text('issue_date').notNull(),
+    documentId: text('document_id').notNull(),
+    sellerVersion: counter('seller_version').notNull(),
+    buyerVersion: counter('buyer_version').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.seriesId, t.number] }),
+    uniqueIndex('issued_document').on(t.companyId, t.documentId),
+    foreignKey({
+      columns: [t.companyId, t.seriesId],
+      foreignColumns: [series.companyId, series.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.documentId],
       foreignColumns: [documents.companyId, documents.id],
     }),
   ],

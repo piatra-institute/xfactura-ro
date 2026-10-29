@@ -110,6 +110,11 @@ export class Proposals {
     return [...this.treatments.values()];
   }
 
+  /** The rules as the company's assurance mode admits them, for checks outside a treatment. */
+  async ruleContext(tx: Transaction, companyId: string) {
+    return new RuleContext(this.register, await this.mode(tx, companyId));
+  }
+
   private async mode(tx: Transaction, companyId: string): Promise<UseMode> {
     const [fact] = await tx
       .select({ value: profileFacts.value })

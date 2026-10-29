@@ -39,10 +39,21 @@ import {
 } from './modules/company';
 import { Evidence, evidenceInput, evidenceView } from './modules/evidence';
 import { documentView, importInput, Invoices } from './modules/invoices';
+import { InvoicerImport, invoicerImportInput, invoicerImportView } from './modules/invoicer-import';
 import { VatRegisters, vatJournalInput, vatJournalView } from './modules/vat';
 import { bnrImportInput, fxChecks, FxRates, rateQuery } from './modules/fx';
 import { Exports } from './modules/exports';
 import { positionQuery, Positions } from './modules/positions';
+import {
+  issueInput,
+  issueView,
+  partyDetailsInput,
+  previewView,
+  Sales,
+  sellerInput,
+  seriesInput,
+  seriesView,
+} from './modules/sales';
 import {
   bankImportInput,
   movementQuery,
@@ -86,6 +97,8 @@ export class Engine {
   readonly fx: FxRates;
   readonly exports: Exports;
   readonly positions: Positions;
+  readonly sales: Sales;
+  readonly invoicerImport: InvoicerImport;
 
   constructor(
     readonly db: Database,
@@ -134,6 +147,8 @@ export class Engine {
     this.fx = new FxRates(this.commands, objects);
     this.exports = new Exports(this.commands, objects);
     this.positions = new Positions(this.commands);
+    this.sales = new Sales(this.commands, objects, this.proposals);
+    this.invoicerImport = new InvoicerImport(this.commands, objects);
     this.operations.add(...this.catalogue());
   }
 
@@ -441,6 +456,98 @@ export class Engine {
         input: importInput,
         output: documentView,
         run: (actor, key, input) => this.invoices.import(actor, key, input),
+      }),
+      define({
+        id: 'invoices.importInvoicer',
+        description:
+          'Importă facturile emise din exportul JSON al facturierului xfactura.ro; fiecare înregistrare primește o stare (importată, duplicat, conflict, invalidă).',
+        permission: 'write',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: invoicerImportInput,
+        output: invoicerImportView,
+        run: (actor, key, input) => this.invoicerImport.run(actor, key, input),
+      }),
+      define({
+        id: 'sales.seller.record',
+        description:
+          'Înregistrează datele de facturare ale companiei (adresă, cod de TVA, cont), cu CUI-ul ei.',
+        permission: 'manage',
+        agent: false,
+        effect: 'manage',
+        approval: 'human',
+        input: sellerInput,
+        output: z.object({ partyId: z.string(), version: z.number() }),
+        run: (actor, key, input) => this.sales.recordSeller(actor, key, input),
+      }),
+      define({
+        id: 'parties.recordDetails',
+        description: 'Înregistrează o versiune nouă a datelor de facturare ale unui partener.',
+        permission: 'write',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: partyDetailsInput,
+        output: z.object({ partyId: z.string(), version: z.number() }),
+        run: (actor, key, input) => this.sales.recordPartyDetails(actor, key, input),
+      }),
+      define({
+        id: 'parties.get',
+        description: 'Un partener cu datele lui de facturare actuale.',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: z.object({ partyId: id }).strict(),
+        output: z.unknown(),
+        run: (actor, _key, input) => this.sales.partyDetails(actor, input),
+      }),
+      define({
+        id: 'sales.series.create',
+        description: 'Creează o serie de facturi, cu primul număr și contul de venit implicit.',
+        permission: 'manage',
+        agent: false,
+        effect: 'manage',
+        approval: 'human',
+        input: seriesInput,
+        output: seriesView,
+        run: (actor, key, input) => this.sales.createSeries(actor, key, input),
+      }),
+      define({
+        id: 'sales.series.list',
+        description: 'Seriile de facturi, cu următorul număr al fiecăreia.',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: z.object({}).strict(),
+        output: z.array(seriesView),
+        run: (actor) => this.sales.listSeries(actor),
+      }),
+      define({
+        id: 'sales.preview',
+        description:
+          'Previzualizează o factură de emis: următorul număr, sumele, XML-ul și orice problemă, fără a emite.',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: issueInput,
+        output: previewView,
+        run: (actor, _key, input) => this.sales.preview(actor, input),
+      }),
+      define({
+        id: 'sales.issue',
+        description:
+          'Emite o factură sau notă de credit: primește următorul număr din serie, XML-ul e-Factura este păstrat și se propune înregistrarea ei.',
+        permission: 'write',
+        agent: false,
+        effect: 'execute',
+        approval: 'human',
+        input: issueInput,
+        output: issueView,
+        run: (actor, key, input) => this.sales.issue(actor, key, input),
       }),
       define({
         id: 'treasury.createAccount',

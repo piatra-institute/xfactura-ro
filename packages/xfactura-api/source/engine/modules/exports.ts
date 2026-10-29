@@ -43,6 +43,15 @@ async function companyRecords(tx: Tx, companyId: string) {
       .from(s.profileFacts)
       .where(eq(s.profileFacts.companyId, companyId)),
     acc_parties: await tx.select().from(s.parties).where(eq(s.parties.companyId, companyId)),
+    acc_party_versions: await tx
+      .select()
+      .from(s.partyVersions)
+      .where(eq(s.partyVersions.companyId, companyId)),
+    acc_series: await tx.select().from(s.series).where(eq(s.series.companyId, companyId)),
+    acc_issued_numbers: await tx
+      .select()
+      .from(s.issuedNumbers)
+      .where(eq(s.issuedNumbers.companyId, companyId)),
     acc_evidence: await tx.select().from(s.evidence).where(eq(s.evidence.companyId, companyId)),
     acc_documents: await tx.select().from(s.documents).where(eq(s.documents.companyId, companyId)),
     acc_document_links: await tx

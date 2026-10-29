@@ -68,6 +68,13 @@ Reviewed actions (month close and reopen) follow the same pattern: request, appr
 | `policies.list` | read | yes | — | Posting policies. |
 | `evidence.record`, `evidence.list`, `evidence.get` | write / read | yes | — | Original files (base64). |
 | `invoices.import`, `documents.list` | write / read | yes | — | e-Factura XML into documents. |
+| `invoices.importInvoicer` | write | yes | — | The browser invoicer's JSON export into sales documents, one outcome per record. |
+| `sales.seller.record` | manage | no | human | The company's invoicing details, with its CUI. |
+| `sales.series.create` | manage | no | human | An invoice series: prefix, width, first number, types, revenue account. |
+| `sales.series.list`, `sales.preview` | read | yes | — | Series with their next number; what issuing would produce, with every problem. |
+| `sales.issue` | write | no | human | Issue an invoice or credit note with the next number and propose its recognition. |
+| `parties.recordDetails` | write | yes | — | A new version of a partner's invoicing details. |
+| `parties.get` | read | yes | — | A partner with its current invoicing details. |
 | `bank.import`, `bank.movements` | write / read | yes | — | MT940/camt.053 statements and their movements. |
 | `treasury.createAccount` | manage | no | human | Configure a bank or cash account. |
 | `treasury.accounts` | read | yes | — | Bank and cash accounts. |

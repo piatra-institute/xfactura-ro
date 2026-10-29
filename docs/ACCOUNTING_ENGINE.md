@@ -110,6 +110,37 @@ Every current parameter is `extracted`. Each proposal lists the parameter versio
 - Revalues monetary items (receivables, payables, accruals, unapplied cash) and foreign bank or cash balances at the selected rate. Each difference is booked on the item or account with a zero currency amount, against 7651 or 6651.
 - Advances and deferrals are not monetary and are not revalued.
 
+## Issuing invoices
+
+The company's own invoices are issued through the books, so the number, the XML and the recognition come from one command.
+
+- **Details.** The company's invoicing details (`sales.seller.record`, owners only) must carry its CUI; a partner's details (`parties.recordDetails`) must match the identifier it was created with. Both are dated versions, and each issued invoice records the versions it used.
+- **Series.** `sales.series.create` fixes a code, a prefix, a counter width, the first number, the document types (380, 381) and the default revenue account. Numbers are the prefix and the padded counter, for example `XF0001`.
+- **Issue.** `sales.issue` is human-only. It takes the next number at the moment of issue, writes the e-Factura with the core writer, keeps the XML as evidence and the document as an issued sale, then proposes its recognition (`invoices.recognize`, or `invoices.credit` for a credit note). A posting policy can post that recognition at once. A refusal after issue leaves the invoice issued and reports why.
+- **Refusals.** `sales.preview` shows the number and every problem without issuing. An issue is refused, with no number used, when:
+  - a party's details are missing;
+  - the buyer is an individual (the B2C identification rules are not sourced yet);
+  - the company's VAT status on the tax point is unknown or contradicts its details;
+  - a standard-rated line is not at the rate the register gives for the tax point (reduced rates are not in the register yet), or the rate is a rule gap (for example after 2026-12-31);
+  - the invoice fails the e-Factura checks (Romanian county and Bucharest sector, lei VAT for foreign currency, the corrected invoice of a credit note);
+  - the date is earlier than the series' last issue, or the number already appears on a sales document, imported or issued.
+- **Database guards.** Numbers in a series are consecutive from the first number, never go back in date, match the document's type, number and date, are never reused across sales documents, and cite recorded party details.
+
+## Importing the invoicer's history
+
+`invoices.importInvoicer` reads the browser invoicer's JSON export (adapter `xfactura-web-export-1`), kept as evidence, and gives every record one outcome:
+
+| Outcome | Meaning |
+|---|---|
+| `imported` | A sales document now exists, known only from the export. |
+| `duplicate` | The same content as an imported record with the same number. |
+| `conflict` | Records share a number but differ; none of them is imported. |
+| `invalid` | The record cannot be an e-Factura (for example a Bucharest address without its sector). |
+| `not_seller` | The company is not the seller. |
+| `existing` | An earlier import already holds the record; importing again adds nothing. |
+
+Documents are what the export states, converted as the invoicer now writes them; the export, not regenerated XML, is their evidence. The SPV archives are the authority on what was issued, and their import (not built yet) will confirm or contradict each document. Individuals are recorded by a hash of their CNP, without invoicing details.
+
 ## Treasury and statements
 
 - A bank or cash account maps to a ledger account: 5121 or 5311 for lei, 5124 or 5314 for foreign currency.
@@ -156,6 +187,7 @@ A close records closing balances per account and currency and joins a hash chain
   - invoice-level allowances and charges as separate treatments;
   - CSV bank statements.
 - **Not built yet:**
+  - SPV upload, status and archive import; reduced VAT rates in the register; B2C identification;
   - VAT categories other than S/O, TVA la încasare, reverse charge, intra-EU operations, pro-rata, VAT settlement and declarations;
   - payroll;
   - fixed assets;
