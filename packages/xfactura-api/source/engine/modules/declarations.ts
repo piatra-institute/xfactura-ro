@@ -13,6 +13,7 @@ import {
   type artifactStates,
 } from '../db/schema';
 import type { DeclarationValidator } from '../adapters/declaration-validator';
+import { pdfAttachments, pdfHasSignature } from '../adapters/pdf-attachments';
 import { sha256, type ObjectStore } from '../adapters/object-store';
 import type { ActionHandler } from '../kernel/actions';
 import { appendAudit, type Actor, type Commands } from '../kernel/commands';
@@ -59,6 +60,28 @@ export const prepareInput = z
   })
   .strict();
 export const artifactInput = z.object({ artifactId: z.uuid() }).strict();
+export const signedInput = z.object({ artifactId: z.uuid(), evidenceId: z.uuid() }).strict();
+export const submissionInput = z
+  .object({
+    artifactId: z.uuid(),
+    /** ANAF's registration number from the receipt (recipisă). */
+    registrationNumber: z.string().trim().min(1).max(60),
+    submittedOn: z.iso.date(),
+    receiptEvidenceId: z.uuid().optional(),
+  })
+  .strict();
+export const outcomeInput = z
+  .object({
+    artifactId: z.uuid(),
+    outcome: z.enum(['accepted', 'rejected']),
+    /** ANAF's confirmation or error message, kept as evidence. */
+    evidenceId: z.uuid(),
+    detail: z.string().trim().max(4000).optional(),
+  })
+  .strict();
+export const reopenInput = z
+  .object({ artifactId: z.uuid(), reason: z.string().trim().min(10).max(1000) })
+  .strict();
 export const artifactView = z.object({
   id: z.string(),
   kind: z.string(),
@@ -73,6 +96,7 @@ export const artifactView = z.object({
       state: z.string(),
       actor: z.string().nullable(),
       detail: z.string().nullable(),
+      evidenceId: z.string().nullable(),
       at: z.string(),
     }),
   ),
@@ -168,6 +192,21 @@ export class Declarations {
             'RECTIFICATION',
             'O declarație rectificativă înlocuiește o declarație de același tip și pentru aceeași perioadă.',
           );
+          const state = (await latestStep(tx, actor.companyId, original.id))?.state;
+          requireCondition(
+            [
+              'prepared',
+              'validation_failed',
+              'validated_official',
+              'authorized',
+              'exported_for_signing',
+              'signed_imported',
+              'accepted',
+              'rejected',
+            ].includes(state ?? ''),
+            'RECTIFICATION',
+            'Declarația inițială a fost depusă și așteaptă răspunsul ANAF; înregistrați-l întâi.',
+          );
         }
         const result = await kind.prepare(tx, actor.companyId, period, options);
         requireCondition(
@@ -216,6 +255,11 @@ export class Declarations {
           state: 'prepared',
           detail: JSON.stringify(result.summary),
         });
+        if (input.supersedesId)
+          await appendStep(tx, actor, input.supersedesId, {
+            state: 'superseded',
+            detail: `Înlocuită de ${id}.`,
+          });
         return { artifactId: id };
       },
     );
@@ -397,6 +441,159 @@ export class Declarations {
     };
   }
 
+  /**
+   * The PDF the company signed: it must carry, as an attachment, exactly the XML that was
+   * authorized, and a signature. The signature itself is verified by ANAF on filing.
+   */
+  importSigned(actor: Actor, key: string, input: z.infer<typeof signedInput>) {
+    return this.commands.run(
+      actor,
+      key,
+      'declarations.importSigned',
+      input,
+      'write',
+      async (tx) => {
+        const row = await this.artifact(tx, actor.companyId, input.artifactId);
+        requireCondition(
+          (await latestStep(tx, actor.companyId, row.id))?.state === 'exported_for_signing',
+          'NOT_EXPORTED',
+          'Se importă semnat doar PDF-ul exportat pentru semnare.',
+        );
+        const [file] = await tx
+          .select()
+          .from(evidence)
+          .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.id, input.evidenceId)));
+        requireCondition(file, 'EVIDENCE', 'Documentul justificativ nu este disponibil.', 404);
+        const bytes = await this.objects.get(actor.companyId, file.hash);
+        requireCondition(
+          pdfAttachments(bytes).some((attachment) => sha256(attachment.bytes) === row.xmlHash),
+          'SIGNED_MISMATCH',
+          'PDF-ul semnat nu conține exact XML-ul autorizat al declarației.',
+        );
+        requireCondition(pdfHasSignature(bytes), 'NOT_SIGNED', 'PDF-ul nu poartă o semnătură.');
+        await appendStep(tx, actor, row.id, {
+          state: 'signed_imported',
+          evidenceId: file.id,
+          detail: 'XML-ul autorizat este atașat; semnătura se verifică de ANAF la depunere.',
+        });
+        return { artifactId: row.id };
+      },
+    );
+  }
+
+  /** The filing, recorded from ANAF's receipt (recipisă). */
+  recordSubmission(actor: Actor, key: string, input: z.infer<typeof submissionInput>) {
+    return this.commands.run(
+      actor,
+      key,
+      'declarations.recordSubmission',
+      input,
+      'write',
+      async (tx) => {
+        const row = await this.artifact(tx, actor.companyId, input.artifactId);
+        requireCondition(
+          (await latestStep(tx, actor.companyId, row.id))?.state === 'signed_imported',
+          'NOT_SIGNED',
+          'Se depune doar declarația semnată și importată.',
+        );
+        await appendStep(tx, actor, row.id, {
+          state: 'submitted',
+          actor: input.registrationNumber,
+          detail: `Depusă la ${input.submittedOn}.`,
+          ...(input.receiptEvidenceId ? { evidenceId: input.receiptEvidenceId } : {}),
+        });
+        return { artifactId: row.id };
+      },
+    );
+  }
+
+  /** ANAF's answer to a filed return. */
+  recordOutcome(actor: Actor, key: string, input: z.infer<typeof outcomeInput>) {
+    return this.commands.run(
+      actor,
+      key,
+      'declarations.recordOutcome',
+      input,
+      'write',
+      async (tx) => {
+        const row = await this.artifact(tx, actor.companyId, input.artifactId);
+        requireCondition(
+          (await latestStep(tx, actor.companyId, row.id))?.state === 'submitted',
+          'NOT_SUBMITTED',
+          'Răspunsul ANAF se înregistrează pentru o declarație depusă.',
+        );
+        await appendStep(tx, actor, row.id, {
+          state: input.outcome,
+          evidenceId: input.evidenceId,
+          ...(input.detail ? { detail: input.detail } : {}),
+        });
+        return { artifactId: row.id };
+      },
+    );
+  }
+
+  /**
+   * Reopening a filed tax period for correction is a reviewed action in the name of the return
+   * that locked it; its rectification is then prepared with `supersedesId`, authorized and filed.
+   */
+  reopenHandler(): ActionHandler<z.infer<typeof reopenInput>> {
+    const latestLock = async (tx: Transaction, companyId: string, tax: string, period: string) => {
+      const [event] = await tx
+        .select()
+        .from(taxPeriodEvents)
+        .where(
+          and(
+            eq(taxPeriodEvents.companyId, companyId),
+            eq(taxPeriodEvents.tax, tax),
+            eq(taxPeriodEvents.period, period),
+          ),
+        )
+        .orderBy(desc(taxPeriodEvents.seq))
+        .limit(1);
+      return event;
+    };
+    return {
+      operation: 'declarations.reopen',
+      permission: 'review',
+      input: reopenInput,
+      preview: async (tx, companyId, { artifactId, reason }) => {
+        const row = await this.artifact(tx, companyId, artifactId);
+        const lock = row.tax ? await latestLock(tx, companyId, row.tax, row.period) : undefined;
+        const findings =
+          lock?.kind === 'lock'
+            ? []
+            : [{ code: 'NOT_LOCKED', message: 'Perioada fiscală a declarației nu este blocată.' }];
+        return {
+          blocking: findings.length > 0,
+          preview: { artifactId, tax: row.tax, period: row.period, reason, findings },
+        };
+      },
+      execute: async (tx, actor, { artifactId }) => {
+        const row = await this.artifact(tx, actor.companyId, artifactId);
+        const lock = await latestLock(tx, actor.companyId, row.tax!, row.period);
+        await tx.insert(taxPeriodEvents).values({
+          companyId: actor.companyId,
+          tax: row.tax!,
+          period: row.period,
+          seq: (lock?.seq ?? 0) + 1,
+          kind: 'unlock',
+          reference: artifactId,
+          createdBy: actor.actorId,
+        });
+        return { artifactId, unlocked: `${row.tax} ${row.period}` };
+      },
+    };
+  }
+
+  private async artifact(tx: Transaction, companyId: string, artifactId: string) {
+    const [row] = await tx
+      .select()
+      .from(artifacts)
+      .where(and(eq(artifacts.companyId, companyId), eq(artifacts.id, artifactId)));
+    requireCondition(row, 'NOT_FOUND', 'Declarația nu există.', 404);
+    return row;
+  }
+
   view(actor: Actor, artifactId: string) {
     return this.commands.read(actor, 'declarations.list', async (tx) => {
       const [row] = await tx
@@ -440,6 +637,7 @@ export class Declarations {
         state: step.state,
         actor: step.actor,
         detail: step.detail,
+        evidenceId: step.evidenceId,
         at: step.createdAt,
       })),
     };

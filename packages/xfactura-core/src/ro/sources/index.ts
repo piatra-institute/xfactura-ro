@@ -144,9 +144,235 @@ export const legalSources: readonly LegalSource[] = [
       },
     ],
   },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat',
+    kind: 'official_document',
+    title:
+      'Codul fiscal adnotat cu normele metodologice, text actualizat publicat de ANAF (ultima actualizare: Legea nr. 204/2026; norme: Hotărârea Guvernului nr. 602/2025)',
+    issuer: 'ANAF',
+    publication: null,
+    urls: ['https://static.anaf.ro/static/10/Anaf/legislatie/Cod_fiscal_norme_2023.htm'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/legislatie/Cod_fiscal_norme_2023.htm',
+        sha256: 'aba0c753fd326414d4327af00bc56269024a9c248857096aef7354a68013e7c1',
+        retrievedOn: '2026-10-29',
+        mediaType: 'text/html',
+      },
+    ],
+  },
+  {
+    id: 'OMFP1243/2018',
+    kind: 'act',
+    title:
+      'Ordinul ministrului finanțelor publice nr. 1.243/2018 privind completarea unor reglementări contabile',
+    issuer: 'Ministerul Finanțelor Publice',
+    publication: 'Monitorul Oficial nr. 120 din 7 februarie 2018',
+    urls: ['https://static.anaf.ro/static/10/Anaf/legislatie/OMFP_1243_2018.pdf'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/legislatie/OMFP_1243_2018.pdf',
+        sha256: '81b0890aad08a3d47559b90521119b4ec320125cc3fd7afbb253061121dcee93',
+        retrievedOn: '2026-10-29',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
+    id: 'HG1506/2024',
+    kind: 'act',
+    title:
+      'Hotărârea Guvernului nr. 1.506/2024 pentru stabilirea salariului de bază minim brut pe țară garantat în plată',
+    issuer: 'Guvernul României',
+    publication: null,
+    urls: [],
+    fetch: false,
+    snapshots: [],
+  },
+  {
+    id: 'HG146/2026',
+    kind: 'act',
+    title:
+      'Hotărârea Guvernului nr. 146/2026 pentru stabilirea salariului de bază minim brut pe țară garantat în plată',
+    issuer: 'Guvernul României',
+    publication: null,
+    urls: [],
+    fetch: false,
+    snapshots: [],
+  },
+  {
+    id: 'OUG89/2025',
+    kind: 'act',
+    title: 'Ordonanța de urgență a Guvernului nr. 89/2025',
+    issuer: 'Guvernul României',
+    publication: null,
+    urls: [],
+    fetch: false,
+    snapshots: [],
+  },
 ];
 
 export const clauses: readonly Clause[] = [
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.64(1)(b)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 64 alin. (1) lit. b)',
+    status: 'located',
+    summary:
+      'Cota impozitului pe venit este 10% pentru veniturile din salarii și asimilate salariilor.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:norme.art.64.pct.4',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'normele metodologice, titlul IV, pct. 4 (aplicarea art. 64)',
+    status: 'located',
+    summary:
+      'Bazele de calcul al impozitului se rotunjesc la leu: fracțiunile de până la 50 de bani inclusiv se neglijează, cele peste 50 de bani se majorează la leu.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.76(3)(h)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 76 alin. (3) lit. h)',
+    status: 'located',
+    summary:
+      'Tichetele de masă, voucherele de vacanță și celelalte bilete de valoare acordate potrivit legii sunt venituri din salarii.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.77',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 77 alin. (1)–(4) și (10)',
+    status: 'located',
+    summary:
+      'Deducerea personală la funcția de bază: de bază, după tabelul procentelor din salariul minim pentru venituri brute de până la salariul minim + 2.000 lei și numărul persoanelor în întreținere; suplimentară, 15% din salariul minim până la 26 de ani și 100 lei pentru fiecare copil înscris la școală.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:norme.art.77.pct.13(14)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'normele metodologice, titlul IV, pct. 13 alin. (14)',
+    status: 'located',
+    summary:
+      'Deducerea personală nu se fracționează pentru contractele cu timp parțial la funcția de bază.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.78(2)(a)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 78 alin. (2) lit. a)',
+    status: 'located',
+    summary:
+      'Impozitul lunar la funcția de bază: 10% din venitul net (brut minus contribuțiile sociale) minus deducerea personală și cotizația sindicală.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.138(a)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 138 lit. a)',
+    status: 'located',
+    summary: 'Cota contribuției de asigurări sociale datorate de angajați este 25%.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.139(1)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 139 alin. (1)',
+    status: 'located',
+    summary: 'Baza lunară a CAS este câștigul brut din salarii și venituri asimilate.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.142(r)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 142 lit. r)',
+    status: 'located',
+    summary: 'Tichetele de masă și voucherele de vacanță nu intră în baza lunară a CAS.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.146(5^6)-(5^9)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 146 alin. (5^6)–(5^9)',
+    status: 'located',
+    summary:
+      'CAS nu poate fi mai mică decât cea calculată la salariul minim pentru zilele lucrătoare în care contractul a fost activ, cu excepțiile de la alin. (5^7); diferența o suportă angajatorul.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.156',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 156',
+    status: 'located',
+    summary: 'Cota contribuției de asigurări sociale de sănătate este 10%.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.157',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 157 alin. (1) și (2)',
+    status: 'located',
+    summary:
+      'Baza lunară a CASS este câștigul brut, inclusiv valoarea nominală a tichetelor de masă și a voucherelor de vacanță.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.168(6^1)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 168 alin. (6^1)',
+    status: 'located',
+    summary: 'Minimul calculat la salariul minim (art. 146 alin. (5^6)–(5^9)) se aplică și CASS.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.220^3(1)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 220^3 alin. (1)',
+    status: 'located',
+    summary: 'Cota contribuției asiguratorii pentru muncă este 2,25%.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.220^4',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 220^4',
+    status: 'located',
+    summary: 'Baza CAM este câștigul brut din salarii, fără sumele de la art. 142.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.291(1)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 291 alin. (1)',
+    status: 'located',
+    summary: 'Cota standard de TVA este 21%.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.291(2)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 291 alin. (2)',
+    status: 'located',
+    summary: 'Cota redusă de TVA este 11%, pentru livrările și prestările enumerate.',
+  },
+  {
+    id: 'OMFP1243/2018:art.1,4',
+    source: 'OMFP1243/2018',
+    locator: 'art. 1 și art. 4',
+    status: 'located',
+    summary:
+      'Introduce în planul de conturi conturile 4315, 4316, 436 (pasiv) și 646, pentru contribuțiile datorate pentru veniturile realizate de la 1 ianuarie 2018.',
+  },
+  {
+    id: 'HG1506/2024:art.1',
+    source: 'HG1506/2024',
+    locator: 'art. 1',
+    status: 'pending',
+    summary: 'Salariul minim brut pe țară este 4.050 lei lunar de la 1 ianuarie 2025.',
+  },
+  {
+    id: 'HG146/2026:art.1',
+    source: 'HG146/2026',
+    locator: 'art. 1',
+    status: 'pending',
+    summary:
+      'Salariul minim brut pe țară este 4.325 lei lunar de la 1 iulie 2026 (cunoscut din presă; textul de obținut).',
+  },
+  {
+    id: 'OUG89/2025:salariul-minim',
+    source: 'OUG89/2025',
+    locator: 'dispozițiile privind suma care nu se include în bazele de calcul (de localizat)',
+    status: 'pending',
+    summary:
+      'Pentru salariații cu salariul de bază egal cu salariul minim și venitul brut până la un plafon, o sumă lunară (300 lei până în iunie 2026, plafon 4.300 lei; 200 lei din iulie 2026, plafon 4.600 lei) nu se include în bazele de calcul (cunoscut din presă; textul de obținut).',
+  },
   {
     id: 'L227/2015:art.291(1)(a)',
     source: 'L227/2015',

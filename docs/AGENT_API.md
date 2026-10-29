@@ -81,6 +81,13 @@ Reviewed actions (month close and reopen) follow the same pattern: request, appr
 | `declarations.prepare`, `declarations.validate` | write | yes | — | Prepare a return from the books in ANAF's format; run ANAF's validator. |
 | `declarations.authorize.request` | review | no | — | Request the reviewed authorization that locks the tax period. |
 | `declarations.pdf`, `declarations.list` | write / read | yes | — | ANAF's PDF of an authorized return; returns with their steps. |
+| `declarations.importSigned`, `declarations.recordOutcome` | write | yes | — | The signed PDF (must carry the authorized XML); ANAF's answer. |
+| `declarations.recordSubmission` | write | no | human | The filing, with ANAF's registration number. |
+| `declarations.reopen.request` | review | no | — | Reviewed reopening of a filed tax period for rectification. |
+| `payroll.employees.record`, `payroll.contracts.record` | write | no | — | An employee (CNP kept encrypted); a contract or a new version of its terms. |
+| `payroll.employees.list`, `payroll.contracts.list` | read | no | — | Employees without CNPs; contracts with every version. |
+| `payroll.runs.prepare` | write | no | — | Compute a month's payroll; computing again supersedes the earlier run. |
+| `payroll.runs.get`, `payroll.runs.list` | read | no | — | Payroll runs with their lines and problems. |
 | `spv.submit` | write | no | human | Authorize and send an issued document's XML to the SPV, once. |
 | `spv.refresh` | write | yes | — | Ask how a submitted upload was processed. |
 | `spv.sync` | write | yes | — | Read the SPV inbox for a window; import, confirm and resolve. |

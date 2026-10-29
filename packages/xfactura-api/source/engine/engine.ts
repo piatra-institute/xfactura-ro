@@ -4,12 +4,14 @@ import type { Treatment } from 'xfactura-core/kernel';
 import { vatDefinitions, vatVersions } from 'xfactura-core/ro/vat';
 import { fxDefinitions, fxVersions } from 'xfactura-core/ro/fx';
 import { procedureDefinitions, procedureVersions } from 'xfactura-core/ro/procedure';
+import { payrollDefinitions, payrollVersions } from 'xfactura-core/ro/payroll';
 import { generalJournal, reversal } from 'xfactura-core/ro/treatments/ledger';
 import { creditRecognition, invoiceRecognition } from 'xfactura-core/ro/treatments/invoices';
 import { settlement } from 'xfactura-core/ro/treatments/settlement';
 import { revaluation } from 'xfactura-core/ro/treatments/revaluation';
 import { vatSettlement } from 'xfactura-core/ro/treatments/vat-settlement';
 import { crossBorderRecognition } from 'xfactura-core/ro/treatments/cross-border';
+import { payrollRecognition } from 'xfactura-core/ro/treatments/payroll';
 import { ParameterRegister } from 'xfactura-core/rules';
 import { clause, sourceOf } from 'xfactura-core/ro/sources';
 import { addDays, bucharestDate } from 'xfactura-core/time';
@@ -68,9 +70,14 @@ import {
   artifactInput,
   artifactView,
   Declarations,
+  outcomeInput,
   prepareInput,
+  reopenInput as declarationReopenInput,
+  signedInput,
+  submissionInput as filingInput,
   type DeclarationKind,
 } from './modules/declarations';
+import { employeeInput, Payroll, runIdInput, runInput, termsInput } from './modules/payroll';
 import {
   issueInput,
   issueView,
@@ -144,8 +151,8 @@ function parameters(register: ParameterRegister) {
 
 export const defaultRegister = () =>
   new ParameterRegister(
-    [...vatDefinitions, ...fxDefinitions, ...procedureDefinitions],
-    [...vatVersions, ...fxVersions, ...procedureVersions],
+    [...vatDefinitions, ...fxDefinitions, ...procedureDefinitions, ...payrollDefinitions],
+    [...vatVersions, ...fxVersions, ...procedureVersions, ...payrollVersions],
   );
 
 /** The accounting engine: one kernel, its modules and the operation catalogue they expose. */
@@ -172,6 +179,7 @@ export class Engine {
   readonly invoicerImport: InvoicerImport;
   readonly spv: Spv;
   readonly declarations: Declarations;
+  readonly payroll: Payroll;
 
   constructor(
     readonly db: Database,
@@ -203,6 +211,7 @@ export class Engine {
       revaluation,
       vatSettlement,
       crossBorderRecognition,
+      payrollRecognition,
       ...(options.treatments ?? []),
     );
     this.actions = new Actions(this.commands);
@@ -236,6 +245,10 @@ export class Engine {
       ...(options.declarations ?? []),
     );
     this.actions.add(this.declarations.authorizeHandler());
+    this.actions.add(this.declarations.reopenHandler());
+    this.payroll = new Payroll(this.commands, secret, (tx, companyId) =>
+      this.proposals.ruleContext(tx, companyId),
+    );
     this.operations.add(...this.catalogue());
   }
 
@@ -633,6 +646,134 @@ export class Engine {
         input: artifactInput,
         output: artifactView,
         run: (actor, _key, input) => this.declarations.exportPdf(actor, input),
+      }),
+      define({
+        id: 'declarations.importSigned',
+        description:
+          'Importă PDF-ul semnat al unei declarații; trebuie să conțină exact XML-ul autorizat și o semnătură.',
+        permission: 'write',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: signedInput,
+        output: z.object({ artifactId: z.string() }),
+        run: (actor, key, input) => this.declarations.importSigned(actor, key, input),
+      }),
+      define({
+        id: 'declarations.recordSubmission',
+        description:
+          'Înregistrează depunerea unei declarații semnate, cu numărul de înregistrare din recipisă.',
+        permission: 'write',
+        agent: false,
+        effect: 'execute',
+        approval: 'human',
+        input: filingInput,
+        output: z.object({ artifactId: z.string() }),
+        run: (actor, key, input) => this.declarations.recordSubmission(actor, key, input),
+      }),
+      define({
+        id: 'declarations.recordOutcome',
+        description:
+          'Înregistrează răspunsul ANAF la o declarație depusă (acceptare sau respingere), cu documentul primit.',
+        permission: 'write',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: outcomeInput,
+        output: z.object({ artifactId: z.string() }),
+        run: (actor, key, input) => this.declarations.recordOutcome(actor, key, input),
+      }),
+      define({
+        id: 'declarations.reopen.request',
+        description:
+          'Cere redeschiderea unei perioade fiscale declarate, pentru corectare și declarație rectificativă.',
+        permission: 'review',
+        agent: false,
+        effect: 'prepare',
+        approval: 'none',
+        input: declarationReopenInput,
+        output: actionView,
+        run: (actor, key, input) => this.actions.request(actor, key, 'declarations.reopen', input),
+      }),
+      define({
+        id: 'payroll.employees.record',
+        description:
+          'Înregistrează un salariat: numele și CNP-ul, păstrat criptat; salariatul devine partener.',
+        permission: 'write',
+        agent: false,
+        effect: 'prepare',
+        approval: 'none',
+        input: employeeInput,
+        output: z.object({ id: z.string(), partyId: z.string(), name: z.string() }),
+        run: (actor, key, input) => this.payroll.recordEmployee(actor, key, input),
+      }),
+      define({
+        id: 'payroll.employees.list',
+        description: 'Salariații înregistrați, fără CNP.',
+        permission: 'read',
+        agent: false,
+        effect: 'read',
+        approval: 'none',
+        input: z.object({}).strict(),
+        output: z.array(z.object({ id: z.string(), partyId: z.string(), name: z.string() })),
+        run: (actor) => this.payroll.listEmployees(actor),
+      }),
+      define({
+        id: 'payroll.contracts.record',
+        description:
+          'Înregistrează un contract de muncă sau o versiune nouă a termenilor lui (salariu, normă, funcție de bază, persoane în întreținere).',
+        permission: 'write',
+        agent: false,
+        effect: 'prepare',
+        approval: 'none',
+        input: termsInput,
+        output: z.object({ contractId: z.string(), seq: z.number() }),
+        run: (actor, key, input) => this.payroll.recordTerms(actor, key, input),
+      }),
+      define({
+        id: 'payroll.contracts.list',
+        description: 'Contractele de muncă, cu toate versiunile termenilor.',
+        permission: 'read',
+        agent: false,
+        effect: 'read',
+        approval: 'none',
+        input: z.object({}).strict(),
+        output: z.array(z.unknown()),
+        run: (actor) => this.payroll.listContracts(actor),
+      }),
+      define({
+        id: 'payroll.runs.prepare',
+        description:
+          'Calculează statul de plată al lunii din contracte și din ce diferă în lună; un calcul nou îl înlocuiește pe cel anterior.',
+        permission: 'write',
+        agent: false,
+        effect: 'prepare',
+        approval: 'none',
+        input: runInput,
+        output: z.unknown(),
+        run: (actor, key, input) => this.payroll.prepareRun(actor, key, input),
+      }),
+      define({
+        id: 'payroll.runs.get',
+        description: 'Un stat de plată, cu liniile și problemele lui.',
+        permission: 'read',
+        agent: false,
+        effect: 'read',
+        approval: 'none',
+        input: runIdInput,
+        output: z.unknown(),
+        run: (actor, _key, input) => this.payroll.getRun(actor, input.runId),
+      }),
+      define({
+        id: 'payroll.runs.list',
+        description: 'Statele de plată calculate.',
+        permission: 'read',
+        agent: false,
+        effect: 'read',
+        approval: 'none',
+        input: z.object({}).strict(),
+        output: z.array(z.unknown()),
+        run: (actor) => this.payroll.listRuns(actor),
       }),
       define({
         id: 'declarations.list',

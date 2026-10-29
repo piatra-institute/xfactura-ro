@@ -4,7 +4,8 @@ import { Database } from '../../source/engine/db/database';
 import { entries } from '../../source/engine/db/schema';
 import { backup, restore } from '../../source/engine/backup';
 import { LocalObjectStore } from '../../source/engine/adapters/object-store';
-import { Exports } from '../../source/engine/modules/exports';
+import { companyRecords, Exports } from '../../source/engine/modules/exports';
+import { guardedTables } from '../../source/engine/db/invariants';
 import { journal, scenario, type Scenario } from './scenario';
 
 const open: Scenario[] = [];
@@ -26,6 +27,17 @@ async function books() {
 }
 
 describe('exports', () => {
+  test('an export holds every guarded company table', async () => {
+    const s = await books();
+    const tables = await s.engine.db.read((tx) => companyRecords(tx, s.owner.companyId));
+    // Command replays are bookkeeping and reference rates are not the company's.
+    expect(
+      guardedTables.filter(
+        (table) => !(table in tables) && table !== 'acc_commands' && !table.startsWith('ref_'),
+      ),
+    ).toEqual([]);
+  });
+
   test('a reviewer exports every record and original; viewers cannot', async () => {
     const s = await books();
     expect((await s.refused(s.invoke(s.viewer, 'exports.request')))?.code).toBe('FORBIDDEN');

@@ -51,6 +51,7 @@ export const vatVersions: ParameterVersion[] = [
     status: 'extracted',
     clauses: [
       'L227/2015:art.291(1)(a)',
+      'ANAF/Cod-fiscal-consolidat:art.291(1)',
       'L141/2025:rates',
       'ANAF/D300-12.0.0:rd.9',
       'ANAF/Ploiesti-modificari-tva:cote',
@@ -80,6 +81,7 @@ export const vatVersions: ParameterVersion[] = [
     status: 'extracted',
     clauses: [
       'L227/2015:art.291(2)',
+      'ANAF/Cod-fiscal-consolidat:art.291(2)',
       'L141/2025:rates',
       'ANAF/D300-12.0.0:rd.10',
       'ANAF/Ploiesti-modificari-tva:cote',

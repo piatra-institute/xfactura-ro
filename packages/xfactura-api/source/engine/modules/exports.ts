@@ -13,7 +13,7 @@ const EVIDENCE_LIMIT = 64 * 1024 * 1024;
 
 /** Every company record an export contains. Authentication, work queues, command replays and
  * global reference data are not company records. */
-async function companyRecords(tx: Tx, companyId: string) {
+export async function companyRecords(tx: Tx, companyId: string) {
   const s = schema;
   return {
     acc_companies: await tx.select().from(s.companies).where(eq(s.companies.id, companyId)),
@@ -123,6 +123,44 @@ async function companyRecords(tx: Tx, companyId: string) {
       .select()
       .from(s.actionExecutions)
       .where(eq(s.actionExecutions.companyId, companyId)),
+    acc_submissions: await tx
+      .select()
+      .from(s.submissions)
+      .where(eq(s.submissions.companyId, companyId)),
+    acc_submission_events: await tx
+      .select()
+      .from(s.submissionEvents)
+      .where(eq(s.submissionEvents.companyId, companyId)),
+    acc_spv_messages: await tx
+      .select()
+      .from(s.spvMessages)
+      .where(eq(s.spvMessages.companyId, companyId)),
+    acc_spv_sync_windows: await tx
+      .select()
+      .from(s.spvSyncWindows)
+      .where(eq(s.spvSyncWindows.companyId, companyId)),
+    acc_artifacts: await tx.select().from(s.artifacts).where(eq(s.artifacts.companyId, companyId)),
+    acc_artifact_events: await tx
+      .select()
+      .from(s.artifactEvents)
+      .where(eq(s.artifactEvents.companyId, companyId)),
+    acc_employees: await tx.select().from(s.employees).where(eq(s.employees.companyId, companyId)),
+    acc_employment_terms: await tx
+      .select()
+      .from(s.employmentTerms)
+      .where(eq(s.employmentTerms.companyId, companyId)),
+    acc_payroll_runs: await tx
+      .select()
+      .from(s.payrollRuns)
+      .where(eq(s.payrollRuns.companyId, companyId)),
+    acc_payroll_run_events: await tx
+      .select()
+      .from(s.payrollRunEvents)
+      .where(eq(s.payrollRunEvents.companyId, companyId)),
+    acc_payroll_lines: await tx
+      .select()
+      .from(s.payrollLines)
+      .where(eq(s.payrollLines.companyId, companyId)),
   };
 }
 

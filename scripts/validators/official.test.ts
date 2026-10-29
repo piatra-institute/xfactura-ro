@@ -15,6 +15,14 @@ import {
   type InvoicerInvoice,
 } from '../../packages/xfactura-core/src/einvoice';
 import { writeD300, type D300 } from '../../packages/xfactura-core/src/ro/declarations/d300';
+import {
+  checkD394,
+  d394RefundFlags,
+  writeD394,
+  type D394,
+  type D394Operation,
+  type D394Partner,
+} from '../../packages/xfactura-core/src/ro/declarations/d394';
 
 const root = path.join(import.meta.dir, '../..');
 const ready =
@@ -199,7 +207,7 @@ describe('official EN 16931 validation', () => {
   );
 });
 
-// ANAF's DUKIntegrator with the D300 validator, as installed by `bun run validators:fetch`.
+// ANAF's DUKIntegrator with the D300 and D394 validators, as installed by `bun run validators:fetch`.
 const duk = path.join(root, '.validators/anaf/dist');
 const anaf =
   existsSync(path.join(duk, 'DUKIntegrator.jar')) && Bun.which('java') !== null ? test : test.skip;
@@ -261,15 +269,19 @@ const vatReturns: Record<string, D300> = {
   ),
 };
 
-async function validateD300(documents: Record<string, string>) {
-  const directory = await mkdtemp(path.join(tmpdir(), 'xfactura-d300-'));
+/** DUKIntegrator's verdict per document: "ok", or its errors (E:) and warnings (A:). */
+async function validateAnaf(declaration: 'D300' | 'D394', documents: Record<string, string>) {
+  const directory = await mkdtemp(path.join(tmpdir(), `xfactura-${declaration.toLowerCase()}-`));
   try {
     const results = await Promise.all(
       Object.entries(documents).map(async ([name, xml]) => {
         const file = path.join(directory, `${name}.xml`);
         const result = path.join(directory, `${name}.txt`);
         await writeFile(file, xml);
-        await $`java -jar DUKIntegrator.jar -v D300 ${file} ${result}`.cwd(duk).nothrow().quiet();
+        await $`java -Djava.awt.headless=true -jar DUKIntegrator.jar -v ${declaration} ${file} ${result}`
+          .cwd(duk)
+          .nothrow()
+          .quiet();
         return [name, existsSync(result) ? readFileSync(result, 'utf8').trim() : ''] as const;
       }),
     );
@@ -283,7 +295,8 @@ describe('official D300 validation', () => {
   anaf(
     'DUKIntegrator accepts every synthetic return without errors or warnings',
     async () => {
-      const results = await validateD300(
+      const results = await validateAnaf(
+        'D300',
         Object.fromEntries(
           Object.entries(vatReturns).map(([name, model]) => [name, writeD300(model)]),
         ),
@@ -303,7 +316,7 @@ describe('official D300 validation', () => {
         expect(xml).toContain(from);
         return xml.replace(from, to);
       };
-      const results = await validateD300({
+      const results = await validateAnaf('D300', {
         'control-sum': mutate('totalPlata_A="4155"', 'totalPlata_A="4156"'),
         'payment-number': mutate(
           'nr_evid="10301010926251026000039"',
@@ -314,6 +327,228 @@ describe('official D300 validation', () => {
       expect(results['control-sum']).toContain('totalPlata_A');
       expect(results['payment-number']).toStartWith('E:');
       expect(results['payment-number']).toContain('nr_evid');
+    },
+    120_000,
+  );
+});
+
+const registered = (cui: string, name: string): D394Partner => ({ kind: 'registered', cui, name });
+const sale = (
+  partner: D394Partner,
+  rate: D394Operation['rate'],
+  invoices: number,
+  base: number,
+  vat: number,
+  type: D394Operation['type'] = 'L',
+): D394Operation => ({ type, rate, partner, invoices, base, vat });
+
+const statement = (extra: Partial<D394> = {}): D394 => ({
+  period: { year: 2026, month: 9 },
+  type: 'L',
+  company: {
+    cui: '18547290',
+    caen: '6201',
+    name: 'Exemplu Servicii SRL',
+    address: 'Str. Lungă nr. 10, Galați, jud. Galați',
+    phone: '0236000000',
+    email: 'contabilitate@exemplu.ro',
+  },
+  representative: { name: 'Popescu Ana', role: 'Administrator', address: 'Str. Lungă nr. 10' },
+  preparer: {
+    kind: 'company',
+    cui: '18547290',
+    name: 'Exemplu Servicii SRL',
+    capacity: 'Administrator',
+  },
+  consultation: true,
+  affiliates: false,
+  operations: [],
+  simplified: {},
+  series: [],
+  issuedInvoices: { own: 0, byBeneficiaries: 0, byThirdParties: 0 },
+  invoices: [],
+  cashVatDeductible: {},
+  ...extra,
+});
+
+const invoiced = {
+  series: [
+    { type: 'allocated', series: 'XF', first: '1', last: '99999' },
+    { type: 'issued', series: 'XF', first: '101', last: '104' },
+  ],
+  issuedInvoices: { own: 4, byBeneficiaries: 0, byThirdParties: 0 },
+} satisfies Partial<D394>;
+const domestic = statement({
+  ...invoiced,
+  operations: [
+    sale(registered('14399840', 'Client Unu SRL'), '21', 2, 10000, 2100),
+    sale(registered('13548146', 'Client Doi SRL'), '21', 1, 4000, 840),
+    sale(registered('10376500', 'Client Trei SRL'), '11', 1, 2000, 220),
+    sale(registered('16341004', 'Furnizor Unu SRL'), '21', 3, 3000, 630, 'A'),
+  ],
+});
+
+const statements: Record<string, D394> = {
+  // Two partners at 21%, one at 11%, acquisitions from one supplier at 21%.
+  monthly: domestic,
+  quarterly: { ...domestic, type: 'T', period: { year: 2026, month: 6 } },
+  // A period without operations: op_efectuate 0, informatii only.
+  nil: statement(),
+  individuals: statement({
+    ...invoiced,
+    operations: [
+      sale(registered('14399840', 'Client Unu SRL'), '21', 1, 2000, 420),
+      sale(
+        { kind: 'unregistered', code: '1900101400012', name: 'Ionescu Mihai' },
+        '21',
+        1,
+        500,
+        105,
+      ),
+      sale(
+        {
+          kind: 'unregistered',
+          name: 'Georgescu Elena',
+          address: { country: 'RO', county: 'RO-GL', locality: 'Galați', street: 'Str. Brăilei' },
+        },
+        '21',
+        1,
+        300,
+        63,
+      ),
+      sale(
+        {
+          kind: 'unregistered',
+          name: 'Müller Hans',
+          address: { country: 'DE', locality: 'Berlin' },
+        },
+        '11',
+        1,
+        100,
+        11,
+      ),
+    ],
+  }),
+  // The first v5 period, with every other covered section.
+  'all-sections': statement({
+    period: { year: 2025, month: 8 },
+    consultation: false,
+    affiliates: true,
+    representative: {
+      cif: '1900101400012',
+      name: 'Popescu Ana',
+      role: 'Administrator',
+      address: 'Str. Lungă nr. 10',
+      phone: '0740000000',
+    },
+    preparer: {
+      kind: 'individual',
+      cnp: '2900101400022',
+      name: 'Ionescu Maria',
+      capacity: 'Expert contabil',
+    },
+    operations: [
+      ...domestic.operations,
+      sale(registered('16341004', 'Furnizor Unu SRL'), '21', 1, 1000, 210, 'AI'),
+      sale(registered('16341004', 'Furnizor Unu SRL'), '19', 1, -100, -19, 'A'),
+      sale(
+        { kind: 'unregistered', code: '6859662', name: 'Asociația Exemplu' },
+        '21',
+        1,
+        1000,
+        210,
+      ),
+    ],
+    simplified: {
+      '21': { receipts: { base: 200, vat: 42 }, purchases: { base: 50, vat: 10 } },
+      '9': { salesWithCode: { base: 100, vat: 9 } },
+    },
+    series: [
+      ...invoiced.series,
+      {
+        type: 'thirdParty',
+        series: 'TP',
+        first: '1',
+        last: '2',
+        issuer: { name: 'Terț Facturare SRL', cui: '13548146' },
+      },
+    ],
+    issuedInvoices: { own: 4, byBeneficiaries: 0, byThirdParties: 2 },
+    invoices: [
+      { type: 'storno', series: 'XF', number: '103' },
+      { type: 'cancelled', series: 'XF', number: '104' },
+      {
+        type: 'selfInvoice',
+        series: 'XF',
+        number: '102',
+        amounts: { '21': { base: 100, vat: 21 } },
+      },
+    ],
+    cashVatDeductible: { '21': 210, '19': 38 },
+    refund: Object.fromEntries(
+      d394RefundFlags.map(([name]) => [
+        name,
+        ['Prest21', 'achizitiiS21', 'efectuat'].includes(name),
+      ]),
+    ) as NonNullable<D394['refund']>,
+  }),
+};
+
+describe('official D394 validation', () => {
+  anaf(
+    'DUKIntegrator accepts every synthetic statement without errors or warnings',
+    async () => {
+      for (const model of Object.values(statements)) expect(checkD394(model)).toEqual([]);
+      const results = await validateAnaf(
+        'D394',
+        Object.fromEntries(
+          Object.entries(statements).map(([name, model]) => [name, writeD394(model)]),
+        ),
+      );
+      expect(results).toEqual(
+        Object.fromEntries(Object.keys(statements).map((name) => [name, 'ok'])),
+      );
+    },
+    120_000,
+  );
+
+  anaf(
+    'DUKIntegrator rejects what checkD394 rejects, and a wrong control sum or partner count',
+    async () => {
+      const xml = writeD394(domestic);
+      const mutate = (from: string, to: string) => {
+        expect(xml).toContain(from);
+        return xml.replace(from, to);
+      };
+      const duplicate = statement({
+        ...domestic,
+        operations: [...domestic.operations, domestic.operations[0]!],
+      });
+      const noCounty = statement({
+        ...invoiced,
+        operations: [
+          sale({ kind: 'unregistered', name: 'X', address: { country: 'RO' } }, '21', 1, 1, 0),
+        ],
+      });
+      const unallocated = statement({ ...domestic, series: [invoiced.series[1]] });
+      expect(checkD394(duplicate).map((check) => check.code)).toEqual(['D394_DUPLICATE']);
+      expect(checkD394(noCounty).map((check) => check.code)).toEqual(['D394_ADDRESS']);
+      expect(checkD394(unallocated).map((check) => check.code)).toEqual(['D394_SERIES']);
+      const results = await validateAnaf('D394', {
+        'control-sum': mutate('totalPlata_A="19004"', 'totalPlata_A="19005"'),
+        'partner-count': mutate('nrCui1="4"', 'nrCui1="3"'),
+        'rate-summary': mutate('bazaL="14000"', 'bazaL="14001"'),
+        duplicate: writeD394(duplicate),
+        'no-county': writeD394(noCounty),
+        unallocated: writeD394(unallocated),
+      });
+      expect(results['control-sum']).toStartWith('E:');
+      expect(results['control-sum']).toContain('R17');
+      expect(results['partner-count']).toContain('R122');
+      expect(results['rate-summary']).toStartWith('E:');
+      expect(results.duplicate).toContain('R218.4');
+      expect(results['no-county']).toContain('R222.3');
+      expect(results.unallocated).toContain('R112.2');
     },
     120_000,
   );

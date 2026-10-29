@@ -57,6 +57,11 @@ const appendOnly = [
   'acc_spv_sync_windows',
   'acc_artifacts',
   'acc_artifact_events',
+  'acc_employees',
+  'acc_employment_terms',
+  'acc_payroll_runs',
+  'acc_payroll_run_events',
+  'acc_payroll_lines',
   'ref_fx_rates',
 ];
 // Tables with narrowly guarded updates (below) that are never deleted from.
@@ -149,6 +154,12 @@ const taxPeriodVersion = (id: string) => {
         (SELECT count(*) ${taxRows}) || '/' || (SELECT count(*) ${settlementRows}) || '/' ||
         max(COALESCE((SELECT max(e.seq) ${taxRows}), 0), COALESCE((SELECT max(e.seq) ${settlementRows}), 0)))`;
 };
+/** A payroll run's read version: its result hash and latest state. */
+const payrollRunVersion = (id: string) => `(
+        SELECT r.result_hash || '/' || (
+          SELECT state FROM acc_payroll_run_events e
+          WHERE e.company_id = r.company_id AND e.run_id = r.id ORDER BY e.seq DESC LIMIT 1)
+        FROM acc_payroll_runs r WHERE r.company_id = NEW.company_id AND r.id = ${id})`;
 const latest = (table: string, scope: string) =>
   `(SELECT kind FROM ${table} WHERE company_id = NEW.company_id AND ${scope} ORDER BY seq DESC LIMIT 1)`;
 const nowMs = `CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)`;
@@ -458,11 +469,13 @@ const entryChecks: Check[] = [
   },
   {
     code: 'stale_read',
-    rule: "The open items, schedules and tax periods the proposal read have not changed since: an open item's version is its number of lines, a schedule's its latest version, a tax period's its tax entries, settlement lines and last entry sequence.",
+    rule: "The open items, schedules, tax periods and payroll runs the proposal read have not changed since: an open item's version is its number of lines, a schedule's its latest version, a tax period's its tax entries, settlement lines and last entry sequence, a payroll run's its result and state.",
     violation: `EXISTS (
       SELECT 1 FROM json_each(${version('read_set_json')}) r
       WHERE (json_extract(r.value, '$.kind') = 'taxPeriod'
           AND json_extract(r.value, '$.version') <> ${taxPeriodVersion("json_extract(r.value, '$.id')")})
+        OR (json_extract(r.value, '$.kind') = 'payrollRun'
+          AND json_extract(r.value, '$.version') IS NOT ${payrollRunVersion("json_extract(r.value, '$.id')")})
         OR (json_extract(r.value, '$.kind') = 'openItem'
           AND json_extract(r.value, '$.version') <> CAST((
             SELECT count(*) FROM acc_lines l
@@ -660,20 +673,75 @@ const artifactEventChecks: Check[] = [
   },
   {
     code: 'artifact_transition',
-    rule: "A declaration is prepared, passes ANAF's validator, is authorized, exported for signing, imported signed, submitted and answered; only a validated one is authorized, and a superseded one ends.",
+    rule: "A declaration is prepared, passes ANAF's validator, is authorized, exported for signing, imported signed, submitted and answered; only a validated one is authorized, one not yet submitted or already answered can be superseded, and a superseded one ends.",
     violation: `NOT CASE ${artifactState('NEW.artifact_id')}
         WHEN 'prepared' THEN NEW.state IN ('validation_failed', 'validated_official', 'superseded')
         WHEN 'validation_failed' THEN NEW.state = 'superseded'
         WHEN 'validated_official' THEN NEW.state IN ('authorized', 'superseded')
-        WHEN 'authorized' THEN NEW.state = 'exported_for_signing'
-        WHEN 'exported_for_signing' THEN NEW.state = 'signed_imported'
-        WHEN 'signed_imported' THEN NEW.state = 'submitted'
+        WHEN 'authorized' THEN NEW.state IN ('exported_for_signing', 'superseded')
+        WHEN 'exported_for_signing' THEN NEW.state IN ('signed_imported', 'superseded')
+        WHEN 'signed_imported' THEN NEW.state IN ('submitted', 'superseded')
         WHEN 'submitted' THEN NEW.state IN ('accepted', 'rejected')
         WHEN 'rejected' THEN NEW.state = 'superseded'
         WHEN 'accepted' THEN NEW.state = 'superseded'
         ELSE ${artifactState('NEW.artifact_id')} IS NULL AND NEW.state = 'prepared' END`,
   },
 ];
+
+const payrollChecks = {
+  terms: [
+    {
+      code: 'terms_sequence',
+      rule: "A contract's terms are numbered from 1 without gaps, for one employee, and apply from no earlier than the previous version.",
+      violation: `NEW.seq <> 1 + COALESCE((
+          SELECT max(seq) FROM acc_employment_terms
+          WHERE company_id = NEW.company_id AND contract_id = NEW.contract_id), 0)
+        OR EXISTS (
+          SELECT 1 FROM acc_employment_terms t
+          WHERE t.company_id = NEW.company_id AND t.contract_id = NEW.contract_id
+            AND (t.employee_id <> NEW.employee_id OR t.effective_from > NEW.effective_from))`,
+    },
+    {
+      code: 'terms_values',
+      rule: 'Terms have 1 to 8 daily hours, no negative amounts or counts, and end no earlier than they start.',
+      violation: `NEW.daily_hours NOT BETWEEN 1 AND 8 OR NEW.base_salary_bani < 0 OR NEW.union_dues_bani < 0
+        OR NEW.dependents < 0 OR NEW.children_in_school < 0
+        OR (NEW.end_date IS NOT NULL AND NEW.end_date < NEW.start_date)`,
+    },
+  ] satisfies Check[],
+  events: [
+    {
+      code: 'payroll_run_transition',
+      rule: 'A payroll run is prepared once, and may then be superseded once.',
+      violation: `NOT CASE (
+          SELECT state FROM acc_payroll_run_events
+          WHERE company_id = NEW.company_id AND run_id = NEW.run_id ORDER BY seq DESC LIMIT 1)
+        WHEN 'prepared' THEN NEW.state = 'superseded'
+        ELSE NOT EXISTS (
+          SELECT 1 FROM acc_payroll_run_events WHERE company_id = NEW.company_id AND run_id = NEW.run_id)
+          AND NEW.state = 'prepared' END
+        OR NEW.seq <> 1 + COALESCE((
+          SELECT max(seq) FROM acc_payroll_run_events
+          WHERE company_id = NEW.company_id AND run_id = NEW.run_id), 0)`,
+    },
+  ] satisfies Check[],
+  lines: [
+    {
+      code: 'payroll_line_sum',
+      rule: 'A payroll line adds up: the net is the money earned less the contributions, tax and dues withheld.',
+      violation: `NEW.net_bani <> NEW.cash_bani - NEW.cas_bani - NEW.cass_bani - NEW.tax_bani - NEW.union_dues_bani`,
+    },
+    {
+      code: 'payroll_line_employee',
+      rule: "A payroll line is the contract's employee, under the employee's party.",
+      violation: `NOT EXISTS (
+          SELECT 1 FROM acc_employment_terms t JOIN acc_employees m
+            ON m.company_id = t.company_id AND m.id = t.employee_id
+          WHERE t.company_id = NEW.company_id AND t.contract_id = NEW.contract_id AND t.seq = NEW.terms_seq
+            AND t.employee_id = NEW.employee_id AND m.party_id = NEW.party_id)`,
+    },
+  ] satisfies Check[],
+};
 
 // 3. Triggers
 
@@ -961,6 +1029,21 @@ const triggers: Trigger[] = [
     name: 'inv_artifact_event_guard',
     on: 'BEFORE INSERT ON acc_artifact_events',
     checks: artifactEventChecks,
+  },
+  {
+    name: 'inv_employment_terms_guard',
+    on: 'BEFORE INSERT ON acc_employment_terms',
+    checks: payrollChecks.terms,
+  },
+  {
+    name: 'inv_payroll_run_event_guard',
+    on: 'BEFORE INSERT ON acc_payroll_run_events',
+    checks: payrollChecks.events,
+  },
+  {
+    name: 'inv_payroll_line_guard',
+    on: 'BEFORE INSERT ON acc_payroll_lines',
+    checks: payrollChecks.lines,
   },
   {
     name: 'inv_audit_chain',

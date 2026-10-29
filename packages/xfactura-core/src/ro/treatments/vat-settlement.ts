@@ -24,6 +24,11 @@ export const vatSettlementInput = z
     evidenceId: z.uuid(),
     /** A later round settles entries that reached the period after an earlier settlement. */
     round: z.number().int().min(1).max(99).default(1),
+    /**
+     * Offsets VAT to recover carried forward from earlier periods (open 4424 items of the
+     * authority, oldest first) against this period's VAT payable, as the return carries it.
+     */
+    offsetCarried: z.boolean().default(false),
   })
   .strict();
 export type VatSettlementInput = z.infer<typeof vatSettlementInput>;
@@ -56,6 +61,13 @@ export const vatSettlement: Treatment<VatSettlementInput> = {
     parties: [input.authorityId],
     taxPeriods: [{ tax: 'VAT', period: input.period }],
     profile: true,
+    ...(input.offsetCarried
+      ? {
+          openItems: [
+            { partyId: input.authorityId, kind: 'tax.receivable' as const, openOnly: true },
+          ],
+        }
+      : {}),
   }),
   evaluate(input, loaded) {
     const issues: Issue[] = [];
@@ -121,11 +133,33 @@ export const vatSettlement: Treatment<VatSettlementInput> = {
       normalSide: payable ? ('C' as const) : ('D' as const),
       mayReverse: false,
     };
-    if (balance !== 0n)
+    let remaining = payable ? balance : -balance;
+    if (payable && input.offsetCarried)
+      for (const carried of [...loaded.openItems.values()]
+        .filter(
+          (open) =>
+            open.kind === 'tax.receivable' &&
+            open.controlAccount === '4424' &&
+            open.partyId === input.authorityId &&
+            open.balanceBani > 0n,
+        )
+        .sort((a, b) => (a.id < b.id ? -1 : 1))) {
+        if (remaining === 0n) break;
+        const taken = carried.balanceBani < remaining ? carried.balanceBani : remaining;
+        lines.push({
+          account: '4424',
+          side: 'C',
+          bani: taken,
+          openItem: carried.id,
+          partyId: input.authorityId,
+        });
+        remaining -= taken;
+      }
+    if (remaining !== 0n)
       lines.push({
         account: item.controlAccount,
         side: payable ? 'C' : 'D',
-        bani: payable ? balance : -balance,
+        bani: remaining,
         openItem: item.ref,
         partyId: input.authorityId,
       });
@@ -136,7 +170,7 @@ export const vatSettlement: Treatment<VatSettlementInput> = {
       journalCode: 'TVA',
       description: `Regularizare TVA ${input.period}${input.round > 1 ? ` (runda ${input.round})` : ''}`,
       lines,
-      openItems: balance === 0n ? [] : [item],
+      openItems: remaining === 0n ? [] : [item],
       taxEntries: [],
       schedules: [],
       explanation: {

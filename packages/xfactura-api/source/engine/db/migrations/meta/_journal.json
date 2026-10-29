@@ -43,6 +43,13 @@
       "when": 1793294179993,
       "tag": "0005_declarations",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1793298524509,
+      "tag": "0006_payroll",
+      "breakpoints": true
     }
   ]
 }

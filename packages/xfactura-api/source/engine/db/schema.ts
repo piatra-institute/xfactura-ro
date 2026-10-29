@@ -1241,6 +1241,152 @@ export const outbox = sqliteTable(
   ],
 );
 
+// Payroll: personal data. The CNP is kept sealed (encrypted with the server's key); its hash is
+// the employee's party identity, as for buyers who are individuals.
+
+export const employees = sqliteTable(
+  'acc_employees',
+  {
+    id: text('id').notNull(),
+    companyId: companyId(),
+    partyId: text('party_id').notNull(),
+    /** The CNP, encrypted; never returned by a view. */
+    cnpSealed: text('cnp_sealed').notNull(),
+    birthDate: text('birth_date').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.id] }),
+    uniqueIndex('employee_party').on(t.companyId, t.partyId),
+    foreignKey({
+      columns: [t.companyId, t.partyId],
+      foreignColumns: [parties.companyId, parties.id],
+    }),
+  ],
+);
+
+/** An employment contract's terms, one version per change (addendum, new declaration). */
+export const employmentTerms = sqliteTable(
+  'acc_employment_terms',
+  {
+    companyId: companyId(),
+    contractId: text('contract_id').notNull(),
+    seq: counter('seq').notNull(),
+    employeeId: text('employee_id').notNull(),
+    number: text('number').notNull(),
+    startDate: text('start_date').notNull(),
+    endDate: text('end_date'),
+    /** The date this version applies from. */
+    effectiveFrom: text('effective_from').notNull(),
+    baseSalaryBani: bani('base_salary_bani').notNull(),
+    dailyHours: counter('daily_hours').notNull(),
+    mainJob: integer('main_job', { mode: 'boolean' }).notNull(),
+    /** COR occupation code. */
+    occupation: text('occupation').notNull(),
+    dependents: counter('dependents').notNull(),
+    childrenInSchool: counter('children_in_school').notNull(),
+    unionDuesBani: bani('union_dues_bani').notNull(),
+    minimumExemption: text('minimum_exemption'),
+    evidenceId: text('evidence_id'),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.contractId, t.seq] }),
+    index('terms_employee').on(t.companyId, t.employeeId),
+    foreignKey({
+      columns: [t.companyId, t.employeeId],
+      foreignColumns: [employees.companyId, employees.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.evidenceId],
+      foreignColumns: [evidence.companyId, evidence.id],
+    }),
+  ],
+);
+
+/** A month's payroll as computed: never changed, only superseded by a new computation. */
+export const payrollRuns = sqliteTable(
+  'acc_payroll_runs',
+  {
+    id: text('id').notNull(),
+    companyId: companyId(),
+    month: text('month').notNull(),
+    round: counter('round').notNull(),
+    workingDays: counter('working_days').notNull(),
+    /** Hash of the lines as computed: with the run's latest state, its version in a read-set. */
+    resultHash: text('result_hash').notNull(),
+    /** Lines the rules could not settle: such a run is not posted. */
+    issues: counter('issues').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.id] }),
+    index('payroll_run_month').on(t.companyId, t.month, t.round),
+  ],
+);
+
+export const payrollRunStates = ['prepared', 'superseded'] as const;
+export const payrollRunEvents = sqliteTable(
+  'acc_payroll_run_events',
+  {
+    companyId: companyId(),
+    runId: text('run_id').notNull(),
+    seq: counter('seq').notNull(),
+    state: text('state', { enum: payrollRunStates }).notNull(),
+    detail: text('detail'),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.runId, t.seq] }),
+    foreignKey({
+      columns: [t.companyId, t.runId],
+      foreignColumns: [payrollRuns.companyId, payrollRuns.id],
+    }),
+  ],
+);
+
+export const payrollLines = sqliteTable(
+  'acc_payroll_lines',
+  {
+    companyId: companyId(),
+    runId: text('run_id').notNull(),
+    contractId: text('contract_id').notNull(),
+    termsSeq: counter('terms_seq').notNull(),
+    employeeId: text('employee_id').notNull(),
+    partyId: text('party_id').notNull(),
+    /** What was computed from: days, items and the deduction facts, as canonical JSON. */
+    input: canonicalJson('input_json'),
+    /** The calculation's steps and their clauses, or the issues that stopped it. */
+    result: canonicalJson('result_json'),
+    cash: bani('cash_bani').notNull(),
+    vouchers: bani('vouchers_bani').notNull(),
+    cas: bani('cas_bani').notNull(),
+    cass: bani('cass_bani').notNull(),
+    casEmployer: bani('cas_employer_bani').notNull(),
+    cassEmployer: bani('cass_employer_bani').notNull(),
+    tax: bani('tax_bani').notNull(),
+    unionDues: bani('union_dues_bani').notNull(),
+    net: bani('net_bani').notNull(),
+    cam: bani('cam_bani').notNull(),
+    issues: counter('issues').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.runId, t.contractId] }),
+    foreignKey({
+      columns: [t.companyId, t.runId],
+      foreignColumns: [payrollRuns.companyId, payrollRuns.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.contractId, t.termsSeq],
+      foreignColumns: [employmentTerms.companyId, employmentTerms.contractId, employmentTerms.seq],
+    }),
+  ],
+);
+
 /** Checksums of the installed database invariants (see invariants.ts). */
 export const invariantChecksums = sqliteTable('acc_invariants', {
   name: text('name').primaryKey(),

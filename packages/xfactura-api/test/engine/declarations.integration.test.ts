@@ -41,13 +41,34 @@ const validator: DeclarationValidator = {
     new TextDecoder().decode(xml).includes('broken')
       ? { ok: false, messages: ['E: câmp invalid'] }
       : { ok: true, messages: [] },
-  pdf: async () => ({ ok: true, messages: [], pdf: new TextEncoder().encode('%PDF-1.4 test') }),
+  pdf: async (_kind, xml) => ({ ok: true, messages: [], pdf: pdfWith(xml) }),
 };
+
+/** A minimal PDF attaching `xml`, as ANAF's tool does; `signed` appends a signature dictionary
+ * the way a signer's incremental update does. */
+function pdfWith(xml: Uint8Array, signed = false) {
+  const head = `%PDF-1.4\n1 0 obj\n<< /Type /EmbeddedFile /Length ${xml.length} >>\nstream\n`;
+  const tail =
+    '\nendstream\nendobj\n2 0 obj\n<< /Type /Filespec /F (t300.xml) /UF (t300.xml) /EF << /F 1 0 R /UF 1 0 R >> >>\nendobj\n' +
+    (signed ? '3 0 obj\n<< /Type /Sig /ByteRange [0 0 0 0] /Contents <00> >>\nendobj\n' : '') +
+    '%%EOF\n';
+  return new Uint8Array([
+    ...new TextEncoder().encode(head),
+    ...xml,
+    ...new TextEncoder().encode(tail),
+  ]);
+}
 
 type Artifact = {
   id: string;
   state: string;
-  steps: { state: string; actor: string | null; detail: string | null }[];
+  evidenceId: string;
+  steps: {
+    state: string;
+    actor: string | null;
+    detail: string | null;
+    evidenceId: string | null;
+  }[];
 };
 
 async function company() {
@@ -77,6 +98,15 @@ async function company() {
     return request;
   };
   return { s, sale, prepare, authorize };
+}
+
+/** Approves and executes a reviewed action as the reviewer. */
+async function authorized(s: Scenario, request: ActionView) {
+  await s.invoke(s.reviewer, 'actions.approve', {
+    id: request.id,
+    previewHash: request.previewHash,
+  });
+  return s.invoke(s.reviewer, 'actions.execute', { id: request.id });
 }
 
 describe('declarations', () => {
@@ -131,6 +161,87 @@ describe('declarations', () => {
     expect(
       (request.preview as { findings: { code: string }[] }).findings.map((item) => item.code),
     ).toEqual(['NOT_VALIDATED']);
+  });
+
+  test('the signed PDF must carry the authorized XML; the filing and the answer are recorded', async () => {
+    const { s, sale, prepare, authorize } = await company();
+    await s.post(await s.approve(await sale({ number: 'V-7' })));
+    const prepared = await prepare();
+    await authorized(s, await authorize(prepared.id));
+    await s.invoke(s.owner, 'declarations.pdf', { artifactId: prepared.id });
+    const xml = (await s.engine.evidence.read(s.owner, prepared.evidenceId)).bytes;
+    const pdf = async (bytes: Uint8Array, name: string) =>
+      (
+        await s.invoke<{ id: string }>(s.owner, 'evidence.record', {
+          filename: name,
+          mediaType: 'application/pdf',
+          base64: Buffer.from(bytes).toString('base64'),
+        })
+      ).id;
+    const importSigned = async (bytes: Uint8Array, name: string) =>
+      s.invoke(s.owner, 'declarations.importSigned', {
+        artifactId: prepared.id,
+        evidenceId: await pdf(bytes, name),
+      });
+    expect((await s.refused(importSigned(pdfWith(xml), 'nesemnat.pdf')))?.code).toBe('NOT_SIGNED');
+    const other = new TextEncoder().encode('<t300 period="2026-10" entries="9"/>');
+    expect((await s.refused(importSigned(pdfWith(other, true), 'altul.pdf')))?.code).toBe(
+      'SIGNED_MISMATCH',
+    );
+    await importSigned(pdfWith(xml, true), 'semnat.pdf');
+    await s.invoke(s.owner, 'declarations.recordSubmission', {
+      artifactId: prepared.id,
+      registrationNumber: 'INTERNT-123456789-2026',
+      submittedOn: '2026-11-20',
+      receiptEvidenceId: (await s.evidence('recipisa.pdf')).id,
+    });
+    await s.invoke(s.owner, 'declarations.recordOutcome', {
+      artifactId: prepared.id,
+      outcome: 'accepted',
+      evidenceId: (await s.evidence('confirmare.pdf')).id,
+    });
+    const [filed] = await s.invoke<Artifact[]>(s.owner, 'declarations.list');
+    expect(filed!.steps.map((step) => step.state)).toEqual([
+      'prepared',
+      'validated_official',
+      'authorized',
+      'exported_for_signing',
+      'signed_imported',
+      'submitted',
+      'accepted',
+    ]);
+    expect(filed!.steps[5]!.actor).toBe('INTERNT-123456789-2026');
+  });
+
+  test('a filed period reopens only by review, and its rectification supersedes the return', async () => {
+    const { s, sale, prepare, authorize } = await company();
+    await s.post(await s.approve(await sale({ number: 'V-8' })));
+    const prepared = await prepare();
+    await authorized(s, await authorize(prepared.id));
+    const blocked = await sale({ number: 'V-9', date: '2026-10-25' });
+    expect(blocked.issues.map((issue) => issue.code)).toContain('TAX_PERIOD_LOCKED');
+    const reopen = await s.invoke<ActionView>(s.owner, 'declarations.reopen.request', {
+      artifactId: prepared.id,
+      reason: 'Factura V-9 lipsea din decont',
+    });
+    await authorized(s, reopen);
+    const [document] = (
+      await s.invoke<{ id: string; number: string }[]>(s.owner, 'documents.list')
+    ).filter((item) => item.number === 'V-9');
+    const late = await s.revise('invoices.recognize', blocked, {
+      documentId: document!.id,
+      account: '704',
+    });
+    expect(late.issues.map((issue) => issue.code)).not.toContain('TAX_PERIOD_LOCKED');
+    await s.post(await s.approve(late));
+    const rectification = await s.invoke<Artifact>(s.owner, 'declarations.prepare', {
+      kind: 'T300',
+      period: '2026-10',
+      supersedesId: prepared.id,
+    });
+    expect(rectification.state).toBe('validated_official');
+    const all = await s.invoke<Artifact[]>(s.owner, 'declarations.list');
+    expect(all.find((item) => item.id === prepared.id)?.state).toBe('superseded');
   });
 
   test('a period without a pinned format is a format gap, and only people authorize', async () => {

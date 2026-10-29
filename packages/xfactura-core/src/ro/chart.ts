@@ -11,14 +11,60 @@ export type ChartAccount = {
 };
 
 /** The OMFP 1802/2014 reference chart as published in 2014. It is not a reviewed consolidation:
- * accounts introduced later (e.g. 4315, 4316 and 436 for post-2018 payroll contributions) are
- * missing and must be added from their amending orders before payroll posts to them. */
+ * accounts introduced later come from their amending orders (`chartAmendments`). */
 export const referenceChart = {
   id: chart.id,
   source: chart.source,
   sourceSha256: chart.sourceSha256,
   accounts: chart.accounts as ChartAccount[],
 };
+
+/** Accounts later orders added to the chart, with the clause that adds them and the date from
+ * which they are used. */
+export const chartAmendments: readonly {
+  clause: string;
+  validFrom: string;
+  accounts: readonly ChartAccount[];
+}[] = [
+  {
+    clause: 'OMFP1243/2018:art.1,4',
+    validFrom: '2018-01-01',
+    accounts: [
+      {
+        code: '4315',
+        name: 'Contribuția de asigurări sociale',
+        balance: 'credit',
+        parentCode: '431',
+        postable: true,
+        book: 'general',
+      },
+      {
+        code: '4316',
+        name: 'Contribuția de asigurări sociale de sănătate',
+        balance: 'credit',
+        parentCode: '431',
+        postable: true,
+        book: 'general',
+      },
+      {
+        code: '436',
+        name: 'Contribuția asiguratorie pentru muncă',
+        balance: 'credit',
+        parentCode: '43',
+        postable: true,
+        book: 'general',
+      },
+      {
+        code: '646',
+        name: 'Cheltuieli privind contribuția asiguratorie pentru muncă',
+        balance: 'debit',
+        parentCode: '64',
+        postable: true,
+        book: 'general',
+      },
+    ],
+  },
+];
 
 /**
  * How the kernel controls each synthetic account: lines on an open-item account must name an
@@ -44,6 +90,9 @@ const controls: Record<string, ControlKind> = {
   '4312': 'tax.payable',
   '4313': 'tax.payable',
   '4314': 'tax.payable',
+  '4315': 'tax.payable',
+  '4316': 'tax.payable',
+  '436': 'tax.payable',
   '4371': 'tax.payable',
   '4372': 'tax.payable',
   '4411': 'tax.payable',

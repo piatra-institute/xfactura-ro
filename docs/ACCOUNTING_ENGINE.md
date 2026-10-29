@@ -23,7 +23,7 @@ Posted records are never changed. A correction is a reversal (`ledger.reverse`) 
 
 ## Rules and their review status
 
-Fiscal parameters come from the source register (`xfactura-core/src/ro/vat.ts`, `src/ro/fx.ts`). Resolution never defaults:
+Fiscal parameters come from the source register (`xfactura-core/src/ro/vat.ts`, `src/ro/fx.ts`, `src/ro/payroll/parameters.ts`). Resolution never defaults:
 
 | Gap | Meaning |
 |---|---|
@@ -40,7 +40,9 @@ Every current parameter is `extracted`. Each proposal lists the parameter versio
 
 Each version cites clauses from the source register (`xfactura-core/src/ro/sources`). A source is an act or an official document with the hashes of the copies read. A clause is `located` when its text was read in such a copy, and `pending` when only its place in the act is known; neither is a review. `bun run sources:fetch` fetches the sources that allow it into `.sources/` and reports drift from the registered hashes; acts on sites that refuse automated access are provided by hand in `.sources/inbox/`. `rules.parameters` lists every value with its citations, and `rules.horizon` the values whose reviewed period ends within a number of days.
 
-Accounting policies the law requires in writing are dated company facts with their evidence. `policy.storno` (red or black) decides a reversal whose method is not given; without either, the reversal is blocked.
+Accounting policies the law requires in writing are dated company facts with their evidence. `policy.storno` (red or black) decides a reversal whose method is not given; without either, the reversal is blocked. `policy.payroll.employer_share` (635 or 6458) is where contributions borne in an employee's name are expensed; a payroll that needs it is blocked without it.
+
+The chart is OMFP 1802/2014 as published, plus the accounts later orders added, each with the clause that adds it: 4315, 4316, 436 and 646 from OMFP 1243/2018, used from 2018.
 
 ## Implemented treatments
 
@@ -122,7 +124,15 @@ Accounting policies the law requires in writing are dated company facts with the
 - **Input:** the VAT period (a month, or a quarter for quarterly payers), the posting date on or after the period's end, the tax authority as a partner (a public institution), the return or worksheet as evidence, and a round number.
 - **Effect:** clears what the period's tax entries booked on 4427 (output) and 4426 (deductible input), net of earlier rounds, with settlement lines; the difference is VAT payable (4423) or recoverable (4424), an open item of the authority. VAT not yet exigible (4428) stays.
 - **Reads** the whole tax period as one read-set entry (its tax entries, settlement lines and last sequence). An entry reaching the period after approval makes the settlement stale, in the application and in the database. A later round settles only what arrived after the first.
-- **Refused:** a period of the wrong kind for the company's `vat.period`, a date before the period ends, a period with nothing to settle. Refund versus carry-forward of 4424 is the return's choice and not yet a treatment.
+- **Carried forward:** with `offsetCarried`, VAT to recover from earlier periods (open 4424 items of the authority, oldest first) is offset against this period's payable, as the return carries it. A refund is received through the bank, settling the 4424 item.
+- **Refused:** a period of the wrong kind for the company's `vat.period`, a date before the period ends, a period with nothing to settle.
+
+### `payroll.recognize`: a month's payroll
+
+- **Input:** a prepared payroll run, its month and round, and the tax authority as a partner.
+- **Effect:** salaries in money owed to each employee (641 = 421, an open item per contract under the employee's party); CAS, CASS and tax withheld from them (421 = 4315, 4316, 444); contributions the company bears in an employee's name (the part-time minimum) on the account of `policy.payroll.employer_share`; CAM (646 = 436). The contributions and the tax are open items of the authority. Meal vouchers are taxed by the run and booked when handed over.
+- **Reads** the run as one read-set entry (its result hash and state): a run computed again after approval makes the posting stale, in the application and in the database.
+- **Refused:** a run with unresolved problems or superseded, a company not recorded as an employer, union dues (the union is not modelled yet), and a run needing the employer-share policy without it. One posting per month; a posted month cannot be computed again until corrections are supported.
 
 ### `fx.revalue`: month-end revaluation
 
@@ -161,6 +171,22 @@ The company's own invoices are issued through the books, so the number, the XML 
 
 Documents are what the export states, converted as the invoicer now writes them; the export, not regenerated XML, is their evidence. The SPV archives are the authority on what was issued: syncing the inbox confirms or contradicts each document (`spv.messages`). Individuals are recorded by a hash of their CNP, without invoicing details.
 
+## Payroll
+
+Payroll data is personal: employees' CNPs are encrypted at rest (AES-256-GCM under a key derived from the server secret, bound to the company) and never returned by a view; an employee's party uses the CNP's hash as its identity, the same as a buyer who is this person. Payroll operations are not open to agents.
+
+- `payroll.employees.record` records an employee (name, CNP; the birth date comes from the CNP).
+- `payroll.contracts.record` records a contract's terms, or a new version of them from a date: base salary, daily hours, main job (funcția de bază), COR code, dependents, children in school, union dues, and the reason the part-time minimum does not apply.
+- `payroll.runs.prepare` computes a month from the contracts in force and what differs this month (active days, the month's amounts, the 26th-birthday decision), given the month's working days. A contract that starts, ends or changes during the month needs its days and amounts; the run keeps every line with its inputs, the calculation's steps and their clauses, or the problems that stopped it. Computing the month again supersedes the earlier run.
+
+The calculation (`xfactura-core/src/ro/payroll`) follows the Fiscal Code articles it cites, read in ANAF's consolidated text:
+- CAS 25% on salary in money, CASS 10% also on meal and holiday vouchers, tax 10% on the net income less the personal deduction and union dues at the main job, CAM 2.25% on salary in money;
+- the personal deduction by the table of art. 77 (percentages of the minimum wage by 50-lei bands up to 2,000 lei above it and by dependents), 15% of the minimum wage under 26, 100 lei per child in school, limited to the net income and not reduced for part time;
+- CAS and CASS at least on the minimum wage for the contract's active working days, the difference borne by the employer, except in the cases of art. 146 alin. (5^7);
+- the tax base rounded to whole lei with 50 bani and less dropped (the methodological norms), contributions and tax half up (the procedure code's rule, pending its text).
+
+The minimum wage (4,050 lei until June 2026, 4,325 lei from July 2026) and the minimum-wage relief (300 lei up to 4,300 lei gross until June 2026, 200 lei up to 4,600 lei from July) cite acts not yet obtained (HG 1506/2024, HG 146/2026, OUG 89/2025): they are known from published reports, listed by `unsourced`, and the relief is applied only where it is unambiguous (a full month of a full-time main-job contract at the minimum wage); otherwise the line is stopped. The Fiscal Code values apply from 2026-01-01, the snapshot's date; earlier months are a rule gap. Leave pay, sick leave, benefits in kind, and D112 are not built yet.
+
 ## Declarations
 
 Tax returns are artifacts of the books:
@@ -168,7 +194,11 @@ Tax returns are artifacts of the books:
 1. `declarations.prepare` reads what the return is computed from (for example the VAT tax period) and writes its XML in ANAF's format for the reporting period. A period with no pinned format is a `FORMAT_GAP`. The XML is kept as evidence with the hash of the inputs read.
 2. ANAF's own validator (DUKIntegrator with the declaration's package, pinned by `bun run validators:fetch`) runs on the exact XML: `validated_official`, or `validation_failed` with ANAF's messages.
 3. `declarations.authorize.request` is a reviewed action on the exact XML. Its preview recomputes the inputs; if the books changed since preparation, or the return is not validated, it blocks. Executing it locks the tax period: from then on, an entry adding tax to that period is refused, by the proposal and by the database.
-4. `declarations.pdf` produces ANAF's PDF from the authorized XML. The company signs and files it; importing the signed PDF and the receipt comes next.
+4. `declarations.pdf` produces ANAF's PDF from the authorized XML, with the XML attached.
+5. `declarations.importSigned` takes the PDF the company signed. It must carry, as an attachment, exactly the authorized XML (by hash) and a signature; the signature itself is verified by ANAF when the return is filed.
+6. `declarations.recordSubmission` (human only) records the filing with ANAF's registration number from the receipt, and `declarations.recordOutcome` ANAF's acceptance or rejection with the message received.
+
+To correct a filed period, `declarations.reopen.request` is a reviewed action that unlocks it in the name of the return that locked it. Corrections are then posted, and the rectification is prepared with `supersedesId`, which marks the earlier return superseded. A return can be superseded before it is submitted or once ANAF has answered, not while an answer is pending.
 
 **D300 (VAT return)** is the first kind. It is written by `xfactura-core/src/ro/declarations/d300.ts` from ANAF's structure 12.0.0, in namespace `v11` for 08–12/2025 and `v12` from 01/2026, and computes the totals, the settlement rows, the control sum and the payment evidence number as ANAF's validator does. From the books:
 - collected VAT goes by rate to rows 9 (21%) and 10 (11%), and 9.1 (19%) for 2025 periods;
@@ -176,11 +206,14 @@ Tax returns are artifacts of the books:
 - services supplied abroad go to row 3, and to 3.1 when the customer is in the EU;
 - purchases go by rate to rows 24 and 25 (24.1 for 2025) with all their VAT, and row 31 holds the VAT actually deducted. Whether non-deductible purchases belong on rows 24–25 is an interpretation awaiting the expert's review;
 - every row is rounded to whole lei by the cited rule `ro.declaration.rounding` (half up at 50 bani);
-- the header comes from the company's invoicing details and the options given when preparing (declarant, CAEN, bank account; pro-rata 100 as the printed form pre-fills it, unless given).
+- the header comes from the company's invoicing details and the options given when preparing (declarant, CAEN, bank account; pro-rata 100 as the printed form pre-fills it, unless given);
+- the previous period's return in the engine supplies the negative balance carried forward (rd. 41) unless it requested a refund, and becomes an input: replacing it makes this return stale. For the first period kept in the engine, the previous balances are given explicitly (`previous`), and the payable still unpaid at filing (rd. 38) is always given, since payments are not yet matched to returns. A refund is requested only for a negative balance of at least 5,000 lei.
 
 Operations without a row yet (goods across the border, domestic reverse charge, exemptions, imports) block the return rather than being left out. Monthly returns are type L and quarterly ones type T; semiannual and annual returns are not produced.
 
 **D390 (VIES recapitulative statement)** lists a month's intra-Community operations by partner, from ANAF's structure "D390 XML 2020" (namespace v3): services supplied to EU businesses as type P and services acquired from EU suppliers as type S, each partner's bases summed and rounded to whole lei. It is monthly even for quarterly VAT payers, reads the month's entries by their tax point, and is informative: authorizing it locks no tax ledger. ANAF's validator checks every partner's VAT code against its country's algorithm. Goods (L, T, A, R) are not produced yet.
+
+**D394 (domestic supplies and acquisitions)** has its writer in `xfactura-core/src/ro/declarations/d394.ts`, from ANAF's structure of 15.09.2025 (namespace v5, periods from 08/2025), checked against ANAF's validator: partners by type and rate, individuals one record each, the summaries, invoice series and the control sum. Preparing it from the books is next.
 
 Steps are recorded in order, and the database allows only the documented transitions; a tax period is locked only in the name of an authorized return of that tax and period. A rectification is a new return that supersedes the earlier one.
 
@@ -243,7 +276,7 @@ A close records closing balances per account and currency and joins a hash chain
 ## Exports, backup and restore
 
 - `exports.request` needs review permission, or an agent scope for it. The worker rechecks authority when it builds and when it stores the file.
-- An export contains every company record and every original file, up to 64 MB of originals. Downloads are rechecked on every request.
+- An export contains every company record and every original file, up to 64 MB of originals. A test fails if a guarded company table is missing from it. Downloads are rechecked on every request.
 - `bun run backup <dir>` takes a consistent SQLite snapshot plus the referenced objects. `bun run restore <backup> <dir>` verifies checksums, integrity and foreign keys before activating.
 
 ## Not implemented
@@ -257,8 +290,8 @@ A close records closing balances per account and currency and joins a hash chain
   - CSV bank statements.
 - **Not built yet:**
   - the live ANAF client and its OAuth authorization, and verification of the Ministry's signature; reduced VAT rates in the register; B2C identification;
-  - VAT categories other than S/O, TVA la încasare, reverse charge, intra-EU operations, pro-rata, VAT settlement and declarations;
-  - payroll;
+  - VAT categories other than S/O, TVA la încasare, domestic reverse charge, goods across the border, pro-rata; D394 from the books, e-TVA;
+  - payroll beyond salary in money and vouchers (leave pay, sick leave, benefits in kind, union dues), corrections of a posted month, and D112;
   - fixed assets;
   - stock;
   - micro and profit tax;

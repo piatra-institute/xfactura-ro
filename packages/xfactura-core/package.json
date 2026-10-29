@@ -35,7 +35,10 @@
     "./ro/declarations/d300": "./src/ro/declarations/d300.ts",
     "./ro/procedure": "./src/ro/procedure.ts",
     "./ro/treatments/cross-border": "./src/ro/treatments/cross-border.ts",
-    "./ro/declarations/d390": "./src/ro/declarations/d390.ts"
+    "./ro/declarations/d390": "./src/ro/declarations/d390.ts",
+    "./ro/payroll": "./src/ro/payroll/index.ts",
+    "./ro/treatments/payroll": "./src/ro/treatments/payroll.ts",
+    "./ro/declarations/d394": "./src/ro/declarations/d394.ts"
   },
   "dependencies": {
     "@noble/hashes": "2.4.0",

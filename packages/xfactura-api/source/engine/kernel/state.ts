@@ -14,6 +14,7 @@ import type {
   OpenItemKind,
   OpenItemState,
   PartyRecord,
+  PayrollRunState,
   PostedEntry,
   ProfileFact,
   ReadPlan,
@@ -34,6 +35,9 @@ import {
   lines,
   openItems,
   parties,
+  payrollLines,
+  payrollRunEvents,
+  payrollRuns,
   profileFacts,
   taxEntries,
   treasuryAccounts,
@@ -462,6 +466,49 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
     });
   }
 
+  const payrollRunMap = new Map<string, PayrollRunState>();
+  for (const id of new Set(plan.payrollRuns ?? [])) {
+    const [run] = await tx
+      .select()
+      .from(payrollRuns)
+      .where(and(eq(payrollRuns.companyId, companyId), eq(payrollRuns.id, id)));
+    if (!run) continue;
+    const [last] = await tx
+      .select({ state: payrollRunEvents.state })
+      .from(payrollRunEvents)
+      .where(and(eq(payrollRunEvents.companyId, companyId), eq(payrollRunEvents.runId, id)))
+      .orderBy(desc(payrollRunEvents.seq))
+      .limit(1);
+    const rows = await tx
+      .select()
+      .from(payrollLines)
+      .where(and(eq(payrollLines.companyId, companyId), eq(payrollLines.runId, id)))
+      .orderBy(asc(payrollLines.contractId));
+    payrollRunMap.set(id, {
+      id,
+      month: run.month,
+      round: run.round,
+      state: last!.state,
+      issues: run.issues,
+      lines: rows.map((row) => ({
+        contractId: row.contractId,
+        employeeId: row.employeeId,
+        partyId: row.partyId,
+        cash: row.cash,
+        vouchers: row.vouchers,
+        cas: row.cas,
+        cass: row.cass,
+        casEmployer: row.casEmployer,
+        cassEmployer: row.cassEmployer,
+        tax: row.tax,
+        unionDues: row.unionDues,
+        net: row.net,
+        cam: row.cam,
+      })),
+    });
+    readSet.push({ kind: 'payrollRun', id, version: `${run.resultHash}/${last!.state}` });
+  }
+
   const loaded: Loaded = {
     years,
     evidence: evidenceMap,
@@ -474,6 +521,7 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
     fxRates: rateMap,
     balances,
     taxLedger,
+    payrollRuns: payrollRunMap,
   };
   return { loaded, readSet };
 }
@@ -513,6 +561,7 @@ export function mergeStates(
     fxRates: merge(first.loaded.fxRates, second.loaded.fxRates),
     balances: first.loaded.balances.length ? first.loaded.balances : second.loaded.balances,
     taxLedger: merge(first.loaded.taxLedger, second.loaded.taxLedger),
+    payrollRuns: merge(first.loaded.payrollRuns, second.loaded.payrollRuns),
   };
   const seen = new Set<string>();
   const readSet = [...first.readSet, ...second.readSet]

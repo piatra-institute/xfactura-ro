@@ -50,6 +50,14 @@
       "extract": ["D390/D390Validator.jar", "D390/D390Pdf.jar"],
       "into": "dist/lib",
       "flatten": true
+    },
+    {
+      "name": "anaf",
+      "description": "ANAF D394 validator and PDF generator (structure of 15.09.2025)",
+      "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/D394_17092025.zip",
+      "sha256": "8a762aed61ff568561a6b42c8e464289eb43911d55dab57d04ade715c9e4fb37",
+      "extract": ["D394Validator.jar", "D394Pdf.jar"],
+      "into": "dist/lib"
     }
   ],
   "manual": [

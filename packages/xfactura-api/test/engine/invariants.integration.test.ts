@@ -16,6 +16,8 @@ import {
   commands,
   documentLinks,
   documents,
+  employees,
+  employmentTerms,
   entries,
   evidence,
   fiscalYears,
@@ -27,6 +29,9 @@ import {
   memberships,
   parties,
   partyVersions,
+  payrollLines,
+  payrollRunEvents,
+  payrollRuns,
   periodBalances,
   policyRevocations,
   postingPolicies,
@@ -323,6 +328,100 @@ async function submittable(world: World) {
       }),
     );
   return { submit, step };
+}
+
+/** An employee with one contract and a prepared payroll run, written directly. */
+async function payrollRecords(world: World) {
+  const partyId = randomUUID();
+  const employeeId = randomUUID();
+  const contractId = randomUUID();
+  const runId = randomUUID();
+  const terms = (seq: number, extra: Partial<typeof employmentTerms.$inferInsert> = {}) =>
+    world.db.write((tx) =>
+      tx.insert(employmentTerms).values({
+        companyId: world.company,
+        contractId,
+        seq,
+        employeeId,
+        number: 'CIM-1',
+        startDate: '2026-01-05',
+        effectiveFrom: '2026-01-05',
+        baseSalaryBani: 500000n,
+        dailyHours: 8,
+        mainJob: true,
+        occupation: '251201',
+        dependents: 0,
+        childrenInSchool: 0,
+        unionDuesBani: 0n,
+        createdBy: world.owner,
+        ...extra,
+      }),
+    );
+  await world.db.write(async (tx) => {
+    await tx.insert(parties).values({
+      id: partyId,
+      companyId: world.company,
+      kind: 'ro_individual',
+      country: 'RO',
+      taxId: `cnp:${'0'.repeat(64)}`,
+      name: 'Salariat',
+      createdBy: world.owner,
+    });
+    await tx.insert(employees).values({
+      id: employeeId,
+      companyId: world.company,
+      partyId,
+      cnpSealed: 'v1.a.b.c',
+      birthDate: '1990-01-01',
+      createdBy: world.owner,
+    });
+  });
+  await terms(1);
+  await world.db.write(async (tx) => {
+    await tx.insert(payrollRuns).values({
+      id: runId,
+      companyId: world.company,
+      month: '2026-03',
+      round: 1,
+      workingDays: 22,
+      resultHash: 'h',
+      issues: 0,
+      createdBy: world.owner,
+    });
+    await tx.insert(payrollRunEvents).values({
+      companyId: world.company,
+      runId,
+      seq: 1,
+      state: 'prepared',
+      createdBy: world.owner,
+    });
+  });
+  const line = (extra: Partial<typeof payrollLines.$inferInsert> = {}) =>
+    world.db.write((tx) =>
+      tx.insert(payrollLines).values({
+        companyId: world.company,
+        runId,
+        contractId,
+        termsSeq: 1,
+        employeeId,
+        partyId,
+        input: '{}',
+        result: '{}',
+        cash: 500000n,
+        vouchers: 0n,
+        cas: 125000n,
+        cass: 50000n,
+        casEmployer: 0n,
+        cassEmployer: 0n,
+        tax: 26900n,
+        unionDues: 0n,
+        net: 298100n,
+        cam: 11300n,
+        issues: 0,
+        ...extra,
+      }),
+    );
+  return { runId, terms, line };
 }
 
 const entry = 'inv_entry_guard';
@@ -1199,6 +1298,75 @@ const attacks: Attack[] = [
     },
   },
   {
+    trigger: 'inv_employment_terms_guard',
+    code: 'terms_sequence',
+    name: "skipping a version of a contract's terms",
+    run: async (world) => (await payrollRecords(world)).terms(3),
+  },
+  {
+    trigger: 'inv_employment_terms_guard',
+    code: 'terms_sequence',
+    name: 'a version of the terms applying before the previous one',
+    run: async (world) => (await payrollRecords(world)).terms(2, { effectiveFrom: '2026-01-01' }),
+  },
+  {
+    trigger: 'inv_employment_terms_guard',
+    code: 'terms_values',
+    name: 'a contract of nine hours a day',
+    run: async (world) =>
+      (await payrollRecords(world)).terms(2, { effectiveFrom: '2026-02-01', dailyHours: 9 }),
+  },
+  {
+    trigger: 'inv_payroll_run_event_guard',
+    code: 'payroll_run_transition',
+    name: 'preparing a payroll run twice',
+    run: async (world) => {
+      const { runId } = await payrollRecords(world);
+      return world.db.write((tx) =>
+        tx.insert(payrollRunEvents).values({
+          companyId: world.company,
+          runId,
+          seq: 2,
+          state: 'prepared',
+          createdBy: world.owner,
+        }),
+      );
+    },
+  },
+  {
+    trigger: 'inv_payroll_line_guard',
+    code: 'payroll_line_sum',
+    name: 'a payslip whose net does not add up',
+    run: async (world) => (await payrollRecords(world)).line({ net: 300000n }),
+  },
+  {
+    trigger: 'inv_payroll_line_guard',
+    code: 'payroll_line_employee',
+    name: "a payslip under another party than the contract's employee",
+    run: async (world) => (await payrollRecords(world)).line({ partyId: randomUUID() }),
+  },
+  {
+    trigger: entry,
+    code: 'stale_read',
+    name: 'posting after the payroll run the proposal read was recomputed',
+    run: async (world) => {
+      const { runId } = await payrollRecords(world);
+      const { proposed, approvalId } = await approved(world, sale(world), {
+        readSet: [{ kind: 'payrollRun', id: runId, version: 'h/prepared' }],
+      });
+      await world.db.write((tx) =>
+        tx.insert(payrollRunEvents).values({
+          companyId: world.company,
+          runId,
+          seq: 2,
+          state: 'superseded',
+          createdBy: world.owner,
+        }),
+      );
+      return post(world, proposed, { approvalId });
+    },
+  },
+  {
     trigger: 'inv_membership_update',
     code: 'membership_epoch',
     name: 'changing a role without a new epoch',
@@ -1547,6 +1715,7 @@ describe('append-only records', () => {
     await lockTaxPeriod(world.db, world.company, world.owner, 'VAT', '2026-03');
     const spv = await submittable(world);
     await spv.step(await spv.submit(), 1, 'authorized');
+    await (await payrollRecords(world)).line();
     await world.db.write(async (tx) => {
       await tx.insert(spvSyncWindows).values({
         companyId: world.company,

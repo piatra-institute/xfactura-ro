@@ -1,7 +1,10 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import path from 'node:path';
 import type { ActionView } from '../../source/engine/kernel/actions';
-import { DukIntegrator } from '../../source/engine/adapters/declaration-validator';
+import {
+  DukIntegrator,
+  type DeclarationValidator,
+} from '../../source/engine/adapters/declaration-validator';
 import { invoiceXml, type XmlInput } from './fixtures/invoice';
 import { scenario, type Scenario } from './scenario';
 
@@ -19,9 +22,13 @@ const options = {
   bank: 'Banca Exemplu',
   account: 'RO49AAAA1B31007593840000',
 };
-type Artifact = { id: string; state: string; steps: { state: string; detail: string | null }[] };
+type Artifact = {
+  id: string;
+  state: string;
+  steps: { state: string; detail: string | null; evidenceId: string | null }[];
+};
 
-async function company(validator?: DukIntegrator) {
+async function company(validator?: DeclarationValidator) {
   const s = await scenario({ cui, ...(validator ? { declarationValidator: validator } : {}) });
   open.push(s);
   await s.invoke(s.owner, 'profile.record', {
@@ -72,6 +79,53 @@ describe('D300 from the books', () => {
     expect(rows(prepared)).toEqual({ R9_1: 1000, R9_2: 210, R22_1: 600, R22_2: 126, R28_2: 105 });
   });
 
+  test("carries the previous return's negative balance unless a refund was requested", async () => {
+    const accept: DeclarationValidator = {
+      id: 'validator de test',
+      validate: async () => ({ ok: true, messages: [] }),
+      pdf: async () => ({ ok: false, messages: [] }),
+    };
+    for (const refundRequested of [false, true]) {
+      const { s, book } = await company(accept);
+      await book(
+        { number: 'F-5', date: '2026-09-10', net: '30000.00', tax: '6300.00', gross: '36300.00' },
+        '628',
+      );
+      const september = await s.invoke<Artifact>(s.owner, 'declarations.prepare', {
+        kind: 'D300',
+        period: '2026-09',
+        options: { ...options, refundRequested },
+      });
+      const request = await s.invoke<ActionView>(s.owner, 'declarations.authorize.request', {
+        artifactId: september.id,
+      });
+      await s.invoke(s.reviewer, 'actions.approve', {
+        id: request.id,
+        previewHash: request.previewHash,
+      });
+      await s.invoke(s.reviewer, 'actions.execute', { id: request.id });
+      await book({ number: 'V-5', direction: 'sale', date: '2026-10-05' }, '704');
+      const october = await s.invoke<Artifact>(s.owner, 'declarations.prepare', {
+        kind: 'D300',
+        period: '2026-10',
+        options,
+      });
+      if (refundRequested) expect(rows(october).R38_2).toBeUndefined();
+      else expect(rows(october).R38_2).toBe(6300);
+      expect(
+        (
+          await s.refused(
+            s.invoke(s.owner, 'declarations.prepare', {
+              kind: 'D300',
+              period: '2026-10',
+              options: { ...options, previous: { negative: 5 } },
+            }),
+          )
+        )?.code,
+      ).toBe('PREVIOUS_KNOWN');
+    }
+  });
+
   test('refuses a period of the wrong kind or a company without its details', async () => {
     const { s, book, prepare } = await company();
     await book({ number: 'V-2', direction: 'sale' }, '704');
@@ -106,6 +160,23 @@ describe('D300 from the books', () => {
         },
       );
       expect(exported.state).toBe('exported_for_signing');
+      // The company signs ANAF's PDF; a signer appends its signature as an incremental update.
+      const pdf = (await s.engine.evidence.read(s.owner, exported.steps.at(-1)!.evidenceId!)).bytes;
+      const signed = new Uint8Array([
+        ...pdf,
+        ...new TextEncoder().encode(
+          '\n9000 0 obj\n<< /Type /Sig /ByteRange [0 0 0 0] /Contents <00> >>\nendobj\n%%EOF\n',
+        ),
+      ]);
+      const { id: signedId } = await s.invoke<{ id: string }>(s.owner, 'evidence.record', {
+        filename: 'D300-semnat.pdf',
+        mediaType: 'application/pdf',
+        base64: Buffer.from(signed).toString('base64'),
+      });
+      await s.invoke(s.owner, 'declarations.importSigned', {
+        artifactId: prepared.id,
+        evidenceId: signedId,
+      });
     },
     120_000,
   );

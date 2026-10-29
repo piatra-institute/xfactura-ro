@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { requireCondition } from 'xfactura-core/errors';
 import { canonical, hashOf } from 'xfactura-core/hash';
 import { accountCodePattern } from 'xfactura-core/kernel';
-import { controlKindOf, referenceChart } from 'xfactura-core/ro/chart';
+import { chartAmendments, controlKindOf, referenceChart } from 'xfactura-core/ro/chart';
 import type { Transaction } from '../db/database';
 import {
   commands,
@@ -75,6 +75,8 @@ export const profileAxes = {
   'controls.segregation': ['off', 'on'],
   // Accounting policies (OMFP 1802/2014 requires them in writing): dated, with their evidence.
   'policy.storno': ['red', 'black'],
+  // Where contributions borne in an employee's name (the part-time minimum) are expensed.
+  'policy.payroll.employer_share': ['635', '6458'],
 } as const;
 export const profileInput = z
   .object({
@@ -125,19 +127,28 @@ async function initializeCompany(
       createdBy,
     })),
   );
-  const rows = referenceChart.accounts.map((account) => ({
-    companyId,
-    code: account.code,
-    parentCode: account.parentCode,
-    name: account.name,
-    nature: account.balance,
-    book: account.book,
-    postable: account.postable,
-    controlKind: account.postable ? controlKindOf(account.code) : null,
-    validFrom: '2015-01-01',
-    chartVersion: referenceChart.id,
-    createdBy,
-  }));
+  const rows = [
+    { validFrom: '2015-01-01', chartVersion: referenceChart.id, accounts: referenceChart.accounts },
+    ...chartAmendments.map((amendment) => ({
+      validFrom: amendment.validFrom,
+      chartVersion: amendment.clause,
+      accounts: amendment.accounts,
+    })),
+  ].flatMap(({ validFrom, chartVersion, accounts }) =>
+    accounts.map((account) => ({
+      companyId,
+      code: account.code,
+      parentCode: account.parentCode,
+      name: account.name,
+      nature: account.balance,
+      book: account.book,
+      postable: account.postable,
+      controlKind: account.postable ? controlKindOf(account.code) : null,
+      validFrom,
+      chartVersion,
+      createdBy,
+    })),
+  );
   for (let index = 0; index < rows.length; index += 50)
     await tx.insert(ledgerAccounts).values(rows.slice(index, index + 50));
 }

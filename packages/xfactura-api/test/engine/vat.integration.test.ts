@@ -36,15 +36,16 @@ async function company(options: { quarterly?: boolean } = {}) {
     const document = await s.invoke<{ id: string }>(s.owner, 'invoices.import', { evidenceId: id });
     return s.book('invoices.recognize', { documentId: document.id, account });
   };
-  const settlement = (period: string, date: string, round?: number) => ({
+  const settlement = (period: string, date: string, round?: number, offsetCarried?: boolean) => ({
     period,
     date,
     authorityId: anaf.id,
     evidenceId,
     ...(round ? { round } : {}),
+    ...(offsetCarried ? { offsetCarried } : {}),
   });
-  const settle = (period: string, date: string, round?: number) =>
-    s.propose('vat.settle', settlement(period, date, round));
+  const settle = (period: string, date: string, round?: number, offsetCarried?: boolean) =>
+    s.propose('vat.settle', settlement(period, date, round, offsetCarried));
   return { s, anaf, book, settle, settlement };
 }
 
@@ -102,6 +103,21 @@ describe('VAT settlement', () => {
     );
     expect((await s.refused(settle('2026-10', '2026-11-02')))?.code).toBeDefined();
     expect(lines(await settle('2026-10', '2026-11-02', 2))).toEqual(['D 4427 2.10', 'C 4423 2.10']);
+  });
+
+  test("VAT to recover carried forward is offset against the next period's VAT payable", async () => {
+    const { s, book, settle } = await company();
+    await book(
+      { number: 'F-9', date: '2026-09-10', net: '50.00', tax: '10.50', gross: '60.50' },
+      '628',
+    );
+    await s.post(await s.approve(await settle('2026-09', '2026-09-30')));
+    await book({ number: 'V-9', direction: 'sale' }, '704');
+    const offset = await settle('2026-10', '2026-10-31', 1, true);
+    expect(lines(offset)).toEqual(['D 4427 21.00', 'C 4424 10.50', 'C 4423 10.50']);
+    await s.post(await s.approve(offset));
+    expect(await balance(s, '4424')).toEqual({ debit: '0.00', credit: '0.00' });
+    expect(await balance(s, '4423')).toEqual({ debit: '0.00', credit: '10.50' });
   });
 
   test("follows the company's VAT period and refuses settling early or nothing", async () => {

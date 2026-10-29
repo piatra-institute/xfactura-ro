@@ -1,9 +1,10 @@
-import { and, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Party } from 'xfactura-core/einvoice';
 import { profileAt, vatPeriodOf, type ReadSetEntry } from 'xfactura-core/kernel';
 import { divRound } from 'xfactura-core/money';
 import {
+  calculateD300,
   checkD300,
   d300Namespace,
   writeD300,
@@ -15,7 +16,7 @@ import { vatPeriodEnd } from 'xfactura-core/ro/treatments/vat-settlement';
 import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
 import type { LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
-import { companies, parties, partyVersions } from '../db/schema';
+import { artifactEvents, artifacts, companies, parties, partyVersions } from '../db/schema';
 import { loadState } from '../kernel/state';
 import type { DeclarationKind, DeclarationProblem } from './declarations';
 
@@ -40,6 +41,18 @@ export const d300Options = z
       .regex(/^(100|\d{1,2})(\.\d{1,2})?$/)
       .default('100'),
     refundRequested: z.boolean().default(false),
+    /**
+     * For the first period kept in the engine only: the previous return's VAT payable still
+     * unpaid when this one is filed (rd. 38) and its negative balance carried forward (rd. 41).
+     * Later periods take them from the previous return in the engine.
+     */
+    previous: z
+      .object({
+        unpaid: z.number().int().min(0).default(0),
+        negative: z.number().int().min(0).default(0),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -115,6 +128,66 @@ export async function rounding(
   }
 }
 
+/** The previous period's return in the engine: the latest one not superseded, once authorized. */
+async function previousReturn(tx: Transaction, companyId: string, period: string) {
+  const quarter = /^(\d{4})-Q([1-4])$/.exec(period);
+  const year = Number(period.slice(0, 4));
+  const before = quarter
+    ? Number(quarter[2]) === 1
+      ? `${year - 1}-Q4`
+      : `${year}-Q${Number(quarter[2]) - 1}`
+    : Number(period.slice(5, 7)) === 1
+      ? `${year - 1}-12`
+      : `${year}-${String(Number(period.slice(5, 7)) - 1).padStart(2, '0')}`;
+  const rows = await tx
+    .select()
+    .from(artifacts)
+    .where(
+      and(
+        eq(artifacts.companyId, companyId),
+        eq(artifacts.kind, 'D300'),
+        eq(artifacts.period, before),
+      ),
+    )
+    .orderBy(desc(artifacts.createdAt));
+  for (const row of rows) {
+    const steps = await tx
+      .select()
+      .from(artifactEvents)
+      .where(and(eq(artifactEvents.companyId, companyId), eq(artifactEvents.artifactId, row.id)))
+      .orderBy(asc(artifactEvents.seq));
+    const states = steps.map((step) => step.state);
+    if (states.includes('superseded') || !states.includes('authorized')) continue;
+    const summary = JSON.parse(steps[0]!.detail ?? '{}') as {
+      balances?: { R41_2?: number; R42_2?: number };
+      refundRequested?: boolean;
+    };
+    return { period: before, artifactId: row.id, ...summary };
+  }
+  return undefined;
+}
+
+/**
+ * The previous return's balances as this one carries them: the payable it showed, which the
+ * company states as still unpaid only through `previous` (payments are not yet matched to
+ * returns), and its negative balance unless a refund was requested.
+ */
+function carried(
+  previous: Awaited<ReturnType<typeof previousReturn>>,
+  given: { unpaid: number; negative: number } | undefined,
+): Partial<Record<D300InputElement, number>> {
+  const negative = previous
+    ? previous.refundRequested
+      ? 0
+      : (previous.balances?.R42_2 ?? 0)
+    : (given?.negative ?? 0);
+  const unpaid = given?.unpaid ?? 0;
+  return {
+    ...(unpaid ? { R35_2: unpaid } : {}),
+    ...(negative ? { R38_2: negative } : {}),
+  };
+}
+
 export async function sellerDetails(tx: Transaction, companyId: string) {
   const [row] = await tx
     .select({
@@ -140,9 +213,14 @@ async function inputsOf(tx: Transaction, companyId: string, period: string) {
     profile: true,
   });
   const seller = await sellerDetails(tx, companyId);
+  const previous = await previousReturn(tx, companyId, period);
   const inputs: ReadSetEntry[] = [
     ...readSet,
     ...(seller ? [{ kind: 'party' as const, id: seller.partyId, version: seller.hash }] : []),
+    // The return whose balances this one carries: replacing it makes this one stale.
+    ...(previous
+      ? [{ kind: 'artifact' as const, id: previous.period, version: previous.artifactId }]
+      : []),
   ];
   return { loaded, seller, inputs };
 }
@@ -169,6 +247,12 @@ export function d300Declaration(
       const options = d300Options.parse(raw);
       const problems: DeclarationProblem[] = [];
       const { loaded, seller, inputs } = await inputsOf(tx, companyId, period);
+      const previous = await previousReturn(tx, companyId, period);
+      if (previous && options.previous)
+        problems.push({
+          code: 'PREVIOUS_KNOWN',
+          message: `Decontul perioadei ${previous.period} este în registre; soldurile lui nu se introduc manual.`,
+        });
       const end = vatPeriodEnd(period);
       if (vatPeriodOf(loaded, end) !== period)
         problems.push({
@@ -246,9 +330,12 @@ export function d300Declaration(
           consoles: false,
         },
         refundRequested: options.refundRequested,
-        rows: Object.fromEntries(
-          [...totals].map(([element, bani]) => [element, Number(roundToLeu(bani))]),
-        ) as Partial<Record<D300InputElement, number>>,
+        rows: {
+          ...(Object.fromEntries(
+            [...totals].map(([element, bani]) => [element, Number(roundToLeu(bani))]),
+          ) as Partial<Record<D300InputElement, number>>),
+          ...carried(previous, options.previous),
+        },
       };
       for (const check of checkD300(model))
         if (check.severity === 'error') problems.push({ code: check.code, message: check.message });
@@ -256,7 +343,19 @@ export function d300Declaration(
         xml: problems.length ? '' : writeD300(model),
         inputs,
         problems,
-        summary: { period, type: model.type, rows: model.rows },
+        summary: {
+          period,
+          type: model.type,
+          rows: model.rows,
+          // What the next return carries: the payable or negative balance, and the refund choice.
+          balances: Object.fromEntries(
+            (['R41_2', 'R42_2'] as const).map((element) => [
+              element,
+              Number(calculateD300(model).amounts[element] ?? 0n),
+            ]),
+          ),
+          refundRequested: model.refundRequested,
+        },
       };
     },
   };

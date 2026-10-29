@@ -27,6 +27,8 @@ export interface ReadPlan {
   /** Everything a tax period holds: its tax entries and the settlement lines already posted.
    * The whole set is one read, so an entry landing in the period makes the proposal stale. */
   taxPeriods?: { tax: string; period: string }[];
+  /** Payroll runs with their computed lines. A run never changes; superseding it does. */
+  payrollRuns?: string[];
 }
 
 export interface OpenItemQuery {
@@ -55,7 +57,9 @@ export interface ReadSetEntry {
     | 'profile'
     | 'fx'
     | 'balance'
-    | 'taxPeriod';
+    | 'taxPeriod'
+    | 'artifact'
+    | 'payrollRun';
   id: string;
   version: string;
 }
@@ -181,6 +185,34 @@ export interface ProfileFact {
 }
 
 /** What the kernel loaded for a plan, ordered deterministically. */
+/** One contract's line in a payroll run; amounts in bani. */
+export interface PayrollLineState {
+  contractId: string;
+  employeeId: string;
+  /** The employee as a party: their 421 open item. */
+  partyId: string;
+  cash: bigint;
+  vouchers: bigint;
+  cas: bigint;
+  cass: bigint;
+  casEmployer: bigint;
+  cassEmployer: bigint;
+  tax: bigint;
+  unionDues: bigint;
+  net: bigint;
+  cam: bigint;
+}
+
+export interface PayrollRunState {
+  id: string;
+  month: string;
+  round: number;
+  state: 'prepared' | 'superseded';
+  /** Problems found when it was computed: such a run is not posted. */
+  issues: number;
+  lines: readonly PayrollLineState[];
+}
+
 export interface Loaded {
   years: readonly FiscalYear[];
   evidence: ReadonlyMap<string, EvidenceRecord>;
@@ -194,6 +226,7 @@ export interface Loaded {
   balances: readonly AccountBalance[];
   /** By `${tax}|${period}`. */
   taxLedger: ReadonlyMap<string, TaxPeriodLedger>;
+  payrollRuns: ReadonlyMap<string, PayrollRunState>;
 }
 
 /** The company profile value on an axis at a date, or null when nothing is recorded. */

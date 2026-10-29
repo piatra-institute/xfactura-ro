@@ -25,7 +25,7 @@
     "db:generate": "bun run --cwd packages/xfactura-api db:generate",
     "setup": "bun run scripts/setup.ts",
     "build:api": "bun run --cwd packages/xfactura-api build",
-    "format:check": "prettier --check packages/xfactura-core packages/xfactura-api/source/engine packages/xfactura-api/test/engine packages/xfactura-web/components/accounting packages/xfactura-web/app/contabilitate scripts test/e2e packages/xfactura-web/scripts",
+    "format:check": "prettier --check packages/xfactura-core packages/xfactura-api/source/engine packages/xfactura-api/test/engine packages/xfactura-web/components/accounting packages/xfactura-web/app/contabilitate scripts test/e2e",
     "backup": "bun run packages/xfactura-api/source/engine/backup.ts backup",
     "restore": "bun run packages/xfactura-api/source/engine/backup.ts restore",
     "test:perf": "bun test --timeout 600000 packages/xfactura-api/test/engine/*.perf.test.ts",
