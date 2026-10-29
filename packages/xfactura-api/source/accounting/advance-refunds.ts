@@ -28,7 +28,7 @@ export async function interpretAdvanceRefund(
   const [state] = await loadAdvancePayments(tx, actor.companyId, [input.paymentId]);
   requireCondition(state, 'NOT_FOUND', 'Avansul nu este disponibil.', 404);
   requireCondition(
-    !state.match && advancePaymentRemaining(state).gross > 0n,
+    advancePaymentRemaining(state).gross > 0n,
     'ADVANCE_PAYMENT_RESOLVED',
     'Avansul este deja facturat sau restituit.',
     409,
@@ -53,9 +53,10 @@ export async function interpretAdvanceRefund(
   );
   requireCondition(
     context.movement.date >= p.date &&
-      state.refunds.every((row) => row.date <= context.movement.date),
+      state.refunds.every((row) => row.date <= context.movement.date) &&
+      state.matches.every((row) => row.date <= context.movement.date),
     'ADVANCE_REFUND_ORDER',
-    'Data restituirii nu poate preceda avansul sau restituirile deja contabilizate.',
+    'Data restituirii nu poate preceda avansul, facturile sau restituirile deja contabilizate.',
   );
   const rule = invoiceRule(p.taxPointDate, p.vatCategory);
   requireCondition(
@@ -88,9 +89,14 @@ export async function interpretAdvanceRefund(
     'ADVANCE_REFUND_EVIDENCE',
     'Documentați separat acordul curent de restituire.',
   );
-  if (input.net !== undefined || state.refunds.length)
+  if (input.net !== undefined || state.refunds.length || state.matches.length)
     requireCondition(
       source.id !== p.sourceEvidenceId &&
+        !state.matches.some(
+          (row) =>
+            row.invoiceEvidenceId === source.id ||
+            generalBodySchema.parse(row.body).invoice?.treatmentEvidenceId === source.id,
+        ) &&
         !state.refunds.some(
           (row) =>
             row.treatment.evidenceId === source.id || row.treatment.sourceEvidenceId === source.id,
@@ -151,7 +157,7 @@ export async function interpretAdvanceRefund(
       ruleId: p.ruleId,
       ruleHash: p.ruleHash,
       registrationIds: [...new Set([...p.registrationIds, ...reg.ids])],
-      ...(input.net !== undefined || state.refunds.length
+      ...(input.net !== undefined || state.refunds.length || state.matches.length
         ? {
             refundBasis: {
               requestedNet: input.net ?? null,
@@ -160,6 +166,16 @@ export async function interpretAdvanceRefund(
               priorRefundFinancialYearId: state.refund
                 ? generalBodySchema.parse(state.refund.body).financialYearId
                 : null,
+              ...(state.match
+                ? {
+                    priorInvoiceCount: state.matches.length,
+                    priorInvoice: {
+                      invoiceId: state.match.record.invoiceId,
+                      journalId: state.match.record.journalId,
+                      financialYearId: generalBodySchema.parse(state.match.body).financialYearId,
+                    },
+                  }
+                : {}),
               before: {
                 net: fromBani(before.net),
                 tax: fromBani(before.tax),

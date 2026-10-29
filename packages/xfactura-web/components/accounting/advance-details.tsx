@@ -9,10 +9,11 @@ type Props = {
   showJournal: (id: string, financialYearId?: string) => void;
 };
 
-export function AdvancePaymentDetails({ body, path, showJournal }: Props) {
+export function AdvancePaymentDetails({ body, state, path, showJournal }: Props) {
   const payment = body.advancePayment,
     refund = body.advanceRefund,
-    basis = refund?.refundBasis;
+    basis = refund?.refundBasis,
+    priorInvoice = basis?.priorInvoice;
   if (!payment && !refund) return null;
   const item = payment ?? refund!;
   return (
@@ -62,6 +63,21 @@ export function AdvancePaymentDetails({ body, path, showJournal }: Props) {
                 <dt>Avans rămas</dt>
                 <dd>{formatMoney(basis.after.gross)}</dd>
               </div>
+              {priorInvoice ? (
+                <div>
+                  <dt>Factura de avans anterioară</dt>
+                  <dd>
+                    <button
+                      className="acc-secondary"
+                      onClick={() =>
+                        showJournal(priorInvoice.journalId, priorInvoice.financialYearId)
+                      }
+                    >
+                      {state.invoiceLabels[priorInvoice.invoiceId]?.number ?? 'Deschide factura'}
+                    </button>
+                  </dd>
+                </div>
+              ) : null}
               {basis.priorRefundJournalId ? (
                 <div>
                   <dt>Restituirea anterioară</dt>
@@ -130,7 +146,8 @@ export function InvoiceAdvanceDetails({ body, state, showJournal }: Props) {
   const invoice = body.invoice,
     advance = invoice?.advance,
     final = invoice?.advanceFinal,
-    credit = invoice?.advanceCredit;
+    credit = invoice?.advanceCredit,
+    partialPayments = advance?.payments.some((payment) => payment.allocation);
   if (!invoice || (!advance && !final && !credit)) return null;
   return (
     <>
@@ -163,9 +180,11 @@ export function InvoiceAdvanceDetails({ body, state, showJournal }: Props) {
                 <thead>
                   <tr>
                     <th>Avans bancar</th>
+                    {partialPayments ? <th>Avans disponibil</th> : null}
                     <th>Fără TVA</th>
                     <th>TVA</th>
                     <th>Total</th>
+                    {partialPayments ? <th>Avans rămas</th> : null}
                   </tr>
                 </thead>
                 <tbody>
@@ -179,9 +198,15 @@ export function InvoiceAdvanceDetails({ body, state, showJournal }: Props) {
                           Deschide avansul {i + 1}
                         </button>
                       </td>
+                      {partialPayments ? (
+                        <td>{formatMoney(payment.allocation?.before.gross ?? payment.gross)}</td>
+                      ) : null}
                       <td>{formatMoney(payment.net)}</td>
                       <td>{formatMoney(payment.tax)}</td>
                       <td>{formatMoney(payment.gross)}</td>
+                      {partialPayments ? (
+                        <td>{formatMoney(payment.allocation?.after.gross ?? '0.00')}</td>
+                      ) : null}
                     </tr>
                   ))}
                 </tbody>

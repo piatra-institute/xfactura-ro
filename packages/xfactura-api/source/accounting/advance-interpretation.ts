@@ -303,13 +303,20 @@ export async function interpretAdvanceInvoice(
     'Păstrați separat contractul pentru avans.',
   );
   requireCondition(
-    new Set(input.paymentIds).size === input.paymentIds.length,
+    !input.paymentAllocations || input.paymentIds.length === 0,
+    'ADVANCE_ALLOCATION_MODE',
+    'Selectați avansuri integrale sau alocări explicite, într-un singur mod.',
+  );
+  const ids = input.paymentAllocations?.map((row) => row.paymentId) ?? input.paymentIds,
+    requested = new Map(input.paymentAllocations?.map((row) => [row.paymentId, row.net]) ?? []);
+  requireCondition(
+    new Set(ids).size === ids.length,
     'DUPLICATE_ALLOCATION',
     'Un avans bancar se alocă o singură dată.',
   );
-  const payments = await loadAdvancePayments(tx, actor.companyId, input.paymentIds);
+  const payments = await loadAdvancePayments(tx, actor.companyId, ids);
   requireCondition(
-    payments.length === input.paymentIds.length,
+    payments.length === ids.length,
     'NOT_FOUND',
     'Un avans bancar nu este disponibil.',
     404,
@@ -323,7 +330,7 @@ export async function interpretAdvanceInvoice(
     const p = payment.treatment,
       remaining = advancePaymentRemaining(payment);
     requireCondition(
-      !payment.match && remaining.gross > 0n,
+      remaining.gross > 0n,
       'ADVANCE_PAYMENT_RESOLVED',
       'Avansul bancar este deja facturat sau restituit.',
       409,
@@ -331,6 +338,7 @@ export async function interpretAdvanceInvoice(
     requireCondition(
       payment.journal.date <= input.recognitionDate &&
         payment.refunds.every((row) => row.date <= input.recognitionDate) &&
+        payment.matches.every((row) => row.date <= input.recognitionDate) &&
         p.direction === expected.invoice.direction &&
         taxIdentity(p.counterparty.taxId) === taxIdentity(party.taxId) &&
         p.account === input.account &&
@@ -354,6 +362,24 @@ export async function interpretAdvanceInvoice(
       'Istoricul TVA al avansului necesită revizuire.',
       409,
     );
+    const requestedNet = requested.get(payment.record.paymentId),
+      net = requestedNet === undefined ? remaining.net : toBani(requestedNet),
+      tax =
+        net === remaining.net
+          ? remaining.tax
+          : toBani(taxAmount(fromBani(net), invoiceRule(p.taxPointDate, p.vatCategory).rate)),
+      gross = net + tax;
+    requireCondition(
+      net > 0n &&
+        net <= remaining.net &&
+        tax >= 0n &&
+        tax <= remaining.tax &&
+        gross > 0n &&
+        gross <= remaining.gross,
+      'ADVANCE_PAYMENT_AMOUNT',
+      'Alocarea depășește avansul nefacturat disponibil.',
+      409,
+    );
     assigned.push({
       paymentId: payment.record.paymentId,
       movementId: payment.record.movementId,
@@ -361,9 +387,28 @@ export async function interpretAdvanceInvoice(
       financialYearId: payment.body.financialYearId,
       proposalHash: payment.proposal.hash,
       stateHash: payment.hash,
-      net: fromBani(remaining.net),
-      tax: fromBani(remaining.tax),
-      gross: fromBani(remaining.gross),
+      net: fromBani(net),
+      tax: fromBani(tax),
+      gross: fromBani(gross),
+      ...(requestedNet !== undefined || payment.matches.length
+        ? {
+            allocation: {
+              requestedNet: requestedNet ?? null,
+              priorInvoiceCount: payment.matches.length,
+              priorRefundCount: payment.refunds.length,
+              before: {
+                net: fromBani(remaining.net),
+                tax: fromBani(remaining.tax),
+                gross: fromBani(remaining.gross),
+              },
+              after: {
+                net: fromBani(remaining.net - net),
+                tax: fromBani(remaining.tax - tax),
+                gross: fromBani(remaining.gross - gross),
+              },
+            },
+          }
+        : {}),
     });
   }
   if (assigned.length) {
@@ -376,7 +421,7 @@ export async function interpretAdvanceInvoice(
         assigned.reduce((sum, row) => sum + toBani(row.gross), 0n) ===
           toBani(expected.treatment.gross),
       'ADVANCE_INVOICE_TOTAL',
-      'Această asociere facturează integral avansurile bancare selectate, la exigibilitatea originală.',
+      'Alocările trebuie să explice integral baza și TVA facturii, la exigibilitatea originală.',
     );
   } else
     requireCondition(
@@ -460,7 +505,15 @@ export async function checkAdvanceInvoicePosting(tx: Transaction, actor: Actor, 
     account: p.serviceAccount,
     deduction: i.deduction,
     counterpartyVatCollection: i.counterpartyVatCollection,
-    paymentIds: p.payments.map((row) => row.paymentId),
+    ...(p.payments.some((row) => row.allocation?.requestedNet != null)
+      ? {
+          paymentIds: [],
+          paymentAllocations: p.payments.map((row) => ({
+            paymentId: row.paymentId,
+            net: row.allocation?.requestedNet ?? row.net,
+          })),
+        }
+      : { paymentIds: p.payments.map((row) => row.paymentId) }),
     evidenceId: p.evidenceId,
     evidenceDate: p.evidenceDate,
     reference: p.reference,

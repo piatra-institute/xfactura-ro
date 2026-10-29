@@ -1290,7 +1290,8 @@ export const advanceInvoiceMatches = sqliteTable(
     createdAt: createdAt(),
   },
   (t) => [
-    primaryKey({ columns: [t.companyId, t.paymentId] }),
+    primaryKey({ columns: [t.companyId, t.paymentId, t.invoiceId] }),
+    index('advance_matches_payment').on(t.companyId, t.paymentId),
     index('advance_matches_invoice').on(t.companyId, t.invoiceId),
     foreignKey({
       columns: [t.companyId, t.paymentId],

@@ -1,4 +1,4 @@
-import { and, asc, eq, exists, gt, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, lte, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { alias } from 'drizzle-orm/sqlite-core';
 import { Commands, type Actor } from './commands';
@@ -233,25 +233,24 @@ export class Advances {
     return this.runner.read(
       actor,
       async (tx) => {
-        const matched = exists(
-          tx
-            .select({ id: advanceInvoiceMatches.paymentId })
-            .from(advanceInvoiceMatches)
-            .innerJoin(
-              journals,
-              and(
-                eq(journals.companyId, advanceInvoiceMatches.companyId),
-                eq(journals.id, advanceInvoiceMatches.journalId),
-              ),
-            )
-            .where(
-              and(
-                eq(advanceInvoiceMatches.companyId, advancePayments.companyId),
-                eq(advanceInvoiceMatches.paymentId, advancePayments.paymentId),
-                lte(journals.date, body.date),
-              ),
+        const matchJournal = alias(journals, 'advance_match_journal');
+        const matchedGross = tx
+          .select({ amount: sql<bigint>`coalesce(sum(${advanceInvoiceMatches.grossBani}),0)` })
+          .from(advanceInvoiceMatches)
+          .innerJoin(
+            matchJournal,
+            and(
+              eq(matchJournal.companyId, advanceInvoiceMatches.companyId),
+              eq(matchJournal.id, advanceInvoiceMatches.journalId),
             ),
-        );
+          )
+          .where(
+            and(
+              eq(advanceInvoiceMatches.companyId, advancePayments.companyId),
+              eq(advanceInvoiceMatches.paymentId, advancePayments.paymentId),
+              lte(matchJournal.date, body.date),
+            ),
+          );
         const refundJournal = alias(journals, 'advance_refund_journal'),
           refundProposal = alias(proposals, 'advance_refund_proposal');
         const refundedGross = tx
@@ -280,7 +279,7 @@ export class Advances {
               lte(refundJournal.date, body.date),
             ),
           );
-        const refunded = sql`${refundedGross}>=cast(replace(json_extract(${proposals.body},'$.advancePayment.gross'),'.','') as integer)`;
+        const resolved = sql`${matchedGross}+${refundedGross}>=cast(replace(json_extract(${proposals.body},'$.advancePayment.gross'),'.','') as integer)`;
         const rows = await tx
           .select({ id: advancePayments.paymentId })
           .from(advancePayments)
@@ -306,7 +305,7 @@ export class Advances {
               body.direction
                 ? sql`json_extract(${proposals.body},'$.advancePayment.direction')=${body.direction}`
                 : undefined,
-              body.onlyOpen ? sql`not ${matched} and not ${refunded}` : undefined,
+              body.onlyOpen ? sql`not ${resolved}` : undefined,
             ),
           )
           .orderBy(asc(advancePayments.paymentId))

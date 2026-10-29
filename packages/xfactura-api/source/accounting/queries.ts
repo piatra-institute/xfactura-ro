@@ -291,6 +291,9 @@ export function overview(runner: Commands, actor: Actor, financialYearId?: strin
           ...(row.body.scopeCredit ? [row.body.scopeCredit.invoiceId] : []),
         ]),
         ...proposed.flatMap(({ body }) => [
+          ...('advanceRefund' in body && body.advanceRefund?.refundBasis?.priorInvoice
+            ? [body.advanceRefund.refundBasis.priorInvoice.invoiceId]
+            : []),
           ...('deferralRelease' in body && body.deferralRelease
             ? [body.deferralRelease.sourceInvoiceId]
             : []),

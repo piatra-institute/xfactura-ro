@@ -403,6 +403,22 @@ export const advancePaymentOutput = z.object({
   remainingControl: decimalString,
   invoiceId: idSchema.nullable(),
   refundJournalId: idSchema.nullable(),
+  invoicedNet: decimalString.optional(),
+  invoicedTax: decimalString.optional(),
+  invoicedGross: decimalString.optional(),
+  invoices: z
+    .array(
+      z.object({
+        invoiceId: idSchema,
+        journalId: idSchema,
+        financialYearId: idSchema,
+        date: dateSchema,
+        net: decimalString,
+        tax: decimalString,
+        gross: decimalString,
+      }),
+    )
+    .optional(),
   remainingNet: decimalString.optional(),
   remainingTax: decimalString.optional(),
   refundedNet: decimalString.optional(),

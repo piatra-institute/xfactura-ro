@@ -436,6 +436,186 @@ test('reviews bank advances, matched invoices, final allocations, unused credits
     status: 'reconciled',
     totals: { outputTax: '8.40' },
   });
+  await statement(
+    '2026-07-01',
+    '2026-07-31',
+    '1048.40',
+    '1169.40',
+    'SPLIT,2026-07-10,121.00,RON,Advance across invoices\n',
+  );
+  const splitPayment = await invoke(
+      'advances.proposePayment',
+      {
+        ...terms,
+        movementId: (await invoke('bank.movements', { matched: false })).items[0].id,
+        net: '100.00',
+        serviceExpectedOn: '2026-12-31',
+        reference: 'SPLIT-ADVANCE',
+      },
+      grant.token,
+    ),
+    splitEntry = await post(splitPayment);
+  const splitInvoices: Array<{ id: string; number: string; entryId: string }> = [];
+  for (const [date, net, tax, gross, before, after] of [
+    ['2026-08-01', '30.00', '6.30', '36.30', '121,00', '84,70'],
+    ['2026-09-01', '50.00', '10.50', '60.50', '84,70', '24,20'],
+  ]) {
+    const number = `AVANS-PART-${splitInvoices.length + 1}`,
+      file = await source(
+        `${number}.xml`,
+        invoiceXml({
+          number,
+          direction: 'sale',
+          date,
+          taxPointDate: '2026-07-10',
+          net,
+          tax,
+          gross,
+        }),
+      ),
+      document = await invoke('invoices.import', { evidenceId: file.id }),
+      proposal = await invoke(
+        'advances.proposeInvoice',
+        {
+          financialYearId: year.id,
+          invoiceId: document.id,
+          recognitionDate: date,
+          taxPointDate: '2026-07-10',
+          account: '704',
+          deduction: 'none',
+          counterpartyVatCollection: 'no',
+          paymentAllocations: [{ paymentId: splitPayment.id, net }],
+          evidenceId: proof.id,
+          evidenceDate: '2026-01-01',
+          reference: 'SPLIT-ADVANCE',
+          serviceExpectedOn: '2026-12-31',
+          reason: 'Alocarea explicită a unei părți din avansul încasat, cu soldul rămas disponibil',
+        },
+        grant.token,
+      );
+    await page.reload();
+    const matches = card.getByRole('table', { name: 'Încasări asociate', exact: true }),
+      row = matches.getByRole('row').nth(1);
+    await expect(
+      matches.getByRole('columnheader', { name: 'Avans disponibil', exact: true }),
+    ).toBeVisible();
+    await expect(
+      matches.getByRole('columnheader', { name: 'Avans rămas', exact: true }),
+    ).toBeVisible();
+    await expect(row.getByRole('cell').nth(1)).toContainText(before);
+    await expect(row.getByRole('cell').nth(5)).toContainText(after);
+    await expect(card).toContainText('TVA nouă la facturare');
+    await expect(effects).not.toContainText('704');
+    await expect(
+      card.getByText('TVA nouă la facturare', { exact: true }).locator('..'),
+    ).toContainText('0,00');
+    await expect(effects.getByRole('row').filter({ hasText: '4427' })).toHaveCount(2);
+    await page.screenshot({
+      path: info.outputPath(`split-advance-${splitInvoices.length + 1}-${info.project.name}.png`),
+      fullPage: true,
+    });
+    if (splitInvoices.length === 0) {
+      await matches.getByRole('button', { name: 'Deschide avansul 1', exact: true }).focus();
+      await page.keyboard.press('Enter');
+      await expect(page.locator(`#journal-${splitEntry.id}`)).toHaveAttribute('open', '');
+      await expect(page.locator(`#journal-${splitEntry.id}`).locator('summary')).toBeFocused();
+      await page.goto(location);
+    }
+    await reviewAndPost();
+    const entry = await invoke('ledger.post', {
+      id: proposal.id,
+      version: proposal.version,
+      hash: proposal.hash,
+    });
+    splitInvoices.push({ id: document.id, number, entryId: entry.id });
+  }
+  expect(
+    await invoke('advances.getPayment', { id: splitPayment.id, date: '2026-09-30' }),
+  ).toMatchObject({ status: 'open', remainingGross: '24.20', invoicedGross: '96.80' });
+  await statement(
+    '2026-10-01',
+    '2026-10-31',
+    '1169.40',
+    '1145.20',
+    'SPLIT-RETURN,2026-10-01,-24.20,RON,Unused unbilled remainder\n',
+  );
+  const unused = await source(
+    'sold-nefacturat.txt',
+    'Separate agreement returns the unbilled balance after two advance invoices',
+  );
+  await invoke(
+    'advances.proposeRefund',
+    {
+      financialYearId: year.id,
+      paymentId: splitPayment.id,
+      movementId: (await invoke('bank.movements', { matched: false })).items[0].id,
+      evidenceId: unused.id,
+      decisionDate: '2026-10-01',
+      periodBasis: 'current_period_event',
+      reason: 'Restituirea exclusivă a soldului nefacturat, păstrând cele două facturi de avans',
+    },
+    grant.token,
+  );
+  await page.reload();
+  await expect(card).toContainText('Factura de avans anterioară');
+  await expect(card).toContainText('24,20');
+  await expect(card).toContainText('0,00');
+  await card.getByRole('button', { name: 'AVANS-PART-2', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator(`#journal-${splitInvoices[1].entryId}`)).toHaveAttribute('open', '');
+  await expect(
+    page.locator(`#journal-${splitInvoices[1].entryId}`).locator('summary'),
+  ).toBeFocused();
+  await page.goto(location);
+  await reviewAndPost();
+  const completionXml = await source(
+      'serviciu-cu-doua-avansuri.xml',
+      finalInvoiceXml({
+        number: 'FINAL-SPLIT',
+        direction: 'sale',
+        date: '2026-11-01',
+        net: '0.00',
+        tax: '0.00',
+        gross: '0.00',
+        serviceNet: '80.00',
+        advances: [
+          { number: splitInvoices[0].number, lineId: 'A1', net: '30.00' },
+          { number: splitInvoices[1].number, lineId: 'A2', net: '50.00' },
+        ],
+      }),
+    ),
+    completion = await invoke('invoices.import', { evidenceId: completionXml.id });
+  await invoke(
+    'advances.proposeFinalInvoice',
+    {
+      financialYearId: year.id,
+      invoiceId: completion.id,
+      recognitionDate: '2026-11-01',
+      serviceDate: '2026-11-01',
+      taxPointDate: '2026-11-01',
+      treatmentEvidenceId: proof.id,
+      account: '704',
+      deduction: 'none',
+      counterpartyVatCollection: 'no',
+      allocations: [
+        { advanceInvoiceId: splitInvoices[0].id, lineId: 'A1', net: '30.00', tax: '6.30' },
+        { advanceInvoiceId: splitInvoices[1].id, lineId: 'A2', net: '50.00', tax: '10.50' },
+      ],
+    },
+    grant.token,
+  );
+  await page.reload();
+  const used = card.getByRole('table', { name: 'Avansuri regularizate', exact: true });
+  await expect(used).toContainText('AVANS-PART-1');
+  await expect(used).toContainText('AVANS-PART-2');
+  await reviewAndPost();
+  expect(
+    await invoke('advances.reconcile', { financialYearId: year.id, date: '2026-11-30' }),
+  ).toMatchObject({ status: 'reconciled', customer: { remaining: '0.00' } });
+  expect(await invoke('vat.summary', { financialYearId: year.id })).toMatchObject({
+    status: 'reconciled',
+    totals: { outputTax: '25.20' },
+  });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   expect(errors).toEqual([]);
 });

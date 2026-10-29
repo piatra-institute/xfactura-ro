@@ -377,7 +377,7 @@ export class Capabilities {
           service.advances.proposePayment(actor, key, body, { id, version }),
       ),
       'advances.proposeInvoice': define(
-        'Prepare a domestic RON advance invoice in 4092/419; optional whole prior payments settle it without duplicating VAT.',
+        'Prepare a domestic RON advance invoice in 4092/419. Select paymentIds for their complete available balances, or paymentAllocations=[{paymentId,net}] for exact parts of prior bank advances; do not mix modes. Preserve the unbilled balance for later invoices/refunds and avoid duplicate VAT. Requires exact human approval.',
         advanceInvoiceInput,
         proposalOutput,
         (actor, key, body) => service.advances.proposeInvoice(actor, key, body),

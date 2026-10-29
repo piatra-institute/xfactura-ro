@@ -43,6 +43,11 @@ export const advanceInvoiceInput = z
     deduction: z.enum(['full', 'none']),
     counterpartyVatCollection: z.literal('no'),
     paymentIds: z.array(idSchema).max(100).default([]),
+    paymentAllocations: z
+      .array(z.object({ paymentId: idSchema, net: moneySchema }).strict())
+      .min(1)
+      .max(100)
+      .optional(),
     ...terms,
   })
   .strict();
@@ -117,6 +122,16 @@ const match = z
     proposalHash: hash,
     stateHash: hash,
     ...amounts,
+    allocation: z
+      .object({
+        requestedNet: moneySchema.nullable(),
+        priorInvoiceCount: z.number().int().nonnegative(),
+        priorRefundCount: z.number().int().nonnegative(),
+        before: z.object(amounts).strict(),
+        after: z.object(amounts).strict(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export const advanceInvoiceSchema = z
@@ -197,6 +212,11 @@ export const advanceRefundSchema = advanceRefundInput
         priorRefundCount: z.number().int().nonnegative(),
         priorRefundJournalId: idSchema.nullable(),
         priorRefundFinancialYearId: idSchema.nullable(),
+        priorInvoiceCount: z.number().int().positive().optional(),
+        priorInvoice: z
+          .object({ invoiceId: idSchema, journalId: idSchema, financialYearId: idSchema })
+          .strict()
+          .optional(),
         before: z.object({ ...amounts, controlAmount: moneySchema }).strict(),
         after: z.object({ ...amounts, controlAmount: moneySchema }).strict(),
       })
