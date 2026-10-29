@@ -615,7 +615,7 @@ describe('allowance source validation and authority', () => {
         ...postingInput(f, charge.invoice.id),
         ...classification,
       }),
-    ).rejects.toMatchObject({ code: 'UNSUPPORTED_TREATMENT' });
+    ).rejects.toMatchObject({ code: 'INVOICE_ALLOWANCE_TREATMENT' });
   });
 
   test('discounted tax must be independently consistent with the original rate and net basis', async () => {

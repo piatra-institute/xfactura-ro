@@ -187,6 +187,7 @@ export async function interpretCreditNote(
     advance: _invoicedAdvance,
     advanceFinal: _advanceFinal,
     documentAllowance: _documentAllowance,
+    documentCharge: _documentCharge,
     ...originalTreatment
   } = previous;
   const treatment = invoiceTreatmentSchema.parse({

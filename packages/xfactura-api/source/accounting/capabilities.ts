@@ -352,7 +352,7 @@ export class Capabilities {
         (actor, _, body) => service.invoices.get(actor, body.id),
       ),
       'invoices.propose': define(
-        'Prepare domestic RON service invoice lines for VAT/non-VAT, using explicit evidence, dates and deduction decisions. For a retained document-level commercial discount, explicitly set documentAllowance=commercial_price_reduction; source details and net VAT basis must reconcile. Financial settlement discounts, charges and other treatments require separate coverage. Exact human approval is required.',
+        'Prepare domestic RON service invoice lines for VAT/non-VAT, using explicit evidence, dates and deduction decisions. For document-level commercial discounts set documentAllowance=commercial_price_reduction; for charges forming part of the same service price set documentCharge=service_price_component. Supply both when present. Retained details and lineNet - allowances + charges must reconcile to net and VAT. Financial discounts, interest, penalties, pass-through amounts and mixed VAT treatments require separate coverage. Exact human approval is required.',
         invoicePostingInput,
         proposalOutput,
         (actor, key, body) => service.invoices.propose(actor, key, body),

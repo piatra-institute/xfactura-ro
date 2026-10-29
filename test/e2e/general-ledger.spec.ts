@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
-import { allowanceInvoiceXml } from '../../packages/xfactura-api/test/accounting/fixtures/invoice-allowance';
+import { chargeInvoiceXml } from '../../packages/xfactura-api/test/accounting/fixtures/invoice-charge';
 import { invoiceZip } from '../../packages/xfactura-api/test/accounting/fixtures/archive';
 
 test('reviews agent-prepared VAT invoice lines and keeps financial years separate', async ({
@@ -68,7 +68,15 @@ test('reviews agent-prepared VAT invoice lines and keeps financial years separat
       filename: 'efactura-issued.zip',
       mediaType: 'application/zip',
       base64: Buffer.from(
-        invoiceZip({ 'facturi/issued.xml': allowanceInvoiceXml({ direction: 'sale' }) }),
+        invoiceZip({
+          'facturi/issued.xml': chargeInvoiceXml({
+            direction: 'sale',
+            allowance: '20.00',
+            net: '90.00',
+            tax: '18.90',
+            gross: '108.90',
+          }),
+        }),
       ).toString('base64'),
     },
     grant.token,
@@ -89,6 +97,7 @@ test('reviews agent-prepared VAT invoice lines and keeps financial years separat
       deduction: 'none',
       counterpartyVatCollection: 'no',
       documentAllowance: 'commercial_price_reduction',
+      documentCharge: 'service_price_component',
     },
     grant.token,
   );
@@ -110,21 +119,31 @@ test('reviews agent-prepared VAT invoice lines and keeps financial years separat
     .locator('.acc-review')
     .filter({ has: page.getByRole('heading', { name: 'INV-1 · Companie 87654321', exact: true }) });
   await expect(proposal).toBeVisible();
-  await expect(proposal.locator('tbody tr')).toHaveCount(3);
-  await expect(proposal.locator('tbody tr').nth(2)).toContainText('4427');
-  await expect(proposal.locator('tbody tr').nth(2)).toContainText('16,80');
+  const effects = proposal.getByRole('table', { name: 'Efect contabil propus', exact: true });
+  await expect(effects.locator('tbody tr')).toHaveCount(3);
+  await expect(effects.locator('tbody tr').nth(2)).toContainText('4427');
+  await expect(effects.locator('tbody tr').nth(2)).toContainText('18,90');
   await expect(proposal).toContainText('Exigibilitate TVA');
   await expect(
-    proposal.getByText('Servicii înainte de reducere', { exact: true }).locator('..'),
+    proposal.getByText('Servicii înainte de ajustări, fără TVA', { exact: true }).locator('..'),
   ).toContainText('100,00');
   await expect(
     proposal.getByText('Reducere comercială în factură', { exact: true }).locator('..'),
   ).toContainText('20,00');
+  await expect(proposal.getByText('Total fără TVA', { exact: true }).locator('..')).toContainText(
+    '90,00',
+  );
+  await expect(proposal).toContainText('108,90');
+  await expect(effects.locator('tbody')).not.toContainText('709');
   await expect(
-    proposal.getByText('Servicii după reducere, fără TVA', { exact: true }).locator('..'),
-  ).toContainText('80,00');
-  await expect(proposal).toContainText('96,80');
-  await expect(proposal.locator('tbody')).not.toContainText('709');
+    proposal.getByText('Total costuri suplimentare', { exact: true }).locator('..'),
+  ).toContainText('10,00');
+  const charges = proposal.getByRole('table', {
+    name: 'Costuri suplimentare în factură',
+    exact: true,
+  });
+  await expect(charges).toContainText('Configurare suplimentară a serviciului');
+  await expect(charges).toContainText('10,00');
   const archives = proposal.locator('.acc-invoice-sources');
   await archives.locator('summary').focus();
   await page.keyboard.press('Enter');
@@ -133,13 +152,31 @@ test('reviews agent-prepared VAT invoice lines and keeps financial years separat
   ).toBeVisible();
   await expect(archives).toContainText('facturi/issued.xml');
   expect(Buffer.from(await (await request.get(`${base}/evidence/${original.id}`)).body())).toEqual(
-    Buffer.from(invoiceZip({ 'facturi/issued.xml': allowanceInvoiceXml({ direction: 'sale' }) })),
+    Buffer.from(
+      invoiceZip({
+        'facturi/issued.xml': chargeInvoiceXml({
+          direction: 'sale',
+          allowance: '20.00',
+          net: '90.00',
+          tax: '18.90',
+          gross: '108.90',
+        }),
+      }),
+    ),
   );
   expect(
     Buffer.from(
       await (await request.get(`${base}/evidence/${imported.entries[0].evidenceId}`)).body(),
     ).toString(),
-  ).toBe(allowanceInvoiceXml({ direction: 'sale' }));
+  ).toBe(
+    chargeInvoiceXml({
+      direction: 'sale',
+      allowance: '20.00',
+      net: '90.00',
+      tax: '18.90',
+      gross: '108.90',
+    }),
+  );
   await selector.focus();
   await selector.press('Tab');
   await expect(page.getByRole('button', { name: 'Export complet', exact: true })).toBeFocused();

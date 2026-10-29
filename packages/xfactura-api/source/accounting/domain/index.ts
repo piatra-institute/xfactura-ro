@@ -167,6 +167,30 @@ export const invoiceTreatmentSchema = z
       })
       .strict()
       .optional(),
+    documentCharge: z
+      .object({
+        schemaVersion: z.literal(1),
+        kind: z.literal('service_price_component'),
+        lineNet: moneySchema,
+        allowances: moneySchema,
+        total: moneySchema,
+        net: moneySchema,
+        items: z
+          .array(
+            z
+              .object({
+                sourceIndex: z.number().int().min(0).max(99),
+                amount: moneySchema,
+                reason: z.string().min(1).max(1000).nullable(),
+                reasonCode: z.string().min(1).max(20).nullable(),
+              })
+              .strict(),
+          )
+          .min(1)
+          .max(100),
+      })
+      .strict()
+      .optional(),
     credit: creditDetailsSchema.optional(),
     accrualMatch: accrualInvoiceMatchSchema.optional(),
     unbilledSaleMatch: unbilledSaleMatchSchema.optional(),

@@ -222,7 +222,28 @@ export default function GeneralDetails({
           />
         ) : null}
         <dl className="acc-review-meta">
-          {invoice.documentAllowance ? (
+          {invoice.documentCharge ? (
+            <>
+              <div>
+                <dt>Servicii înainte de ajustări, fără TVA</dt>
+                <dd>{formatMoney(invoice.documentCharge.lineNet)}</dd>
+              </div>
+              {invoice.documentAllowance ? (
+                <div>
+                  <dt>Reducere comercială în factură</dt>
+                  <dd>{formatMoney(invoice.documentAllowance.total)}</dd>
+                </div>
+              ) : null}
+              <div>
+                <dt>Total costuri suplimentare</dt>
+                <dd>{formatMoney(invoice.documentCharge.total)}</dd>
+              </div>
+              <div>
+                <dt>Total fără TVA</dt>
+                <dd>{formatMoney(invoice.documentCharge.net)}</dd>
+              </div>
+            </>
+          ) : invoice.documentAllowance ? (
             <>
               <div>
                 <dt>Servicii înainte de reducere</dt>
@@ -454,6 +475,27 @@ export default function GeneralDetails({
             </>
           ) : null}
         </dl>
+        {invoice.documentCharge ? (
+          <div className="acc-table-scroll">
+            <table>
+              <caption>Costuri suplimentare în factură</caption>
+              <thead>
+                <tr>
+                  <th>Motiv</th>
+                  <th>Fără TVA</th>
+                </tr>
+              </thead>
+              <tbody>
+                {invoice.documentCharge.items.map((row) => (
+                  <tr key={row.sourceIndex}>
+                    <td>{row.reason ?? `Cod ${row.reasonCode}`}</td>
+                    <td>{formatMoney(row.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
         <InvoiceAdvanceDetails {...{ body, state, path, showJournal }} />
         {cancellation && !scopeReduction ? (
           <div className="acc-table-scroll">

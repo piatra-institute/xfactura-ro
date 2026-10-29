@@ -38,6 +38,7 @@ export const invoicePostingInput = z
     counterpartyVatCollection: z.literal('no'),
     account: accountCodeSchema,
     documentAllowance: z.literal('commercial_price_reduction').optional(),
+    documentCharge: z.literal('service_price_component').optional(),
   })
   .strict();
 export type InvoicePostingInput = z.infer<typeof invoicePostingInput>;
@@ -100,13 +101,12 @@ export async function interpretInvoice(
     'Perioadele diferite necesită tratarea explicită a angajamentelor și a exigibilității.',
   );
   requireCondition(
-    (timing === 'service' || totals.allowances === '0.00') &&
-      totals.charges === '0.00' &&
+    (timing === 'service' || (totals.allowances === '0.00' && totals.charges === '0.00')) &&
       totals.prepaid === '0.00' &&
       totals.rounding === '0.00' &&
       new Amount(totals.net).gt(0),
     'UNSUPPORTED_TREATMENT',
-    'Avansurile, reducerile globale și rotunjirile necesită un tratament separat.',
+    'Avansurile, ajustările abonamentelor și rotunjirile necesită un tratament separat.',
   );
   requireCondition(
     doc.taxes.length === 1,
@@ -116,16 +116,22 @@ export async function interpretInvoice(
   const tax = doc.taxes[0],
     rule = invoiceRule(input.taxPointDate, tax.category);
   requireCondition(
-    (totals.allowances === '0.00' &&
-      input.documentAllowance === undefined &&
-      !doc.documentAdjustments?.length) ||
+    (totals.allowances === '0.00' && input.documentAllowance === undefined) ||
       (timing === 'service' &&
         new Amount(totals.allowances).gt(0) &&
         input.documentAllowance === 'commercial_price_reduction'),
     'INVOICE_ALLOWANCE_TREATMENT',
     'Confirmați reducerea comercială din factura inițială; sconturile financiare necesită un tratament separat.',
   );
-  if (totals.allowances !== '0.00')
+  requireCondition(
+    (totals.charges === '0.00' && input.documentCharge === undefined) ||
+      (timing === 'service' &&
+        new Amount(totals.charges).gt(0) &&
+        input.documentCharge === 'service_price_component'),
+    'INVOICE_CHARGE_TREATMENT',
+    'Confirmați costurile suplimentare care fac parte din prețul serviciului; dobânzile, penalitățile și sumele în numele altora au tratamente separate.',
+  );
+  if (totals.allowances !== '0.00' || totals.charges !== '0.00')
     requireCondition(
       doc.parserVersion === 'ubl-invoice-3' &&
         (!doc.invoiceTypeCode || doc.invoiceTypeCode === '380') &&
@@ -133,13 +139,18 @@ export async function interpretInvoice(
         doc.documentAdjustments?.length &&
         doc.documentAdjustments.every(
           (row) =>
-            !row.charge &&
             new Amount(row.amount).gt(0) &&
             row.vatCategory === tax.category &&
             (row.vatRate ?? '0') === (tax.rate ?? '0'),
         ),
+      totals.charges !== '0.00' ? 'INVOICE_CHARGE_DETAILS' : 'INVOICE_ALLOWANCE_DETAILS',
+      'Reducerile și costurile suplimentare necesită detalii XML păstrate, cu aceeași categorie și cotă TVA ca serviciile.',
+    );
+  else
+    requireCondition(
+      !doc.documentAdjustments?.length,
       'INVOICE_ALLOWANCE_DETAILS',
-      'Reducerile necesită detalii XML păstrate, cu aceeași categorie și cotă TVA ca serviciile.',
+      'Detaliile de preț cu sumă zero necesită un tratament separat.',
     );
   requireCondition(
     (tax.rate ?? '0') === rule.rate &&
@@ -250,6 +261,30 @@ export async function interpretInvoice(
           },
         }
       : {}),
+    ...(input.documentCharge
+      ? {
+          documentCharge: {
+            schemaVersion: 1,
+            kind: input.documentCharge,
+            lineNet: totals.lineNet,
+            allowances: totals.allowances,
+            total: totals.charges,
+            net: totals.net,
+            items: doc.documentAdjustments!.flatMap((row, sourceIndex) =>
+              row.charge
+                ? [
+                    {
+                      sourceIndex,
+                      amount: row.amount,
+                      reason: row.reason,
+                      reasonCode: row.reasonCode,
+                    },
+                  ]
+                : [],
+            ),
+          },
+        }
+      : {}),
   });
   return { invoice, lines, treatment };
 }
@@ -303,6 +338,7 @@ export async function checkInvoicePosting(tx: Transaction, actor: Actor, body: G
     counterpartyVatCollection: input.counterpartyVatCollection,
     account: input.account,
     ...(input.documentAllowance ? { documentAllowance: input.documentAllowance.kind } : {}),
+    ...(input.documentCharge ? { documentCharge: input.documentCharge.kind } : {}),
   });
   requireCondition(
     canonical(expected.treatment) === canonical(input) &&
