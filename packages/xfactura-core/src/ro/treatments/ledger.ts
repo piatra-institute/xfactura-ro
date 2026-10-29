@@ -10,6 +10,7 @@ import {
   type Side,
   type TaxEntrySpec,
   type Treatment,
+  profileAt,
   vatPeriodOf,
 } from '../../kernel';
 import { isSupportedCurrency, LEDGER_CURRENCY, parseMoney } from '../../money';
@@ -221,8 +222,9 @@ export const reversalInput = z
     date,
     reason: z.string().trim().min(10).max(1000),
     evidenceId: z.uuid(),
-    /** Red storno repeats the lines with negative amounts; black storno swaps their sides. */
-    method: z.enum(['red', 'black']),
+    /** Red storno repeats the lines with negative amounts; black storno swaps their sides.
+     * When omitted, the company's recorded accounting policy (`policy.storno`) decides. */
+    method: z.enum(['red', 'black']).optional(),
   })
   .strict();
 export type ReversalInput = z.infer<typeof reversalInput>;
@@ -262,7 +264,20 @@ export const reversal: Treatment<ReversalInput> = {
       issues.push(
         block('REVERSAL_DATE', 'Stornarea nu poate precede înregistrarea inițială.', 'date'),
       );
-    const red = input.method === 'red';
+    const method = input.method ?? profileAt(loaded, 'policy.storno', input.date);
+    if (method !== 'red' && method !== 'black')
+      return {
+        effect: null,
+        issues: [
+          ...issues,
+          block(
+            'POLICY_MISSING',
+            'Alegeți metoda de stornare sau înregistrați politica contabilă a companiei.',
+            'method',
+          ),
+        ],
+      };
+    const red = method === 'red';
     const lines: LineSpec[] = entry.lines.map((line) => ({
       ...line,
       side: red ? line.side : opposite(line.side),
@@ -314,7 +329,7 @@ export const reversal: Treatment<ReversalInput> = {
         summary: `Stornarea integrală a notei ${entry.number} din ${entry.date}.`,
         details: {
           entryId: entry.id,
-          method: input.method,
+          method,
           reason: input.reason,
           evidenceId: input.evidenceId,
         },

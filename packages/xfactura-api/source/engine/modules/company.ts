@@ -73,6 +73,8 @@ export const profileAxes = {
   employer: ['no', 'yes'],
   'books.assurance': ['preview', 'shadow', 'live'],
   'controls.segregation': ['off', 'on'],
+  // Accounting policies (OMFP 1802/2014 requires them in writing): dated, with their evidence.
+  'policy.storno': ['red', 'black'],
 } as const;
 export const profileInput = z
   .object({

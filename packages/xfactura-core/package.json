@@ -29,7 +29,9 @@
     "./ro/treatments/revaluation": "./src/ro/treatments/revaluation.ts",
     "./einvoice": "./src/einvoice/index.ts",
     "./ro/geo": "./src/ro/geo.ts",
-    "./ro/identifiers": "./src/ro/identifiers.ts"
+    "./ro/identifiers": "./src/ro/identifiers.ts",
+    "./ro/sources": "./src/ro/sources/index.ts",
+    "./ro/treatments/vat-settlement": "./src/ro/treatments/vat-settlement.ts"
   },
   "dependencies": {
     "@noble/hashes": "2.4.0",

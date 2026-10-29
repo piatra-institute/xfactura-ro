@@ -54,12 +54,14 @@ Reviewed actions (month close and reopen) follow the same pattern: request, appr
 | Operation | Permission | Agent | Approval | Purpose |
 |---|---|---|---|---|
 | `capabilities.list` | read | yes | — | Operations available to this principal, with contracts. |
+| `rules.parameters`, `rules.horizon` | read | yes | — | Legal parameters with review status and cited clauses; those whose reviewed period ends soon. |
 | `ledger.general.propose` / `.revise` | write | yes | — | Explicit journal entry: opening, general or adjustment. |
 | `ledger.reverse.propose` / `.revise` | write | yes | — | Full storno of a posted entry. |
 | `invoices.recognize.propose` / `.revise` | write | yes | — | Domestic service invoice, in lei or foreign currency. |
 | `invoices.credit.propose` / `.revise` | write | yes | — | Credit note against its original invoice. |
 | `bank.settle.propose` / `.revise` | write | yes | — | Full explanation of a bank movement. |
 | `fx.revalue.propose` / `.revise` | write | yes | — | Month-end revaluation of foreign-currency monetary items. |
+| `vat.settle.propose` / `.revise` | write | yes | — | VAT settlement of a period into 4423 or 4424. |
 | `proposals.get`, `proposals.list` | read | yes | — | A proposal, or proposals in creation order. |
 | `proposals.approve` | review | no | human | Approve one exact version. |
 | `proposals.withdraw` | write | yes | — | Withdraw an unposted proposal. |

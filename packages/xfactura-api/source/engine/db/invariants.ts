@@ -131,6 +131,22 @@ const isReviewer = (user: string, epoch: string) => `EXISTS (
       SELECT 1 FROM acc_memberships m
       WHERE m.company_id = NEW.company_id AND m.user_id = ${user}
         AND m.active = 1 AND m.role IN ('owner', 'reviewer') AND m.epoch = ${epoch})`;
+/**
+ * A tax period's read version, as the state loader records it for `${tax}|${period}`: its tax
+ * entries, its settlement lines and the last sequence among their entries, excluding the
+ * entry being posted.
+ */
+const taxPeriodVersion = (id: string) => {
+  const tax = `substr(${id}, 1, instr(${id}, '|') - 1)`;
+  const period = `substr(${id}, instr(${id}, '|') + 1)`;
+  const taxRows = `FROM acc_tax_entries t JOIN acc_entries e ON e.company_id = t.company_id AND e.id = t.entry_id
+          WHERE t.company_id = NEW.company_id AND t.tax = ${tax} AND t.tax_period = ${period}`;
+  const settlementRows = `FROM acc_lines l JOIN acc_entries e ON e.company_id = l.company_id AND e.id = l.entry_id
+          WHERE l.company_id = NEW.company_id AND l.tax_settlement_tax = ${tax} AND l.tax_settlement_period = ${period}`;
+  return `(
+        (SELECT count(*) ${taxRows}) || '/' || (SELECT count(*) ${settlementRows}) || '/' ||
+        max(COALESCE((SELECT max(e.seq) ${taxRows}), 0), COALESCE((SELECT max(e.seq) ${settlementRows}), 0)))`;
+};
 const latest = (table: string, scope: string) =>
   `(SELECT kind FROM ${table} WHERE company_id = NEW.company_id AND ${scope} ORDER BY seq DESC LIMIT 1)`;
 const nowMs = `CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)`;
@@ -440,10 +456,12 @@ const entryChecks: Check[] = [
   },
   {
     code: 'stale_read',
-    rule: "The open items and schedules the proposal read have not changed since: an open item's version is its number of lines, a schedule's is its latest version.",
+    rule: "The open items, schedules and tax periods the proposal read have not changed since: an open item's version is its number of lines, a schedule's its latest version, a tax period's its tax entries, settlement lines and last entry sequence.",
     violation: `EXISTS (
       SELECT 1 FROM json_each(${version('read_set_json')}) r
-      WHERE (json_extract(r.value, '$.kind') = 'openItem'
+      WHERE (json_extract(r.value, '$.kind') = 'taxPeriod'
+          AND json_extract(r.value, '$.version') <> ${taxPeriodVersion("json_extract(r.value, '$.id')")})
+        OR (json_extract(r.value, '$.kind') = 'openItem'
           AND json_extract(r.value, '$.version') <> CAST((
             SELECT count(*) FROM acc_lines l
             WHERE l.company_id = NEW.company_id AND l.open_item_id = json_extract(r.value, '$.id')

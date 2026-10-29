@@ -31,7 +31,8 @@
     "test:perf": "bun test --timeout 600000 packages/xfactura-api/test/engine/*.perf.test.ts",
     "test:official": "bun test scripts/validators",
     "validators:fetch": "bun scripts/validators/fetch.ts",
-    "validate:official": "bun scripts/validators/validate.ts"
+    "validate:official": "bun scripts/validators/validate.ts",
+    "sources:fetch": "bun scripts/sources/fetch.ts"
   },
   "devDependencies": {
     "@playwright/test": "1.64.1",

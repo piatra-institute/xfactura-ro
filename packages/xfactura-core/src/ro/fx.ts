@@ -39,7 +39,7 @@ export const fxVersions: ParameterVersion[] = [
     reviewedThrough: date('2026-12-31'),
     knowledgeDate: null,
     status: 'extracted',
-    clauses: ['OMFP 1802/2014 pct. 315–316, operațiuni în valută (TO-SOURCE)'],
+    clauses: ['OMFP1802/2014:pct.315-316'],
   },
   {
     id: 'ro.fx.rate_date.vat/2024-01-01',
@@ -51,7 +51,7 @@ export const fxVersions: ParameterVersion[] = [
     reviewedThrough: date('2026-12-31'),
     knowledgeDate: null,
     status: 'extracted',
-    clauses: ['L227/2015 art. 290 și normele de aplicare (TO-SOURCE)'],
+    clauses: ['L227/2015:art.290'],
   },
 ];
 

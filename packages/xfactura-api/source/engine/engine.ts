@@ -7,7 +7,10 @@ import { generalJournal, reversal } from 'xfactura-core/ro/treatments/ledger';
 import { creditRecognition, invoiceRecognition } from 'xfactura-core/ro/treatments/invoices';
 import { settlement } from 'xfactura-core/ro/treatments/settlement';
 import { revaluation } from 'xfactura-core/ro/treatments/revaluation';
+import { vatSettlement } from 'xfactura-core/ro/treatments/vat-settlement';
 import { ParameterRegister } from 'xfactura-core/rules';
+import { clause, sourceOf } from 'xfactura-core/ro/sources';
+import { addDays, bucharestDate } from 'xfactura-core/time';
 import type { Database } from './db/database';
 import { agentGrants } from './db/schema';
 import type { ObjectStore } from './adapters/object-store';
@@ -88,12 +91,53 @@ const actionView = z.object({
   result: z.unknown(),
 });
 
+const parameterView = z.object({
+  id: z.string(),
+  key: z.string(),
+  scope: z.record(z.string(), z.string()),
+  value: z.unknown(),
+  from: z.string(),
+  to: z.string().nullable(),
+  reviewedThrough: z.string().nullable(),
+  status: z.string(),
+  citations: z.array(
+    z.object({ clause: z.string(), source: z.string(), locator: z.string(), status: z.string() }),
+  ),
+});
+
+/** Every parameter version with what it cites, for review and for agents explaining a value. */
+function parameters(register: ParameterRegister) {
+  return register.versions.map((version) => ({
+    id: version.id,
+    key: version.key,
+    scope: version.scope,
+    value: version.value,
+    from: version.from,
+    to: version.to,
+    reviewedThrough: version.reviewedThrough,
+    status: version.status,
+    citations: version.clauses.map((id) => {
+      const cited = clause(id);
+      return cited
+        ? {
+            clause: id,
+            source: sourceOf(cited).title,
+            locator: cited.locator,
+            status: cited.status,
+          }
+        : { clause: id, source: '', locator: '', status: 'unknown' };
+    }),
+  }));
+}
+
 export const defaultRegister = () =>
   new ParameterRegister([...vatDefinitions, ...fxDefinitions], [...vatVersions, ...fxVersions]);
 
 /** The accounting engine: one kernel, its modules and the operation catalogue they expose. */
 export class Engine {
   readonly operations = new OperationRegistry();
+  /** The legal parameters every proposal resolves from. */
+  readonly register: ParameterRegister;
   readonly commands: Commands;
   readonly proposals: Proposals;
   readonly policies: PostingPolicies;
@@ -129,11 +173,8 @@ export class Engine {
   ) {
     this.commands = new Commands(db, this.operations.policy);
     this.policies = new PostingPolicies(this.commands);
-    this.proposals = new Proposals(
-      this.commands,
-      options.register ?? defaultRegister(),
-      this.policies,
-    );
+    this.register = options.register ?? defaultRegister();
+    this.proposals = new Proposals(this.commands, this.register, this.policies);
     this.proposals.addTreatment(
       generalJournal,
       reversal,
@@ -141,6 +182,7 @@ export class Engine {
       creditRecognition,
       settlement,
       revaluation,
+      vatSettlement,
       ...(options.treatments ?? []),
     );
     this.actions = new Actions(this.commands);
@@ -234,6 +276,36 @@ export class Engine {
       }),
     ]);
     return [
+      define({
+        id: 'rules.parameters',
+        description:
+          'Parametrii legali folosiți de motor: valoare, perioadă, stadiul verificării și sursele citate.',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: z.object({}).strict(),
+        output: z.array(parameterView),
+        run: (actor) =>
+          this.commands.read(actor, 'rules.parameters', async () => parameters(this.register)),
+      }),
+      define({
+        id: 'rules.horizon',
+        description:
+          'Parametrii a căror perioadă verificată se încheie în următoarele zile: trebuie confirmați sau înlocuiți la timp.',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: z.object({ days: z.number().int().min(1).max(366).default(90) }).strict(),
+        output: z.array(parameterView),
+        run: (actor, _key, input) =>
+          this.commands.read(actor, 'rules.horizon', async () => {
+            const until = addDays(bucharestDate(Date.now()), input.days);
+            const expiring = new Set(this.register.horizon(until).map((version) => version.id));
+            return parameters(this.register).filter((item) => expiring.has(item.id));
+          }),
+      }),
       define({
         id: 'capabilities.list',
         description: 'Operațiunile disponibile acestei identități, cu contractele lor.',

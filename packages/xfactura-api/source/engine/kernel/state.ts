@@ -19,6 +19,7 @@ import type {
   ReadPlan,
   ReadSetEntry,
   TaxEntrySpec,
+  TaxPeriodLedger,
 } from 'xfactura-core/kernel';
 import type { LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
@@ -392,6 +393,74 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
     }
   }
 
+  const taxLedger = new Map<string, TaxPeriodLedger>();
+  for (const query of plan.taxPeriods ?? []) {
+    const key = `${query.tax}|${query.period}`;
+    if (taxLedger.has(key)) continue;
+    const posted = and(eq(entries.companyId, lines.companyId), eq(entries.id, lines.entryId));
+    const taxRows = await tx
+      .select({ tax: taxEntries, seq: entries.seq })
+      .from(taxEntries)
+      .innerJoin(
+        entries,
+        and(eq(entries.companyId, taxEntries.companyId), eq(entries.id, taxEntries.entryId)),
+      )
+      .where(
+        and(
+          eq(taxEntries.companyId, companyId),
+          eq(taxEntries.tax, query.tax),
+          eq(taxEntries.taxPeriod, query.period),
+        ),
+      )
+      .orderBy(asc(entries.seq), asc(taxEntries.taxNo));
+    const settlementRows = await tx
+      .select({ line: lines, seq: entries.seq })
+      .from(lines)
+      .innerJoin(entries, posted)
+      .where(
+        and(
+          eq(lines.companyId, companyId),
+          eq(lines.taxSettlementTax, query.tax),
+          eq(lines.taxSettlementPeriod, query.period),
+        ),
+      )
+      .orderBy(asc(entries.seq), asc(lines.lineNo));
+    taxLedger.set(key, {
+      tax: query.tax,
+      period: query.period,
+      entries: taxRows.map(({ tax, seq }) => ({
+        entryId: tax.entryId,
+        seq: Number(seq),
+        taxNo: Number(tax.taxNo),
+        direction: tax.direction,
+        code: tax.code,
+        baseBani: tax.baseBani,
+        taxBani: tax.taxBani,
+        deductibleBani: tax.deductibleBani,
+        ledgerBani: tax.ledgerBani,
+        documentId: tax.documentId,
+        partyId: tax.partyId,
+      })),
+      settlements: settlementRows.map(({ line }) => ({
+        entryId: line.entryId,
+        account: line.account,
+        side: line.side,
+        bani: line.bani,
+      })),
+    });
+    // The period as a whole: any entry landing in it changes the count or the last sequence.
+    const last = Math.max(
+      0,
+      ...taxRows.map((row) => Number(row.seq)),
+      ...settlementRows.map((row) => Number(row.seq)),
+    );
+    readSet.push({
+      kind: 'taxPeriod',
+      id: key,
+      version: `${taxRows.length}/${settlementRows.length}/${last}`,
+    });
+  }
+
   const loaded: Loaded = {
     years,
     evidence: evidenceMap,
@@ -403,6 +472,7 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
     profile,
     fxRates: rateMap,
     balances,
+    taxLedger,
   };
   return { loaded, readSet };
 }
@@ -441,6 +511,7 @@ export function mergeStates(
     profile: first.loaded.profile.length ? first.loaded.profile : second.loaded.profile,
     fxRates: merge(first.loaded.fxRates, second.loaded.fxRates),
     balances: first.loaded.balances.length ? first.loaded.balances : second.loaded.balances,
+    taxLedger: merge(first.loaded.taxLedger, second.loaded.taxLedger),
   };
   const seen = new Set<string>();
   const readSet = [...first.readSet, ...second.readSet]

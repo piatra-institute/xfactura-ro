@@ -13,11 +13,19 @@ export const vatDefinitions: ParameterDefinition[] = [
     value: percent,
     description: 'Cota TVA aplicabilă unei categorii de taxare (EN 16931 BT-151).',
   },
+  {
+    key: 'ro.vat.rate.reduced',
+    axis: 'vat_chargeability_date',
+    continuity: 'attest_allowed',
+    scope: [],
+    value: percent,
+    description:
+      'Cota redusă de TVA. Operațiunile cărora li se aplică sunt o clasificare separată, pe linie.',
+  },
 ];
 
-// Transcribed from the previous draft catalogue and extended to 2024 for the pilot's history.
-// None of these versions has been checked against the official text: every one is `extracted`
-// and must be sourced and reviewed before it supports posting or filing.
+// Every version is `extracted`: its clauses (src/ro/sources) say where the value comes from, and
+// an expert contabil reviews it before it supports posting or filing.
 export const vatVersions: ParameterVersion[] = [
   {
     id: 'ro.vat.rate/S/2024-01-01',
@@ -29,9 +37,7 @@ export const vatVersions: ParameterVersion[] = [
     reviewedThrough: null,
     knowledgeDate: null,
     status: 'extracted',
-    clauses: [
-      'L227/2015 art. 291 alin. (1) lit. a), forma în vigoare până la 31.07.2025 (TO-SOURCE)',
-    ],
+    clauses: ['L227/2015:art.291(1)(a)', 'ANAF/Ploiesti-modificari-tva:cote'],
   },
   {
     id: 'ro.vat.rate/S/2025-08-01',
@@ -44,8 +50,10 @@ export const vatVersions: ParameterVersion[] = [
     knowledgeDate: null,
     status: 'extracted',
     clauses: [
-      'L227/2015 art. 291 alin. (1) lit. a), modificat cu efect de la 01.08.2025 (TO-SOURCE: actul modificator)',
-      'https://static.anaf.ro/static/10/Ploiesti/modificari_tva.pdf',
+      'L227/2015:art.291(1)(a)',
+      'L141/2025:rates',
+      'ANAF/D300-12.0.0:rd.9',
+      'ANAF/Ploiesti-modificari-tva:cote',
     ],
   },
   {
@@ -58,8 +66,23 @@ export const vatVersions: ParameterVersion[] = [
     reviewedThrough: date('2026-12-31'),
     knowledgeDate: null,
     status: 'extracted',
+    clauses: ['ANAF/ghid-coduri-facturi-2.9:O'],
+  },
+  {
+    id: 'ro.vat.rate.reduced/2025-08-01',
+    key: 'ro.vat.rate.reduced',
+    scope: {},
+    value: '11',
+    from: date('2025-08-01'),
+    to: null,
+    reviewedThrough: date('2026-12-31'),
+    knowledgeDate: null,
+    status: 'extracted',
     clauses: [
-      'Categoria O (neplătitor de TVA / în afara sferei): https://static.anaf.ro/static/10/Anaf/Informatii_R/Ghid%20cod%20facturi_final%20v2.9.pdf',
+      'L227/2015:art.291(2)',
+      'L141/2025:rates',
+      'ANAF/D300-12.0.0:rd.10',
+      'ANAF/Ploiesti-modificari-tva:cote',
     ],
   },
 ];

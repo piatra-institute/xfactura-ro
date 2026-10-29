@@ -781,6 +781,18 @@ const attacks: Attack[] = [
       return post(world, first.proposed, { approvalId: first.approvalId });
     },
   },
+  {
+    trigger: entry,
+    code: 'stale_read',
+    name: 'posting after an entry reached the tax period the proposal read',
+    run: async (world) => {
+      await book(world, sale(world));
+      const { proposed, approvalId } = await approved(world, sale(world), {
+        readSet: [{ kind: 'taxPeriod', id: 'VAT|2026-03', version: '0/0/0' }],
+      });
+      return post(world, proposed, { approvalId });
+    },
+  },
   ...(['acc_lines', 'acc_tax_entries'] as const).map((table): Attack => ({
     trigger: `inv_${table}_sealed`,
     code: 'sealed_entry',

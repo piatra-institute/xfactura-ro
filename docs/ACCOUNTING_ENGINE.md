@@ -38,6 +38,10 @@ The company's `books.assurance` fact selects the mode:
 
 Every current parameter is `extracted`. Each proposal lists the parameter versions it used and their status.
 
+Each version cites clauses from the source register (`xfactura-core/src/ro/sources`). A source is an act or an official document with the hashes of the copies read. A clause is `located` when its text was read in such a copy, and `pending` when only its place in the act is known; neither is a review. `bun run sources:fetch` fetches the sources that allow it into `.sources/` and reports drift from the registered hashes; acts on sites that refuse automated access are provided by hand in `.sources/inbox/`. `rules.parameters` lists every value with its citations, and `rules.horizon` the values whose reviewed period ends within a number of days.
+
+Accounting policies the law requires in writing are dated company facts with their evidence. `policy.storno` (red or black) decides a reversal whose method is not given; without either, the reversal is blocked.
+
 ## Implemented treatments
 
 ### `ledger.general`: explicit journal entry
@@ -103,6 +107,13 @@ Every current parameter is `extracted`. Each proposal lists the parameter versio
   - Each allocation releases the item's RON carrying amount in proportion to the currency settled; settling the full balance releases all of it.
   - The difference is a realized exchange gain (7651) or loss (6651).
   - Paying a foreign-currency item from a RON account is not supported.
+
+### `vat.settle`: VAT settlement of a period
+
+- **Input:** the VAT period (a month, or a quarter for quarterly payers), the posting date on or after the period's end, the tax authority as a partner (a public institution), the return or worksheet as evidence, and a round number.
+- **Effect:** clears what the period's tax entries booked on 4427 (output) and 4426 (deductible input), net of earlier rounds, with settlement lines; the difference is VAT payable (4423) or recoverable (4424), an open item of the authority. VAT not yet exigible (4428) stays.
+- **Reads** the whole tax period as one read-set entry (its tax entries, settlement lines and last sequence). An entry reaching the period after approval makes the settlement stale, in the application and in the database. A later round settles only what arrived after the first.
+- **Refused:** a period of the wrong kind for the company's `vat.period`, a date before the period ends, a period with nothing to settle. Refund versus carry-forward of 4424 is the return's choice and not yet a treatment.
 
 ### `fx.revalue`: month-end revaluation
 

@@ -56,11 +56,16 @@ const controls: Record<string, ControlKind> = {
   '444': 'tax.payable',
   '446': 'tax.payable',
   '447': 'tax.payable',
+  // Associates' current accounts and interest on them: per associate, normally owed to them.
+  '4551': 'payable',
+  '4558': 'payable',
   '457': 'payable',
   '461': 'receivable',
   '462': 'payable',
   '471': 'deferral.expense',
   '472': 'deferral.revenue',
+  // Treasury advances: per person, owed back until their expense report settles them.
+  '542': 'receivable',
 };
 
 /** The control kind of an account code, inherited from its synthetic prefix. */

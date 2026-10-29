@@ -143,6 +143,7 @@ describe('register consistency', () => {
     expect(register.horizon(date('2026-12-31')).map((version) => version.id)).toEqual([
       'ro.vat.rate/S/2025-08-01',
       'ro.vat.rate/O/2024-01-01',
+      'ro.vat.rate.reduced/2025-08-01',
     ]);
   });
 });

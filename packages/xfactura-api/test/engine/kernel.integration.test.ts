@@ -243,6 +243,31 @@ describe('reversal', () => {
     expect(row(balance, '4111')?.current).toEqual({ debit: '0.00', credit: '0.00' });
   });
 
+  test('without a method, the recorded storno policy decides; without either, nothing posts', async () => {
+    const s = await fresh();
+    const original = await sale(s);
+    const { id: evidenceId } = await s.evidence('storno.pdf');
+    const input = {
+      entryId: original.entry!.id,
+      date: '2026-03-20',
+      reason: 'Factura emisă din eroare',
+      evidenceId,
+    };
+    const blocked = await s.propose('ledger.reverse', input);
+    expect(blocked.issues.map((issue) => issue.code)).toContain('POLICY_MISSING');
+    const { id: policyEvidence } = await s.evidence('politici-contabile.pdf');
+    await s.invoke(s.owner, 'profile.record', {
+      axis: 'policy.storno',
+      value: 'black',
+      effectiveFrom: '2026-01-01',
+      evidenceId: policyEvidence,
+    });
+    const reversed = await s.revise('ledger.reverse', blocked, input);
+    expect(
+      reversed.effect?.lines.map((line) => `${line.side} ${line.account} ${line.amount}`),
+    ).toEqual(['C 4111 1000.00', 'D 704 1000.00']);
+  });
+
   test('a settled receivable cannot be reversed past zero', async () => {
     const s = await fresh();
     const original = await sale(s);

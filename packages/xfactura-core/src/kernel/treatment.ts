@@ -24,6 +24,9 @@ export interface ReadPlan {
   fx?: { currency: string; until: LocalDate }[];
   /** Balances at a date of accounts without partners (bank, cash) held in a foreign currency. */
   foreignBalances?: { at: LocalDate };
+  /** Everything a tax period holds: its tax entries and the settlement lines already posted.
+   * The whole set is one read, so an entry landing in the period makes the proposal stale. */
+  taxPeriods?: { tax: string; period: string }[];
 }
 
 export interface OpenItemQuery {
@@ -51,7 +54,8 @@ export interface ReadSetEntry {
     | 'party'
     | 'profile'
     | 'fx'
-    | 'balance';
+    | 'balance'
+    | 'taxPeriod';
   id: string;
   version: string;
 }
@@ -139,6 +143,36 @@ export interface AccountBalance {
   minor: bigint;
 }
 
+/** A posted tax entry as a tax period lists it. */
+export interface TaxLedgerEntry {
+  entryId: string;
+  seq: number;
+  taxNo: number;
+  direction: 'output' | 'input';
+  code: string;
+  baseBani: bigint;
+  taxBani: bigint;
+  deductibleBani: bigint;
+  ledgerBani: bigint;
+  documentId: string | null;
+  partyId: string | null;
+}
+
+/** A posted line that settled (cleared) a tax period, signed as booked. */
+export interface TaxSettlementLine {
+  entryId: string;
+  account: string;
+  side: 'D' | 'C';
+  bani: bigint;
+}
+
+export interface TaxPeriodLedger {
+  tax: string;
+  period: string;
+  entries: readonly TaxLedgerEntry[];
+  settlements: readonly TaxSettlementLine[];
+}
+
 export interface ProfileFact {
   axis: string;
   value: string;
@@ -157,6 +191,8 @@ export interface Loaded {
   profile: readonly ProfileFact[];
   fxRates: ReadonlyMap<string, readonly FxRate[]>;
   balances: readonly AccountBalance[];
+  /** By `${tax}|${period}`. */
+  taxLedger: ReadonlyMap<string, TaxPeriodLedger>;
 }
 
 /** The company profile value on an axis at a date, or null when nothing is recorded. */

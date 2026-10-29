@@ -48,3 +48,6 @@ coverage/
 
 # Downloaded official validation artifacts (pinned in scripts/validators/sources.json)
 .validators/
+
+# Snapshots of the official texts the rule register cites (hashes in src/ro/sources)
+.sources/
