@@ -1154,12 +1154,14 @@ export const deferralCancellations = sqliteTable(
     fromMonth: text('from_month').notNull(),
     toMonth: text('to_month').notNull(),
     amountBani: bani('amount_bani').notNull(),
+    sequence: counter('sequence').notNull().default(1),
     createdBy: author(),
     createdAt: createdAt(),
   },
   (t) => [
     primaryKey({ columns: [t.companyId, t.creditInvoiceId] }),
-    uniqueIndex('deferral_cancellation_source').on(t.companyId, t.deferralId),
+    index('deferral_cancellation_deferral').on(t.companyId, t.deferralId),
+    uniqueIndex('deferral_cancellation_sequence').on(t.companyId, t.deferralId, t.sequence),
     uniqueIndex('deferral_cancellation_journal').on(t.companyId, t.journalId),
     foreignKey({
       columns: [t.companyId, t.deferralId],

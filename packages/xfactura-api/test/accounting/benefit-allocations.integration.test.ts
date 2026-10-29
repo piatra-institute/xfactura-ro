@@ -491,7 +491,7 @@ describe('partial cancellation of documented monthly benefits', () => {
     );
     await expect(
       service.deferrals.proposeScopeReduction(f.actor, key(), credit.input),
-    ).rejects.toMatchObject({ code: 'DEFERRAL_ALREADY_CANCELLED' });
+    ).rejects.toMatchObject({ code: 'DEFERRAL_CANCELLATION_EVIDENCE' });
     await expect(amend(f, root)).rejects.toMatchObject({ code: 'DEFERRAL_BENEFIT_AMOUNT' });
   });
 
@@ -808,19 +808,27 @@ describe('partial cancellation of documented monthly benefits', () => {
         }),
       );
     await apply(f, calendar);
+    const further = await scopeCredit(
+        f,
+        root,
+        { benefits: benefitRows(['30.00', '20.00', '19.94'], 1) },
+        { net: '10.00', tax: '0.00', gross: '10.00' },
+      ),
+      furtherProposal = await proposeScope(f, further.input);
+    await post(f.actor, furtherProposal);
     const state = await service.deferrals.get(f.actor, {
       id: root.proposal.id,
       date: '2026-02-01',
     });
     expect(state.schedule.map((row) => row.amount)).toEqual([
       '9007199254740900.01',
-      '40.00',
+      '30.00',
       '20.00',
       '19.94',
     ]);
     expect(state).toMatchObject({
-      cancelled: '20.00',
-      remaining: '79.94',
+      cancelled: '30.00',
+      remaining: '69.94',
       allocated: '9007199254740900.01',
     });
     const job = await service.exports.request(f.actor, key());

@@ -321,6 +321,16 @@ const fullDeferralCreditSchema = z
     months: z.array(deferralScheduleRowSchema).min(1).max(60),
     rescheduleId: idSchema.optional(),
     rescheduleVersion: z.number().int().positive().optional(),
+    priorCancellation: z
+      .object({
+        journalId: idSchema,
+        invoiceId: idSchema,
+        financialYearId: idSchema,
+        count: z.number().int().min(1).max(127),
+        amount: moneySchema,
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type DeferralCreditInput = z.infer<typeof deferralCreditInput>;
@@ -473,6 +483,8 @@ export const deferralRescheduleEffect = deferralRescheduleInput
         invoiceId: idSchema,
         financialYearId: idSchema,
         amount: moneySchema,
+        priorAmount: moneySchema.optional(),
+        priorCount: z.number().int().min(1).max(127).optional(),
       })
       .strict()
       .optional(),

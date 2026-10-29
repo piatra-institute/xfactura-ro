@@ -10,6 +10,7 @@ import {
   deferralCreditSchema,
   deferralScopeReductionInput,
   fromBani,
+  generalBodySchema,
   invoiceTreatmentSchema,
   requireCondition,
   toBani,
@@ -55,10 +56,15 @@ export async function interpretDeferralCredit(
     409,
   );
   requireCondition(
-    !state.cancellation,
+    !state.cancellation || state.cancellation.treatment.schemaVersion !== 1,
     'DEFERRAL_ALREADY_CANCELLED',
-    'Abonamentul are deja o anulare. O altă modificare necesită un tratament separat.',
+    'Serviciile viitoare au fost deja anulate integral.',
     409,
+  );
+  requireCondition(
+    state.cancellations.length < 128,
+    'DEFERRAL_CREDIT_LIMIT',
+    'Sunt acceptate cel mult 128 de anulări pentru aceeași factură.',
   );
   requireCondition(
     (!scopeReduction || input.recognitionDate >= result.invoice.body.issueDate) &&
@@ -99,6 +105,10 @@ export async function interpretDeferralCredit(
       state.interpretation.treatmentEvidenceId,
       state.invoice.evidenceId,
       result.invoice.evidenceId,
+      ...state.cancellations.flatMap((row) => {
+        const body = generalBodySchema.parse(row.body);
+        return [body.evidenceId, body.invoice!.treatmentEvidenceId];
+      }),
     ].includes(input.treatmentEvidenceId),
     'DEFERRAL_CANCELLATION_EVIDENCE',
     'Păstrați separat acordul care justifică anularea serviciilor viitoare.',
@@ -110,7 +120,8 @@ export async function interpretDeferralCredit(
         ? toBani(result.treatment.gross) - toBani(result.treatment.deductibleTax)
         : toBani(result.treatment.net),
     allocated = state.releases.reduce((sum, row) => sum + row.record.amountBani, 0n),
-    remainingBefore = toBani(state.treatment.amount) - allocated;
+    cancelledBefore = state.cancellations.reduce((sum, row) => sum + row.record.amountBani, 0n),
+    remainingBefore = toBani(state.treatment.amount) - allocated - cancelledBefore;
   requireCondition(
     creditAmount > 0n &&
       (scopeReduction ? creditAmount < futureAmount : creditAmount === futureAmount),
@@ -122,7 +133,7 @@ export async function interpretDeferralCredit(
   const amount = creditAmount;
   const beforeSchedule = deferralSchedule(state);
   let scope;
-  if (scopeReduction) {
+  if (scopeReduction || state.cancellation) {
     const [priorConfirmation] = await tx
       .select({ id: journals.id })
       .from(deferralReleases)
@@ -147,6 +158,8 @@ export async function interpretDeferralCredit(
       'DEFERRAL_CANCELLATION_EVIDENCE',
       'Păstrați separat acordul privind diminuarea serviciilor viitoare.',
     );
+  }
+  if (scopeReduction) {
     const first = months[0],
       last = months.at(-1)!,
       remainingAmount = fromBani(futureAmount - amount),
@@ -228,6 +241,17 @@ export async function interpretDeferralCredit(
       months,
       ...rescheduleContext(state),
       ...scope,
+      ...(state.cancellation
+        ? {
+            priorCancellation: {
+              journalId: state.cancellation.record.journalId,
+              invoiceId: state.cancellation.record.creditInvoiceId,
+              financialYearId: generalBodySchema.parse(state.cancellation.body).financialYearId,
+              count: state.cancellations.length,
+              amount: fromBani(cancelledBefore),
+            },
+          }
+        : {}),
     }),
   });
   return { ...result, treatment, state };

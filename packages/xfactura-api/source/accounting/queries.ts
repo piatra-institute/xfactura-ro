@@ -298,6 +298,9 @@ export function overview(runner: Commands, actor: Actor, financialYearId?: strin
             ? [
                 body.invoice.invoiceId,
                 ...(body.invoice.credit ? [body.invoice.credit.originalInvoiceId] : []),
+                ...(body.invoice.deferralCredit?.priorCancellation
+                  ? [body.invoice.deferralCredit.priorCancellation.invoiceId]
+                  : []),
                 ...(body.invoice.advanceFinal?.allocations.map((row) => row.advanceInvoiceId) ??
                   []),
               ]

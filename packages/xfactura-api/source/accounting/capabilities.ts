@@ -492,7 +492,7 @@ export class Capabilities {
         (actor, key, body) => service.deferrals.proposeCreditNote(actor, key, body),
       ),
       'deferrals.proposeScopeReduction': define(
-        'Prepare a separately evidenced partial cancellation of unprovided services using a linked credit note. Reduce 471/472 and original-rate VAT; preserve earned periods, dates and allocation method. Uniform sources require uniform remaining services. Evidenced monthly sources require remainingServices=documented_monthly_benefits and exact future benefits, with no month increased. Requires exact human approval before ledger.post; one scope cancellation per source.',
+        'Prepare a separately evidenced partial cancellation of unprovided services using a linked credit note. Reduce 471/472 and original-rate VAT; preserve earned periods, dates and allocation method. Uniform sources require uniform remaining services. Evidenced monthly sources require remainingServices=documented_monthly_benefits and exact future benefits, with no month increased. Further reductions bind the complete prior credit state and current reduced plan. Requires exact human approval before ledger.post.',
         deferralScopeReductionInput,
         proposalOutput,
         (actor, key, body) => service.deferrals.proposeScopeReduction(actor, key, body),

@@ -1,4 +1,4 @@
-import { and, eq, gte, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, lte, sql } from 'drizzle-orm';
 import type { Transaction } from './db';
 import { effectiveDeferralSchedule, fromBani, generalBodySchema, toBani } from './domain';
 import {
@@ -80,13 +80,8 @@ export async function deferralControls(
       proposals,
       and(eq(proposals.companyId, journals.companyId), eq(proposals.id, journals.sourceId)),
     )
-    .where(and(eq(deferralCancellations.companyId, companyId), lte(journals.date, date)));
-  const byDeferral = new Map(
-    cancellations.map(({ record, body }) => [
-      record.deferralId,
-      { ...record, treatment: generalBodySchema.parse(body).invoice!.deferralCredit! },
-    ]),
-  );
+    .where(and(eq(deferralCancellations.companyId, companyId), lte(journals.date, date)))
+    .orderBy(asc(deferralCancellations.sequence));
   const reschedules = await tx
     .select()
     .from(deferralReschedules)
@@ -107,20 +102,27 @@ export async function deferralControls(
   for (const root of roots) {
     const invoice = generalBodySchema.parse(root.body).invoice!,
       plan = invoice.deferral!;
-    const cancellation = byDeferral.get(root.record.deferralId);
+    const ownCancellations = cancellations
+      .filter(({ record }) => record.deferralId === root.record.deferralId)
+      .map(({ record, body }) => ({
+        ...record,
+        treatment: generalBodySchema.parse(body).invoice!.deferralCredit!,
+      }));
+    const cancellation = ownCancellations.at(-1),
+      partial = ownCancellations.filter((row) => row.treatment.schemaVersion !== 1).at(-1);
     const remaining =
       toBani(plan.amount) -
       (allocated.get(root.record.deferralId) ?? 0n) -
-      (cancellation?.amountBani ?? 0n);
+      ownCancellations.reduce((sum, row) => sum + row.amountBani, 0n);
     if (invoice.direction === 'purchase') prepaid += remaining;
     else deferredRevenue += remaining;
     const schedule = effectiveDeferralSchedule(
       plan.schedule,
       schedules.get(root.record.deferralId)?.body,
-      cancellation
+      partial
         ? {
-            journalId: cancellation.journalId,
-            treatment: cancellation.treatment,
+            journalId: partial.journalId,
+            treatment: partial.treatment,
           }
         : undefined,
     );

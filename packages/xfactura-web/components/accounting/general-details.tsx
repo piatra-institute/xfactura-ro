@@ -34,6 +34,7 @@ export default function GeneralDetails({
     settlement = body.settlement,
     credit = invoice?.credit,
     cancellation = invoice?.deferralCredit,
+    priorCancellation = cancellation?.priorCancellation,
     scopeReduction = cancellation && cancellation.schemaVersion !== 1 ? cancellation : undefined,
     discount = invoice?.deferralDiscount,
     deferral = invoice?.deferral,
@@ -280,6 +281,31 @@ export default function GeneralDetails({
                 <dt>Sumă deja recunoscută</dt>
                 <dd>{formatMoney(cancellation.allocated)}</dd>
               </div>
+              {priorCancellation ? (
+                <>
+                  <div>
+                    <dt>Anulat anterior</dt>
+                    <dd>{formatMoney(priorCancellation.amount)}</dd>
+                  </div>
+                  <div>
+                    <dt>Corecția anterioară</dt>
+                    <dd>
+                      <button
+                        className="acc-secondary"
+                        onClick={() =>
+                          showJournal(
+                            priorCancellation.journalId,
+                            priorCancellation.financialYearId,
+                          )
+                        }
+                      >
+                        {state.invoiceLabels[priorCancellation.invoiceId]?.number ??
+                          'Factura de corecție'}
+                      </button>
+                    </dd>
+                  </div>
+                </>
+              ) : null}
               <div>
                 <dt>Sold amânat înainte</dt>
                 <dd>{formatMoney(cancellation.remainingBefore)}</dd>

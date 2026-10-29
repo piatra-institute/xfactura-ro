@@ -282,9 +282,7 @@ export async function interpretDeferralRelease(
   await checkDeferralSource(tx, actor, state);
   let benefitEvidence;
   if (state.treatment.schemaVersion === 3) {
-    const cancellationBody = state.cancellation
-      ? generalBodySchema.parse(state.cancellation.body)
-      : undefined;
+    const cancellationBodies = state.cancellations.map((row) => generalBodySchema.parse(row.body));
     requireCondition(
       input.benefitEvidence,
       'DEFERRAL_BENEFIT_EVIDENCE',
@@ -305,8 +303,7 @@ export async function interpretDeferralRelease(
         state.invoice.evidenceId,
         state.interpretation.treatmentEvidenceId,
         ...state.reschedules.map((row) => row.evidenceId),
-        cancellationBody?.evidenceId,
-        cancellationBody?.invoice?.treatmentEvidenceId,
+        ...cancellationBodies.flatMap((row) => [row.evidenceId, row.invoice!.treatmentEvidenceId]),
       ].includes(source.id) &&
         input.benefitEvidence.evidenceDate >=
           ('serviceTo' in allocation && typeof allocation.serviceTo === 'string'

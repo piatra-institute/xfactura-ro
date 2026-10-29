@@ -1,4 +1,4 @@
-import { and, asc, eq, exists, gte, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, eq, exists, gt, gte, inArray, isNull, notExists, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
 import type { Transaction } from './db';
 import {
@@ -71,7 +71,21 @@ export async function loadDeferrals(tx: Transaction, companyId: string, ids: str
     )
     .orderBy(asc(deferralReleases.month));
   const cancellations = await tx
-    .select({ record: deferralCancellations, date: journals.date, body: proposals.body })
+    .select({
+      record: {
+        companyId: deferralCancellations.companyId,
+        deferralId: deferralCancellations.deferralId,
+        creditInvoiceId: deferralCancellations.creditInvoiceId,
+        journalId: deferralCancellations.journalId,
+        fromMonth: deferralCancellations.fromMonth,
+        toMonth: deferralCancellations.toMonth,
+        amountBani: deferralCancellations.amountBani,
+        createdBy: deferralCancellations.createdBy,
+        createdAt: deferralCancellations.createdAt,
+      },
+      date: journals.date,
+      body: proposals.body,
+    })
     .from(deferralCancellations)
     .innerJoin(
       journals,
@@ -89,7 +103,8 @@ export async function loadDeferrals(tx: Transaction, companyId: string, ids: str
         eq(deferralCancellations.companyId, companyId),
         inArray(deferralCancellations.deferralId, ids),
       ),
-    );
+    )
+    .orderBy(asc(journals.number));
   const reschedules = await tx
     .select()
     .from(deferralReschedules)
@@ -111,15 +126,22 @@ export async function loadDeferrals(tx: Transaction, companyId: string, ids: str
       500,
     );
     const ownReleases = releases.filter((row) => row.record.deferralId === root.record.deferralId);
-    const cancellationRow = cancellations.find(
-      (row) => row.record.deferralId === root.record.deferralId,
-    );
-    const cancellation = cancellationRow
-      ? {
-          ...cancellationRow,
-          treatment: generalBodySchema.parse(cancellationRow.body).invoice!.deferralCredit!,
-        }
-      : undefined;
+    const ownCancellations = cancellations
+      .filter((row) => row.record.deferralId === root.record.deferralId)
+      .map((row, index) => ({
+        ...row,
+        record: { ...row.record, sequence: index + 1 },
+        treatment: generalBodySchema.parse(row.body).invoice!.deferralCredit!,
+      }));
+    const cancellation = ownCancellations.at(-1);
+    const cancellationSnapshot = (row: NonNullable<typeof cancellation>) => ({
+      invoiceId: row.record.creditInvoiceId,
+      journalId: row.record.journalId,
+      from: row.record.fromMonth,
+      to: row.record.toMonth,
+      amount: row.record.amountBani.toString(),
+      date: row.date,
+    });
     const ownReschedules = reschedules
       .filter((row) => row.deferralId === root.record.deferralId)
       .map((row) => ({ ...row, body: deferralRescheduleEffect.parse(row.body) }));
@@ -130,6 +152,7 @@ export async function loadDeferrals(tx: Transaction, companyId: string, ids: str
       treatment,
       releases: ownReleases,
       cancellation,
+      cancellations: ownCancellations,
       reschedules: ownReschedules,
       hash: sha256(
         canonical({
@@ -143,15 +166,11 @@ export async function loadDeferrals(tx: Transaction, companyId: string, ids: str
           })),
           ...(cancellation
             ? {
-                cancellation: {
-                  invoiceId: cancellation.record.creditInvoiceId,
-                  journalId: cancellation.record.journalId,
-                  from: cancellation.record.fromMonth,
-                  to: cancellation.record.toMonth,
-                  amount: cancellation.record.amountBani.toString(),
-                  date: cancellation.date,
-                },
+                cancellation: cancellationSnapshot(cancellation),
               }
+            : {}),
+          ...(ownCancellations.length > 1
+            ? { priorCancellations: ownCancellations.slice(0, -1).map(cancellationSnapshot) }
             : {}),
           ...(ownReschedules.length
             ? {
@@ -171,10 +190,9 @@ export async function loadDeferrals(tx: Transaction, companyId: string, ids: str
 export type DeferralState = Awaited<ReturnType<typeof loadDeferrals>>[number];
 export function deferralSchedule(state: DeferralState, date?: string) {
   const latest = state.reschedules.filter((row) => !date || row.date <= date).at(-1);
-  const cancellation =
-    state.cancellation && (!date || state.cancellation.date <= date)
-      ? state.cancellation
-      : undefined;
+  const cancellation = state.cancellations
+    .filter((row) => (!date || row.date <= date) && row.treatment.schemaVersion !== 1)
+    .at(-1);
   return effectiveDeferralSchedule(
     state.treatment.schedule,
     latest?.body,
@@ -191,6 +209,7 @@ export function rescheduleContext(state: DeferralState) {
   return latest ? { rescheduleId: latest.id, rescheduleVersion: latest.sequence } : {};
 }
 export function rescheduleReviewSuperseded(tx: Transaction) {
+  const newerCancellation = alias(deferralCancellations, 'newer_calendar_cancellation');
   return and(
     eq(actionReviews.operation, 'deferrals.reschedule'),
     isNull(actionReviews.executedAt),
@@ -229,7 +248,18 @@ export function rescheduleReviewSuperseded(tx: Transaction) {
             and(
               eq(deferralCancellations.companyId, actionReviews.companyId),
               sql`${deferralCancellations.deferralId}=json_extract(${actionReviews.effect},'$.deferralId')`,
-              sql`json_extract(${proposals.body},'$.invoice.deferralCredit.schemaVersion') in (2,3)`,
+              notExists(
+                tx
+                  .select({ id: newerCancellation.journalId })
+                  .from(newerCancellation)
+                  .where(
+                    and(
+                      eq(newerCancellation.companyId, deferralCancellations.companyId),
+                      eq(newerCancellation.deferralId, deferralCancellations.deferralId),
+                      gt(newerCancellation.sequence, deferralCancellations.sequence),
+                    ),
+                  ),
+              ),
               sql`json_extract(${actionReviews.effect},'$.scopeCredit.journalId') is not ${deferralCancellations.journalId}`,
             ),
           ),
@@ -240,9 +270,9 @@ export function rescheduleReviewSuperseded(tx: Transaction) {
 export function deferralView(state: DeferralState, date: string) {
   const released = state.releases.filter((row) => row.date <= date),
     byMonth = new Map(released.map((row) => [row.record.month, row.record]));
-  const cancellation =
-      state.cancellation && state.cancellation.date <= date ? state.cancellation : undefined,
-    cancelled = cancellation?.record.amountBani ?? 0n;
+  const cancellations = state.cancellations.filter((row) => row.date <= date),
+    cancellation = cancellations.at(-1),
+    cancelled = cancellations.reduce((sum, row) => sum + row.record.amountBani, 0n);
   const fullyCancelled = cancellation && cancellation.treatment.schemaVersion === 1;
   const allocated = released.reduce((sum, row) => sum + row.record.amountBani, 0n),
     remaining = toBani(state.treatment.amount) - allocated - cancelled;
@@ -327,9 +357,27 @@ export function deferralView(state: DeferralState, date: string) {
           date: cancellation.date,
           from: cancellation.record.fromMonth,
           to: cancellation.record.toMonth,
-          amount: fromBani(cancelled),
+          amount: fromBani(cancellation.record.amountBani),
         }
       : null,
+    ...(cancellations.length > 1
+      ? {
+          cancellations: cancellations.map((row) => ({
+            creditInvoiceId: row.record.creditInvoiceId,
+            journalId: row.record.journalId,
+            financialYearId: generalBodySchema.parse(row.body).financialYearId,
+            date: row.date,
+            from: row.record.fromMonth,
+            to: row.record.toMonth,
+            amount: fromBani(row.record.amountBani),
+            sequence: row.record.sequence,
+            kind:
+              row.treatment.schemaVersion === 1
+                ? ('cancellation' as const)
+                : ('scope_reduction' as const),
+          })),
+        }
+      : {}),
     nextDueMonth:
       schedule.find((row) => row.date <= date && row.status === 'scheduled')?.month ?? null,
     schedule,
@@ -341,6 +389,7 @@ export function deferralView(state: DeferralState, date: string) {
 export function deferralReleaseSuperseded(tx: Transaction) {
   const creditJournal = alias(journals, 'deferral_credit_journal');
   const creditProposal = alias(proposals, 'deferral_credit_proposal');
+  const newerCancellation = alias(deferralCancellations, 'newer_release_cancellation');
   const cancelled = exists(
     tx
       .select({ id: deferralCancellations.deferralId })
@@ -363,8 +412,19 @@ export function deferralReleaseSuperseded(tx: Transaction) {
         and(
           eq(deferralCancellations.companyId, proposals.companyId),
           sql`json_extract(${proposals.body}, '$.deferralRelease.deferralId')=${deferralCancellations.deferralId}`,
-          sql`json_extract(${proposals.body}, '$.deferralRelease.month') between ${deferralCancellations.fromMonth} and ${deferralCancellations.toMonth}`,
-          sql`(json_extract(${creditProposal.body}, '$.invoice.deferralCredit.schemaVersion') not in (2,3) or json_extract(${proposals.body}, '$.deferralRelease.cancellationJournalId') is not ${deferralCancellations.journalId})`,
+          notExists(
+            tx
+              .select({ id: newerCancellation.journalId })
+              .from(newerCancellation)
+              .where(
+                and(
+                  eq(newerCancellation.companyId, deferralCancellations.companyId),
+                  eq(newerCancellation.deferralId, deferralCancellations.deferralId),
+                  gt(newerCancellation.sequence, deferralCancellations.sequence),
+                ),
+              ),
+          ),
+          sql`((json_extract(${creditProposal.body}, '$.invoice.deferralCredit.schemaVersion')=1 and json_extract(${proposals.body}, '$.deferralRelease.month') between ${deferralCancellations.fromMonth} and ${deferralCancellations.toMonth}) or json_extract(${proposals.body}, '$.deferralRelease.cancellationJournalId') is not ${deferralCancellations.journalId})`,
         ),
       ),
   );

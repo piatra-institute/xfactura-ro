@@ -79,9 +79,8 @@ export async function previewDeferralReschedule(tx: Transaction, actor: Actor, i
     'DEFERRAL_RESCHEDULE_EVIDENCE',
     'Păstrați separat noul acord privind perioada serviciilor.',
   );
-  const cancellationBody = state.cancellation
-    ? generalBodySchema.parse(state.cancellation.body)
-    : undefined;
+  const cancellationBodies = state.cancellations.map((row) => generalBodySchema.parse(row.body));
+  const cancellationBody = cancellationBodies.at(-1);
   if (state.cancellation) {
     const [priorConfirmation] = await tx
       .select({ id: journals.id })
@@ -102,9 +101,9 @@ export async function previewDeferralReschedule(tx: Transaction, actor: Actor, i
       )
       .limit(1);
     requireCondition(
-      ![cancellationBody?.evidenceId, cancellationBody?.invoice?.treatmentEvidenceId].includes(
-        body.evidenceId,
-      ) && !priorConfirmation,
+      !cancellationBodies
+        .flatMap((row) => [row.evidenceId, row.invoice!.treatmentEvidenceId])
+        .includes(body.evidenceId) && !priorConfirmation,
       'DEFERRAL_RESCHEDULE_EVIDENCE',
       'Păstrați noul acord separat de reducere și de confirmările serviciilor.',
     );
@@ -205,6 +204,16 @@ export async function previewDeferralReschedule(tx: Transaction, actor: Actor, i
             invoiceId: state.cancellation.record.creditInvoiceId,
             financialYearId: cancellationBody.financialYearId,
             amount: fromBani(state.cancellation.record.amountBani),
+            ...(state.cancellations.length > 1
+              ? {
+                  priorAmount: fromBani(
+                    state.cancellations
+                      .slice(0, -1)
+                      .reduce((sum, row) => sum + row.record.amountBani, 0n),
+                  ),
+                  priorCount: state.cancellations.length - 1,
+                }
+              : {}),
           },
         }
       : {}),

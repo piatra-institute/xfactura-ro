@@ -335,6 +335,21 @@ export const deferralPositionOutput = z.object({
       amount: decimalString,
     })
     .nullable(),
+  cancellations: z
+    .array(
+      z.object({
+        creditInvoiceId: idSchema,
+        journalId: idSchema,
+        financialYearId: idSchema,
+        date: dateSchema,
+        from: dateSchema,
+        to: dateSchema,
+        amount: decimalString,
+        sequence: z.number().int().positive(),
+        kind: z.enum(['cancellation', 'scope_reduction']),
+      }),
+    )
+    .optional(),
   nextDueMonth: dateSchema.nullable(),
   schedule: z
     .array(

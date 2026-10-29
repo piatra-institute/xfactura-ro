@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import type { Overview } from 'xfactura-api/accounting-types';
 import type { DeferralRescheduleEffect } from 'xfactura-api/accounting';
+import { Amount } from 'xfactura-api/accounting';
 import { command, companyPath, field, formatMoney } from './api';
 import type { Run } from './forms';
 
@@ -70,7 +71,11 @@ export function RescheduleDetails({ state, effect, showJournal }: Props) {
         {scopeCredit ? (
           <div>
             <dt>Reducere înregistrată</dt>
-            <dd>{formatMoney(scopeCredit.amount)}</dd>
+            <dd>
+              {formatMoney(
+                new Amount(scopeCredit.amount).plus(scopeCredit.priorAmount ?? '0.00').toFixed(2),
+              )}
+            </dd>
           </div>
         ) : null}
         {effect.method === 'actual_calendar_days' ? (

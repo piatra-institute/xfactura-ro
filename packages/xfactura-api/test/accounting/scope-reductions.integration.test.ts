@@ -690,9 +690,11 @@ describe('credit-backed future-service scope reductions', () => {
       reason: 'The later extension is not agreed; preserve the current reduced calendar',
     });
     const again = await scopeCredit(f, root);
-    await expect(
-      service.deferrals.proposeScopeReduction(f.actor, key(), again.input),
-    ).rejects.toMatchObject({ code: 'DEFERRAL_ALREADY_CANCELLED' });
+    const further = await service.deferrals.proposeScopeReduction(f.actor, key(), again.input);
+    expect(scopePlan(generalBodySchema.parse(further.body)).priorCancellation).toMatchObject({
+      count: 1,
+      amount: '20.00',
+    });
     for (const month of ['2026-02-01', '2026-03-01', '2026-04-01']) await release(f, root, month);
     expect(
       await service.deferrals.reconcile(f.actor, {

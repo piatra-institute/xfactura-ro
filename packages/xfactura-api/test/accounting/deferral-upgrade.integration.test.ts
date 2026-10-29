@@ -39,6 +39,7 @@ test.each([
   { baseline: 38 },
   { baseline: 39 },
   { baseline: 40 },
+  { baseline: 41 },
 ])(
   'populated 00$baseline subscription books and exact approvals survive later migrations',
   async ({ baseline }) => {
@@ -157,7 +158,13 @@ test.each([
         rootEntry = await post(root),
         interpretation = generalBodySchema.parse(root.body).invoice!;
       // Serialize the old contract against the old schema; the new cancellation table does not exist yet.
-      async function oldRelease(month: string, date: string, shouldPost: boolean) {
+      let firstScope: { id: string; number: number } | undefined;
+      async function oldRelease(
+        month: string,
+        date: string,
+        shouldPost: boolean,
+        amount = '33.33',
+      ) {
         const confirmation =
             baseline === 39
               ? await retain(
@@ -173,15 +180,15 @@ test.each([
             description: `Cheltuială aferentă perioadei · PRE-UPGRADE · ${month.slice(0, 7)}`,
             sourceReference: `deferral-release:${root.id}:${month}`,
             lines: [
-              { account: '628', debit: '33.33', credit: '0.00' },
-              { account: '471', debit: '0.00', credit: '33.33' },
+              { account: '628', debit: amount, credit: '0.00' },
+              { account: '471', debit: '0.00', credit: amount },
             ],
             deferralRelease: {
               schemaVersion: 1,
               deferralId: root.id,
               month,
               date,
-              amount: '33.33',
+              amount,
               sourceInvoiceId: invoice.id,
               sourceJournalId: rootEntry.id,
               sourceFinancialYearId: year.id,
@@ -193,6 +200,7 @@ test.each([
               ruleId: interpretation.ruleId,
               ruleHash: interpretation.ruleHash,
               registrationIds: interpretation.registrationIds,
+              ...(firstScope ? { cancellationJournalId: firstScope.id } : {}),
               ...(confirmation
                 ? {
                     benefitEvidence: {
@@ -250,7 +258,47 @@ test.each([
         return proposal;
       }
       await oldRelease('2026-01-01', '2026-01-31', true);
-      const pending = await oldRelease('2026-02-01', '2026-02-28', baseline === 40);
+      if (baseline === 41) {
+        const agreement = await retain(
+            'first-scope.txt',
+            'Separate first partial cancellation agreed before the upgrade',
+          ),
+          xml = await retain(
+            'first-credit.xml',
+            invoiceXml({
+              credit: true,
+              originalNumber: 'PRE-UPGRADE',
+              number: 'FIRST-SCOPE',
+              date: '2026-02-01',
+              net: '20.00',
+              tax: '4.20',
+              gross: '24.20',
+            }),
+          ),
+          credit = await service.invoices.import(actor, key(), { evidenceId: xml.id });
+        firstScope = await post(
+          await service.deferrals.proposeScopeReduction(actor, key(), {
+            financialYearId: year.id,
+            invoiceId: credit.id,
+            originalInvoiceId: invoice.id,
+            recognitionDate: '2026-02-01',
+            decisionDate: '2026-02-01',
+            treatmentEvidenceId: agreement.id,
+            kind: 'cancellation',
+            periodBasis: 'current_period_event',
+            cancelFrom: '2026-02-01',
+            changeBasis: 'cancelled_future_services',
+            remainingServices: 'uniform',
+            reason: 'Cancel only unprovided services before the schema upgrade',
+          }),
+        );
+      }
+      const pending = await oldRelease(
+        '2026-02-01',
+        '2026-02-28',
+        baseline === 40,
+        baseline === 41 ? '23.33' : '33.33',
+      );
       let pendingCalendar;
       if (baseline === 40) {
         const agreement = await retain(
@@ -294,10 +342,31 @@ test.each([
         preserved = new Map<string, unknown>();
       for (const [name, table] of Object.entries(tables))
         preserved.set(name, await db.orm.select().from(table));
+      const oldCancellations =
+        baseline === 41
+          ? (
+              await db.client.execute(
+                'SELECT company_id,deferral_id,credit_invoice_id,journal_id,from_month,to_month,amount_bani,created_by,created_at FROM acc_deferral_cancellations',
+              )
+            ).rows
+          : undefined;
       await migrate(db);
       await migrate(db);
       for (const [name, table] of Object.entries(tables))
         expect(preserved.get(name)).toEqual(await db.orm.select().from(table));
+      if (oldCancellations) {
+        expect(
+          (
+            await db.client.execute(
+              'SELECT company_id,deferral_id,credit_invoice_id,journal_id,from_month,to_month,amount_bani,created_by,created_at FROM acc_deferral_cancellations',
+            )
+          ).rows,
+        ).toEqual(oldCancellations);
+        expect(
+          (await db.client.execute('SELECT sequence FROM acc_deferral_cancellations')).rows[0]
+            .sequence,
+        ).toBe(1n);
+      }
       const commandKey = key(),
         input = { id: pending.id, version: pending.version, hash: pending.hash },
         entry = await service.ledger.post(actor, commandKey, input);
@@ -317,9 +386,9 @@ test.each([
       }
       expect(await service.deferrals.get(actor, { id: root.id, date: '2026-02-28' })).toMatchObject(
         {
-          allocated: '66.66',
-          cancelled: '0.00',
-          remaining: '33.34',
+          allocated: baseline === 41 ? '56.66' : '66.66',
+          cancelled: baseline === 41 ? '20.00' : '0.00',
+          remaining: baseline === 41 ? '23.34' : '33.34',
         },
       );
       const agreement = await retain(
@@ -333,9 +402,9 @@ test.each([
             originalNumber: 'PRE-UPGRADE',
             number: 'POST-UPGRADE-CREDIT',
             date: '2026-03-01',
-            net: '33.34',
-            tax: '7.00',
-            gross: '40.34',
+            net: baseline === 41 ? '23.34' : '33.34',
+            tax: baseline === 41 ? '4.90' : '7.00',
+            gross: baseline === 41 ? '28.24' : '40.34',
           }),
         ),
         credit = await service.invoices.import(actor, key(), { evidenceId: creditXml.id });
@@ -355,8 +424,8 @@ test.each([
       );
       expect(await service.deferrals.get(actor, { id: root.id, date: '2026-03-31' })).toMatchObject(
         {
-          allocated: '66.66',
-          cancelled: '33.34',
+          allocated: baseline === 41 ? '56.66' : '66.66',
+          cancelled: baseline === 41 ? '43.34' : '33.34',
           remaining: '0.00',
         },
       );
