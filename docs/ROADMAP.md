@@ -4,9 +4,11 @@
 
 Keep the public invoicer available. Agents perform routine work through the same typed command API used by the application. The UI primarily verifies evidence, exact effects, decisions and results; manual accounting remains available without a model. Every domain feature needs an API/tool capability and a corresponding review projection.
 
-General-ledger primitives, bounded domestic service invoices/credits including commercial allowances and service price charges in the original invoice, purchase accruals, explicitly classified sales-estimate changes, completed unbilled sales and later-invoice matching, native positions, RON bank/cash settlements and working VAT registers are implemented. Uniform services retain equal-month or actual-calendar-day 471/472 schedules, including partial first/last months, full/partial future-service cancellation and reviewed prospective unchanged-price calendar amendments that preserve the original method and recognized prefix; separately invoiced additional future services retain independent value/VAT/schedules with immutable parent links; explicit nonuniform monthly benefits now retain exact amounts/descriptions and separate performed-service evidence for each positive release; their future-only reviews preserve recognized rows and total value; credit-backed partial cancellation requires explicit smaller amounts with no month increased; successive credits and a final cancellation use the current reduced plan and retain every earlier financial event; later timing reviews bind the cumulative credit history and redistribute only the reduced future balance; post-invoice commercial discounts use separate 609/709 entries without changing the schedule; advances retain payments, invoices, final offsets and full/partial bank refunds through 4092/419, with dated remaining balances, explicit splitting of one payment across invoices and refunds limited to the unbilled balance. Retained e-Factura ZIPs preserve original/member bytes without claiming ANAF acceptance. CSV, MT940 and camt.053 now feed the same reconciliation flow with original provenance, booking/value dates and cross-format movement identity. Gap-free daily statement chains support month close. Delivery remains within step 2; retroactive price corrections, uncompleted milestones and combined timing/scope redistributions, mid-month cancellation, cross-period VAT remeasurement and cross-year estimate/error decisions still need distinct coverage before full service-workflow completion. Step 3 extends VAT and FX. These mechanics do not establish a complete Romanian accounting profile. [IMPLEMENTATION.md](IMPLEMENTATION.md) owns executable proof; [CONFORMANCE.md](CONFORMANCE.md) profiles remain targets until independent gates pass.
+This file owns planned delivery and acceptance gates. [IMPLEMENTATION.md](IMPLEMENTATION.md) owns the current capability inventory and recorded proof; [ACCOUNTING_ENGINE.md](ACCOUNTING_ENGINE.md) owns exact implemented behavior. Proposed outcomes in [FEATURE_VISION.md](FEATURE_VISION.md) do not establish released coverage.
 
-Step 2 also accepts simple negative type-380 storno sources alongside positive 381 credits. Signed source meaning, original number/date and VAT are retained through API/MCP and exact human review. This is source-format coverage for supported current events; mixed-sign corrections, positive reversal of storno and historical/annual error treatment remain separate. The sequence below is unchanged.
+The product completion target is one company's complete applicable accounting cycle: reviewed opening books and tax history → economic facts → accounting/fiscal treatment → reconciled books and subledgers → calculated tax positions → monthly/quarterly/annual outputs → authorized external fulfillment and receipt tracking. A domestic-services SRL must be able to complete a full year on its selected VAT and income-tax branch. Broader payroll, stock and production claims require their own complete facets and interactions.
+
+Do not infer completion from invoice variants, migrations, test counts, arbitrary balanced journals or the existence of API/MCP. A new increment must close a named coverage gap or a demonstrated correctness/security defect. The nine steps are dependency order, not equally sized percentage points.
 
 | Order | Deliverable and exit condition |
 |---|---|
@@ -20,7 +22,7 @@ Step 2 also accepts simple negative type-380 storno sources alongside positive 3
 | 8 | Reporting and official packages: required journals/ledger/inventory/trial balances, applicable D100/D101/D112/D300/D301/D390/D394/D406 and conditional reports; annual statements and supporting documents. Pin schemas and official validator/PDF tools, reconcile content, export an exact signing/submission package and track imported receipts. |
 | 9 | Replacement proof: MIG-01 continuity and responsibility, independent fiscal review, quarterly/year-end reference outputs, real-company parallel closes, complete obligation closure and restore/replay. Approve only the exact covered company, interval and version combination. |
 
-Run steps in this order, carrying forward existing evidence, API/MCP access, exact approvals and tests. Within a step, deliver bounded vertical workflows with explicit exclusions. Do not label a generic journal capability as complete support for payroll, stock, VAT or a declaration.
+Run steps in this order, carrying forward existing evidence, API/MCP access, exact approvals and tests. Within a step, deliver bounded vertical workflows with explicit exclusions. Do not label a generic journal capability as complete support for payroll, stock, VAT or a declaration. Step 2 needs a finite supported-month exit fixture and an explicit register of remaining scenarios; it must not expand indefinitely through unrelated document variants while later modules remain absent.
 
 Initial verification covers 2025 and 2026. Historical opening balances and tax vintages need retained authority; later annual formats remain pending until published and independently checked. Both VAT and non-VAT, micro/profit taxation, payroll and manufacturing remain committed scope, not unspecified future product ideas.
 
@@ -28,7 +30,23 @@ The existing capability API and scoped-credential MCP are infrastructure already
 
 Filing fulfillment initially uses external signing/submission of the validated official package and receipt import. Reserve explicit authorization for exact artifacts and keep prepared/validated/exported/submitted/accepted states distinct. Direct submission automation is not a prerequisite.
 
-## First coding ticket: general accounting foundation
+## Definition of a complete company cycle
+
+For an exact company, claimed interval and profile combination, demonstrate all of the following:
+
+1. Company identity, financial/fiscal years, dated registrations, accounting policies and relevant business facts are evidenced. Unknown facts have an owner and resolution path; absence of records does not imply non-applicability.
+2. Opening books, material open items and fiscal history reconcile, including carried losses/credits/bases and responsibility for obligations spanning a migration cutover.
+3. All in-scope economic facts have supported treatments and source lineage. Bank/cash, receivables/payables and every relevant accrual, asset, payroll or stock control reconcile without unexplained differences.
+4. Accounting result and each applicable tax position are calculated and independently reconciled. Amounts paid, amounts declared, tax credits and outstanding liabilities remain distinct.
+5. Applicable statutory records, periodic declarations, annual statements and supporting documents can be reproduced from approved snapshots, using the correct period-specific formats and official validation tools.
+6. Required preparers, reviewers, management signers and authorized submitters are identified. Exact packages can be handed off for signing/submission, and pending, rejected, accepted or uncertain outcomes are retained with the actual receipts. Direct submission automation is optional.
+7. Independent fiscal expectations, interaction/mutation cases, real-company parallel closes and annual comparisons support the claim. Export and fresh restore preserve every source, approved version, carry-forward and unresolved external attempt.
+
+Even a company without employees, assets or stock must pass its applicable annual tax/reporting and inventory-verification requirements. Those exclusions do not turn a monthly bookkeeping fixture into a complete accounting system. [CONFORMANCE.md](CONFORMANCE.md) owns the formal replacement gate and [REGULATORY_BASELINE.md](REGULATORY_BASELINE.md) the dated planning findings.
+
+## Foundation acceptance contract
+
+These requirements define the foundation rather than a new request to rebuild working primitives. Use the current evidence in [IMPLEMENTATION.md](IMPLEMENTATION.md) and complete its remaining review/applicability gaps.
 
 1. Source the general chart and represent postable accounts, groups and company analytical accounts; retain source/hash/version and avoid unsupported claims of a reviewed current consolidation.
 2. Separate financial/fiscal years from company identity. Require an explicit report year when several exist; never sum repeated annual opening balances.
@@ -38,7 +56,7 @@ Filing fulfillment initially uses external signing/submission of the validated o
 6. Expose configuration, proposals, exact posting effects and year reports through the shared API/MCP. Reuse the existing review screen.
 7. Add effective-dated policy/rule/obligation records and move to the document-to-ledger workflow. Independent fiscal review remains required before any conformance claim.
 
-## Ticket A1: keep the first slice small
+## A1 regression fixture
 
 1. Create a domestic non-VAT profit-tax services SRL. Import approved opening entries: debit bank 1,000.00 RON, credit paid-in capital 1,000.00 RON.
 2. Retain a synthetic domestic supplier invoice for 100.00 RON with no VAT and its source metadata/hash.
@@ -48,7 +66,9 @@ Filing fulfillment initially uses external signing/submission of the validated o
 6. Reimport/retry without adding entries; restart and reproduce results. A second company/user cannot read or mutate any record.
 7. Run the same domain commands from API and UI. No AI, payment collection, live ANAF authorization or global plugin framework is needed.
 
-## Ticket A1b: deliberately difficult second fixture
+## A1b full periodic fixture
+
+This fixture spans the ledger, VAT and official-reporting steps. Passing its posting/reconciliation subset does not complete its declaration, source-authority or receipt requirements; [IMPLEMENTATION.md](IMPLEMENTATION.md) records the actual subset proved. The full fixture remains an integration exit condition as those modules arrive.
 
 Use one normal-VAT RON company with an approved source/configuration snapshot and a fixed period-specific oracle:
 
@@ -66,30 +86,76 @@ The oracle specifies complete amounts, source/rule versions, statement/control b
 
 Recruit an accounting partner alongside the accounting work. Obtain consented opening balances, tax-history registers, representative statements, source documents and reference outputs. Publish only synthetic or explicitly cleared anonymized cases.
 
-By step 9, the accountant portfolio shows companies they may access, reporting periods, freshness, missing evidence, bank differences, blocked closes and pending/rejected filings. Every count drills into actual records; revoked membership removes access immediately. Full firm billing/staff orchestration is not required.
+Deliver a minimal accountant portfolio with the first real-company parallel pilot. Show only available company/period freshness, missing evidence, bank differences and blocked work; add pending/rejected filings when fulfillment exists. Every count drills into actual authorized records, and revoked membership removes access immediately. Extend the same view for step 9 replacement proof. Full firm billing/staff orchestration is not required.
 
 Preserve the migration process in [ARCHITECTURE.md](ARCHITECTURE.md): reviewed opening position, separate tax-history evidence, control reconciliation, retained originals and explicit activation. Do not infer historical books from XML or require a legacy paid-AI conversion to migrate accounting.
 
-## Priority implementation tickets
+## Module backlog
+
+This is the local delivery backlog. Work-item IDs identify required outcomes, not implemented endpoints or external tracker issues. A module's required accounting/fiscal operations remain deterministic and available without AI.
 
 | Priority / ticket | Required proof | Delivery |
 |---|---|---|
-| P0 GL-01 | General chart/years/openings/proposals, preserved upgrade and VAT/non-VAT 2025/2026 posting fixtures. | Step 1 |
-| P0 DOC-01 | Incoming/outgoing XML and settlements reconcile with evidence and open items; unsupported treatments block interpretation. | Step 2 |
-| P0 VAT-01 | Normal/special/cash VAT, deduction, corrections and dated regime/FX interactions. | Steps 2–3 |
+| P0 GL-01 | Retain working accounts/years/general postings; finish current chart consolidation and clause-to-control review. Generic journal access must not advertise automatic module coverage. | Step 1 |
+| P0 CFG-02 | Evidenced fiscal vector, reporting periodicity, relevant activities/locations, professional authority and historical registration correction/supersession. A corrected history identifies affected interpretations and approvals. | Steps 1–3 |
+| P0 DOC-01 | A complete supported domestic RON service month for VAT/non-VAT purchase/sale: sources, account classification, positions, partial/grouped payments, fees/refunds and close controls reconcile. Allocation to supported expense/revenue accounts is explicit; importing all purchases must not classify them all as 628 services. | Step 2 |
+| P0 DOC-08 | Remaining document/period decisions: source-linked price corrections and correction formats, positive reversal of storno, broader line/account classification, uncompleted milestones and mid-month service changes. Scope each treatment; preserve unsupported facts and original sources. Historical tax/annual effects depend on the later fiscal/correction modules. | Steps 2/3/7 |
+| P0 VAT-01 | Normal/special/cash VAT, reduced/exempt/out-of-scope distinctions, full/partial/no recovery, mixed use/pro-rata, advances, corrections and effective-dated registration transitions. Independent fixtures prove eligibility, tax point, deduction and register effects. | Step 3 |
+| P0 FX-01 | Original-currency amounts, source/rate/date provenance, distinct accounting/VAT conversion, partial settlement differences, period-end revaluation and reversal/correction. Ledger, positions and reports reconcile at exact declared precision. | Step 3 |
+| P0 INTL-01 | Domestic/foreign service and goods branches, EU/special identification, reverse-charge cases, imports/exports and applicable reporting mappings. A foreign SaaS invoice must trigger the correct supported branch or an explicit gap. Marketplace/OSS/IOSS or other specialized regimes require separately reviewed extensions before the corresponding company is covered. | Step 3 |
+| P0 ASSET-01 | Asset acquisition/capitalization, accounting and fiscal bases, useful lives/methods, depreciation, improvements, impairment/disposal and itemized control reconciliation. Prove reporting inputs without collapsing fiscal depreciation into book value. | Step 4 |
+| P0 FINANCE-01 | Loans, interest, financing fees, leasing classification/schedules, repayments and lender/counterparty controls under reviewed policies. Separate principal, interest, cash settlement and tax treatment. | Step 4 |
+| P0 OWNER-01 | Capital/equity movements, shareholder loans, reviewed distributions/dividends, withholding, payment and reporting dependencies. Preserve period and recipient status and prevent distributions being treated as ordinary service costs. | Steps 4/7/8 |
+| P0 PAY-01 | Native employee/contract history, gross-to-net, employer costs, leave/absence, benefits, corrections, liabilities/payments and payslips. Independently reconcile calculations to postings and D112 content; employee data has separate access/egress controls. | Steps 5/8 |
+| P0 STOCK-01 | Item/unit/warehouse records, receipts/issues/transfers/returns, supported valuation policies, stock counts/differences, write-downs and cost of goods sold. Quantities, valuation layers and GL controls reconcile; browser-local invoicer inventory is not this subledger. | Step 6 |
+| P0 PROD-01 | Versioned BOMs/work orders, material/labor/overhead consumption, yield/scrap, finished goods, work in progress and cost variances. Prove quantity/cost lineage to stock, payroll/purchases and the general ledger. | Step 6 |
+| P0 TAX-MICRO-01 | Effective-dated microenterprise eligibility, tax base/exclusions, periods, changes of regime, liabilities/payments and return mappings. Use reviewed rules and evidence; revenue alone cannot select the regime. | Step 7 |
+| P0 TAX-PROFIT-01 | Accounting-to-tax bridge, nondeductible/limited expenses, fiscal depreciation, loss vintages/utilization/expiry, credits/reliefs, quarterly/annual calculations and corrected returns. Prove the prescribed fiscal register and loss/credit/payment continuity separately. | Step 7 |
+| P0 CLOSE-01 | Year-end accruals/deferrals, provisions/impairments, relevant annual inventory evidence, supported prior-period error/materiality decisions, result closing and controlled opening roll-forward. Reconcile every carried subledger and fiscal position across years. | Step 7 |
+| P0 REPORT-01 | Complete period-specific Registrul-jurnal, Registrul-inventar, Cartea mare, statutory trial balance, balance sheet/P&L and applicable annual statements/disclosures/supporting documents. Generated content reconciles to approved books and tax positions. | Steps 7–8 |
 | P0 CONF-01 | Obligation closure; EU-service, VAT-transition, non-VAT D406 and unknown facts fail closed. | From step 1; full gate by step 9 |
-| P0 FISC-01 | Effective-dated legal/calendar/register authority and independently reviewed expected outputs. | Steps 1/7/8 |
-| P0 FISC-02 | Distinct adjustments, credits, losses and payments with immutable correction lineage. | Steps 4/7 |
+| P0 FISC-01 | Effective-dated legal/calendar/register authority, official source snapshots, statutory turnover bases, reporting periods/deadlines and independently approved expected results. Changes produce impact reports and signed fiscal-package releases. | Steps 1/3/7/8 |
+| P0 FISC-02 | Calculated fiscal interpretations and distinct adjustments, bases, credits, loss vintages and actual tax payments with immutable correction lineage. Reference-only records cannot satisfy this ticket. | Steps 4/7 |
 | P0 LEDGER-01 | Accrual/later-invoice/credit-note links; FP-01/02 avoid cross-period duplicate recognition. | Step 2 |
-| P0 PAY-01 | Native reviewed payroll and D112 content/validator proof. | Steps 5/8 |
-| P0 STOCK-01 | Native inventory and production subledgers reconcile quantities, valuation and GL. | Step 6 |
 | P0 TEST-01 | Independent legal/expected oracles and deliberate fiscal/period mutation failures. | Every step |
-| P0 FILING-01 | Exact official packages, external signing/submission handoff and imported pending/rejected/accepted receipts. | Step 8 |
+| P0 FILING-01 | Actual official artifact generators, versioned field mappings, pinned validators, reconciled full content, required signatures/supporting files, exact external handoff and imported pending/rejected/accepted receipts. Preparation, validation, authorization, submission and acceptance are separate states. | Step 8 |
+| P0 CONDITIONAL-01 | A reviewed applicability decision and complete path for each other triggering obligation, including relevant withholding/registration reports and, for later profiles, Intrastat, e-Transport, e-TVA comparison or employment-registry interfaces. Retain explicit exclusions until their independent source/format/fulfillment proof exists. | Affected module/step 8 |
 | P0 MIG-01 | Signed handover, current-year/tax continuity and exact controls; missing history blocks activation. | Step 9 |
-| P1 UX-01 | Accountant exception portfolio drills into authorized records and actual unresolved work. | Step 9 |
+| P0 PILOT-01 | Consented real-company parallel monthly closes, reviewed quarterly/year-end outputs and exact-company replacement decision. Record failures, exceptions and unresolved historical/external responsibilities. | Parallel pilot through step 9 |
+| P1 UX-01 | Minimal accountant exception portfolio with real authorized drill-down; owner views distinguish money, accounting result, estimated/approved taxes and fulfillment. | First real-company pilot; extend through step 9 |
+| P1 MGMT-01 | Reconciled P&L, balance-sheet and cash/aging views; optional project/customer/product dimensions and documented allocation policies can extend them without changing statutory books. | Reporting foundation in step 8; dimensions by relevant module |
 | P1 CONF-02 | Independently prove combined VAT/currency/time/EU/asset/payroll/stock regimes. | Each affected step |
 
-These are planned work items, not created external tracker issues. [FISCAL_FIXTURES.md](FISCAL_FIXTURES.md) owns the candidate cases, [MIGRATION.md](MIGRATION.md) the handover proof, and [REGULATORY_BASELINE.md](REGULATORY_BASELINE.md) the dated authority.
+Each row is refined into reviewable vertical tickets when its step starts. Keep its status/evidence in [IMPLEMENTATION.md](IMPLEMENTATION.md), including partially completed mechanics. [FISCAL_FIXTURES.md](FISCAL_FIXTURES.md) owns the candidate cases, [MIGRATION.md](MIGRATION.md) the handover proof, and [REGULATORY_BASELINE.md](REGULATORY_BASELINE.md) the dated authority.
+
+## Official reporting delivery
+
+The form list is a planning catalogue, not a statement that every company files every form. The applicability engine selects the actual company/period set; conditional obligations cannot be omitted because a company is below the commercial revenue target.
+
+| Output family | Required inputs and completion proof |
+|---|---|
+| D100 / D101 | Approved applicable tax positions, payments, adjustments and fiscal history; independently calculated expected amounts, annual/rectifying behavior and exact official validation. |
+| D300 / D301 / D390 / D394 | Supported registration, domestic/foreign transaction and timing branches; purchase/sale VAT registers, deduction/reverse-charge/correction mappings and source-to-field reconciliation. |
+| D406 SAF-T | Correct covered master records, accounting transactions, document/payment and applicable asset/stock data; official schema/content checks and control-total reconciliation. Passing XML syntax alone is insufficient. |
+| D112 | Reviewed payroll/recipient history, effective rules and corrected periods; reconciliation to payslips, liabilities and GL, followed by official artifact validation. |
+| D205 / D207 / D107 / D700 and other triggered reports | Evidenced recipient/event/registration facts, actual applicability and period-specific mappings. Do not derive them solely from an account balance or assume non-applicability. |
+| Annual statements and accompanying documents | Correct accounting category, approved closing snapshot, year-specific forms and required disclosures, inventory/management approvals and signing/supporting-file procedures. A previous year's package is not the specification for an unpublished year. |
+
+For every applicable output: pin the legal/form version → establish independent expected content → implement deterministic mapping → reconcile source/ledger/tax totals → run official validators → review/authorize exact bytes → export a signing/submission package → import actual receipts → retain corrections and unresolved attempts. A direct connector can be added later without changing that contract.
+
+## Turning the feature vision into releases
+
+[FEATURE_VISION.md](FEATURE_VISION.md) owns V01–V19 outcomes and their product boundaries. Existing ledger/source/API primitives support further development; they do not make the complete outcomes implemented.
+
+| Prerequisite | Features it enables |
+|---|---|
+| Reliable current sources, positions and permissions | Evidence drill-down, clearer matching and the minimal exception portfolio; grounded explanations can begin only over actual supported data. |
+| Complete relevant subledgers and closing controls | Continuous-close preparation, safe review batches, project/product costs and company comparisons with explicit access. |
+| Calculated fiscal positions and official mappings | Tax visibility, business-change previews, filing readiness, authority-position comparison and correction impact. |
+| Migration continuity, signed versions and complete recovery | Migration assistance, reproducible filing/audit packages and portable full-company archives. |
+| Demonstrated domain coverage plus reviewed policy/provider contracts | Built-in L0/L1 assistance first; governed L2+ automation later. Forecasts, outbound follow-up and new integrations remain separately scoped candidates. |
+
+Broader entity types such as PFA, SA or nonprofit organizations require separate accounting frameworks, conformance profiles and reviewed obligations. They are future scope decisions beyond the committed SRL sequence. Do not advertise support for every Romanian legal entity from the SRL engine alone.
 
 ## Launch gates and dependencies
 

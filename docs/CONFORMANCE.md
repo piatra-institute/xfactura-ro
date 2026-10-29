@@ -20,6 +20,20 @@ Add explicit RO-TAX-MICRO, RO-PAY, RO-STOCK and RO-PRODUCTION facets with their 
 
 The first filing path produces a versioned official validation/signing/submission package and imports the actual external receipt. A direct ANAF connector is optional; the complete authorized handoff is required. Unpublished later annual packages remain gaps until checked.
 
+## Representative company combinations
+
+These are coverage-design examples, not released profiles or assertions that every listed obligation applies. Use verified facts and reviewed rules to derive each company's actual closure. The [implementation matrix](IMPLEMENTATION.md) owns the current gap assessment and [ROADMAP.md](ROADMAP.md) the build backlog.
+
+| Company example | Coverage that must be demonstrated together |
+|---|---|
+| Domestic RON services SRL without normal VAT, employees or stock | Complete service books/positions, its selected income-tax branch, relevant annual inventory verification, applicable periodic/annual outputs, migration history and authorized fulfillment. |
+| VAT-registered service SRL with EUR and foreign suppliers/customers | The preceding general foundation plus the correct VAT branch, foreign-service/registration interactions, accounting/VAT/settlement FX and the resulting reporting set. Domestic-only sales do not establish domestic-only purchases. |
+| Service SRL on the microenterprise branch with payroll and equipment | Reviewed tax eligibility/history, payroll, assets/accounting-fiscal depreciation, owner/financing facts when present and their combined periodic/annual outputs. |
+| Retail or e-commerce SRL | Goods/stock/valuation/returns, sources outside e-Factura, multiple settlement channels, applicable VAT/currency/jurisdiction branches, payroll/assets when present and full-year controls. Marketplace or OSS/IOSS cases require explicit reviewed extensions. |
+| Manufacturing SRL | Accounting stock plus BOM/work orders, material/labor/overhead, finished goods/WIP/variances, fixed assets/payroll where relevant and their tax/reporting interactions. |
+
+Turnover cannot select one of these combinations by itself. A generic journal or a browser inventory list cannot satisfy a native subledger requirement. Unsupported conditional regimes and broader entity frameworks remain explicit boundaries until their own profiles, corpus, rules and outputs exist.
+
 ## Draft profiles
 
 | ID | Coverage introduced | Reporting and claim boundary |

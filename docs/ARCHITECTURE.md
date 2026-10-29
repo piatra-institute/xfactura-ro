@@ -1,14 +1,16 @@
 # Architecture and domain contracts
 
+This document contains both implemented invariants and the target contracts needed by the full suite. [IMPLEMENTATION.md](IMPLEMENTATION.md) owns current module coverage, [ACCOUNTING_ENGINE.md](ACCOUNTING_ENGINE.md) exact runtime behavior and [ROADMAP.md](ROADMAP.md) remaining work. A named record or adapter below is not evidence that its calculation, workflow or integration exists.
+
 ## Runtime and ports
 
 Accounting is an internal module of the existing `xfactura-api` package, with Hono routes mounted in its Express server and a worker process from the same package. Use Bun, SQLite/libSQL, Drizzle, Zod and `decimal.js`. Local SQLite is the default; the existing libSQL configuration also accepts Turso. Domain calculations depend on neither HTTP, React, provider SDKs, nor Piatra identity. Shared contracts use explicit API-package exports, not separate accounting-core/server packages. [ADR 0008](adr/0008-existing-api-sqlite-drizzle.md) records this boundary.
 
-Retain Next.js and upgrade to a supported 16.x release, pinning tested dependencies and lockfiles. [Next.js support policy](https://nextjs.org/support-policy)
+Retain Next.js for the web surface; package manifests and the lockfile own tested versions. Apply the [Next.js support policy](https://nextjs.org/support-policy) when scheduling framework maintenance.
 
 Implement small typed IdentityProvider, AIProvider, ObjectStore, BankProvider, and TaxAuthorityConnector ports as their first adapters are built. BillingProvider remains a future boundary. Avoid building a general plugin framework before the end-to-end accounting slice.
 
-| Boundary | Core contract and initial adapter |
+| Target boundary | Core contract and adapter direction |
 |---|---|
 | IdentityProvider | Verified identity/session; Piatra handoff for hosted operation, standalone Better Auth for self-hosting. Company authorization stays in xFactura. |
 | AIProvider | Typed proposed facts/actions, capabilities, usage, and errors; regular Piatra AI, OpenAI, and OpenRouter keys. |
@@ -30,6 +32,8 @@ General proposals contain explicit lines, purpose, source reference, financial y
 The sourced chart is a reference catalogue, not a signed current fiscal consolidation. Classes 8/9 remain catalogue references; general-ledger posting uses postable general-book accounts and company analytical accounts. Policy records and draft rule/obligation references do not by themselves implement applicability or autonomous execution. [ACCOUNTING_ENGINE.md](ACCOUNTING_ENGINE.md) owns exact scope, APIs and migration behavior.
 
 ## Two interpretation branches
+
+This is the target full-suite model. Current fiscal-position/reference storage is a foundation; it does not implement micro/profit-tax computation, loss utilization, tax credits, obligation closure or official output generation. General ledger access can record an explicit supported journal, but does not establish a native asset, payroll or stock subledger. New modules need their own derived state, invariants, effective rules and reporting proof.
 
 ```text
                               ┌→ Accounting interpretation → Ledger
@@ -97,6 +101,8 @@ Record the disputed fact, all assertions, chosen authority, rationale, approver,
 - Approvals bind to exact hashes. Official artifacts retain a separate internal manifest containing `fiscal_package_id`, `rule_set_hash`, `software_version`, profiles, corpus and validator versions. Do not inject unsupported fields into official XML.
 
 Expose one versioned company-scoped REST/OpenAPI interface and shared contracts for facts, interpretations, tax positions, postings, reconciliation, reports, obligations, submissions, providers and jobs. Humans and agents use the same validated commands. Open Accounting IR/schema exports must remain independently implementable.
+
+Each new module must provide deterministic operations, evidence-backed previews, exact human approval where required, live permission checks, idempotent execution, dated reads/reconciliation, complete exports and recovery. Its API/MCP capabilities use the existing server module and its UI projections verify the same results. Future webhooks, connectors, bulk policies and provider calls must not bypass that path or silently expand scope.
 
 The implemented capability catalogue and MCP adapter stay inside the existing API module. Each capability declares input/output schemas, permission, effect and approval requirement. Discovery intersects implemented definitions with live company membership and agent scope; it does not advertise planned fiscal support. [AGENT_API.md](AGENT_API.md) owns the wire contract and supported commands.
 

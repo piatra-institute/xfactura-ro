@@ -52,6 +52,10 @@ Disagreement creates a three-way discrepancy report: xFactura, the qualified com
 
 ## Release evidence
 
+Assess two separate axes: implementation correctness for the declared workflow, and completeness for an exact company/interval/profile combination. A larger test count, a passing parser or arbitrary balanced journal access cannot complete an absent tax/subledger/reporting module. [IMPLEMENTATION.md](IMPLEMENTATION.md) owns recorded runs and current coverage; [ROADMAP.md](ROADMAP.md) owns full-cycle and module exit requirements.
+
+Every new native module needs evidence for its inputs and negative eligibility, independently expected accounting/fiscal effects, subledger/control reconciliation, exact/stale approval, company isolation/revocation, repeated execution, source/period corrections, export and fresh restore. Where the claim includes a return or annual output, validate its full mapped content against the approved positions and the actual official tools. Do not substitute a fragment or a single happy path for the claimed company cycle.
+
 Run domain/database integration tests, type/static checks, production builds and owner/accountant/portfolio browser workflows. Official XSD/semantic validators run for the exact applicable reporting period. A passing validator does not establish a correct tax position.
 
 The parallel pilot preserves input manifests, frozen versions, reference outputs and every difference. Compare opening balances, AP/AR, bank, assets, tax bases/carry-forwards, VAT/profit-tax positions, journals, trial balances and applicable filings. Require two real monthly closes plus reviewed quarterly/year-end reference outputs before the relevant replacement claim.

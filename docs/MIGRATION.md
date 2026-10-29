@@ -1,5 +1,7 @@
 # Migration handover and production activation
 
+This is the required MIG-01 handover specification. The implemented opening-entry, source-retention, export and local backup/restore mechanics do not constitute a complete historical importer or a signed company migration/activation workflow. [IMPLEMENTATION.md](IMPLEMENTATION.md) owns that coverage boundary; [ROADMAP.md](ROADMAP.md) owns the remaining delivery work. Migration assistance in the [feature vision](FEATURE_VISION.md) must produce this proof rather than conceal missing history.
+
 ## Handover manifest
 
 Implement MIG-01 before midyear replacement activation. A balanced cutover trial balance, e-Factura and bank statements do not establish full fiscal-year continuity.

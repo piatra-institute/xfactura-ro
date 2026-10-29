@@ -1,10 +1,12 @@
 # AI providers and governed autonomy
 
-## Initial provider path
+## Current boundary and planned provider path
 
 The capability API and MCP are implemented. The accounting-first sequence in [ROADMAP.md](ROADMAP.md) now takes priority; browser OAuth delegation and a built-in provider-key agent are deferred. [AGENT_API.md](AGENT_API.md) describes the implemented command/MCP surface and its current manual-credential connection path. The built-in accounting agent is not implemented yet. Agents may prepare work and execute exact human-approved versions; agent credentials never inherit the delegator's ability to approve.
 
-Company owners configure provider keys, models, permitted actions and spending controls. Self-hosted backends call Piatra AI with a regular user API key or connect directly to OpenAI/OpenRouter. Piatra's normal scopes, capabilities, limits and billing apply exactly as for other users.
+The provider configuration, credential handling, model execution and autonomy requirements below specify that future accounting agent; they do not describe an existing accounting-agent settings screen. An external MCP client can operate current tools today. Neither external nor built-in models can supply missing VAT, payroll, tax-calculation or filing capabilities. [FEATURE_VISION.md](FEATURE_VISION.md) owns proposed grounded explanations, continuous close and governed automation experiences.
+
+Implement company-owner configuration of provider keys, models, permitted actions and spending controls. Self-hosted backends call Piatra AI with a regular paid user API key or connect directly to a user-supplied provider such as OpenAI/OpenRouter. Piatra's normal scopes, capabilities, limits and billing apply exactly as for other users.
 
 No hosted xFactura commerce relay, privileged service credential, prepaid xFactura balance, or paid AI is required for accounting. Hosted company-supplied keys use the same adapters and have no xFactura AI surcharge. Provider billing remains with the provider account.
 

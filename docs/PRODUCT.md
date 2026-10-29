@@ -6,6 +6,10 @@ xFactura should make accounting understandable and largely automatic for Romania
 
 The initial commercial audience is companies below €1M annual turnover. Revenue is not a domain eligibility rule, license restriction, or feature lock. The actual complexity vector and supported combinations live in [CONFORMANCE.md](CONFORMANCE.md).
 
+The committed suite scope is Romanian SRLs on supported VAT/non-VAT and microenterprise/profit-tax branches, including native payroll, assets/financing/owner transactions, inventory and production when their facts apply. “Full accounting” means the company's complete monthly/quarterly/annual cycle, including calculated taxes, applicable statutory outputs, annual statements and authorized fulfillment. A service company without stock or employees still needs its applicable tax and annual accounting coverage. Broader legal-entity frameworks require separate scope decisions and profiles.
+
+This is the product contract and target direction. [IMPLEMENTATION.md](IMPLEMENTATION.md) owns what exists and what prevents sole-system replacement; [ROADMAP.md](ROADMAP.md) owns the remaining modules. The [feature vision](FEATURE_VISION.md) describes how the completed engine should reduce work and make every figure understandable.
+
 ## Durable promises
 
 - Hosted accounting and self-hosting are free, including applicable fiscal updates, collaboration, reports, filings, basic API access, and complete exports.
@@ -19,11 +23,13 @@ The initial commercial audience is companies below €1M annual turnover. Revenu
 
 Use an owner-first interface and accountant-first distribution. Recruit accounting partners for the parallel pilot, conformance cases, and company migrations; they are design and review partners, not merely a later sales channel.
 
-Treat the UI primarily as a verification and decision layer. External MCP clients and the built-in Piatra AI/BYOK agent use the same capability contract to collect evidence, prepare work and execute authorized versions. People inspect sources, exact effects and exceptions; routine operation should not require re-entering data into forms. Keep professional registers and manual fallbacks available. Initially, humans authorize postings and consequential actions; agents cannot approve their own work.
+Treat the UI primarily as a verification and decision layer. External MCP clients and the planned built-in Piatra AI/BYOK agent use the same capability contract to collect evidence, prepare work and execute authorized versions. People inspect sources, exact effects and exceptions; routine operation should not require re-entering data into forms. Keep professional registers and manual fallbacks available. Initially, humans authorize postings and consequential actions; agents cannot approve their own work.
 
 Ship a minimal accountant portfolio by the first real-company pilot: company membership, reporting period, import freshness, bank differences, blocked closes, missing evidence, and rejected/pending filings. Each item opens the affected company's workbench with its own authorization check. Portfolio counts come from actual exception states; they do not invent an overall health confidence.
 
 The owner home prioritizes actions requiring a decision, reconciled money, receivables/payables, and obligations. Every review item shows the source, proposed accounting/fiscal treatment, reason, effect, and exact decision needed. Professional journals and registers remain available beneath this interface.
+
+Distinguish observed balances, accounting result, calculated estimates, approved tax liabilities and accepted filings. Missing calculation or evidence must never appear as zero tax, a healthy company or completed compliance. Give an affected transaction a precise missing fact or unsupported-treatment outcome; do not put generic implementation/governance warnings in the owner interface. Use the same principles for future forecasts, close preparation and accountant portfolio views.
 
 ## Free hosting and funding
 

@@ -2,6 +2,8 @@
 
 This document describes executable behavior. [ROADMAP.md](ROADMAP.md) owns the full-suite target; [CONFORMANCE.md](CONFORMANCE.md) owns coverage claims. No complete fiscal profile, official declaration or annual replacement claim has passed.
 
+Start with the [product coverage matrix](IMPLEMENTATION.md#macro-position) for the overall picture, including modules that do not yet exist. The workflows below describe supported operations rather than a full-company accounting promise. [FEATURE_VISION.md](FEATURE_VISION.md) describes intended experiences built on these primitives; it does not expand their current accounting scope.
+
 ## Company configuration and general ledger
 
 The engine remains inside `packages/xfactura-api/source/accounting`, using SQLite/libSQL and Drizzle. There is no separate accounting package or PostgreSQL service.

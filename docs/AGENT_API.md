@@ -1,6 +1,8 @@
 # Accounting capabilities and MCP
 
-The implemented API covers general-ledger proposals and financial-year reports, company chart/configuration records, domestic RON service invoices/credits, purchase accruals, completed unbilled sales and later-invoice matching, uniform monthly/actual-day service allocations through 471/472, service advances through 4092/419, invoice positions, bank/cash settlements and working VAT registers. It does not calculate full tax positions, generate official declarations, submit to ANAF or establish replacement eligibility. [ACCOUNTING_ENGINE.md](ACCOUNTING_ENGINE.md) specifies the engine capabilities and their limits. The built-in accounting agent and browser OAuth delegation remain planned. External clients can already use MCP with an explicitly issued accounting credential.
+This is the implemented agent contract. The API covers general-ledger proposals and financial-year reports, company chart/configuration records, domestic RON service invoices/credits, purchase accruals, completed unbilled sales and later-invoice matching, monthly/actual-day/documented-benefit allocations through 471/472, service advances through 4092/419, invoice positions, bank/cash settlements and working VAT registers. [ACCOUNTING_ENGINE.md](ACCOUNTING_ENGINE.md) owns exact treatment limits; [IMPLEMENTATION.md](IMPLEMENTATION.md) owns company-level coverage and [ROADMAP.md](ROADMAP.md) missing modules. A discoverable command does not supply absent full tax calculations, native payroll/stock or official declarations.
+
+External clients can use MCP with an explicitly issued accounting credential. The built-in accounting model agent, provider configuration and browser OAuth delegation remain specified separately in [AI.md](AI.md); their presence in a plan is not an available tool or permission.
 
 ## One contract
 

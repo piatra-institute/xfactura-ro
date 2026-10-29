@@ -2,6 +2,8 @@
 
 This is the working plan, not a claim that the proposed accounting capabilities are implemented.
 
+For the current answer to “can xFactura replace a company's accounting system?”, read [IMPLEMENTATION.md](IMPLEMENTATION.md). For the full remaining build scope, read [ROADMAP.md](ROADMAP.md). The [documentation index](README.md) separates implemented contracts, product direction, planned work and release evidence.
+
 ## Product direction
 
 Build free, open Romanian accounting infrastructure that minimizes manual work and switching costs.
@@ -17,6 +19,8 @@ Details and product commitments live in [PRODUCT.md](PRODUCT.md).
 | Document | Owns |
 |---|---|
 | [PRODUCT.md](PRODUCT.md) | Audience, promises, distribution, and economic boundary. |
+| [FEATURE_VISION.md](FEATURE_VISION.md) | Target experiences, standout features, dependencies and candidate enhancements. |
+| [IMPLEMENTATION.md](IMPLEMENTATION.md) | Current company coverage, macro position and recorded executable proof. |
 | [CONFORMANCE.md](CONFORMANCE.md) | Coverage profiles, obligation closure, eligibility and replacement gates. |
 | [REGULATORY_BASELINE.md](REGULATORY_BASELINE.md) | Dated primary-source findings and register/deadline requirements. |
 | [MIGRATION.md](MIGRATION.md) | Handover manifest, continuity, reconciliation and cutover responsibility. |
@@ -59,6 +63,8 @@ Offer a minimal accountant portfolio view showing real exceptions and reporting 
 Retain the public invoicer while companies migrate through a reviewed opening position, current-year/fiscal-history continuity and a signed handover proof.
 Keep typed proposals, deterministic calculations, exact-version approvals, and the filing receipt lifecycle.
 
+Native payroll, stock and production are conditional company facets; tax calculations, annual close and applicable statutory outputs are also needed by a company without those facets. A supported monthly service workflow must not be presented as a complete annual accounting system. The completion unit is the exact company/year and its full applicable obligation set, rather than a count of implemented transaction variants.
+
 ## Delivery sequence
 
 | Order | Result |
@@ -73,9 +79,9 @@ Keep typed proposals, deterministic calculations, exact-version approvals, and t
 | 8 | Complete statutory registers and filing outputs: applicable D100/D101/D112/D300/D301/D390/D394/D406 and conditional reports, annual statements and supporting package. Pin official schemas/validators; reconcile to approved source positions. |
 | 9 | Migration and exact-company/year replacement proof: signed continuity, independent oracles/mutations, real closes, annual reporting and recovery. |
 
-The capability API and manual-credential MCP already exist and grow with each engine module. Deployment changes, browser OAuth delegation and a built-in Piatra AI/BYOK agent are deferred from this accounting critical path. Every new engine capability remains available to external agents through the shared API/MCP and reviewable through the existing UI.
+The capability API and manual-credential MCP already exist and grow with each engine module. Deployment changes, browser OAuth delegation and a built-in Piatra AI/BYOK agent are deferred from this accounting critical path. Expose each new module through the shared capability contract and reviewable UI projections, under its actual permissions. Human-only approvals and configuration authority must not become agent permissions merely because the operation has an API.
 
-The first coding ticket generalizes accounts, years, opening positions and proposals, with populated-book upgrade tests and independent 2025/2026 VAT/non-VAT sales/purchase posting fixtures. These fixtures establish ledger mechanics; they do not establish complete VAT or tax-return coverage.
+Build on the existing general-ledger, document, settlement and API/MCP modules; do not restart them or treat another document variant as progress on missing tax/reporting modules. The ordered module backlog and finite step-exit criteria live in [ROADMAP.md](ROADMAP.md). Ledger fixtures establish mechanics; full VAT, calculated taxes, annual reports and official artifacts require their own proof.
 
 Filing delivery initially means a validated official package for external signing/submission, followed by import and tracking of the actual receipt. Direct ANAF automation is an optional later adapter. An unsigned export, structural validator result or monthly close is never an accepted filing.
 See [ROADMAP.md](ROADMAP.md) for ordered tickets and proof gates, and [IMPLEMENTATION.md](IMPLEMENTATION.md) for what has actually passed.
@@ -94,7 +100,7 @@ Defer prepaid wallets, retail tariff engines, and new billing gateway work.
 A future managed paid mode requires a separate RFC justified by measured usage economics.
 
 The reference self-host deployment uses local SQLite/libSQL and a local document volume. Accounting stays within the existing API package; Drizzle schemas generate migrations and typed queries implement operations. Turso is an optional libSQL configuration.
-S3-compatible storage remains available for hosted/multi-node operation.
+S3-compatible storage remains a planned adapter for hosted/multi-node operation; the implemented local ObjectStore and its recovery boundary are documented separately.
 Self-hostability does not promise support for arbitrary deployment environments.
 
 ## Licensing and governance
