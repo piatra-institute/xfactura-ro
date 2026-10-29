@@ -6,7 +6,15 @@ import { $ } from 'bun';
 
 const root = path.join(import.meta.dir, '../..', '.validators');
 const { sources } = (await Bun.file(path.join(import.meta.dir, 'sources.json')).json()) as {
-  sources: { name: string; url: string; sha256: string; extract?: string[]; into?: string }[];
+  sources: {
+    name: string;
+    url: string;
+    sha256: string;
+    extract?: string[];
+    into?: string;
+    /** Drop the archive's folders, for packages that keep their jars in one. */
+    flatten?: boolean;
+  }[];
 };
 
 for (const source of sources) {
@@ -31,7 +39,8 @@ for (const source of sources) {
     for (const prefix of source.extract)
       if (prefix.endsWith('/'))
         await rm(path.join(target, prefix), { recursive: true, force: true });
-    await $`unzip -q -o ${file} ${source.extract.map((prefix) => `${prefix}*`)} -d ${target}`;
+    const flags = source.flatten ? ['-q', '-o', '-j'] : ['-q', '-o'];
+    await $`unzip ${flags} ${file} ${source.extract.map((prefix) => `${prefix}*`)} -d ${target}`;
     await rm(file);
   }
   await writeFile(marker, `${source.sha256}\n`);

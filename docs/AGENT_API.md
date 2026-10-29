@@ -59,6 +59,7 @@ Reviewed actions (month close and reopen) follow the same pattern: request, appr
 | `ledger.reverse.propose` / `.revise` | write | yes | — | Full storno of a posted entry. |
 | `invoices.recognize.propose` / `.revise` | write | yes | — | Domestic service invoice, in lei or foreign currency. |
 | `invoices.credit.propose` / `.revise` | write | yes | — | Credit note against its original invoice. |
+| `invoices.crossBorder.propose` / `.revise` | write | yes | — | Services bought from abroad (reverse charge) or supplied abroad. |
 | `bank.settle.propose` / `.revise` | write | yes | — | Full explanation of a bank movement. |
 | `fx.revalue.propose` / `.revise` | write | yes | — | Month-end revaluation of foreign-currency monetary items. |
 | `vat.settle.propose` / `.revise` | write | yes | — | VAT settlement of a period into 4423 or 4424. |

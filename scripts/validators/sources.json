@@ -41,6 +41,15 @@
       "sha256": "95f58433495c57012a76ee4c773250e6100d54310896cef856bf988f6839b11c",
       "extract": ["D300Validator.jar", "D300Pdf.jar"],
       "into": "dist/lib"
+    },
+    {
+      "name": "anaf",
+      "description": "ANAF D390 VIES validator and PDF generator (structure 2020, namespace v3)",
+      "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/D390_20250625.zip",
+      "sha256": "eb82f117da7dcf873d748a6a0ea61e41c1a9ca30485e61073b66a28689b63c25",
+      "extract": ["D390/D390Validator.jar", "D390/D390Pdf.jar"],
+      "into": "dist/lib",
+      "flatten": true
     }
   ],
   "manual": [

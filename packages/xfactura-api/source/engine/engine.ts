@@ -9,6 +9,7 @@ import { creditRecognition, invoiceRecognition } from 'xfactura-core/ro/treatmen
 import { settlement } from 'xfactura-core/ro/treatments/settlement';
 import { revaluation } from 'xfactura-core/ro/treatments/revaluation';
 import { vatSettlement } from 'xfactura-core/ro/treatments/vat-settlement';
+import { crossBorderRecognition } from 'xfactura-core/ro/treatments/cross-border';
 import { ParameterRegister } from 'xfactura-core/rules';
 import { clause, sourceOf } from 'xfactura-core/ro/sources';
 import { addDays, bucharestDate } from 'xfactura-core/time';
@@ -62,6 +63,7 @@ import {
 import type { EFacturaPort } from './adapters/efactura';
 import type { DeclarationValidator } from './adapters/declaration-validator';
 import { d300Declaration } from './modules/d300';
+import { d390Declaration } from './modules/d390';
 import {
   artifactInput,
   artifactView,
@@ -200,6 +202,7 @@ export class Engine {
       settlement,
       revaluation,
       vatSettlement,
+      crossBorderRecognition,
       ...(options.treatments ?? []),
     );
     this.actions = new Actions(this.commands);
@@ -229,6 +232,7 @@ export class Engine {
     this.declarations = new Declarations(this.commands, objects, options.declarationValidator);
     this.declarations.add(
       d300Declaration((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
+      d390Declaration((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
       ...(options.declarations ?? []),
     );
     this.actions.add(this.declarations.authorizeHandler());

@@ -108,6 +108,15 @@ Accounting policies the law requires in writing are dated company facts with the
   - The difference is a realized exchange gain (7651) or loss (6651).
   - Paying a foreign-currency item from a RON account is not supported.
 
+### `invoices.crossBorder`: services across the border
+
+- **Document:** an imported invoice (not a credit note) whose counterparty is established abroad; for an EU customer, with a VAT code of its state (the general rule applies between businesses).
+- **Input:** the account, `supply: services_general_rule` (services taxed where the customer is established, Cod fiscal art. 278 alin. (2); the exceptions and goods are other treatments), the deduction for purchases, and optionally the tax point when the service was provided.
+- **Purchase:** expense and payable at the accounting rate; Romanian VAT self-assessed at the standard rate on the base at the BNR rate for VAT, collected (4427) and deducted (4426) at once, or added to the expense without deduction. Tax entries `RC-EU-SERV` or `RC-NONEU-SERV`, in both directions.
+- **Sale:** receivable and revenue, no Romanian VAT; tax entry `EXP-EU-SERV` or `EXP-NONEU-SERV` with the base only.
+- **Refused:** a domestic partner, an invoice that already charges VAT, an EU customer without a VAT code.
+- **Open for review:** which e-Factura VAT category a Romanian supplier uses for services sold to EU businesses (ANAF's guide reserves AE for art. 331); the tax point of continuous services.
+
 ### `vat.settle`: VAT settlement of a period
 
 - **Input:** the VAT period (a month, or a quarter for quarterly payers), the posting date on or after the period's end, the tax authority as a partner (a public institution), the return or worksheet as evidence, and a round number.
@@ -163,11 +172,15 @@ Tax returns are artifacts of the books:
 
 **D300 (VAT return)** is the first kind. It is written by `xfactura-core/src/ro/declarations/d300.ts` from ANAF's structure 12.0.0, in namespace `v11` for 08–12/2025 and `v12` from 01/2026, and computes the totals, the settlement rows, the control sum and the payment evidence number as ANAF's validator does. From the books:
 - collected VAT goes by rate to rows 9 (21%) and 10 (11%), and 9.1 (19%) for 2025 periods;
+- services bought from abroad with reverse charge go to row 7, and also to its subset 7.1 when the supplier is in the EU; the return repeats them as deductible on rows 20 and 20.1;
+- services supplied abroad go to row 3, and to 3.1 when the customer is in the EU;
 - purchases go by rate to rows 24 and 25 (24.1 for 2025) with all their VAT, and row 31 holds the VAT actually deducted. Whether non-deductible purchases belong on rows 24–25 is an interpretation awaiting the expert's review;
 - every row is rounded to whole lei by the cited rule `ro.declaration.rounding` (half up at 50 bani);
 - the header comes from the company's invoicing details and the options given when preparing (declarant, CAEN, bank account; pro-rata 100 as the printed form pre-fills it, unless given).
 
-Operations without a row yet (reverse charge, intra-EU, exempt, imports) block the return rather than being left out. Monthly returns are type L and quarterly ones type T; semiannual and annual returns are not produced.
+Operations without a row yet (goods across the border, domestic reverse charge, exemptions, imports) block the return rather than being left out. Monthly returns are type L and quarterly ones type T; semiannual and annual returns are not produced.
+
+**D390 (VIES recapitulative statement)** lists a month's intra-Community operations by partner, from ANAF's structure "D390 XML 2020" (namespace v3): services supplied to EU businesses as type P and services acquired from EU suppliers as type S, each partner's bases summed and rounded to whole lei. It is monthly even for quarterly VAT payers, reads the month's entries by their tax point, and is informative: authorizing it locks no tax ledger. ANAF's validator checks every partner's VAT code against its country's algorithm. Goods (L, T, A, R) are not produced yet.
 
 Steps are recorded in order, and the database allows only the documented transitions; a tax period is locked only in the name of an authorized return of that tax and period. A rectification is a new return that supersedes the earlier one.
 

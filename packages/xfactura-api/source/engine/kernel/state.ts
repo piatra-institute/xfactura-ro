@@ -438,6 +438,7 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
         taxBani: tax.taxBani,
         deductibleBani: tax.deductibleBani,
         ledgerBani: tax.ledgerBani,
+        taxPoint: date(tax.taxPoint),
         documentId: tax.documentId,
         partyId: tax.partyId,
       })),

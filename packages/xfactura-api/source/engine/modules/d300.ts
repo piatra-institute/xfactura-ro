@@ -44,14 +44,40 @@ export const d300Options = z
   .strict();
 
 /**
- * Where the books' tax entries go on the return: collected VAT by rate on rows 9–10, purchases
- * by rate on rows 24–25 (the 19% rows only for 2025 periods), and the VAT deducted on row 31.
- * Purchases enter rows 24–25 with all their VAT and row 31 holds only the deductible part; that
- * reading of rows 24–25 versus 31 is an interpretation for the expert's review.
+ * Where the books' tax entries go on the return, as the base and VAT elements of each row:
+ * - collected VAT by rate on rows 9–10 (9.1 at 19% for 2025 periods);
+ * - services bought from abroad with reverse charge on row 7, and also on its subset 7.1 when
+ *   the supplier is in the EU; the return repeats them as deductible on rows 20 and 20.1;
+ * - services supplied abroad under the general rule on row 3, and on 3.1 when the customer is
+ *   in the EU (base only);
+ * - purchases by rate on rows 24–25 (24.1 for 2025) with all their VAT.
+ * Row 31 holds the VAT actually deducted. That purchases enter rows 24–25 with all their VAT
+ * while row 31 holds only the deductible part is an interpretation for the expert's review.
+ * `null` marks entries the return derives itself (the deductible side of reverse charge).
  */
-const rowsByCode: Record<'output' | 'input', Record<string, string>> = {
-  output: { 'S-21': 'R9', 'S-11': 'R10', 'S-19': 'R69' },
-  input: { 'S-21': 'R22', 'S-11': 'R23', 'S-19': 'R74' },
+const rowsByCode: Record<'output' | 'input', Record<string, [string, string | null][] | null>> = {
+  output: {
+    'S-21': [['R9_1', 'R9_2']],
+    'S-11': [['R10_1', 'R10_2']],
+    'S-19': [['R69_1', 'R69_2']],
+    'RC-EU-SERV': [
+      ['R7_1', 'R7_2'],
+      ['R7_1_1', 'R7_1_2'],
+    ],
+    'RC-NONEU-SERV': [['R7_1', 'R7_2']],
+    'EXP-EU-SERV': [
+      ['R3_1', null],
+      ['R3_1_1', null],
+    ],
+    'EXP-NONEU-SERV': [['R3_1', null]],
+  },
+  input: {
+    'S-21': [['R22_1', 'R22_2']],
+    'S-11': [['R23_1', 'R23_2']],
+    'S-19': [['R74_1', 'R74_2']],
+    'RC-EU-SERV': null,
+    'RC-NONEU-SERV': null,
+  },
 };
 
 function returnPeriod(period: string): D300['period'] {
@@ -60,14 +86,14 @@ function returnPeriod(period: string): D300['period'] {
   return { year: Number(period.slice(0, 4)), month: Number(period.slice(5, 7)) };
 }
 
-function periodStart(period: string): LocalDate {
+export function periodStart(period: string): LocalDate {
   const { year, month } = returnPeriod(period);
   const first = period.includes('Q') ? month - 2 : month;
   return `${year}-${String(first).padStart(2, '0')}-01` as LocalDate;
 }
 
 /** How bani round to the whole lei the return is in, from the rule register. */
-async function rounding(
+export async function rounding(
   rules: (tx: Transaction, companyId: string) => Promise<RuleContext>,
   tx: Transaction,
   companyId: string,
@@ -89,7 +115,7 @@ async function rounding(
   }
 }
 
-async function sellerDetails(tx: Transaction, companyId: string) {
+export async function sellerDetails(tx: Transaction, companyId: string) {
   const [row] = await tx
     .select({
       partyId: partyVersions.partyId,
@@ -166,16 +192,18 @@ export function d300Declaration(
         totals.set(element, (totals.get(element) ?? 0n) + bani);
       let deducted = 0n;
       for (const entry of loaded.taxLedger.get(`VAT|${period}`)?.entries ?? []) {
-        const row = rowsByCode[entry.direction][entry.code];
-        if (!row) {
+        const rows = rowsByCode[entry.direction][entry.code];
+        if (rows === undefined) {
           problems.push({
             code: 'D300_CODE',
             message: `Operațiunile ${entry.direction === 'output' ? 'colectate' : 'deductibile'} cu codul ${entry.code} nu au încă un rând în decont.`,
           });
           continue;
         }
-        add(`${row}_1`, entry.baseBani);
-        add(`${row}_2`, entry.taxBani);
+        for (const [base, vat] of rows ?? []) {
+          add(base, entry.baseBani);
+          if (vat) add(vat, entry.taxBani);
+        }
         if (entry.direction === 'input') deducted += entry.deductibleBani;
       }
       if (deducted !== 0n) add('R28_2', deducted);

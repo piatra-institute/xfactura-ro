@@ -154,6 +154,7 @@ export interface TaxLedgerEntry {
   taxBani: bigint;
   deductibleBani: bigint;
   ledgerBani: bigint;
+  taxPoint: LocalDate;
   documentId: string | null;
   partyId: string | null;
 }
