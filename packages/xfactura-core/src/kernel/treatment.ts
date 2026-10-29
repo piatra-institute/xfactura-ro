@@ -167,6 +167,16 @@ export function profileAt(loaded: Loaded, axis: string, date: LocalDate): string
   return value;
 }
 
+/**
+ * The VAT period containing a date: its calendar month, or its quarter (`2026-Q4`) when the
+ * company's `vat.period` fact says quarterly. The month is the legal default tax period
+ * (Cod fiscal art. 322; paragraph to cite in the source register).
+ */
+export function vatPeriodOf(loaded: Loaded, date: LocalDate): string {
+  if (profileAt(loaded, 'vat.period', date) !== 'quarterly') return date.slice(0, 7);
+  return `${date.slice(0, 4)}-Q${Math.ceil(Number(date.slice(5, 7)) / 3)}`;
+}
+
 export interface Evaluation {
   effect: Effect | null;
   issues: Issue[];

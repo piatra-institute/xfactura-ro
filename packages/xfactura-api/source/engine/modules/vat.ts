@@ -4,7 +4,8 @@ import { formatMoney } from 'xfactura-core/money';
 import { documents, entries, parties, taxEntries } from '../db/schema';
 import type { Actor, Commands } from '../kernel/commands';
 
-const month = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
+// A VAT period: a month (2026-10), or a quarter (2026-Q4) for quarterly payers.
+const month = z.string().regex(/^\d{4}-(0[1-9]|1[0-2]|Q[1-4])$/);
 export const vatJournalInput = z
   .object({ direction: z.enum(['output', 'input']), from: month, to: month })
   .strict()

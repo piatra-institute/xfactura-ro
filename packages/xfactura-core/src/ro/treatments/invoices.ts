@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   accountCodePattern,
   profileAt,
+  vatPeriodOf,
   type DocumentRecord,
   type Effect,
   type FxRate,
@@ -107,7 +108,10 @@ function vatFor(invoice: Invoice, loaded: Loaded, rules: RuleContext, taxPoint: 
 const vatEntry = (
   invoice: Invoice,
   entry: Partial<TaxEntrySpec> &
-    Pick<TaxEntrySpec, 'baseBani' | 'taxBani' | 'deductibleBani' | 'ledgerBani' | 'taxPoint'>,
+    Pick<
+      TaxEntrySpec,
+      'baseBani' | 'taxBani' | 'deductibleBani' | 'ledgerBani' | 'taxPoint' | 'taxPeriod'
+    >,
   code: string,
 ): TaxEntrySpec => ({
   key: 'vat',
@@ -115,7 +119,6 @@ const vatEntry = (
   code,
   direction: invoice.direction === 'sale' ? 'output' : 'input',
   exigibility: entry.taxPoint,
-  taxPeriod: entry.taxPoint.slice(0, 7),
   documentId: invoice.record.id,
   ...(invoice.record.partyId ? { partyId: invoice.record.partyId } : {}),
   attributes: {
@@ -228,6 +231,7 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
     if ('code' in invoice) return { effect: null, issues: [invoice] };
     const { body, direction } = invoice;
     const taxPoint = date(body.taxPointDate ?? body.issueDate);
+    const taxPeriod = vatPeriodOf(loaded, taxPoint);
     const vat = vatFor(invoice, loaded, rules, taxPoint);
     const amounts = amountsFor(invoice, loaded, rules, taxPoint);
     const issues = [...vat.issues, ...amounts.issues];
@@ -319,6 +323,7 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
               ledgerBani: tax,
               line: 2,
               taxPoint,
+              taxPeriod,
               ...vatCurrency,
             },
             code,
@@ -339,6 +344,7 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
               ledgerBani: tax,
               line: 1,
               taxPoint,
+              taxPeriod,
               ...vatCurrency,
             },
             code,
@@ -363,6 +369,7 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
             deductibleBani: 0n,
             ledgerBani: 0n,
             taxPoint,
+            taxPeriod,
             ...vatCurrency,
           },
           code,
@@ -457,6 +464,7 @@ export const creditRecognition: Treatment<CreditInput> = {
         ),
       );
     const taxPoint = date(credit.body.taxPointDate ?? credit.body.issueDate);
+    const taxPeriod = vatPeriodOf(loaded, taxPoint);
     const originalTaxPoint = date(original.body.taxPointDate ?? original.body.issueDate);
     const vat = vatFor(original, loaded, rules, originalTaxPoint);
     issues.push(...vat.issues);
@@ -499,6 +507,7 @@ export const creditRecognition: Treatment<CreditInput> = {
           deductibleBani: -deductible,
           ledgerBani: -ledger,
           taxPoint,
+          taxPeriod,
           ...(line === undefined ? {} : { line }),
           originTaxEntry: `${original.record.id}:vat`,
         },

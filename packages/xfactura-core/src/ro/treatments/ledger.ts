@@ -10,6 +10,7 @@ import {
   type Side,
   type TaxEntrySpec,
   type Treatment,
+  vatPeriodOf,
 } from '../../kernel';
 import { isSupportedCurrency, LEDGER_CURRENCY, parseMoney } from '../../money';
 import { isLocalDate, type LocalDate } from '../../time';
@@ -245,6 +246,7 @@ export const reversal: Treatment<ReversalInput> = {
     evidence: [input.evidenceId],
     entries: [input.entryId],
     openItems: [{ touchedBy: input.entryId }],
+    profile: true,
   }),
   evaluate(input, loaded) {
     const issues: Issue[] = [];
@@ -271,7 +273,8 @@ export const reversal: Treatment<ReversalInput> = {
           }
         : {}),
     }));
-    const taxPeriod = input.date.slice(0, 7);
+    // The reversal is reported in its own VAT period; the period it corrects stays recorded.
+    const taxPeriod = vatPeriodOf(loaded, input.date);
     const taxEntries: TaxEntrySpec[] = entry.taxEntries.map((tax) => ({
       ...tax,
       key: `reversal:${tax.key}`,
@@ -282,6 +285,10 @@ export const reversal: Treatment<ReversalInput> = {
       taxPoint: input.date,
       exigibility: tax.exigibility === null ? null : input.date,
       taxPeriod: tax.taxPeriod === null ? null : taxPeriod,
+      attributes: {
+        ...tax.attributes,
+        ...(tax.taxPeriod ? { correctsTaxPeriod: tax.taxPeriod } : {}),
+      },
       originTaxEntry: `${entry.id}:${tax.key}`,
       ...(tax.currency
         ? {

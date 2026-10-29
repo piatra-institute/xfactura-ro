@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import type { ProposalView } from '../../source/engine/kernel/views';
+import { taxPeriodEvents } from '../../source/engine/db/schema';
 import { invoiceXml, type XmlInput } from './fixtures/invoice';
 import { scenario, type Scenario } from './scenario';
 
@@ -261,6 +262,40 @@ describe('credit notes', () => {
 });
 
 describe('VAT journals', () => {
+  test("a quarterly payer's tax entries fall in the quarter, which a lock closes", async () => {
+    const s = await company();
+    const { id: evidenceId } = await s.evidence('notificare-trimestrial.pdf');
+    await s.invoke(s.owner, 'profile.record', {
+      axis: 'vat.period',
+      value: 'quarterly',
+      effectiveFrom: '2026-01-01',
+      evidenceId,
+    });
+    const sale = await importInvoice(s, { number: 'V-40', direction: 'sale', date: '2026-11-05' });
+    await s.book('invoices.recognize', { documentId: sale.id, account: '704' });
+    const journal = await s.invoke<{ rows: { taxPeriod: string; document: string }[] }>(
+      s.owner,
+      'vat.journal',
+      { direction: 'output', from: '2026-Q4', to: '2026-Q4' },
+    );
+    expect(journal.rows.map((row) => `${row.taxPeriod} ${row.document}`)).toEqual(['2026-Q4 V-40']);
+
+    await s.db.write((tx) =>
+      tx.insert(taxPeriodEvents).values({
+        companyId: s.company.id,
+        tax: 'VAT',
+        period: '2026-Q4',
+        seq: 1,
+        kind: 'lock',
+        reference: 'D300 2026-Q4',
+        createdBy: s.owner.actorId,
+      }),
+    );
+    const late = await importInvoice(s, { number: 'V-41', direction: 'sale', date: '2026-12-01' });
+    const proposal = await s.propose('invoices.recognize', { documentId: late.id, account: '704' });
+    expect(proposal.issues.map((issue) => issue.code)).toContain('TAX_PERIOD_LOCKED');
+  });
+
   test('list each tax entry in its period, with credits in their own period', async () => {
     const s = await company();
     const original = await importInvoice(s, { number: 'V-20', direction: 'sale' });

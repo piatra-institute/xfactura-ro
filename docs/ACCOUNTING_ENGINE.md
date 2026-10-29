@@ -194,7 +194,7 @@ A close records closing balances per account and currency and joins a hash chain
 
 - `ledger.trialBalance`: balanța de verificare for a financial year or interval. It shows initial balance, previous and current turnover, total sums and final balance per account.
 - `ledger.journal`: Registrul-jurnal in recording order.
-- `vat.journal`: sales or purchase VAT journal per tax period, with totals per VAT code. These are working registers, not declarations.
+- `vat.journal`: sales or purchase VAT journal per tax period, with totals per VAT code. These are working registers, not declarations. The tax period is the month, or the quarter (`2026-Q4`) when the company's `vat.period` fact says quarterly; a reversal is reported in its own period and records the period it corrects (`correctsTaxPeriod`).
 - `openItems.list`: open receivables, payables and other items with their balances.
 
 ## Exports, backup and restore
