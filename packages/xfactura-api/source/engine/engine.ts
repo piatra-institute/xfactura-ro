@@ -2,9 +2,11 @@ import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Treatment } from 'xfactura-core/kernel';
 import { vatDefinitions, vatVersions } from 'xfactura-core/ro/vat';
+import { fxDefinitions, fxVersions } from 'xfactura-core/ro/fx';
 import { generalJournal, reversal } from 'xfactura-core/ro/treatments/ledger';
 import { creditRecognition, invoiceRecognition } from 'xfactura-core/ro/treatments/invoices';
 import { settlement } from 'xfactura-core/ro/treatments/settlement';
+import { revaluation } from 'xfactura-core/ro/treatments/revaluation';
 import { ParameterRegister } from 'xfactura-core/rules';
 import type { Database } from './db/database';
 import { agentGrants } from './db/schema';
@@ -38,6 +40,7 @@ import {
 import { Evidence, evidenceInput, evidenceView } from './modules/evidence';
 import { documentView, importInput, Invoices } from './modules/invoices';
 import { VatRegisters, vatJournalInput, vatJournalView } from './modules/vat';
+import { bnrImportInput, fxChecks, FxRates, rateQuery } from './modules/fx';
 import {
   bankImportInput,
   movementQuery,
@@ -60,7 +63,8 @@ const actionView = z.object({
   result: z.unknown(),
 });
 
-export const defaultRegister = () => new ParameterRegister(vatDefinitions, vatVersions);
+export const defaultRegister = () =>
+  new ParameterRegister([...vatDefinitions, ...fxDefinitions], [...vatVersions, ...fxVersions]);
 
 /** The accounting engine: one kernel, its modules and the operation catalogue they expose. */
 export class Engine {
@@ -77,6 +81,7 @@ export class Engine {
   readonly invoices: Invoices;
   readonly vat: VatRegisters;
   readonly treasury: Treasury;
+  readonly fx: FxRates;
 
   constructor(
     readonly db: Database,
@@ -101,10 +106,13 @@ export class Engine {
       invoiceRecognition,
       creditRecognition,
       settlement,
+      revaluation,
       ...(options.treatments ?? []),
     );
     this.actions = new Actions(this.commands);
-    this.actions.add(closeHandler([...treasuryChecks, ...(options.closeChecks ?? [])]));
+    this.actions.add(
+      closeHandler([...treasuryChecks, ...fxChecks, ...(options.closeChecks ?? [])]),
+    );
     this.actions.add(reopenHandler);
     this.reports = new Reports(this.commands);
     this.companies = new Companies(this.commands, secret);
@@ -119,6 +127,7 @@ export class Engine {
     this.invoices = new Invoices(this.commands, objects);
     this.vat = new VatRegisters(this.commands);
     this.treasury = new Treasury(this.commands, objects);
+    this.fx = new FxRates(this.commands, objects);
     this.operations.add(...this.catalogue());
   }
 
@@ -458,6 +467,28 @@ export class Engine {
         input: movementQuery,
         output: z.array(z.unknown()),
         run: (actor, _, input) => this.treasury.movements(actor, input),
+      }),
+      define({
+        id: 'fx.importBnr',
+        description: 'Importă cursurile de referință BNR dintr-un fișier XML publicat de BNR.',
+        permission: 'write',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: bnrImportInput,
+        output: z.object({ rates: z.number(), added: z.number(), revised: z.number() }),
+        run: (actor, key, input) => this.fx.importBnr(actor, key, input),
+      }),
+      define({
+        id: 'fx.rates',
+        description: 'Cursurile BNR cunoscute pentru o monedă și un interval.',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: rateQuery,
+        output: z.array(z.unknown()),
+        run: (actor, _, input) => this.fx.rates(actor, input),
       }),
       define({
         id: 'vat.journal',

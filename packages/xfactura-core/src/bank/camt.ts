@@ -1,4 +1,5 @@
 import { requireCondition } from '../errors';
+import { isSupportedCurrency } from '../money';
 import { Amount, dateSchema } from '../values';
 import { sourceXml, type XmlElement } from '../xml/source-xml';
 import {
@@ -48,11 +49,13 @@ export function parseCamt(bytes: Uint8Array): BankStatementDocument[] {
   };
   const path = (node: XmlElement | undefined, ...names: string[]) =>
     names.reduce((next, name) => one(next, name, true), node);
+  // Every amount in a statement is in its account's currency.
+  let accountCurrency = '';
   const currency = (node: XmlElement) =>
     requireCondition(
-      node.attributes.Ccy === 'RON',
+      node.attributes.Ccy === accountCurrency,
       'UNSUPPORTED_CURRENCY',
-      'Sunt acceptate numai valori bancare în RON.',
+      'Toate valorile extrasului trebuie să fie în moneda contului.',
     );
   const amount = (node: XmlElement | undefined) => {
     requireCondition(node && node.children.length === 0, 'CAMT_AMOUNT', 'Lipsește suma bancară.');
@@ -119,14 +122,15 @@ export function parseCamt(bytes: Uint8Array): BankStatementDocument[] {
   const messageId = value(header, 'MsgId')!;
   return children(document, 'Stmt').map((statement, ordinal) => {
     pagination(statement);
-    allAmounts(statement);
     const ownAccount = one(statement, 'Acct'),
       account = bankAccount(value(one(ownAccount, 'Id'), 'IBAN')!);
+    accountCurrency = value(ownAccount, 'Ccy') ?? '';
     requireCondition(
-      value(ownAccount, 'Ccy') === 'RON',
+      isSupportedCurrency(accountCurrency),
       'UNSUPPORTED_CURRENCY',
-      'Contul extrasului trebuie să fie în RON.',
+      'Moneda contului extrasului nu este acceptată.',
     );
+    allAmounts(statement);
     const balances = children(statement, 'Bal');
     const getBalance = (code: string) => {
       const selected = balances.filter(
@@ -307,7 +311,7 @@ export function parseCamt(bytes: Uint8Array): BankStatementDocument[] {
       messageId,
       sequence: value(statement, 'ElctrncSeqNb', true) ?? value(statement, 'LglSeqNb', true),
       bankAccount: account,
-      currency: 'RON',
+      currency: accountCurrency,
       from,
       to,
       openingDate: opening.date,

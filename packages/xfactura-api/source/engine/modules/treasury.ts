@@ -12,7 +12,7 @@ import {
 } from 'xfactura-core/bank/statement-document';
 import { requireCondition } from 'xfactura-core/errors';
 import { canonical } from 'xfactura-core/hash';
-import { formatMoney, parseMoney } from 'xfactura-core/money';
+import { formatMoney, isSupportedCurrency, parseMoney } from 'xfactura-core/money';
 import { monthEnd, type Month } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
 import {
@@ -36,7 +36,9 @@ export const treasuryAccountInput = z
     kind: z.enum(['bank', 'cash']),
     name: z.string().trim().min(2).max(200),
     iban: z.string().trim().min(15).max(34).optional(),
-    currency: z.literal('RON'),
+    currency: z
+      .string()
+      .refine((code): boolean => isSupportedCurrency(code), 'Moneda nu este acceptată.'),
     ledgerAccount: z.string().regex(/^5(12|31)\d(\.[A-Z0-9_-]{1,24})?$/),
     openedOn: day,
   })
@@ -44,6 +46,11 @@ export const treasuryAccountInput = z
   .refine((input) => (input.kind === 'bank') === Boolean(input.iban), {
     message: 'Un cont bancar are IBAN; casa nu are.',
     path: ['iban'],
+  })
+  // Lei are kept on 5121/5311 and foreign currency on 5124/5314 (OMFP 1802/2014 chart).
+  .refine((input) => /^5(121|311)/.test(input.ledgerAccount) === (input.currency === 'RON'), {
+    message: 'Contul contabil nu corespunde monedei.',
+    path: ['ledgerAccount'],
   });
 export const bankImportInput = z
   .object({ evidenceId: z.uuid(), financialYearId: z.uuid() })
@@ -56,8 +63,6 @@ export const movementQuery = z
     unsettled: z.boolean().default(false),
   })
   .strict();
-
-const ron = (minor: bigint) => formatMoney(minor, 'RON');
 
 function parseStatements(
   bytes: Uint8Array,
@@ -85,18 +90,19 @@ const settled = (tx: Transaction, companyId: string) =>
       ),
     );
 
-/** The ledger balance of an account at the end of a date, in bani. */
+/** The ledger balance of an account at the end of a date, in the account's own currency. */
 async function ledgerBalance(tx: Transaction, companyId: string, account: string, at: string) {
   const [row] = await tx
     .select({
-      bani: sql<bigint>`coalesce(sum(case ${lines.side} when 'D' then ${lines.bani} else -${lines.bani} end), 0)`.mapWith(
-        BigInt,
-      ),
+      minor:
+        sql<bigint>`coalesce(sum(case ${lines.side} when 'D' then 1 else -1 end * coalesce(${lines.currencyMinor}, ${lines.bani})), 0)`.mapWith(
+          BigInt,
+        ),
     })
     .from(lines)
     .innerJoin(entries, and(eq(entries.companyId, lines.companyId), eq(entries.id, lines.entryId)))
     .where(and(eq(lines.companyId, companyId), eq(lines.account, account), lte(entries.date, at)));
-  return row?.bani ?? 0n;
+  return row?.minor ?? 0n;
 }
 
 export class Treasury {
@@ -195,6 +201,11 @@ export class Treasury {
             iban: statement.bankAccount,
           },
         );
+        requireCondition(
+          account.currency === statement.currency,
+          'BANK_CURRENCY',
+          `Extrasul este în ${statement.currency}, contul ${account.name} în ${account.currency}.`,
+        );
         const financialHash = statementFinancialHash(statement);
         const [existing] = await tx
           .select({ id: bankStatements.id })
@@ -217,15 +228,15 @@ export class Treasury {
             sourceId: statement.sourceId,
             from: statement.from,
             to: statement.to,
-            openingMinor: parseMoney(statement.opening, 'RON'),
-            closingMinor: parseMoney(statement.closing, 'RON'),
+            openingMinor: parseMoney(statement.opening, statement.currency),
+            closingMinor: parseMoney(statement.closing, statement.currency),
             financialHash,
             createdBy: actor.actorId,
           });
         let added = 0;
         for (const entry of statement.entries) {
           const sourceId = entrySourceId(statement, entry);
-          const amountMinor = parseMoney(entry.amount, 'RON');
+          const amountMinor = parseMoney(entry.amount, statement.currency);
           const [known] = await tx
             .select()
             .from(bankMovements)
@@ -312,7 +323,7 @@ export class Treasury {
         treasuryAccountId: movement.treasuryAccountId,
         bookingDate: movement.bookingDate,
         valueDate: movement.valueDate,
-        amount: ron(movement.amountMinor),
+        amount: formatMoney(movement.amountMinor, movement.currency),
         currency: movement.currency,
         reference: movement.reference,
         counterparty: movement.counterparty,
@@ -389,7 +400,7 @@ export const treasuryChecks: CloseCheck[] = [
           findings.push({
             code: 'BANK_BALANCE',
             severity: 'block',
-            message: `Soldul contabil ${ron(balance)} al contului ${account.ledgerAccount} diferă de extras (${ron(latest.closingMinor)}) la ${latest.to}.`,
+            message: `Soldul contabil ${formatMoney(balance, account.currency)} al contului ${account.ledgerAccount} diferă de extras (${formatMoney(latest.closingMinor, account.currency)} ${account.currency}) la ${latest.to}.`,
             items: [latest.id],
           });
       }

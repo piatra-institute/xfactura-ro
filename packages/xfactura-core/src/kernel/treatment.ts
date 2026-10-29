@@ -20,6 +20,10 @@ export interface ReadPlan {
   parties?: string[];
   /** The company's dated profile facts (VAT status, regimes, …), read with `profileAt`. */
   profile?: boolean;
+  /** Reference rates published on or before `until`, newest first, per currency. */
+  fx?: { currency: string; until: LocalDate }[];
+  /** Balances at a date of accounts without partners (bank, cash) held in a foreign currency. */
+  foreignBalances?: { at: LocalDate };
 }
 
 export interface OpenItemQuery {
@@ -31,12 +35,23 @@ export interface OpenItemQuery {
   kind?: OpenItemKind;
   /** Only items whose balance is not zero. */
   openOnly?: boolean;
+  /** Only items held in a currency other than RON. */
+  foreign?: boolean;
 }
 
 /** One recorded read. `version` identifies the state read: for an open item, its number of
  * posted lines; for an immutable record, its content hash. */
 export interface ReadSetEntry {
-  kind: 'evidence' | 'document' | 'entry' | 'openItem' | 'movement' | 'party' | 'profile';
+  kind:
+    | 'evidence'
+    | 'document'
+    | 'entry'
+    | 'openItem'
+    | 'movement'
+    | 'party'
+    | 'profile'
+    | 'fx'
+    | 'balance';
   id: string;
   version: string;
 }
@@ -108,6 +123,22 @@ export interface PostedEntry {
   taxEntries: TaxEntrySpec[];
 }
 
+export interface FxRate {
+  id: string;
+  source: string;
+  currency: string;
+  date: LocalDate;
+  rate: string;
+  multiplier: number;
+}
+
+export interface AccountBalance {
+  account: string;
+  currency: string;
+  bani: bigint;
+  minor: bigint;
+}
+
 export interface ProfileFact {
   axis: string;
   value: string;
@@ -124,6 +155,8 @@ export interface Loaded {
   movements: ReadonlyMap<string, MovementRecord>;
   parties: ReadonlyMap<string, PartyRecord>;
   profile: readonly ProfileFact[];
+  fxRates: ReadonlyMap<string, readonly FxRate[]>;
+  balances: readonly AccountBalance[];
 }
 
 /** The company profile value on an axis at a date, or null when nothing is recorded. */
@@ -153,6 +186,8 @@ export interface Treatment<Input = unknown> {
    * treatments: every treatment that recognizes a document uses `document:<id>`. */
   subject(input: Input): string;
   plan(input: Input): ReadPlan;
+  /** A second read that depends on the first, e.g. rates for a document's currency and date. */
+  followUp?(input: Input, loaded: Loaded): ReadPlan | null;
   evaluate(input: Input, loaded: Loaded, rules: RuleContext): Evaluation;
   /** Whether an agent credential may propose this treatment. */
   agent: boolean;

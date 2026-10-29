@@ -82,6 +82,13 @@ export const invoiceDocumentSchema = z
     issueDate: dateSchema,
     taxPointDate: dateSchema.nullable(),
     currency: z.string().regex(/^[A-Z]{3}$/),
+    /** BT-6 and BT-111: the VAT accounting currency and the VAT total in it, when it differs
+     * from the document currency. */
+    vatCurrency: z
+      .string()
+      .regex(/^[A-Z]{3}$/)
+      .optional(),
+    vatAccountingTotal: moneySchema.optional(),
     supplier: partySchema,
     customer: partySchema,
     originalInvoiceNumber: z.string().max(100).nullable(),
@@ -233,6 +240,18 @@ export function invoiceDocumentFromXml(root: Element): InvoiceDocument {
     taxTotal.length === 1,
     'XML_TAX',
     'Totalul TVA în moneda facturii lipsește sau este ambiguu.',
+  );
+  const vatCurrency = value(root, 'TaxCurrencyCode', true);
+  const accountingTotal =
+    vatCurrency && vatCurrency !== currency
+      ? children(root, 'TaxTotal').filter(
+          (node) => one(node, 'TaxAmount', cbc, true)?.attributes.currencyID === vatCurrency,
+        )
+      : [];
+  requireCondition(
+    !vatCurrency || vatCurrency === currency || accountingTotal.length === 1,
+    'XML_TAX',
+    'Totalul TVA în moneda de contabilizare a TVA lipsește sau este ambiguu.',
   );
   const totals = one(root, 'LegalMonetaryTotal')!;
   const negative =
@@ -401,6 +420,17 @@ export function invoiceDocumentFromXml(root: Element): InvoiceDocument {
     issueDate: value(root, 'IssueDate'),
     taxPointDate: value(root, 'TaxPointDate', true),
     currency,
+    ...(accountingTotal[0]
+      ? {
+          vatCurrency: vatCurrency!,
+          // Normalized like every other amount: a negative invoice states its totals as positive.
+          vatAccountingTotal: new Amount(
+            amount(accountingTotal[0], 'TaxAmount', vatCurrency!, false, negative),
+          )
+            .abs()
+            .toFixed(2),
+        }
+      : {}),
     supplier: party(root, 'AccountingSupplierParty'),
     customer: party(root, 'AccountingCustomerParty'),
     originalInvoiceNumber: references[0]?.number ?? null,

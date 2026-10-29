@@ -1,12 +1,14 @@
-import { and, asc, eq, inArray, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, lte, ne, sql, type SQL } from 'drizzle-orm';
 import { hashOf } from 'xfactura-core/hash';
 import type {
+  AccountBalance,
   AccountInfo,
   ControlKind,
   DocumentRecord,
   EvidenceRecord,
   MovementRecord,
   FiscalYear,
+  FxRate,
   LineSpec,
   Loaded,
   OpenItemKind,
@@ -26,6 +28,7 @@ import {
   bankMovements,
   evidence,
   fiscalYears,
+  fxRates,
   ledgerAccounts,
   lines,
   openItems,
@@ -239,6 +242,7 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
     if (query.documentId) where.push(eq(openItems.documentId, query.documentId));
     if (query.partyId) where.push(eq(openItems.partyId, query.partyId));
     if (query.kind) where.push(eq(openItems.kind, query.kind));
+    if (query.foreign) where.push(ne(openItems.currency, 'RON'));
     for (const item of await loadOpenItems(tx, companyId, where))
       if (!query.openOnly || item.balanceBani !== 0n || item.balanceMinor !== 0n)
         itemMap.set(item.id, item);
@@ -306,6 +310,88 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
     readSet.push({ kind: 'profile', id: 'company', version: hashOf(profile) });
   }
 
+  const rateMap = new Map<string, FxRate[]>();
+  for (const query of plan.fx ?? []) {
+    const rows = await tx
+      .select()
+      .from(fxRates)
+      .where(
+        and(
+          eq(fxRates.source, 'BNR'),
+          eq(fxRates.currency, query.currency),
+          lte(fxRates.rateDate, query.until),
+        ),
+      )
+      .orderBy(desc(fxRates.rateDate), desc(fxRates.revision))
+      .limit(20);
+    const latest: FxRate[] = [];
+    for (const row of rows)
+      if (latest.at(-1)?.date !== row.rateDate)
+        latest.push({
+          id: `${row.source}/${row.currency}/${row.rateDate}/${row.revision}`,
+          source: row.source,
+          currency: row.currency,
+          date: date(row.rateDate),
+          rate: row.rate,
+          multiplier: row.multiplier,
+        });
+    const known = rateMap.get(query.currency) ?? [];
+    for (const rate of latest) if (!known.some((item) => item.id === rate.id)) known.push(rate);
+    rateMap.set(
+      query.currency,
+      known.sort((a, b) => (a.date < b.date ? 1 : -1)),
+    );
+  }
+  for (const rates of rateMap.values())
+    for (const rate of rates) readSet.push({ kind: 'fx', id: rate.id, version: rate.rate });
+
+  const balances: AccountBalance[] = [];
+  if (plan.foreignBalances) {
+    const rows = await tx
+      .select({
+        account: lines.account,
+        currency: lines.currency,
+        bani: sql<bigint>`sum(${sign} * ${lines.bani})`.mapWith(BigInt),
+        minor: sql<bigint>`sum(${sign} * ${lines.currencyMinor})`.mapWith(BigInt),
+      })
+      .from(lines)
+      .innerJoin(
+        entries,
+        and(eq(entries.companyId, lines.companyId), eq(entries.id, lines.entryId)),
+      )
+      .innerJoin(
+        treasuryAccounts,
+        and(
+          eq(treasuryAccounts.companyId, lines.companyId),
+          eq(treasuryAccounts.ledgerAccount, lines.account),
+        ),
+      )
+      .where(
+        and(
+          eq(lines.companyId, companyId),
+          isNotNull(lines.currency),
+          lte(entries.date, plan.foreignBalances.at),
+        ),
+      )
+      .groupBy(lines.account, lines.currency)
+      .orderBy(asc(lines.account), asc(lines.currency));
+    for (const row of rows) {
+      if (row.bani === 0n && row.minor === 0n) continue;
+      const balance = {
+        account: row.account,
+        currency: row.currency!,
+        bani: row.bani,
+        minor: row.minor,
+      };
+      balances.push(balance);
+      readSet.push({
+        kind: 'balance',
+        id: `${row.account}/${row.currency}`,
+        version: `${row.bani}/${row.minor}`,
+      });
+    }
+  }
+
   const loaded: Loaded = {
     years,
     evidence: evidenceMap,
@@ -315,6 +401,8 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
     movements: movementMap,
     parties: partyMap,
     profile,
+    fxRates: rateMap,
+    balances,
   };
   return { loaded, readSet };
 }
@@ -334,4 +422,34 @@ export async function loadAccounts(tx: Transaction, companyId: string, codes: st
       validTo: row.validTo ? date(row.validTo) : null,
     });
   return map;
+}
+
+/** Combines a follow-up read with the first one; entries already loaded keep their first value. */
+export function mergeStates(
+  first: Awaited<ReturnType<typeof loadState>>,
+  second: Awaited<ReturnType<typeof loadState>>,
+) {
+  const merge = <V>(a: ReadonlyMap<string, V>, b: ReadonlyMap<string, V>) => new Map([...b, ...a]);
+  const loaded: Loaded = {
+    years: first.loaded.years,
+    evidence: merge(first.loaded.evidence, second.loaded.evidence),
+    documents: merge(first.loaded.documents, second.loaded.documents),
+    entries: merge(first.loaded.entries, second.loaded.entries),
+    openItems: merge(first.loaded.openItems, second.loaded.openItems),
+    movements: merge(first.loaded.movements, second.loaded.movements),
+    parties: merge(first.loaded.parties, second.loaded.parties),
+    profile: first.loaded.profile.length ? first.loaded.profile : second.loaded.profile,
+    fxRates: merge(first.loaded.fxRates, second.loaded.fxRates),
+    balances: first.loaded.balances.length ? first.loaded.balances : second.loaded.balances,
+  };
+  const seen = new Set<string>();
+  const readSet = [...first.readSet, ...second.readSet]
+    .filter((entry) => {
+      const id = `${entry.kind}/${entry.id}`;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    })
+    .sort((a, b) => (a.kind === b.kind ? (a.id < b.id ? -1 : 1) : a.kind < b.kind ? -1 : 1));
+  return { loaded, readSet };
 }

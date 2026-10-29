@@ -23,7 +23,10 @@
     "./bank/mt940": "./src/bank/mt940.ts",
     "./bank/camt": "./src/bank/camt.ts",
     "./ro/treatments/invoices": "./src/ro/treatments/invoices.ts",
-    "./ro/treatments/settlement": "./src/ro/treatments/settlement.ts"
+    "./ro/treatments/settlement": "./src/ro/treatments/settlement.ts",
+    "./fx/bnr": "./src/fx/bnr.ts",
+    "./ro/fx": "./src/ro/fx.ts",
+    "./ro/treatments/revaluation": "./src/ro/treatments/revaluation.ts"
   },
   "dependencies": {
     "@noble/hashes": "2.4.0",

@@ -30,7 +30,7 @@ import {
 } from '../db/schema';
 import type { Actor, Commands } from './commands';
 import { writeEntry } from './ledger';
-import { loadAccounts, loadState } from './state';
+import { loadAccounts, loadState, mergeStates } from './state';
 import { viewEffect, type ProposalView, type StoredEffect } from './views';
 import type { PostingPolicies } from './policies';
 
@@ -166,7 +166,10 @@ export class Proposals {
     treatment: Treatment,
     input: unknown,
   ): Promise<Evaluated> {
-    const { loaded, readSet } = await loadState(tx, companyId, treatment.plan(input));
+    let state = await loadState(tx, companyId, treatment.plan(input));
+    const followUp = treatment.followUp?.(input, state.loaded);
+    if (followUp) state = mergeStates(state, await loadState(tx, companyId, followUp));
+    const { loaded, readSet } = state;
     const mode = await this.mode(tx, companyId);
     const rules = new RuleContext(this.register, mode);
     let effect: Effect | null = null;

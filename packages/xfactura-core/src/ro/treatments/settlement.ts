@@ -2,11 +2,13 @@ import { z } from 'zod';
 import {
   accountCodePattern,
   type Effect,
+  type FxRate,
   type Issue,
   type LineSpec,
   type Treatment,
 } from '../../kernel';
-import { formatMoney, LEDGER_CURRENCY, parseMoney } from '../../money';
+import { convertMinor, divRound, formatMoney, LEDGER_CURRENCY, parseMoney } from '../../money';
+import { selectRate } from '../fx';
 import { controlKindOf } from '../chart';
 
 const amount = z
@@ -66,7 +68,13 @@ export const settlement: Treatment<SettlementInput> = {
     movements: [input.movementId],
     openItems: [{ ids: input.allocations.map((allocation) => allocation.openItem) }],
   }),
-  evaluate(input, loaded) {
+  followUp(input, loaded) {
+    const movement = loaded.movements.get(input.movementId);
+    return movement && movement.currency !== LEDGER_CURRENCY
+      ? { fx: [{ currency: movement.currency, until: movement.bookingDate }] }
+      : null;
+  },
+  evaluate(input, loaded, rules) {
     const movement = loaded.movements.get(input.movementId);
     if (!movement)
       return {
@@ -74,37 +82,79 @@ export const settlement: Treatment<SettlementInput> = {
         issues: [block('MOVEMENT', 'Mișcarea bancară nu este disponibilă.', 'movementId')],
       };
     const issues: Issue[] = [];
-    if (movement.currency !== LEDGER_CURRENCY)
-      issues.push(block('CURRENCY', 'Mișcările în valută cer tratamentul de curs valutar.'));
+    const currency = movement.currency;
+    const foreign = currency !== LEDGER_CURRENCY;
+    let rate: FxRate | undefined;
+    if (foreign) {
+      const selected = selectRate(loaded, rules, currency, movement.bookingDate, 'accounting');
+      if ('code' in selected) return { effect: null, issues: [selected] };
+      rate = selected;
+    }
+    const toRon = (minor: bigint) =>
+      rate
+        ? convertMinor(minor, currency, { rate: rate.rate, multiplier: rate.multiplier })
+        : minor;
+    const withCurrency = (line: LineSpec, minor: bigint): LineSpec =>
+      rate
+        ? { ...line, currency: { code: currency, minor, rateId: rate.id, rate: rate.rate } }
+        : line;
     const received = movement.amountMinor > 0n;
     const total = received ? movement.amountMinor : -movement.amountMinor;
+    const bank = toRon(total);
     // Settlement lines sit opposite the bank line: credits for receipts, debits for payments.
     const side = received ? 'C' : 'D';
     const lines: LineSpec[] = [
-      { account: movement.ledgerAccount, side: received ? 'D' : 'C', bani: total },
+      withCurrency(
+        { account: movement.ledgerAccount, side: received ? 'D' : 'C', bani: bank },
+        total,
+      ),
     ];
     let explained = 0n;
+    let settledBani = 0n;
     input.allocations.forEach((allocation, index) => {
       const item = loaded.openItems.get(allocation.openItem);
-      const bani = parseMoney(allocation.amount, LEDGER_CURRENCY);
-      explained += bani;
+      const minor = parseMoney(allocation.amount, currency);
+      explained += minor;
       if (!item) {
         issues.push(
           block('OPEN_ITEM', 'Poziția deschisă nu este disponibilă.', `allocations.${index}`),
         );
         return;
       }
-      lines.push({
-        account: item.controlAccount,
-        side,
-        bani,
-        openItem: item.id,
-        partyId: item.partyId,
-      });
+      if (item.currency !== currency) {
+        issues.push(
+          block(
+            'CURRENCY_MISMATCH',
+            'Poziția are altă monedă decât mișcarea bancară.',
+            `allocations.${index}`,
+          ),
+        );
+        return;
+      }
+      // A foreign item releases its RON carrying amount in proportion to the currency settled;
+      // settling the whole balance releases all of it, so nothing is left in lei.
+      const balanceMinor = item.balanceMinor < 0n ? -item.balanceMinor : item.balanceMinor;
+      const balanceBani = item.balanceBani < 0n ? -item.balanceBani : item.balanceBani;
+      const bani = !foreign
+        ? minor
+        : minor === balanceMinor
+          ? balanceBani
+          : balanceMinor === 0n
+            ? toRon(minor)
+            : divRound(balanceBani * minor, balanceMinor, 'halfAwayFromZero');
+      settledBani += bani;
+      lines.push(
+        withCurrency(
+          { account: item.controlAccount, side, bani, openItem: item.id, partyId: item.partyId },
+          minor,
+        ),
+      );
     });
     input.lines.forEach((line, index) => {
-      const bani = parseMoney(line.amount, LEDGER_CURRENCY);
-      explained += bani;
+      const minor = parseMoney(line.amount, currency);
+      const bani = toRon(minor);
+      explained += minor;
+      settledBani += bani;
       if (controlKindOf(line.account))
         issues.push(
           block(
@@ -113,16 +163,32 @@ export const settlement: Treatment<SettlementInput> = {
             `lines.${index}`,
           ),
         );
-      lines.push({ account: line.account, side, bani, ...(line.memo ? { memo: line.memo } : {}) });
+      lines.push(
+        withCurrency(
+          { account: line.account, side, bani, ...(line.memo ? { memo: line.memo } : {}) },
+          minor,
+        ),
+      );
     });
     if (explained !== total)
       issues.push(
         block(
           'UNEXPLAINED',
-          `Sumele explicate (${formatMoney(explained, LEDGER_CURRENCY)}) diferă de mișcare (${formatMoney(total, LEDGER_CURRENCY)}).`,
+          `Sumele explicate (${formatMoney(explained, currency)}) diferă de mișcare (${formatMoney(total, currency)} ${currency}).`,
         ),
       );
     if (issues.some((issue) => issue.severity === 'block')) return { effect: null, issues };
+    // The realized exchange difference: what the bank booked in lei against the carrying amounts.
+    const difference = bank - settledBani;
+    if (difference !== 0n) {
+      const gain = received ? difference > 0n : difference < 0n;
+      lines.push({
+        account: gain ? '7651' : '6651',
+        side: gain ? 'C' : 'D',
+        bani: difference < 0n ? -difference : difference,
+        memo: 'Diferență de curs realizată',
+      });
+    }
     const effect: Effect = {
       schema: 'effect@1',
       date: movement.bookingDate,
@@ -136,7 +202,7 @@ export const settlement: Treatment<SettlementInput> = {
       taxEntries: [],
       schedules: [],
       explanation: {
-        summary: `${received ? 'Încasare' : 'Plată'} de ${formatMoney(total, LEDGER_CURRENCY)} lei din ${movement.bookingDate}.`,
+        summary: `${received ? 'Încasare' : 'Plată'} de ${formatMoney(total, currency)} ${currency} din ${movement.bookingDate}${rate ? ` la cursul ${rate.rate}` : ''}.`,
         details: {
           movementId: movement.id,
           reference: movement.reference,

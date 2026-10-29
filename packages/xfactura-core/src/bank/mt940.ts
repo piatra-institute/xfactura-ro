@@ -1,4 +1,5 @@
 import { requireCondition } from '../errors';
+import { isSupportedCurrency } from '../money';
 import { dateSchema } from '../values';
 import {
   bankAccount,
@@ -67,11 +68,12 @@ function balance(field: Field, anchor: string) {
   const found = /^([CD])(\d{6})([A-Z]{3})(\d{1,16},\d{0,2})$/.exec(field.value);
   requireCondition(found, 'MT940_BALANCE', 'Sold MT940 invalid.');
   requireCondition(
-    found[3] === 'RON',
+    isSupportedCurrency(found[3]!),
     'UNSUPPORTED_CURRENCY',
-    'Sunt acceptate numai extrase contabile în RON.',
+    'Moneda extrasului nu este acceptată.',
   );
   return {
+    currency: found[3]!,
     date: shortDate(found[2], anchor),
     amount: signedBankAmount(bankNumber(found[4], ','), found[1] === 'D' ? 'DBIT' : 'CRDT'),
   };
@@ -151,7 +153,7 @@ export function parseMt940(
       requireCondition(
         !found[4] || found[4] === 'N',
         'UNSUPPORTED_CURRENCY',
-        'Codul valutei tranzacției nu corespunde contului RON.',
+        'Codul valutei tranzacției nu corespunde contului.',
       );
       const valueDate = shortDate(found[1], closing.date),
         mmdd = found[2];
@@ -227,8 +229,17 @@ export function parseMt940(
         details: [],
       });
     }
+    requireCondition(
+      closing.currency === opening.currency,
+      'UNSUPPORTED_CURRENCY',
+      'Soldurile extrasului au monede diferite.',
+    );
     for (const extra of fields.filter((field) => field.tag === '64' || field.tag === '65'))
-      balance(extra, year.to);
+      requireCondition(
+        balance(extra, year.to).currency === opening.currency,
+        'UNSUPPORTED_CURRENCY',
+        'Soldurile extrasului au monede diferite.',
+      );
     return {
       ordinal,
       format: 'mt940',
@@ -236,7 +247,7 @@ export function parseMt940(
       messageId: trn,
       sequence,
       bankAccount: account,
-      currency: 'RON',
+      currency: opening.currency,
       from: opening.date,
       to: closing.date,
       openingDate: opening.date,

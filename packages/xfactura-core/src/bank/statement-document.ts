@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { requireCondition } from '../errors';
 import { canonical, sha256Hex as sha256 } from '../hash';
+import { isSupportedCurrency } from '../money';
 import { Amount, dateSchema, signedMoneySchema } from '../values';
 
 export const bankFileLimits = Object.freeze({
@@ -71,7 +72,7 @@ export const bankStatementDocumentSchema = z
     messageId: z.string().max(200).nullable(),
     sequence: z.string().max(100).nullable(),
     bankAccount: z.string().min(15).max(34),
-    currency: z.literal('RON'),
+    currency: z.string().refine((code): boolean => isSupportedCurrency(code)),
     from: dateSchema,
     to: dateSchema,
     openingDate: dateSchema,

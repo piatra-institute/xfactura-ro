@@ -4,13 +4,21 @@ import {
   profileAt,
   type DocumentRecord,
   type Effect,
+  type FxRate,
   type Issue,
   type LineSpec,
   type Loaded,
   type TaxEntrySpec,
   type Treatment,
 } from '../../kernel';
-import { LEDGER_CURRENCY, parseMoney } from '../../money';
+import {
+  convertMinor,
+  formatMoney,
+  isSupportedCurrency,
+  LEDGER_CURRENCY,
+  parseMoney,
+} from '../../money';
+import { selectRate } from '../fx';
 import type { RuleContext } from '../../rules';
 import { isLocalDate, type LocalDate } from '../../time';
 import { invoiceDocumentSchema, type InvoiceDocument } from '../../ubl/invoice-document';
@@ -62,8 +70,6 @@ function vatFor(invoice: Invoice, loaded: Loaded, rules: RuleContext, taxPoint: 
   const issues: Issue[] = [];
   const body = invoice.body;
   const status = profileAt(loaded, 'vat.status', taxPoint);
-  if (body.currency !== LEDGER_CURRENCY)
-    issues.push(block('CURRENCY', 'Documentele în valută cer tratamentul de curs valutar.'));
   const categories = new Set([
     ...body.taxes.map((tax) => `${tax.category}/${tax.rate}`),
     ...body.lines.map((line) => `${line.vatCategory}/${line.vatRate}`),
@@ -123,6 +129,62 @@ const vatEntry = (
   ...entry,
 });
 
+/**
+ * The amounts to book, in RON. A foreign-currency document is converted at the accounting rate
+ * on its issue date; its VAT is the RON total the document states (BT-111), compared with the
+ * BNR rate at the tax point.
+ */
+function amountsFor(invoice: Invoice, loaded: Loaded, rules: RuleContext, taxPoint: LocalDate) {
+  const body = invoice.body;
+  const issues: Issue[] = [];
+  if (body.currency === LEDGER_CURRENCY) {
+    const net = ron(body.totals.net);
+    const tax = ron(body.totals.tax);
+    return { issues, net, tax, gross: net + tax, base: net, fx: undefined };
+  }
+  if (!isSupportedCurrency(body.currency)) {
+    issues.push(block('CURRENCY', `Moneda ${body.currency} nu este acceptată.`));
+    return { issues };
+  }
+  if (body.vatCurrency !== LEDGER_CURRENCY || body.vatAccountingTotal === undefined)
+    issues.push(
+      block('VAT_CURRENCY', 'Factura în valută trebuie să indice TVA în lei (BT-6, BT-111).'),
+    );
+  const accounting = selectRate(loaded, rules, body.currency, date(body.issueDate), 'accounting');
+  const vatRate = selectRate(loaded, rules, body.currency, taxPoint, 'vat');
+  if ('code' in accounting) issues.push(accounting);
+  else if ('code' in vatRate) issues.push(vatRate);
+  if (issues.length || 'code' in accounting || 'code' in vatRate) return { issues };
+  const minor = (value: string) => parseMoney(value, body.currency);
+  const fx = {
+    code: body.currency,
+    net: minor(body.totals.net),
+    tax: minor(body.totals.tax),
+    gross: minor(body.totals.gross),
+    accounting,
+    vat: vatRate,
+  };
+  const quote = (rate: FxRate) => ({ rate: rate.rate, multiplier: rate.multiplier });
+  const net = convertMinor(fx.net, fx.code, quote(accounting));
+  const tax = ron(body.vatAccountingTotal!);
+  const expected = convertMinor(fx.tax, fx.code, quote(vatRate));
+  if (tax !== expected)
+    issues.push(
+      warn(
+        'VAT_FX',
+        `TVA în lei din document (${formatMoney(tax, LEDGER_CURRENCY)}) diferă de TVA la cursul BNR (${formatMoney(expected, LEDGER_CURRENCY)}).`,
+      ),
+    );
+  return {
+    issues,
+    net,
+    tax,
+    gross: net + tax,
+    base: convertMinor(fx.net, fx.code, quote(vatRate)),
+    fx,
+  };
+}
+
 export const recognitionInput = z
   .object({
     documentId: z.uuid(),
@@ -153,13 +215,22 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
   agent: true,
   subject: (input) => `document:${input.documentId}`,
   plan: (input) => ({ documents: [input.documentId], profile: true }),
+  followUp(input, loaded) {
+    const parsed = invoiceDocumentSchema.safeParse(loaded.documents.get(input.documentId)?.body);
+    if (!parsed.success || parsed.data.currency === LEDGER_CURRENCY) return null;
+    const until = [parsed.data.issueDate, parsed.data.taxPointDate ?? parsed.data.issueDate]
+      .sort()
+      .at(-1)!;
+    return { fx: [{ currency: parsed.data.currency, until: date(until) }] };
+  },
   evaluate(input, loaded, rules) {
     const invoice = invoiceOf(loaded, input.documentId, false);
     if ('code' in invoice) return { effect: null, issues: [invoice] };
     const { body, direction } = invoice;
     const taxPoint = date(body.taxPointDate ?? body.issueDate);
     const vat = vatFor(invoice, loaded, rules, taxPoint);
-    const issues = [...vat.issues];
+    const amounts = amountsFor(invoice, loaded, rules, taxPoint);
+    const issues = [...vat.issues, ...amounts.issues];
     if (direction === 'sale' ? !input.account.startsWith('70') : !input.account.startsWith('6'))
       issues.push(
         block(
@@ -191,11 +262,34 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
     if (!invoice.record.partyId) issues.push(block('PARTY', 'Documentul nu are partener.'));
     if (issues.some((issue) => issue.severity === 'block')) return { effect: null, issues };
 
-    const net = ron(body.totals.net);
-    const tax = ron(body.totals.tax);
-    const gross = ron(body.totals.gross);
+    const { net, tax, gross, base, fx } = amounts as Required<Omit<typeof amounts, 'fx'>> &
+      Pick<typeof amounts, 'fx'>;
     const partyId = invoice.record.partyId!;
     const code = vat.category === 'S' ? `S-${vat.rate}` : 'O';
+    // Every line of a foreign-currency document records its currency amount and rate.
+    const line = (spec: LineSpec, minor?: bigint, rate?: FxRate): LineSpec =>
+      fx && minor !== undefined
+        ? {
+            ...spec,
+            currency: {
+              code: fx.code,
+              minor: spec.bani < 0n ? -minor : minor,
+              rateId: (rate ?? fx.accounting).id,
+              rate: (rate ?? fx.accounting).rate,
+            },
+          }
+        : spec;
+    const vatCurrency = fx
+      ? {
+          currency: {
+            code: fx.code,
+            baseMinor: fx.net,
+            taxMinor: fx.tax,
+            rateId: fx.vat.id,
+            rate: fx.vat.rate,
+          },
+        }
+      : {};
     const lines: LineSpec[] = [];
     const taxEntries: TaxEntrySpec[] = [];
     const item = {
@@ -203,52 +297,74 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
       kind: direction === 'sale' ? ('receivable' as const) : ('payable' as const),
       controlAccount: direction === 'sale' ? '4111' : '401',
       partyId,
-      currency: LEDGER_CURRENCY,
+      currency: fx?.code ?? LEDGER_CURRENCY,
       normalSide: direction === 'sale' ? ('D' as const) : ('C' as const),
       mayReverse: false,
       documentId: invoice.record.id,
     };
     if (direction === 'sale') {
-      lines.push({ account: '4111', side: 'D', bani: gross, openItem: item.ref, partyId });
-      lines.push({ account: input.account, side: 'C', bani: net });
+      lines.push(
+        line({ account: '4111', side: 'D', bani: gross, openItem: item.ref, partyId }, fx?.gross),
+      );
+      lines.push(line({ account: input.account, side: 'C', bani: net }, fx?.net));
       if (tax !== 0n) {
-        lines.push({ account: '4427', side: 'C', bani: tax });
-        taxEntries.push(
-          vatEntry(
-            invoice,
-            { baseBani: net, taxBani: tax, deductibleBani: 0n, ledgerBani: tax, line: 2, taxPoint },
-            code,
-          ),
-        );
-      }
-    } else if (input.deduction === 'full' || tax === 0n) {
-      lines.push({ account: input.account, side: 'D', bani: net });
-      if (tax !== 0n) {
-        lines.push({ account: '4426', side: 'D', bani: tax });
+        lines.push(line({ account: '4427', side: 'C', bani: tax }, fx?.tax, fx?.vat));
         taxEntries.push(
           vatEntry(
             invoice,
             {
-              baseBani: net,
+              baseBani: base,
               taxBani: tax,
-              deductibleBani: tax,
+              deductibleBani: 0n,
               ledgerBani: tax,
-              line: 1,
+              line: 2,
               taxPoint,
+              ...vatCurrency,
             },
             code,
           ),
         );
       }
-      lines.push({ account: '401', side: 'C', bani: gross, openItem: item.ref, partyId });
+    } else if (input.deduction === 'full' || tax === 0n) {
+      lines.push(line({ account: input.account, side: 'D', bani: net }, fx?.net));
+      if (tax !== 0n) {
+        lines.push(line({ account: '4426', side: 'D', bani: tax }, fx?.tax, fx?.vat));
+        taxEntries.push(
+          vatEntry(
+            invoice,
+            {
+              baseBani: base,
+              taxBani: tax,
+              deductibleBani: tax,
+              ledgerBani: tax,
+              line: 1,
+              taxPoint,
+              ...vatCurrency,
+            },
+            code,
+          ),
+        );
+      }
+      lines.push(
+        line({ account: '401', side: 'C', bani: gross, openItem: item.ref, partyId }, fx?.gross),
+      );
     } else {
       // Non-deductible VAT is part of the expense; the tax entry records it without a VAT line.
-      lines.push({ account: input.account, side: 'D', bani: gross });
-      lines.push({ account: '401', side: 'C', bani: gross, openItem: item.ref, partyId });
+      lines.push(line({ account: input.account, side: 'D', bani: gross }, fx?.gross));
+      lines.push(
+        line({ account: '401', side: 'C', bani: gross, openItem: item.ref, partyId }, fx?.gross),
+      );
       taxEntries.push(
         vatEntry(
           invoice,
-          { baseBani: net, taxBani: tax, deductibleBani: 0n, ledgerBani: 0n, taxPoint },
+          {
+            baseBani: base,
+            taxBani: tax,
+            deductibleBani: 0n,
+            ledgerBani: 0n,
+            taxPoint,
+            ...vatCurrency,
+          },
           code,
         ),
       );
@@ -264,7 +380,9 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
       taxEntries,
       schedules: [],
       explanation: {
-        summary: `${body.number} din ${body.issueDate}: bază ${body.totals.net}, TVA ${body.totals.tax}, total ${body.totals.gross} lei.`,
+        summary: fx
+          ? `${body.number} din ${body.issueDate}: ${body.totals.gross} ${fx.code} la cursul ${fx.accounting.rate} (${fx.accounting.date}); TVA ${formatMoney(tax, LEDGER_CURRENCY)} lei.`
+          : `${body.number} din ${body.issueDate}: bază ${body.totals.net}, TVA ${body.totals.tax}, total ${body.totals.gross} lei.`,
         details: {
           taxPoint,
           category: vat.category,
@@ -315,6 +433,8 @@ export const creditRecognition: Treatment<CreditInput> = {
         issues: ['code' in credit ? credit : [], 'code' in original ? original : []].flat(),
       };
     const issues: Issue[] = [];
+    if (credit.body.currency !== LEDGER_CURRENCY || original.body.currency !== LEDGER_CURRENCY)
+      issues.push(block('CURRENCY', 'Notele de credit în valută cer un tratament separat.'));
     if (
       credit.direction !== original.direction ||
       credit.record.partyId !== original.record.partyId
