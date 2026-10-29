@@ -436,6 +436,118 @@ export const issuedNumbers = sqliteTable(
   ],
 );
 
+// SPV: submissions to e-Factura, messages read from it and the windows synced
+
+/** An authorized upload of one issued document's XML (the evidence with hash `xmlHash`). */
+export const submissions = sqliteTable(
+  'acc_submissions',
+  {
+    id: text('id').notNull(),
+    companyId: companyId(),
+    documentId: text('document_id').notNull(),
+    evidenceId: text('evidence_id').notNull(),
+    xmlHash: text('xml_hash').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.id] }),
+    index('submission_document').on(t.companyId, t.documentId),
+    index('submission_xml').on(t.companyId, t.xmlHash),
+    foreignKey({
+      columns: [t.companyId, t.documentId],
+      foreignColumns: [documents.companyId, documents.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.evidenceId],
+      foreignColumns: [evidence.companyId, evidence.id],
+    }),
+  ],
+);
+export const submissionStates = [
+  'authorized',
+  'submitting',
+  'submitted',
+  'uncertain',
+  'accepted',
+  'rejected',
+  'absent',
+] as const;
+/** Each step of a submission, in order; `submitting` is written before any request leaves. */
+export const submissionEvents = sqliteTable(
+  'acc_submission_events',
+  {
+    companyId: companyId(),
+    submissionId: text('submission_id').notNull(),
+    seq: counter('seq').notNull(),
+    state: text('state', { enum: submissionStates }).notNull(),
+    uploadId: text('upload_id'),
+    downloadId: text('download_id'),
+    detail: text('detail'),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.submissionId, t.seq] }),
+    index('submission_upload').on(t.companyId, t.uploadId),
+    foreignKey({
+      columns: [t.companyId, t.submissionId],
+      foreignColumns: [submissions.companyId, submissions.id],
+    }),
+  ],
+);
+/** A message from the SPV inbox, with what its archive became in the books. */
+export const spvMessages = sqliteTable(
+  'acc_spv_messages',
+  {
+    companyId: companyId(),
+    /** ANAF's message (download) identifier. */
+    id: text('id').notNull(),
+    uploadId: text('upload_id').notNull(),
+    kind: text('kind', { enum: ['sent', 'received', 'error', 'buyer_message'] }).notNull(),
+    /** When ANAF created the message, in epoch milliseconds. */
+    createdAtAnaf: counter('created_at_anaf').notNull(),
+    details: text('details').notNull(),
+    evidenceId: text('evidence_id'),
+    documentId: text('document_id'),
+    outcome: text('outcome', {
+      enum: ['created', 'matched', 'differs', 'reconciled', 'recorded', 'error'],
+    }).notNull(),
+    detail: text('detail'),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.id] }),
+    index('spv_message_upload').on(t.companyId, t.uploadId),
+    foreignKey({
+      columns: [t.companyId, t.evidenceId],
+      foreignColumns: [evidence.companyId, evidence.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.documentId],
+      foreignColumns: [documents.companyId, documents.id],
+    }),
+  ],
+);
+/** A time window whose SPV messages were listed completely; their union is the coverage. */
+export const spvSyncWindows = sqliteTable(
+  'acc_spv_sync_windows',
+  {
+    companyId: companyId(),
+    seq: counter('seq').notNull(),
+    from: counter('from_ms').notNull(),
+    to: counter('to_ms').notNull(),
+    messages: counter('messages').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.seq] }),
+    check('spv_window', sql`${t.from} < ${t.to}`),
+  ],
+);
+
 // Proposals, approvals and posting policies
 
 export const proposals = sqliteTable(

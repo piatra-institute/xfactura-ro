@@ -1,0 +1,5412 @@
+{
+  "version": "6",
+  "dialect": "sqlite",
+  "id": "23f801d8-6966-4c38-9939-eb6ad678eb3d",
+  "prevId": "a5a9e0df-f980-4b31-aaaf-14995e2a5e43",
+  "tables": {
+    "account": {
+      "name": "account",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "account_id": {
+          "name": "account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "provider_id": {
+          "name": "provider_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "access_token": {
+          "name": "access_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "refresh_token": {
+          "name": "refresh_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "id_token": {
+          "name": "id_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "scope": {
+          "name": "scope",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "password": {
+          "name": "password",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "access_token_expires_at": {
+          "name": "access_token_expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "refresh_token_expires_at": {
+          "name": "refresh_token_expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "account_user": {
+          "name": "account_user",
+          "columns": ["user_id"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "account_user_id_user_id_fk": {
+          "name": "account_user_id_user_id_fk",
+          "tableFrom": "account",
+          "tableTo": "user",
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_action_decisions": {
+      "name": "acc_action_decisions",
+      "columns": {
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "request_id": {
+          "name": "request_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "decision": {
+          "name": "decision",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "preview_hash": {
+          "name": "preview_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "decided_by": {
+          "name": "decided_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "decided_epoch": {
+          "name": "decided_epoch",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "acc_action_decisions_company_id_acc_companies_id_fk": {
+          "name": "acc_action_decisions_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_action_decisions",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_action_decisions_decided_by_user_id_fk": {
+          "name": "acc_action_decisions_decided_by_user_id_fk",
+          "tableFrom": "acc_action_decisions",
+          "tableTo": "user",
+          "columnsFrom": ["decided_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_action_decisions_company_id_request_id_acc_action_requests_company_id_id_fk": {
+          "name": "acc_action_decisions_company_id_request_id_acc_action_requests_company_id_id_fk",
+          "tableFrom": "acc_action_decisions",
+          "tableTo": "acc_action_requests",
+          "columnsFrom": ["company_id", "request_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_action_decisions_company_id_request_id_pk": {
+          "columns": ["company_id", "request_id"],
+          "name": "acc_action_decisions_company_id_request_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_action_executions": {
+      "name": "acc_action_executions",
+      "columns": {
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "request_id": {
+          "name": "request_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "result_json": {
+          "name": "result_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "executed_by": {
+          "name": "executed_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "acc_action_executions_company_id_acc_companies_id_fk": {
+          "name": "acc_action_executions_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_action_executions",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_action_executions_executed_by_user_id_fk": {
+          "name": "acc_action_executions_executed_by_user_id_fk",
+          "tableFrom": "acc_action_executions",
+          "tableTo": "user",
+          "columnsFrom": ["executed_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_action_executions_company_id_request_id_acc_action_decisions_company_id_request_id_fk": {
+          "name": "acc_action_executions_company_id_request_id_acc_action_decisions_company_id_request_id_fk",
+          "tableFrom": "acc_action_executions",
+          "tableTo": "acc_action_decisions",
+          "columnsFrom": ["company_id", "request_id"],
+          "columnsTo": ["company_id", "request_id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_action_executions_company_id_request_id_pk": {
+          "columns": ["company_id", "request_id"],
+          "name": "acc_action_executions_company_id_request_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_action_requests": {
+      "name": "acc_action_requests",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "operation": {
+          "name": "operation",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "input_json": {
+          "name": "input_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "preview_json": {
+          "name": "preview_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "preview_hash": {
+          "name": "preview_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "agent_id": {
+          "name": "agent_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "acc_action_requests_company_id_acc_companies_id_fk": {
+          "name": "acc_action_requests_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_action_requests",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_action_requests_created_by_user_id_fk": {
+          "name": "acc_action_requests_created_by_user_id_fk",
+          "tableFrom": "acc_action_requests",
+          "tableTo": "user",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_action_requests_company_id_id_pk": {
+          "columns": ["company_id", "id"],
+          "name": "acc_action_requests_company_id_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_agent_grants": {
+      "name": "acc_agent_grants",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "token_hash": {
+          "name": "token_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "scopes": {
+          "name": "scopes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "membership_epoch": {
+          "name": "membership_epoch",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {
+        "acc_agent_grants_token_hash_unique": {
+          "name": "acc_agent_grants_token_hash_unique",
+          "columns": ["token_hash"],
+          "isUnique": true
+        },
+        "agent_grant_company": {
+          "name": "agent_grant_company",
+          "columns": ["company_id", "id"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "acc_agent_grants_company_id_acc_companies_id_fk": {
+          "name": "acc_agent_grants_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_agent_grants",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_agent_grants_created_by_user_id_fk": {
+          "name": "acc_agent_grants_created_by_user_id_fk",
+          "tableFrom": "acc_agent_grants",
+          "tableTo": "user",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_agent_grants_company_id_created_by_acc_memberships_company_id_user_id_fk": {
+          "name": "acc_agent_grants_company_id_created_by_acc_memberships_company_id_user_id_fk",
+          "tableFrom": "acc_agent_grants",
+          "tableTo": "acc_memberships",
+          "columnsFrom": ["company_id", "created_by"],
+          "columnsTo": ["company_id", "user_id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_approvals": {
+      "name": "acc_approvals",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "proposal_id": {
+          "name": "proposal_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "effect_hash": {
+          "name": "effect_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "approver_id": {
+          "name": "approver_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "approver_epoch": {
+          "name": "approver_epoch",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "acknowledgements_json": {
+          "name": "acknowledgements_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {
+        "approval_version": {
+          "name": "approval_version",
+          "columns": ["company_id", "proposal_id", "version"],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "acc_approvals_company_id_acc_companies_id_fk": {
+          "name": "acc_approvals_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_approvals",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_approvals_approver_id_user_id_fk": {
+          "name": "acc_approvals_approver_id_user_id_fk",
+          "tableFrom": "acc_approvals",
+          "tableTo": "user",
+          "columnsFrom": ["approver_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_approvals_company_id_proposal_id_version_acc_proposal_versions_company_id_proposal_id_version_fk": {
+          "name": "acc_approvals_company_id_proposal_id_version_acc_proposal_versions_company_id_proposal_id_version_fk",
+          "tableFrom": "acc_approvals",
+          "tableTo": "acc_proposal_versions",
+          "columnsFrom": ["company_id", "proposal_id", "version"],
+          "columnsTo": ["company_id", "proposal_id", "version"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_approvals_company_id_id_pk": {
+          "columns": ["company_id", "id"],
+          "name": "acc_approvals_company_id_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_audit": {
+      "name": "acc_audit",
+      "columns": {
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "seq": {
+          "name": "seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "actor_id": {
+          "name": "actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "agent_id": {
+          "name": "agent_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "action": {
+          "name": "action",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "body_json": {
+          "name": "body_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "prev_hash": {
+          "name": "prev_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "hash": {
+          "name": "hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "acc_audit_company_id_acc_companies_id_fk": {
+          "name": "acc_audit_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_audit",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_audit_actor_id_user_id_fk": {
+          "name": "acc_audit_actor_id_user_id_fk",
+          "tableFrom": "acc_audit",
+          "tableTo": "user",
+          "columnsFrom": ["actor_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_audit_company_id_seq_pk": {
+          "columns": ["company_id", "seq"],
+          "name": "acc_audit_company_id_seq_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_bank_movements": {
+      "name": "acc_bank_movements",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "treasury_account_id": {
+          "name": "treasury_account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "statement_id": {
+          "name": "statement_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "source_id": {
+          "name": "source_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "booking_date": {
+          "name": "booking_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "value_date": {
+          "name": "value_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "amount_minor": {
+          "name": "amount_minor",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "currency": {
+          "name": "currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reference": {
+          "name": "reference",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "counterparty": {
+          "name": "counterparty",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "counterparty_account": {
+          "name": "counterparty_account",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "details_json": {
+          "name": "details_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "bank_movement_identity": {
+          "name": "bank_movement_identity",
+          "columns": ["company_id", "treasury_account_id", "source_id"],
+          "isUnique": true
+        },
+        "bank_movement_date": {
+          "name": "bank_movement_date",
+          "columns": ["company_id", "treasury_account_id", "booking_date"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "acc_bank_movements_company_id_acc_companies_id_fk": {
+          "name": "acc_bank_movements_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_bank_movements",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_bank_movements_company_id_treasury_account_id_acc_treasury_accounts_company_id_id_fk": {
+          "name": "acc_bank_movements_company_id_treasury_account_id_acc_treasury_accounts_company_id_id_fk",
+          "tableFrom": "acc_bank_movements",
+          "tableTo": "acc_treasury_accounts",
+          "columnsFrom": ["company_id", "treasury_account_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_bank_movements_company_id_statement_id_acc_bank_statements_company_id_id_fk": {
+          "name": "acc_bank_movements_company_id_statement_id_acc_bank_statements_company_id_id_fk",
+          "tableFrom": "acc_bank_movements",
+          "tableTo": "acc_bank_statements",
+          "columnsFrom": ["company_id", "statement_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_bank_movements_company_id_id_pk": {
+          "columns": ["company_id", "id"],
+          "name": "acc_bank_movements_company_id_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "bank_movement_amount": {
+          "name": "bank_movement_amount",
+          "value": "\"acc_bank_movements\".\"amount_minor\" <> 0"
+        }
+      }
+    },
+    "acc_bank_statements": {
+      "name": "acc_bank_statements",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "treasury_account_id": {
+          "name": "treasury_account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "evidence_id": {
+          "name": "evidence_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "format": {
+          "name": "format",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "source_id": {
+          "name": "source_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "date_from": {
+          "name": "date_from",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "date_to": {
+          "name": "date_to",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "opening_minor": {
+          "name": "opening_minor",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "closing_minor": {
+          "name": "closing_minor",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "financial_hash": {
+          "name": "financial_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {
+        "bank_statement_identity": {
+          "name": "bank_statement_identity",
+          "columns": ["company_id", "treasury_account_id", "financial_hash"],
+          "isUnique": true
+        },
+        "bank_statement_period": {
+          "name": "bank_statement_period",
+          "columns": ["company_id", "treasury_account_id", "date_to"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "acc_bank_statements_company_id_acc_companies_id_fk": {
+          "name": "acc_bank_statements_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_bank_statements",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_bank_statements_created_by_user_id_fk": {
+          "name": "acc_bank_statements_created_by_user_id_fk",
+          "tableFrom": "acc_bank_statements",
+          "tableTo": "user",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_bank_statements_company_id_treasury_account_id_acc_treasury_accounts_company_id_id_fk": {
+          "name": "acc_bank_statements_company_id_treasury_account_id_acc_treasury_accounts_company_id_id_fk",
+          "tableFrom": "acc_bank_statements",
+          "tableTo": "acc_treasury_accounts",
+          "columnsFrom": ["company_id", "treasury_account_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_bank_statements_company_id_evidence_id_acc_evidence_company_id_id_fk": {
+          "name": "acc_bank_statements_company_id_evidence_id_acc_evidence_company_id_id_fk",
+          "tableFrom": "acc_bank_statements",
+          "tableTo": "acc_evidence",
+          "columnsFrom": ["company_id", "evidence_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_bank_statements_company_id_id_pk": {
+          "columns": ["company_id", "id"],
+          "name": "acc_bank_statements_company_id_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_commands": {
+      "name": "acc_commands",
+      "columns": {
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "actor_id": {
+          "name": "actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "key": {
+          "name": "key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "operation": {
+          "name": "operation",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "hash": {
+          "name": "hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "result": {
+          "name": "result",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "acc_commands_company_id_acc_companies_id_fk": {
+          "name": "acc_commands_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_commands",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_commands_actor_id_user_id_fk": {
+          "name": "acc_commands_actor_id_user_id_fk",
+          "tableFrom": "acc_commands",
+          "tableTo": "user",
+          "columnsFrom": ["actor_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_commands_company_id_actor_id_key_pk": {
+          "columns": ["company_id", "actor_id", "key"],
+          "name": "acc_commands_company_id_actor_id_key_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_companies": {
+      "name": "acc_companies",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "cui": {
+          "name": "cui",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "country": {
+          "name": "country",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'RO'"
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "acc_companies_created_by_user_id_fk": {
+          "name": "acc_companies_created_by_user_id_fk",
+          "tableFrom": "acc_companies",
+          "tableTo": "user",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "company_cui": {
+          "name": "company_cui",
+          "value": "\"acc_companies\".\"cui\" glob '[0-9]*' and length(\"acc_companies\".\"cui\") between 2 and 10"
+        }
+      }
+    },
+    "acc_document_links": {
+      "name": "acc_document_links",
+      "columns": {
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "from_id": {
+          "name": "from_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "to_id": {
+          "name": "to_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "acc_document_links_company_id_acc_companies_id_fk": {
+          "name": "acc_document_links_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_document_links",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_document_links_created_by_user_id_fk": {
+          "name": "acc_document_links_created_by_user_id_fk",
+          "tableFrom": "acc_document_links",
+          "tableTo": "user",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_document_links_company_id_from_id_acc_documents_company_id_id_fk": {
+          "name": "acc_document_links_company_id_from_id_acc_documents_company_id_id_fk",
+          "tableFrom": "acc_document_links",
+          "tableTo": "acc_documents",
+          "columnsFrom": ["company_id", "from_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_document_links_company_id_to_id_acc_documents_company_id_id_fk": {
+          "name": "acc_document_links_company_id_to_id_acc_documents_company_id_id_fk",
+          "tableFrom": "acc_document_links",
+          "tableTo": "acc_documents",
+          "columnsFrom": ["company_id", "to_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_document_links_company_id_from_id_to_id_kind_pk": {
+          "columns": ["company_id", "from_id", "to_id", "kind"],
+          "name": "acc_document_links_company_id_from_id_to_id_kind_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_documents": {
+      "name": "acc_documents",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "schema": {
+          "name": "schema",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "body_json": {
+          "name": "body_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "body_hash": {
+          "name": "body_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "source_key": {
+          "name": "source_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "evidence_id": {
+          "name": "evidence_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "origin": {
+          "name": "origin",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "doc_date": {
+          "name": "doc_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "party_id": {
+          "name": "party_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "currency": {
+          "name": "currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "number": {
+          "name": "number",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {
+        "document_source": {
+          "name": "document_source",
+          "columns": ["company_id", "source_key"],
+          "isUnique": true
+        },
+        "document_date": {
+          "name": "document_date",
+          "columns": ["company_id", "doc_date"],
+          "isUnique": false
+        },
+        "document_number": {
+          "name": "document_number",
+          "columns": ["company_id", "number"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "acc_documents_company_id_acc_companies_id_fk": {
+          "name": "acc_documents_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_documents",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_documents_created_by_user_id_fk": {
+          "name": "acc_documents_created_by_user_id_fk",
+          "tableFrom": "acc_documents",
+          "tableTo": "user",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_documents_company_id_evidence_id_acc_evidence_company_id_id_fk": {
+          "name": "acc_documents_company_id_evidence_id_acc_evidence_company_id_id_fk",
+          "tableFrom": "acc_documents",
+          "tableTo": "acc_evidence",
+          "columnsFrom": ["company_id", "evidence_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_documents_company_id_party_id_acc_parties_company_id_id_fk": {
+          "name": "acc_documents_company_id_party_id_acc_parties_company_id_id_fk",
+          "tableFrom": "acc_documents",
+          "tableTo": "acc_parties",
+          "columnsFrom": ["company_id", "party_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_documents_company_id_id_pk": {
+          "columns": ["company_id", "id"],
+          "name": "acc_documents_company_id_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_entries": {
+      "name": "acc_entries",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "fiscal_year_id": {
+          "name": "fiscal_year_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "journal_class": {
+          "name": "journal_class",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "journal_code": {
+          "name": "journal_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "number": {
+          "name": "number",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "seq": {
+          "name": "seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "date": {
+          "name": "date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "period": {
+          "name": "period",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "proposal_id": {
+          "name": "proposal_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "approval_id": {
+          "name": "approval_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "policy_id": {
+          "name": "policy_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "posted_by": {
+          "name": "posted_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "agent_id": {
+          "name": "agent_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {
+        "entry_proposal": {
+          "name": "entry_proposal",
+          "columns": ["company_id", "proposal_id"],
+          "isUnique": true
+        },
+        "entry_number": {
+          "name": "entry_number",
+          "columns": ["company_id", "fiscal_year_id", "journal_class", "number"],
+          "isUnique": true
+        },
+        "entry_seq": {
+          "name": "entry_seq",
+          "columns": ["company_id", "seq"],
+          "isUnique": true
+        },
+        "entry_period": {
+          "name": "entry_period",
+          "columns": ["company_id", "period"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "acc_entries_company_id_acc_companies_id_fk": {
+          "name": "acc_entries_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_entries",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_entries_posted_by_user_id_fk": {
+          "name": "acc_entries_posted_by_user_id_fk",
+          "tableFrom": "acc_entries",
+          "tableTo": "user",
+          "columnsFrom": ["posted_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_entries_company_id_fiscal_year_id_acc_fiscal_years_company_id_id_fk": {
+          "name": "acc_entries_company_id_fiscal_year_id_acc_fiscal_years_company_id_id_fk",
+          "tableFrom": "acc_entries",
+          "tableTo": "acc_fiscal_years",
+          "columnsFrom": ["company_id", "fiscal_year_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_entries_company_id_proposal_id_version_acc_proposal_versions_company_id_proposal_id_version_fk": {
+          "name": "acc_entries_company_id_proposal_id_version_acc_proposal_versions_company_id_proposal_id_version_fk",
+          "tableFrom": "acc_entries",
+          "tableTo": "acc_proposal_versions",
+          "columnsFrom": ["company_id", "proposal_id", "version"],
+          "columnsTo": ["company_id", "proposal_id", "version"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_entries_company_id_approval_id_acc_approvals_company_id_id_fk": {
+          "name": "acc_entries_company_id_approval_id_acc_approvals_company_id_id_fk",
+          "tableFrom": "acc_entries",
+          "tableTo": "acc_approvals",
+          "columnsFrom": ["company_id", "approval_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_entries_company_id_policy_id_acc_posting_policies_company_id_id_fk": {
+          "name": "acc_entries_company_id_policy_id_acc_posting_policies_company_id_id_fk",
+          "tableFrom": "acc_entries",
+          "tableTo": "acc_posting_policies",
+          "columnsFrom": ["company_id", "policy_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_entries_company_id_id_pk": {
+          "columns": ["company_id", "id"],
+          "name": "acc_entries_company_id_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "entry_binding": {
+          "name": "entry_binding",
+          "value": "(\"acc_entries\".\"approval_id\" is null) <> (\"acc_entries\".\"policy_id\" is null)"
+        },
+        "entry_period_value": {
+          "name": "entry_period_value",
+          "value": "\"acc_entries\".\"period\" = substr(\"acc_entries\".\"date\", 1, 7)"
+        }
+      }
+    },
+    "acc_evidence": {
+      "name": "acc_evidence",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "hash": {
+          "name": "hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "filename": {
+          "name": "filename",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "media_type": {
+          "name": "media_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "size": {
+          "name": "size",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {
+        "evidence_content": {
+          "name": "evidence_content",
+          "columns": ["company_id", "hash"],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "acc_evidence_company_id_acc_companies_id_fk": {
+          "name": "acc_evidence_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_evidence",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_evidence_created_by_user_id_fk": {
+          "name": "acc_evidence_created_by_user_id_fk",
+          "tableFrom": "acc_evidence",
+          "tableTo": "user",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_evidence_company_id_id_pk": {
+          "columns": ["company_id", "id"],
+          "name": "acc_evidence_company_id_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "evidence_size": {
+          "name": "evidence_size",
+          "value": "\"acc_evidence\".\"size\" between 1 and 67108864"
+        },
+        "evidence_hash": {
+          "name": "evidence_hash",
+          "value": "length(\"acc_evidence\".\"hash\")=64"
+        }
+      }
+    },
+    "acc_fiscal_years": {
+      "name": "acc_fiscal_years",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "label": {
+          "name": "label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "date_from": {
+          "name": "date_from",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "date_to": {
+          "name": "date_to",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {
+        "fiscal_year_start": {
+          "name": "fiscal_year_start",
+          "columns": ["company_id", "kind", "date_from"],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "acc_fiscal_years_company_id_acc_companies_id_fk": {
+          "name": "acc_fiscal_years_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_fiscal_years",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_fiscal_years_created_by_user_id_fk": {
+          "name": "acc_fiscal_years_created_by_user_id_fk",
+          "tableFrom": "acc_fiscal_years",
+          "tableTo": "user",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_fiscal_years_company_id_id_pk": {
+          "columns": ["company_id", "id"],
+          "name": "acc_fiscal_years_company_id_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "fiscal_year_dates": {
+          "name": "fiscal_year_dates",
+          "value": "\"acc_fiscal_years\".\"date_from\" <= \"acc_fiscal_years\".\"date_to\""
+        }
+      }
+    },
+    "ref_fx_rates": {
+      "name": "ref_fx_rates",
+      "columns": {
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "currency": {
+          "name": "currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "rate_date": {
+          "name": "rate_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "revision": {
+          "name": "revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "rate": {
+          "name": "rate",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "multiplier": {
+          "name": "multiplier",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "published_at": {
+          "name": "published_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "evidence_hash": {
+          "name": "evidence_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "ref_fx_rates_source_currency_rate_date_revision_pk": {
+          "columns": ["source", "currency", "rate_date", "revision"],
+          "name": "ref_fx_rates_source_currency_rate_date_revision_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_invariants": {
+      "name": "acc_invariants",
+      "columns": {
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "checksum": {
+          "name": "checksum",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_invitations": {
+      "name": "acc_invitations",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "email": {
+          "name": "email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "role": {
+          "name": "role",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "token_hash": {
+          "name": "token_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "accepted_at": {
+          "name": "accepted_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {
+        "acc_invitations_token_hash_unique": {
+          "name": "acc_invitations_token_hash_unique",
+          "columns": ["token_hash"],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "acc_invitations_company_id_acc_companies_id_fk": {
+          "name": "acc_invitations_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_invitations",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_invitations_created_by_user_id_fk": {
+          "name": "acc_invitations_created_by_user_id_fk",
+          "tableFrom": "acc_invitations",
+          "tableTo": "user",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_issued_numbers": {
+      "name": "acc_issued_numbers",
+      "columns": {
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "series_id": {
+          "name": "series_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "number": {
+          "name": "number",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "type_code": {
+          "name": "type_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "issue_date": {
+          "name": "issue_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "document_id": {
+          "name": "document_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "seller_version": {
+          "name": "seller_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "buyer_version": {
+          "name": "buyer_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {
+        "issued_document": {
+          "name": "issued_document",
+          "columns": ["company_id", "document_id"],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "acc_issued_numbers_company_id_acc_companies_id_fk": {
+          "name": "acc_issued_numbers_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_issued_numbers",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_issued_numbers_created_by_user_id_fk": {
+          "name": "acc_issued_numbers_created_by_user_id_fk",
+          "tableFrom": "acc_issued_numbers",
+          "tableTo": "user",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_issued_numbers_company_id_series_id_acc_series_company_id_id_fk": {
+          "name": "acc_issued_numbers_company_id_series_id_acc_series_company_id_id_fk",
+          "tableFrom": "acc_issued_numbers",
+          "tableTo": "acc_series",
+          "columnsFrom": ["company_id", "series_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_issued_numbers_company_id_document_id_acc_documents_company_id_id_fk": {
+          "name": "acc_issued_numbers_company_id_document_id_acc_documents_company_id_id_fk",
+          "tableFrom": "acc_issued_numbers",
+          "tableTo": "acc_documents",
+          "columnsFrom": ["company_id", "document_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_issued_numbers_company_id_series_id_number_pk": {
+          "columns": ["company_id", "series_id", "number"],
+          "name": "acc_issued_numbers_company_id_series_id_number_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_jobs": {
+      "name": "acc_jobs",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "actor_id": {
+          "name": "actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "agent_id": {
+          "name": "agent_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "params": {
+          "name": "params",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'pending'"
+        },
+        "lease_token": {
+          "name": "lease_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "lease_until": {
+          "name": "lease_until",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "result": {
+          "name": "result",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "error": {
+          "name": "error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {
+        "job_pending": {
+          "name": "job_pending",
+          "columns": ["status", "lease_until"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "acc_jobs_company_id_acc_companies_id_fk": {
+          "name": "acc_jobs_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_jobs",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_jobs_actor_id_user_id_fk": {
+          "name": "acc_jobs_actor_id_user_id_fk",
+          "tableFrom": "acc_jobs",
+          "tableTo": "user",
+          "columnsFrom": ["actor_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_jobs_company_id_id_pk": {
+          "columns": ["company_id", "id"],
+          "name": "acc_jobs_company_id_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_accounts": {
+      "name": "acc_accounts",
+      "columns": {
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "code": {
+          "name": "code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "parent_code": {
+          "name": "parent_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "nature": {
+          "name": "nature",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "book": {
+          "name": "book",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "postable": {
+          "name": "postable",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "control_kind": {
+          "name": "control_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "saft_account": {
+          "name": "saft_account",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "valid_from": {
+          "name": "valid_from",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "valid_to": {
+          "name": "valid_to",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "chart_version": {
+          "name": "chart_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "acc_accounts_company_id_acc_companies_id_fk": {
+          "name": "acc_accounts_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_accounts",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_accounts_created_by_user_id_fk": {
+          "name": "acc_accounts_created_by_user_id_fk",
+          "tableFrom": "acc_accounts",
+          "tableTo": "user",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_accounts_company_id_code_pk": {
+          "columns": ["company_id", "code"],
+          "name": "acc_accounts_company_id_code_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "account_validity": {
+          "name": "account_validity",
+          "value": "\"acc_accounts\".\"valid_to\" is null or \"acc_accounts\".\"valid_from\" <= \"acc_accounts\".\"valid_to\""
+        }
+      }
+    },
+    "acc_lines": {
+      "name": "acc_lines",
+      "columns": {
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "entry_id": {
+          "name": "entry_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "line_no": {
+          "name": "line_no",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "account": {
+          "name": "account",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "side": {
+          "name": "side",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "bani": {
+          "name": "bani",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "currency": {
+          "name": "currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "currency_minor": {
+          "name": "currency_minor",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "fx_rate_id": {
+          "name": "fx_rate_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "fx_rate": {
+          "name": "fx_rate",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "party_id": {
+          "name": "party_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "open_item_id": {
+          "name": "open_item_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "tax_settlement_tax": {
+          "name": "tax_settlement_tax",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "tax_settlement_period": {
+          "name": "tax_settlement_period",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "cost_center": {
+          "name": "cost_center",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "project": {
+          "name": "project",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "item": {
+          "name": "item",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "memo": {
+          "name": "memo",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "line_account": {
+          "name": "line_account",
+          "columns": ["company_id", "account", "entry_id"],
+          "isUnique": false
+        },
+        "line_open_item": {
+          "name": "line_open_item",
+          "columns": ["company_id", "open_item_id"],
+          "isUnique": false
+        },
+        "line_party": {
+          "name": "line_party",
+          "columns": ["company_id", "party_id"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "acc_lines_company_id_acc_companies_id_fk": {
+          "name": "acc_lines_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_lines",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_lines_company_id_entry_id_acc_entries_company_id_id_fk": {
+          "name": "acc_lines_company_id_entry_id_acc_entries_company_id_id_fk",
+          "tableFrom": "acc_lines",
+          "tableTo": "acc_entries",
+          "columnsFrom": ["company_id", "entry_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_lines_company_id_account_acc_accounts_company_id_code_fk": {
+          "name": "acc_lines_company_id_account_acc_accounts_company_id_code_fk",
+          "tableFrom": "acc_lines",
+          "tableTo": "acc_accounts",
+          "columnsFrom": ["company_id", "account"],
+          "columnsTo": ["company_id", "code"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_lines_company_id_open_item_id_acc_open_items_company_id_id_fk": {
+          "name": "acc_lines_company_id_open_item_id_acc_open_items_company_id_id_fk",
+          "tableFrom": "acc_lines",
+          "tableTo": "acc_open_items",
+          "columnsFrom": ["company_id", "open_item_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_lines_company_id_entry_id_line_no_pk": {
+          "columns": ["company_id", "entry_id", "line_no"],
+          "name": "acc_lines_company_id_entry_id_line_no_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "line_amount": {
+          "name": "line_amount",
+          "value": "\"acc_lines\".\"bani\" <> 0"
+        },
+        "line_currency": {
+          "name": "line_currency",
+          "value": "(\"acc_lines\".\"currency\" is null) = (\"acc_lines\".\"currency_minor\" is null)"
+        }
+      }
+    },
+    "acc_memberships": {
+      "name": "acc_memberships",
+      "columns": {
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "role": {
+          "name": "role",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "active": {
+          "name": "active",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": true
+        },
+        "epoch": {
+          "name": "epoch",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "acc_memberships_company_id_acc_companies_id_fk": {
+          "name": "acc_memberships_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_memberships",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_memberships_user_id_user_id_fk": {
+          "name": "acc_memberships_user_id_user_id_fk",
+          "tableFrom": "acc_memberships",
+          "tableTo": "user",
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_memberships_company_id_user_id_pk": {
+          "columns": ["company_id", "user_id"],
+          "name": "acc_memberships_company_id_user_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "membership_role": {
+          "name": "membership_role",
+          "value": "\"acc_memberships\".\"role\" in ('owner','reviewer','viewer')"
+        }
+      }
+    },
+    "acc_open_items": {
+      "name": "acc_open_items",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "control_account": {
+          "name": "control_account",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "party_id": {
+          "name": "party_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "currency": {
+          "name": "currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "normal_side": {
+          "name": "normal_side",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "may_reverse": {
+          "name": "may_reverse",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "due_date": {
+          "name": "due_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "document_id": {
+          "name": "document_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "origin_entry_id": {
+          "name": "origin_entry_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "open_item_origin": {
+          "name": "open_item_origin",
+          "columns": ["company_id", "origin_entry_id"],
+          "isUnique": false
+        },
+        "open_item_party": {
+          "name": "open_item_party",
+          "columns": ["company_id", "party_id", "kind"],
+          "isUnique": false
+        },
+        "open_item_document": {
+          "name": "open_item_document",
+          "columns": ["company_id", "document_id"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "acc_open_items_company_id_acc_companies_id_fk": {
+          "name": "acc_open_items_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_open_items",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_open_items_company_id_origin_entry_id_acc_entries_company_id_id_fk": {
+          "name": "acc_open_items_company_id_origin_entry_id_acc_entries_company_id_id_fk",
+          "tableFrom": "acc_open_items",
+          "tableTo": "acc_entries",
+          "columnsFrom": ["company_id", "origin_entry_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_open_items_company_id_party_id_acc_parties_company_id_id_fk": {
+          "name": "acc_open_items_company_id_party_id_acc_parties_company_id_id_fk",
+          "tableFrom": "acc_open_items",
+          "tableTo": "acc_parties",
+          "columnsFrom": ["company_id", "party_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_open_items_company_id_id_pk": {
+          "columns": ["company_id", "id"],
+          "name": "acc_open_items_company_id_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_outbox": {
+      "name": "acc_outbox",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "payload": {
+          "name": "payload",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'pending'"
+        },
+        "attempt_id": {
+          "name": "attempt_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "lease_until": {
+          "name": "lease_until",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "result": {
+          "name": "result",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {
+        "outbox_pending": {
+          "name": "outbox_pending",
+          "columns": ["status", "lease_until"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "acc_outbox_company_id_acc_companies_id_fk": {
+          "name": "acc_outbox_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_outbox",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_outbox_company_id_id_pk": {
+          "columns": ["company_id", "id"],
+          "name": "acc_outbox_company_id_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_parties": {
+      "name": "acc_parties",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "country": {
+          "name": "country",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "tax_id": {
+          "name": "tax_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {
+        "party_identity": {
+          "name": "party_identity",
+          "columns": ["company_id", "country", "tax_id"],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "acc_parties_company_id_acc_companies_id_fk": {
+          "name": "acc_parties_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_parties",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_parties_created_by_user_id_fk": {
+          "name": "acc_parties_created_by_user_id_fk",
+          "tableFrom": "acc_parties",
+          "tableTo": "user",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_parties_company_id_id_pk": {
+          "columns": ["company_id", "id"],
+          "name": "acc_parties_company_id_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_party_versions": {
+      "name": "acc_party_versions",
+      "columns": {
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "party_id": {
+          "name": "party_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "details_json": {
+          "name": "details_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "details_hash": {
+          "name": "details_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "acc_party_versions_company_id_acc_companies_id_fk": {
+          "name": "acc_party_versions_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_party_versions",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_party_versions_created_by_user_id_fk": {
+          "name": "acc_party_versions_created_by_user_id_fk",
+          "tableFrom": "acc_party_versions",
+          "tableTo": "user",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_party_versions_company_id_party_id_acc_parties_company_id_id_fk": {
+          "name": "acc_party_versions_company_id_party_id_acc_parties_company_id_id_fk",
+          "tableFrom": "acc_party_versions",
+          "tableTo": "acc_parties",
+          "columnsFrom": ["company_id", "party_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_party_versions_company_id_party_id_version_pk": {
+          "columns": ["company_id", "party_id", "version"],
+          "name": "acc_party_versions_company_id_party_id_version_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_period_balances": {
+      "name": "acc_period_balances",
+      "columns": {
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "month": {
+          "name": "month",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "close_seq": {
+          "name": "close_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "account": {
+          "name": "account",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "currency": {
+          "name": "currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "debit_turnover": {
+          "name": "debit_turnover",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "credit_turnover": {
+          "name": "credit_turnover",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "closing_bani": {
+          "name": "closing_bani",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "closing_minor": {
+          "name": "closing_minor",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "acc_period_balances_company_id_acc_companies_id_fk": {
+          "name": "acc_period_balances_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_period_balances",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_period_balances_company_id_month_close_seq_acc_period_events_company_id_month_seq_fk": {
+          "name": "acc_period_balances_company_id_month_close_seq_acc_period_events_company_id_month_seq_fk",
+          "tableFrom": "acc_period_balances",
+          "tableTo": "acc_period_events",
+          "columnsFrom": ["company_id", "month", "close_seq"],
+          "columnsTo": ["company_id", "month", "seq"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_period_balances_company_id_month_close_seq_account_currency_pk": {
+          "columns": ["company_id", "month", "close_seq", "account", "currency"],
+          "name": "acc_period_balances_company_id_month_close_seq_account_currency_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_period_events": {
+      "name": "acc_period_events",
+      "columns": {
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "month": {
+          "name": "month",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "seq": {
+          "name": "seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "action_id": {
+          "name": "action_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "watermark_seq": {
+          "name": "watermark_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "snapshot_hash": {
+          "name": "snapshot_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "prev_hash": {
+          "name": "prev_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "hash": {
+          "name": "hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "acc_period_events_company_id_acc_companies_id_fk": {
+          "name": "acc_period_events_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_period_events",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_period_events_created_by_user_id_fk": {
+          "name": "acc_period_events_created_by_user_id_fk",
+          "tableFrom": "acc_period_events",
+          "tableTo": "user",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_period_events_company_id_action_id_acc_action_requests_company_id_id_fk": {
+          "name": "acc_period_events_company_id_action_id_acc_action_requests_company_id_id_fk",
+          "tableFrom": "acc_period_events",
+          "tableTo": "acc_action_requests",
+          "columnsFrom": ["company_id", "action_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_period_events_company_id_month_seq_pk": {
+          "columns": ["company_id", "month", "seq"],
+          "name": "acc_period_events_company_id_month_seq_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_policy_revocations": {
+      "name": "acc_policy_revocations",
+      "columns": {
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "policy_id": {
+          "name": "policy_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "acc_policy_revocations_company_id_acc_companies_id_fk": {
+          "name": "acc_policy_revocations_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_policy_revocations",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_policy_revocations_created_by_user_id_fk": {
+          "name": "acc_policy_revocations_created_by_user_id_fk",
+          "tableFrom": "acc_policy_revocations",
+          "tableTo": "user",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_policy_revocations_company_id_policy_id_acc_posting_policies_company_id_id_fk": {
+          "name": "acc_policy_revocations_company_id_policy_id_acc_posting_policies_company_id_id_fk",
+          "tableFrom": "acc_policy_revocations",
+          "tableTo": "acc_posting_policies",
+          "columnsFrom": ["company_id", "policy_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_policy_revocations_company_id_policy_id_pk": {
+          "columns": ["company_id", "policy_id"],
+          "name": "acc_policy_revocations_company_id_policy_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_posting_policies": {
+      "name": "acc_posting_policies",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "treatments_json": {
+          "name": "treatments_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "rules_hashes_json": {
+          "name": "rules_hashes_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "preconditions_json": {
+          "name": "preconditions_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "approved_by": {
+          "name": "approved_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "approver_epoch": {
+          "name": "approver_epoch",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "valid_from": {
+          "name": "valid_from",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "acc_posting_policies_company_id_acc_companies_id_fk": {
+          "name": "acc_posting_policies_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_posting_policies",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_posting_policies_approved_by_user_id_fk": {
+          "name": "acc_posting_policies_approved_by_user_id_fk",
+          "tableFrom": "acc_posting_policies",
+          "tableTo": "user",
+          "columnsFrom": ["approved_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_posting_policies_company_id_id_pk": {
+          "columns": ["company_id", "id"],
+          "name": "acc_posting_policies_company_id_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_profile_facts": {
+      "name": "acc_profile_facts",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "axis": {
+          "name": "axis",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "value": {
+          "name": "value",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "effective_from": {
+          "name": "effective_from",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "evidence_id": {
+          "name": "evidence_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "supersedes_id": {
+          "name": "supersedes_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {
+        "profile_axis": {
+          "name": "profile_axis",
+          "columns": ["company_id", "axis", "effective_from"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "acc_profile_facts_company_id_acc_companies_id_fk": {
+          "name": "acc_profile_facts_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_profile_facts",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_profile_facts_created_by_user_id_fk": {
+          "name": "acc_profile_facts_created_by_user_id_fk",
+          "tableFrom": "acc_profile_facts",
+          "tableTo": "user",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_profile_facts_company_id_evidence_id_acc_evidence_company_id_id_fk": {
+          "name": "acc_profile_facts_company_id_evidence_id_acc_evidence_company_id_id_fk",
+          "tableFrom": "acc_profile_facts",
+          "tableTo": "acc_evidence",
+          "columnsFrom": ["company_id", "evidence_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_profile_facts_company_id_id_pk": {
+          "columns": ["company_id", "id"],
+          "name": "acc_profile_facts_company_id_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_proposal_versions": {
+      "name": "acc_proposal_versions",
+      "columns": {
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "proposal_id": {
+          "name": "proposal_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "treatment_version": {
+          "name": "treatment_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "input_json": {
+          "name": "input_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "read_set_json": {
+          "name": "read_set_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "rules_json": {
+          "name": "rules_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "rules_hash": {
+          "name": "rules_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "effect_json": {
+          "name": "effect_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "issues_json": {
+          "name": "issues_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "blocking": {
+          "name": "blocking",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "effect_hash": {
+          "name": "effect_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "entry_date": {
+          "name": "entry_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "agent_id": {
+          "name": "agent_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "acc_proposal_versions_company_id_acc_companies_id_fk": {
+          "name": "acc_proposal_versions_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_proposal_versions",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_proposal_versions_created_by_user_id_fk": {
+          "name": "acc_proposal_versions_created_by_user_id_fk",
+          "tableFrom": "acc_proposal_versions",
+          "tableTo": "user",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_proposal_versions_company_id_proposal_id_acc_proposals_company_id_id_fk": {
+          "name": "acc_proposal_versions_company_id_proposal_id_acc_proposals_company_id_id_fk",
+          "tableFrom": "acc_proposal_versions",
+          "tableTo": "acc_proposals",
+          "columnsFrom": ["company_id", "proposal_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_proposal_versions_company_id_proposal_id_version_pk": {
+          "columns": ["company_id", "proposal_id", "version"],
+          "name": "acc_proposal_versions_company_id_proposal_id_version_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "proposal_effect": {
+          "name": "proposal_effect",
+          "value": "\"acc_proposal_versions\".\"blocking\" = 1 or \"acc_proposal_versions\".\"effect_json\" is not null"
+        }
+      }
+    },
+    "acc_proposals": {
+      "name": "acc_proposals",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "treatment_id": {
+          "name": "treatment_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "subject_key": {
+          "name": "subject_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "document_id": {
+          "name": "document_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {
+        "proposal_subject": {
+          "name": "proposal_subject",
+          "columns": ["company_id", "subject_key"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "acc_proposals_company_id_acc_companies_id_fk": {
+          "name": "acc_proposals_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_proposals",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_proposals_created_by_user_id_fk": {
+          "name": "acc_proposals_created_by_user_id_fk",
+          "tableFrom": "acc_proposals",
+          "tableTo": "user",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_proposals_company_id_document_id_acc_documents_company_id_id_fk": {
+          "name": "acc_proposals_company_id_document_id_acc_documents_company_id_id_fk",
+          "tableFrom": "acc_proposals",
+          "tableTo": "acc_documents",
+          "columnsFrom": ["company_id", "document_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_proposals_company_id_id_pk": {
+          "columns": ["company_id", "id"],
+          "name": "acc_proposals_company_id_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_schedule_rows": {
+      "name": "acc_schedule_rows",
+      "columns": {
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "schedule_id": {
+          "name": "schedule_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "row_key": {
+          "name": "row_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "entry_id": {
+          "name": "entry_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "open_item_id": {
+          "name": "open_item_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "method": {
+          "name": "method",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "due_date": {
+          "name": "due_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "bani": {
+          "name": "bani",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "counter_account": {
+          "name": "counter_account",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "schedule_entry": {
+          "name": "schedule_entry",
+          "columns": ["company_id", "entry_id"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "acc_schedule_rows_company_id_acc_companies_id_fk": {
+          "name": "acc_schedule_rows_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_schedule_rows",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_schedule_rows_company_id_entry_id_acc_entries_company_id_id_fk": {
+          "name": "acc_schedule_rows_company_id_entry_id_acc_entries_company_id_id_fk",
+          "tableFrom": "acc_schedule_rows",
+          "tableTo": "acc_entries",
+          "columnsFrom": ["company_id", "entry_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_schedule_rows_company_id_open_item_id_acc_open_items_company_id_id_fk": {
+          "name": "acc_schedule_rows_company_id_open_item_id_acc_open_items_company_id_id_fk",
+          "tableFrom": "acc_schedule_rows",
+          "tableTo": "acc_open_items",
+          "columnsFrom": ["company_id", "open_item_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_schedule_rows_company_id_schedule_id_version_row_key_pk": {
+          "columns": ["company_id", "schedule_id", "version", "row_key"],
+          "name": "acc_schedule_rows_company_id_schedule_id_version_row_key_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "schedule_amount": {
+          "name": "schedule_amount",
+          "value": "\"acc_schedule_rows\".\"bani\" > 0"
+        }
+      }
+    },
+    "acc_series": {
+      "name": "acc_series",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "code": {
+          "name": "code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "prefix": {
+          "name": "prefix",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "width": {
+          "name": "width",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "first_number": {
+          "name": "first_number",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "type_codes_json": {
+          "name": "type_codes_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "revenue_account": {
+          "name": "revenue_account",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {
+        "series_code": {
+          "name": "series_code",
+          "columns": ["company_id", "code"],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "acc_series_company_id_acc_companies_id_fk": {
+          "name": "acc_series_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_series",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_series_created_by_user_id_fk": {
+          "name": "acc_series_created_by_user_id_fk",
+          "tableFrom": "acc_series",
+          "tableTo": "user",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_series_company_id_id_pk": {
+          "columns": ["company_id", "id"],
+          "name": "acc_series_company_id_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "series_width": {
+          "name": "series_width",
+          "value": "\"acc_series\".\"width\" between 1 and 12"
+        },
+        "series_first": {
+          "name": "series_first",
+          "value": "\"acc_series\".\"first_number\" >= 1"
+        }
+      }
+    },
+    "session": {
+      "name": "session",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "token": {
+          "name": "token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ip_address": {
+          "name": "ip_address",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "user_agent": {
+          "name": "user_agent",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "session_token_unique": {
+          "name": "session_token_unique",
+          "columns": ["token"],
+          "isUnique": true
+        },
+        "session_user": {
+          "name": "session_user",
+          "columns": ["user_id"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "session_user_id_user_id_fk": {
+          "name": "session_user_id_user_id_fk",
+          "tableFrom": "session",
+          "tableTo": "user",
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_spv_messages": {
+      "name": "acc_spv_messages",
+      "columns": {
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "upload_id": {
+          "name": "upload_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at_anaf": {
+          "name": "created_at_anaf",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "details": {
+          "name": "details",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "evidence_id": {
+          "name": "evidence_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "document_id": {
+          "name": "document_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "outcome": {
+          "name": "outcome",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "detail": {
+          "name": "detail",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {
+        "spv_message_upload": {
+          "name": "spv_message_upload",
+          "columns": ["company_id", "upload_id"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "acc_spv_messages_company_id_acc_companies_id_fk": {
+          "name": "acc_spv_messages_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_spv_messages",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_spv_messages_created_by_user_id_fk": {
+          "name": "acc_spv_messages_created_by_user_id_fk",
+          "tableFrom": "acc_spv_messages",
+          "tableTo": "user",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_spv_messages_company_id_evidence_id_acc_evidence_company_id_id_fk": {
+          "name": "acc_spv_messages_company_id_evidence_id_acc_evidence_company_id_id_fk",
+          "tableFrom": "acc_spv_messages",
+          "tableTo": "acc_evidence",
+          "columnsFrom": ["company_id", "evidence_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_spv_messages_company_id_document_id_acc_documents_company_id_id_fk": {
+          "name": "acc_spv_messages_company_id_document_id_acc_documents_company_id_id_fk",
+          "tableFrom": "acc_spv_messages",
+          "tableTo": "acc_documents",
+          "columnsFrom": ["company_id", "document_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_spv_messages_company_id_id_pk": {
+          "columns": ["company_id", "id"],
+          "name": "acc_spv_messages_company_id_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_spv_sync_windows": {
+      "name": "acc_spv_sync_windows",
+      "columns": {
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "seq": {
+          "name": "seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "from_ms": {
+          "name": "from_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "to_ms": {
+          "name": "to_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "messages": {
+          "name": "messages",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "acc_spv_sync_windows_company_id_acc_companies_id_fk": {
+          "name": "acc_spv_sync_windows_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_spv_sync_windows",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_spv_sync_windows_created_by_user_id_fk": {
+          "name": "acc_spv_sync_windows_created_by_user_id_fk",
+          "tableFrom": "acc_spv_sync_windows",
+          "tableTo": "user",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_spv_sync_windows_company_id_seq_pk": {
+          "columns": ["company_id", "seq"],
+          "name": "acc_spv_sync_windows_company_id_seq_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "spv_window": {
+          "name": "spv_window",
+          "value": "\"acc_spv_sync_windows\".\"from_ms\" < \"acc_spv_sync_windows\".\"to_ms\""
+        }
+      }
+    },
+    "acc_submission_events": {
+      "name": "acc_submission_events",
+      "columns": {
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "submission_id": {
+          "name": "submission_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "seq": {
+          "name": "seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "upload_id": {
+          "name": "upload_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "download_id": {
+          "name": "download_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "detail": {
+          "name": "detail",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {
+        "submission_upload": {
+          "name": "submission_upload",
+          "columns": ["company_id", "upload_id"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "acc_submission_events_company_id_acc_companies_id_fk": {
+          "name": "acc_submission_events_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_submission_events",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_submission_events_created_by_user_id_fk": {
+          "name": "acc_submission_events_created_by_user_id_fk",
+          "tableFrom": "acc_submission_events",
+          "tableTo": "user",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_submission_events_company_id_submission_id_acc_submissions_company_id_id_fk": {
+          "name": "acc_submission_events_company_id_submission_id_acc_submissions_company_id_id_fk",
+          "tableFrom": "acc_submission_events",
+          "tableTo": "acc_submissions",
+          "columnsFrom": ["company_id", "submission_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_submission_events_company_id_submission_id_seq_pk": {
+          "columns": ["company_id", "submission_id", "seq"],
+          "name": "acc_submission_events_company_id_submission_id_seq_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_submissions": {
+      "name": "acc_submissions",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "document_id": {
+          "name": "document_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "evidence_id": {
+          "name": "evidence_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "xml_hash": {
+          "name": "xml_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {
+        "submission_document": {
+          "name": "submission_document",
+          "columns": ["company_id", "document_id"],
+          "isUnique": false
+        },
+        "submission_xml": {
+          "name": "submission_xml",
+          "columns": ["company_id", "xml_hash"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "acc_submissions_company_id_acc_companies_id_fk": {
+          "name": "acc_submissions_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_submissions",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_submissions_created_by_user_id_fk": {
+          "name": "acc_submissions_created_by_user_id_fk",
+          "tableFrom": "acc_submissions",
+          "tableTo": "user",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_submissions_company_id_document_id_acc_documents_company_id_id_fk": {
+          "name": "acc_submissions_company_id_document_id_acc_documents_company_id_id_fk",
+          "tableFrom": "acc_submissions",
+          "tableTo": "acc_documents",
+          "columnsFrom": ["company_id", "document_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_submissions_company_id_evidence_id_acc_evidence_company_id_id_fk": {
+          "name": "acc_submissions_company_id_evidence_id_acc_evidence_company_id_id_fk",
+          "tableFrom": "acc_submissions",
+          "tableTo": "acc_evidence",
+          "columnsFrom": ["company_id", "evidence_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_submissions_company_id_id_pk": {
+          "columns": ["company_id", "id"],
+          "name": "acc_submissions_company_id_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_tax_entries": {
+      "name": "acc_tax_entries",
+      "columns": {
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "entry_id": {
+          "name": "entry_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "tax_no": {
+          "name": "tax_no",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "key": {
+          "name": "key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "line_no": {
+          "name": "line_no",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "tax": {
+          "name": "tax",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "code": {
+          "name": "code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "direction": {
+          "name": "direction",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "base_bani": {
+          "name": "base_bani",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "tax_bani": {
+          "name": "tax_bani",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "deductible_bani": {
+          "name": "deductible_bani",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ledger_bani": {
+          "name": "ledger_bani",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "tax_point": {
+          "name": "tax_point",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "exigibility": {
+          "name": "exigibility",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "tax_period": {
+          "name": "tax_period",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "party_id": {
+          "name": "party_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "document_id": {
+          "name": "document_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "origin_tax_entry": {
+          "name": "origin_tax_entry",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "currency": {
+          "name": "currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "base_minor": {
+          "name": "base_minor",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "tax_minor": {
+          "name": "tax_minor",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "fx_rate_id": {
+          "name": "fx_rate_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "fx_rate": {
+          "name": "fx_rate",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "attributes_json": {
+          "name": "attributes_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "tax_entry_key": {
+          "name": "tax_entry_key",
+          "columns": ["company_id", "entry_id", "key"],
+          "isUnique": true
+        },
+        "tax_entry_period": {
+          "name": "tax_entry_period",
+          "columns": ["company_id", "tax", "tax_period"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "acc_tax_entries_company_id_acc_companies_id_fk": {
+          "name": "acc_tax_entries_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_tax_entries",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_tax_entries_company_id_entry_id_acc_entries_company_id_id_fk": {
+          "name": "acc_tax_entries_company_id_entry_id_acc_entries_company_id_id_fk",
+          "tableFrom": "acc_tax_entries",
+          "tableTo": "acc_entries",
+          "columnsFrom": ["company_id", "entry_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_tax_entries_company_id_entry_id_tax_no_pk": {
+          "columns": ["company_id", "entry_id", "tax_no"],
+          "name": "acc_tax_entries_company_id_entry_id_tax_no_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "tax_entry_ledger": {
+          "name": "tax_entry_ledger",
+          "value": "\"acc_tax_entries\".\"line_no\" is not null or \"acc_tax_entries\".\"ledger_bani\" = 0"
+        }
+      }
+    },
+    "acc_tax_period_events": {
+      "name": "acc_tax_period_events",
+      "columns": {
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "tax": {
+          "name": "tax",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "period": {
+          "name": "period",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "seq": {
+          "name": "seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reference": {
+          "name": "reference",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "acc_tax_period_events_company_id_acc_companies_id_fk": {
+          "name": "acc_tax_period_events_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_tax_period_events",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_tax_period_events_created_by_user_id_fk": {
+          "name": "acc_tax_period_events_created_by_user_id_fk",
+          "tableFrom": "acc_tax_period_events",
+          "tableTo": "user",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_tax_period_events_company_id_tax_period_seq_pk": {
+          "columns": ["company_id", "tax", "period", "seq"],
+          "name": "acc_tax_period_events_company_id_tax_period_seq_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_treasury_accounts": {
+      "name": "acc_treasury_accounts",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "iban": {
+          "name": "iban",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "currency": {
+          "name": "currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ledger_account": {
+          "name": "ledger_account",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "opened_on": {
+          "name": "opened_on",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {
+        "treasury_iban": {
+          "name": "treasury_iban",
+          "columns": ["company_id", "iban"],
+          "isUnique": true
+        },
+        "treasury_ledger_account": {
+          "name": "treasury_ledger_account",
+          "columns": ["company_id", "ledger_account"],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "acc_treasury_accounts_company_id_acc_companies_id_fk": {
+          "name": "acc_treasury_accounts_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_treasury_accounts",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_treasury_accounts_created_by_user_id_fk": {
+          "name": "acc_treasury_accounts_created_by_user_id_fk",
+          "tableFrom": "acc_treasury_accounts",
+          "tableTo": "user",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_treasury_accounts_company_id_ledger_account_acc_accounts_company_id_code_fk": {
+          "name": "acc_treasury_accounts_company_id_ledger_account_acc_accounts_company_id_code_fk",
+          "tableFrom": "acc_treasury_accounts",
+          "tableTo": "acc_accounts",
+          "columnsFrom": ["company_id", "ledger_account"],
+          "columnsTo": ["company_id", "code"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_treasury_accounts_company_id_id_pk": {
+          "columns": ["company_id", "id"],
+          "name": "acc_treasury_accounts_company_id_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "user": {
+      "name": "user",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "email": {
+          "name": "email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "email_verified": {
+          "name": "email_verified",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "image": {
+          "name": "image",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "user_email_unique": {
+          "name": "user_email_unique",
+          "columns": ["email"],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "verification": {
+      "name": "verification",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "identifier": {
+          "name": "identifier",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "value": {
+          "name": "value",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "acc_withdrawals": {
+      "name": "acc_withdrawals",
+      "columns": {
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "proposal_id": {
+          "name": "proposal_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "acc_withdrawals_company_id_acc_companies_id_fk": {
+          "name": "acc_withdrawals_company_id_acc_companies_id_fk",
+          "tableFrom": "acc_withdrawals",
+          "tableTo": "acc_companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_withdrawals_created_by_user_id_fk": {
+          "name": "acc_withdrawals_created_by_user_id_fk",
+          "tableFrom": "acc_withdrawals",
+          "tableTo": "user",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "acc_withdrawals_company_id_proposal_id_acc_proposals_company_id_id_fk": {
+          "name": "acc_withdrawals_company_id_proposal_id_acc_proposals_company_id_id_fk",
+          "tableFrom": "acc_withdrawals",
+          "tableTo": "acc_proposals",
+          "columnsFrom": ["company_id", "proposal_id"],
+          "columnsTo": ["company_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "acc_withdrawals_company_id_proposal_id_pk": {
+          "columns": ["company_id", "proposal_id"],
+          "name": "acc_withdrawals_company_id_proposal_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    }
+  },
+  "views": {},
+  "enums": {},
+  "_meta": {
+    "schemas": {},
+    "tables": {},
+    "columns": {}
+  },
+  "internal": {
+    "indexes": {}
+  }
+}

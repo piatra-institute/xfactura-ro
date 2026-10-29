@@ -51,7 +51,7 @@ async function partyFor(tx: Transaction, actor: Actor, party: InvoiceDocument['s
   return id;
 }
 
-function view(row: typeof documents.$inferSelect) {
+export function view(row: typeof documents.$inferSelect) {
   const body = JSON.parse(row.body) as Partial<InvoiceDocument>;
   return {
     id: row.id,
@@ -65,6 +65,75 @@ function view(row: typeof documents.$inferSelect) {
       : null,
     evidenceId: row.evidenceId,
   };
+}
+
+/**
+ * Records an e-Factura invoice or credit note from its XML. The company must be its supplier
+ * or its customer. One document per supplier, number, date and type: the same invoice from
+ * another file is the same document if its content is identical, and a conflict otherwise.
+ */
+export async function recordInvoice(
+  tx: Transaction,
+  actor: Actor,
+  evidenceId: string,
+  bytes: Uint8Array,
+  origin: string,
+) {
+  const body = parseInvoiceXml(bytes);
+  const [company] = await tx.select().from(companies).where(eq(companies.id, actor.companyId));
+  const own = (party: InvoiceDocument['supplier']) =>
+    party.country === 'RO' && normalizedTaxId(party.taxId) === company!.cui;
+  const sale = own(body.supplier);
+  requireCondition(
+    sale !== own(body.customer),
+    'COUNTERPARTY',
+    'Compania trebuie să fie fie furnizorul, fie clientul documentului.',
+  );
+  const credit = body.documentType === 'credit_note';
+  const kind = sale
+    ? credit
+      ? invoiceKinds.saleCredit
+      : invoiceKinds.sale
+    : credit
+      ? invoiceKinds.purchaseCredit
+      : invoiceKinds.purchase;
+  const sourceKey = `invoice:${hashOf([normalizedTaxId(body.supplier.taxId), body.number, body.issueDate, body.documentType])}`;
+  const content = canonical(body);
+  const [existing] = await tx
+    .select()
+    .from(documents)
+    .where(and(eq(documents.companyId, actor.companyId), eq(documents.sourceKey, sourceKey)));
+  if (existing) {
+    requireCondition(
+      existing.body === content,
+      'DOCUMENT_CONFLICT',
+      'Există deja un document cu același furnizor, număr și dată, dar cu alt conținut.',
+      409,
+      { documentId: existing.id },
+    );
+    return { row: existing, body, created: false };
+  }
+  const partyId = await partyFor(tx, actor, sale ? body.customer : body.supplier);
+  const [row] = await tx
+    .insert(documents)
+    .values({
+      id: randomUUID(),
+      companyId: actor.companyId,
+      kind,
+      schema: body.parserVersion,
+      body: content,
+      bodyHash: hashOf(body),
+      sourceKey,
+      evidenceId,
+      origin,
+      docDate: body.issueDate,
+      partyId,
+      currency: body.currency,
+      number: body.number,
+      createdBy: actor.actorId,
+    })
+    .returning();
+  return { row: row!, body, created: true };
 }
 
 /** Imports e-Factura invoices and credit notes from retained XML evidence. */
@@ -81,63 +150,14 @@ export class Invoices {
         .from(evidence)
         .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.id, input.evidenceId)));
       requireCondition(source, 'EVIDENCE', 'Documentul justificativ nu este disponibil.', 404);
-      const body = parseInvoiceXml(await this.objects.get(actor.companyId, source.hash));
-      const [company] = await tx.select().from(companies).where(eq(companies.id, actor.companyId));
-      const own = (party: InvoiceDocument['supplier']) =>
-        party.country === 'RO' && normalizedTaxId(party.taxId) === company!.cui;
-      const sale = own(body.supplier);
-      requireCondition(
-        sale !== own(body.customer),
-        'COUNTERPARTY',
-        'Compania trebuie să fie fie furnizorul, fie clientul documentului.',
+      const recorded = await recordInvoice(
+        tx,
+        actor,
+        source.id,
+        await this.objects.get(actor.companyId, source.hash),
+        'upload',
       );
-      const credit = body.documentType === 'credit_note';
-      const kind = sale
-        ? credit
-          ? invoiceKinds.saleCredit
-          : invoiceKinds.sale
-        : credit
-          ? invoiceKinds.purchaseCredit
-          : invoiceKinds.purchase;
-      // One document per supplier, number and date; the same invoice from another file is the
-      // same document only if its content is identical.
-      const sourceKey = `invoice:${hashOf([normalizedTaxId(body.supplier.taxId), body.number, body.issueDate, body.documentType])}`;
-      const content = canonical(body);
-      const [existing] = await tx
-        .select()
-        .from(documents)
-        .where(and(eq(documents.companyId, actor.companyId), eq(documents.sourceKey, sourceKey)));
-      if (existing) {
-        requireCondition(
-          existing.body === content,
-          'DOCUMENT_CONFLICT',
-          'Există deja un document cu același furnizor, număr și dată, dar cu alt conținut.',
-          409,
-          { documentId: existing.id },
-        );
-        return view(existing);
-      }
-      const partyId = await partyFor(tx, actor, sale ? body.customer : body.supplier);
-      const [row] = await tx
-        .insert(documents)
-        .values({
-          id: randomUUID(),
-          companyId: actor.companyId,
-          kind,
-          schema: body.parserVersion,
-          body: content,
-          bodyHash: hashOf(body),
-          sourceKey,
-          evidenceId: source.id,
-          origin: 'upload',
-          docDate: body.issueDate,
-          partyId,
-          currency: body.currency,
-          number: body.number,
-          createdBy: actor.actorId,
-        })
-        .returning();
-      return view(row!);
+      return view(recorded.row);
     });
   }
 

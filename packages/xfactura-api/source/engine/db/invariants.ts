@@ -51,6 +51,10 @@ const appendOnly = [
   'acc_party_versions',
   'acc_series',
   'acc_issued_numbers',
+  'acc_submissions',
+  'acc_submission_events',
+  'acc_spv_messages',
+  'acc_spv_sync_windows',
   'ref_fx_rates',
 ];
 // Tables with narrowly guarded updates (below) that are never deleted from.
@@ -574,6 +578,54 @@ const issuedNumberChecks: Check[] = [
   },
 ];
 
+/** The latest state of a submission, or NULL before its first event. */
+const submissionState = (submission: string) => `(
+      SELECT state FROM acc_submission_events
+      WHERE company_id = NEW.company_id AND submission_id = ${submission} ORDER BY seq DESC LIMIT 1)`;
+const submissionChecks: Check[] = [
+  {
+    code: 'submission_document',
+    rule: "A submission sends an issued invoice or credit note's own kept XML.",
+    violation: `NOT EXISTS (
+        SELECT 1 FROM acc_documents d JOIN acc_evidence e ON e.company_id = d.company_id AND e.id = NEW.evidence_id
+        WHERE d.company_id = NEW.company_id AND d.id = NEW.document_id
+          AND d.kind IN ('invoice.issued', 'creditNote.issued') AND e.hash = NEW.xml_hash)`,
+  },
+  {
+    code: 'submission_open',
+    rule: 'A document is submitted again only after its earlier submission was rejected or confirmed absent: an uncertain upload is never resent.',
+    violation: `EXISTS (
+        SELECT 1 FROM acc_submissions s
+        WHERE s.company_id = NEW.company_id AND s.document_id = NEW.document_id AND s.id <> NEW.id
+          AND COALESCE(${submissionState('s.id')}, 'authorized') NOT IN ('rejected', 'absent'))`,
+  },
+];
+const submissionEventChecks: Check[] = [
+  {
+    code: 'submission_sequence',
+    rule: 'Submission steps are numbered from 1 without gaps.',
+    violation: `NEW.seq <> 1 + COALESCE((
+        SELECT max(seq) FROM acc_submission_events
+        WHERE company_id = NEW.company_id AND submission_id = NEW.submission_id), 0)`,
+  },
+  {
+    code: 'submission_transition',
+    rule: 'A submission is authorized, then marked submitting before the request leaves; it ends submitted or uncertain, then accepted or rejected; only an uncertain one can be confirmed absent.',
+    violation: `NOT CASE ${submissionState('NEW.submission_id')}
+        WHEN 'authorized' THEN NEW.state = 'submitting'
+        WHEN 'submitting' THEN NEW.state IN ('submitted', 'uncertain')
+        WHEN 'submitted' THEN NEW.state IN ('accepted', 'rejected')
+        WHEN 'uncertain' THEN NEW.state IN ('accepted', 'rejected', 'absent')
+        ELSE ${submissionState('NEW.submission_id')} IS NULL AND NEW.state = 'authorized' END`,
+  },
+  {
+    code: 'submission_receipt',
+    rule: "A submitted step records ANAF's upload index; an accepted or rejected one, its message.",
+    violation: `(NEW.state = 'submitted' AND NEW.upload_id IS NULL)
+      OR (NEW.state IN ('accepted', 'rejected') AND NEW.download_id IS NULL)`,
+  },
+];
+
 // 3. Triggers
 
 type Trigger = { name: string; on: string; checks: Check[] };
@@ -824,6 +876,28 @@ const triggers: Trigger[] = [
     name: 'inv_issued_number_guard',
     on: 'BEFORE INSERT ON acc_issued_numbers',
     checks: issuedNumberChecks,
+  },
+  {
+    name: 'inv_submission_guard',
+    on: 'BEFORE INSERT ON acc_submissions',
+    checks: submissionChecks,
+  },
+  {
+    name: 'inv_submission_event_guard',
+    on: 'BEFORE INSERT ON acc_submission_events',
+    checks: submissionEventChecks,
+  },
+  {
+    name: 'inv_spv_window_guard',
+    on: 'BEFORE INSERT ON acc_spv_sync_windows',
+    checks: [
+      {
+        code: 'spv_window_sequence',
+        rule: 'Synced windows are numbered from 1 without gaps.',
+        violation: `NEW.seq <> 1 + COALESCE((
+          SELECT max(seq) FROM acc_spv_sync_windows WHERE company_id = NEW.company_id), 0)`,
+      },
+    ],
   },
   {
     name: 'inv_audit_chain',

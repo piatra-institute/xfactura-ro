@@ -1,16 +1,17 @@
 // Imports a real invoicer export into a fresh, private engine database through
-// `invoices.importInvoicer`, and writes the per-record outcomes under .private/:
-//   bun scripts/pilot/import.ts <export.json> .private/pilot/engine
+// `invoices.importInvoicer`, then, if given, every SPV archive (.zip) in a directory through
+// `spv.importArchive`, and writes the outcomes under .private/:
+//   bun scripts/pilot/import.ts <export.json> .private/pilot/engine [spv-zip-directory]
 // The company is the export's default seller. Nothing here is committed or sent anywhere.
 import { randomUUID } from 'node:crypto';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Database } from '../../packages/xfactura-api/source/engine/db/database';
 import { user } from '../../packages/xfactura-api/source/engine/db/schema';
 import { LocalObjectStore } from '../../packages/xfactura-api/source/engine/adapters/object-store';
 import { Engine } from '../../packages/xfactura-api/source/engine/engine';
 
-const [exportPath, directory] = process.argv.slice(2);
+const [exportPath, directory, archives] = process.argv.slice(2);
 if (!exportPath || !directory) throw new Error('usage: import.ts <export.json> <directory>');
 await rm(directory, { recursive: true, force: true });
 await mkdir(directory, { recursive: true });
@@ -54,6 +55,32 @@ const report = (await engine.invoke(owner, 'invoices.importInvoicer', randomUUID
   outcomes: { state: string; code?: string; notes: string[] }[];
 };
 await writeFile(path.join(directory, 'import-report.json'), JSON.stringify(report, null, 2) + '\n');
+const spv: Record<string, number> = {};
+if (archives) {
+  const outcomes = [];
+  for (const name of (await readdir(archives)).filter((file) => file.endsWith('.zip')).sort()) {
+    const zip = new Uint8Array(await Bun.file(path.join(archives, name)).arrayBuffer());
+    try {
+      const { id } = (await engine.invoke(owner, 'evidence.record', randomUUID(), {
+        filename: name,
+        mediaType: 'application/zip',
+        base64: Buffer.from(zip).toString('base64'),
+      })) as { id: string };
+      const result = (await engine.invoke(owner, 'spv.importArchive', randomUUID(), {
+        evidenceId: id,
+      })) as { kind: string; outcome: string; detail: string | null };
+      outcomes.push({ name, ...result });
+      spv[`${result.kind} ${result.outcome}`] = (spv[`${result.kind} ${result.outcome}`] ?? 0) + 1;
+    } catch (error) {
+      outcomes.push({ name, error: (error as Error).message });
+      spv.unreadable = (spv.unreadable ?? 0) + 1;
+    }
+  }
+  await writeFile(
+    path.join(directory, 'spv-report.json'),
+    JSON.stringify(outcomes, null, 2) + '\n',
+  );
+}
 const codes: Record<string, number> = {};
 for (const outcome of report.outcomes)
   if (outcome.code) codes[outcome.code] = (codes[outcome.code] ?? 0) + 1;
@@ -65,6 +92,7 @@ console.log(
     {
       records: report.records,
       states: report.states,
+      ...(archives ? { spv } : {}),
       codes,
       parties: Object.fromEntries(
         Object.entries(Object.groupBy(parties, (item) => item.kind)).map(([kind, list]) => [

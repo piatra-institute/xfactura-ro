@@ -45,6 +45,18 @@ import { bnrImportInput, fxChecks, FxRates, rateQuery } from './modules/fx';
 import { Exports } from './modules/exports';
 import { positionQuery, Positions } from './modules/positions';
 import {
+  archiveInput,
+  archiveView,
+  Spv,
+  spvChecks,
+  submissionInput,
+  submissionView,
+  submitInput,
+  syncInput,
+  syncView,
+} from './modules/spv';
+import type { EFacturaPort } from './adapters/efactura';
+import {
   issueInput,
   issueView,
   partyDetailsInput,
@@ -99,6 +111,7 @@ export class Engine {
   readonly positions: Positions;
   readonly sales: Sales;
   readonly invoicerImport: InvoicerImport;
+  readonly spv: Spv;
 
   constructor(
     readonly db: Database,
@@ -108,6 +121,10 @@ export class Engine {
       register?: ParameterRegister;
       treatments?: Treatment[];
       closeChecks?: CloseCheck[];
+      /** The e-Factura connection; without it, SPV operations report it unavailable. */
+      efactura?: EFacturaPort;
+      /** The time the SPV module reasons with (upload horizons, synced windows). */
+      clock?: () => number;
     } = {},
   ) {
     this.commands = new Commands(db, this.operations.policy);
@@ -128,7 +145,7 @@ export class Engine {
     );
     this.actions = new Actions(this.commands);
     this.actions.add(
-      closeHandler([...treasuryChecks, ...fxChecks, ...(options.closeChecks ?? [])]),
+      closeHandler([...treasuryChecks, ...fxChecks, ...spvChecks, ...(options.closeChecks ?? [])]),
     );
     this.actions.add(reopenHandler);
     this.reports = new Reports(this.commands);
@@ -149,6 +166,7 @@ export class Engine {
     this.positions = new Positions(this.commands);
     this.sales = new Sales(this.commands, objects, this.proposals);
     this.invoicerImport = new InvoicerImport(this.commands, objects);
+    this.spv = new Spv(this.commands, objects, options.efactura, options.clock);
     this.operations.add(...this.catalogue());
   }
 
@@ -468,6 +486,75 @@ export class Engine {
         input: invoicerImportInput,
         output: invoicerImportView,
         run: (actor, key, input) => this.invoicerImport.run(actor, key, input),
+      }),
+      define({
+        id: 'spv.submit',
+        description:
+          'Autorizează și transmite în SPV XML-ul unei facturi emise; o transmitere incertă nu se repetă, se clarifică la sincronizare.',
+        permission: 'write',
+        agent: false,
+        effect: 'execute',
+        approval: 'human',
+        input: submitInput,
+        output: submissionView,
+        run: (actor, key, input) => this.spv.submit(actor, key, input),
+      }),
+      define({
+        id: 'spv.refresh',
+        description: 'Întreabă SPV cum a fost prelucrată o factură transmisă.',
+        permission: 'write',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: submissionInput,
+        output: submissionView,
+        run: (actor, _key, input) => this.spv.refresh(actor, input),
+      }),
+      define({
+        id: 'spv.sync',
+        description:
+          'Citește mesajele SPV dintr-un interval: importă facturile primite, confirmă sau contrazice facturile emise și închide transmiterile.',
+        permission: 'write',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: syncInput,
+        output: syncView,
+        run: (actor, key, input) => this.spv.sync(actor, key, input),
+      }),
+      define({
+        id: 'spv.importArchive',
+        description:
+          'Citește o arhivă e-Factura descărcată din SPV (păstrată ca document): factură primită, confirmarea unei facturi emise sau o eroare.',
+        permission: 'write',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: archiveInput,
+        output: archiveView,
+        run: (actor, key, input) => this.spv.importArchive(actor, key, input),
+      }),
+      define({
+        id: 'spv.submissions',
+        description: 'Transmiterile în SPV, cu pașii și starea fiecăreia.',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: z.object({}).strict(),
+        output: z.array(submissionView),
+        run: (actor) => this.spv.list(actor),
+      }),
+      define({
+        id: 'spv.messages',
+        description: 'Mesajele SPV citite și ce a devenit fiecare în registre.',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: z.object({}).strict(),
+        output: z.array(z.unknown()),
+        run: (actor) => this.spv.messages(actor),
       }),
       define({
         id: 'sales.seller.record',

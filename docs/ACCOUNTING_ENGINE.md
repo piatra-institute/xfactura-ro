@@ -139,7 +139,33 @@ The company's own invoices are issued through the books, so the number, the XML 
 | `not_seller` | The company is not the seller. |
 | `existing` | An earlier import already holds the record; importing again adds nothing. |
 
-Documents are what the export states, converted as the invoicer now writes them; the export, not regenerated XML, is their evidence. The SPV archives are the authority on what was issued, and their import (not built yet) will confirm or contradict each document. Individuals are recorded by a hash of their CNP, without invoicing details.
+Documents are what the export states, converted as the invoicer now writes them; the export, not regenerated XML, is their evidence. The SPV archives are the authority on what was issued: syncing the inbox confirms or contradicts each document (`spv.messages`). Individuals are recorded by a hash of their CNP, without invoicing details.
+
+## e-Factura through the SPV
+
+The engine talks to ANAF through an e-Factura port (upload, status, message list, download). Only a deterministic simulator implements it so far; the live client, with its OAuth authorization, is not built.
+
+- **Submission.** `spv.submit` is human-only and sends an issued document's kept XML. Its steps are recorded in order, and `submitting` is written before the request leaves:
+
+  | Step | Next |
+  |---|---|
+  | `authorized` | `submitting` |
+  | `submitting` | `submitted` (with ANAF's upload index) or `uncertain` (no answer) |
+  | `submitted` | `accepted` or `rejected` (with the message), from `spv.refresh` or the inbox |
+  | `uncertain` | `accepted` or `rejected` when the inbox shows the upload, or `absent` |
+
+- **Never resent.** Moving to `submitting` is a single claim, so a retried or concurrent request sends nothing. While a document's submission is neither rejected nor absent, the database refuses another. An uncertain upload becomes `absent` only when the synced windows cover it from one minute before it to three days after (ANAF's processing horizon is still to be sourced); a person may then authorize it again. An attempt interrupted in `submitting` for ten minutes becomes `uncertain`.
+- **Inbox.** `spv.sync` lists a window of at most 60 days, ending no later than now, page by page, and records each message once by its ANAF identifier. Every archive is kept as evidence and read with bounds on size, expansion and paths:
+
+  | Message | What it becomes |
+  |---|---|
+  | Received invoice | A purchase document, imported like an uploaded XML. |
+  | Sent invoice | The end of a pending submission (matched by content or upload index); otherwise a check of the sale with the same number and date (`matched` or `differs`, with the differing fields), or a new sale known from the SPV. |
+  | Error report | The rejection of a pending submission, with ANAF's messages. |
+  | Buyer message | Recorded. |
+
+  The Ministry's signature in each archive is kept but not verified yet. An archive downloaded from the SPV website is read the same way with `spv.importArchive`: its direction comes from the invoice, and it adds nothing to the synced coverage.
+- **Coverage.** Once a company has synced, a month closes only when its synced windows cover the whole month (Europe/Bucharest). Submissions of the month without a final answer raise a warning.
 
 ## Treasury and statements
 
@@ -187,7 +213,7 @@ A close records closing balances per account and currency and joins a hash chain
   - invoice-level allowances and charges as separate treatments;
   - CSV bank statements.
 - **Not built yet:**
-  - SPV upload, status and archive import; reduced VAT rates in the register; B2C identification;
+  - the live ANAF client and its OAuth authorization, and verification of the Ministry's signature; reduced VAT rates in the register; B2C identification;
   - VAT categories other than S/O, TVA la încasare, reverse charge, intra-EU operations, pro-rata, VAT settlement and declarations;
   - payroll;
   - fixed assets;

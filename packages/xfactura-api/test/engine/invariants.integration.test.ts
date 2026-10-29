@@ -32,6 +32,10 @@ import {
   profileFacts,
   proposals,
   series,
+  spvMessages,
+  spvSyncWindows,
+  submissionEvents,
+  submissions,
   taxPeriodEvents,
   treasuryAccounts,
   withdrawals,
@@ -256,9 +260,137 @@ async function issuing(world: World) {
   return { document, issue };
 }
 
+/** An issued invoice with its kept XML, and ways to submit it and record steps. */
+async function submittable(world: World) {
+  const evidenceId = randomUUID();
+  const documentId = randomUUID();
+  const hash = 'b'.repeat(64);
+  await world.db.write(async (tx) => {
+    await tx.insert(evidence).values({
+      id: evidenceId,
+      companyId: world.company,
+      hash,
+      filename: 'XF0001.xml',
+      mediaType: 'application/xml',
+      size: 1,
+      createdBy: world.owner,
+    });
+    await tx.insert(documents).values({
+      id: documentId,
+      companyId: world.company,
+      kind: 'invoice.issued',
+      schema: 'test',
+      body: '{}',
+      bodyHash: documentId,
+      sourceKey: documentId,
+      evidenceId,
+      origin: 'issued',
+      docDate: '2026-03-10',
+      number: 'XF0001',
+      createdBy: world.owner,
+    });
+  });
+  const submit = async (xmlHash = hash) => {
+    const id = randomUUID();
+    await world.db.write((tx) =>
+      tx.insert(submissions).values({
+        id,
+        companyId: world.company,
+        documentId,
+        evidenceId,
+        xmlHash,
+        createdBy: world.owner,
+      }),
+    );
+    return id;
+  };
+  const step = (
+    submissionId: string,
+    seq: number,
+    state: (typeof submissionEvents.$inferInsert)['state'],
+    extra: { uploadId?: string; downloadId?: string } = {},
+  ) =>
+    world.db.write((tx) =>
+      tx.insert(submissionEvents).values({
+        companyId: world.company,
+        submissionId,
+        seq,
+        state,
+        createdBy: world.owner,
+        ...extra,
+      }),
+    );
+  return { submit, step };
+}
+
 const entry = 'inv_entry_guard';
 const numbering = 'inv_issued_number_guard';
+const submission = 'inv_submission_event_guard';
 const attacks: Attack[] = [
+  {
+    trigger: 'inv_submission_guard',
+    code: 'submission_document',
+    name: 'submitting XML other than the invoice kept',
+    run: async (world) => (await submittable(world)).submit('c'.repeat(64)),
+  },
+  {
+    trigger: 'inv_submission_guard',
+    code: 'submission_open',
+    name: 'submitting again while the first submission is unresolved',
+    run: async (world) => {
+      const { submit, step } = await submittable(world);
+      await step(await submit(), 1, 'authorized');
+      await submit();
+    },
+  },
+  {
+    trigger: submission,
+    code: 'submission_sequence',
+    name: 'a submission step out of sequence',
+    run: async (world) => {
+      const { submit, step } = await submittable(world);
+      await step(await submit(), 2, 'authorized');
+    },
+  },
+  {
+    trigger: submission,
+    code: 'submission_transition',
+    name: 'a submission reported submitted without being marked submitting first',
+    run: async (world) => {
+      const { submit, step } = await submittable(world);
+      const id = await submit();
+      await step(id, 1, 'authorized');
+      await step(id, 2, 'submitted', { uploadId: '1' });
+    },
+  },
+  {
+    trigger: submission,
+    code: 'submission_receipt',
+    name: "a submission reported submitted without ANAF's upload index",
+    run: async (world) => {
+      const { submit, step } = await submittable(world);
+      const id = await submit();
+      await step(id, 1, 'authorized');
+      await step(id, 2, 'submitting');
+      await step(id, 3, 'submitted');
+    },
+  },
+  {
+    trigger: 'inv_spv_window_guard',
+    code: 'spv_window_sequence',
+    name: 'a synced window out of sequence',
+    run: async (world) =>
+      world.db.write((tx) =>
+        tx.insert(spvSyncWindows).values({
+          companyId: world.company,
+          seq: 2,
+          from: 1,
+          to: 2,
+          messages: 0,
+          createdBy: world.owner,
+        }),
+      ),
+  },
   {
     trigger: 'inv_party_version_guard',
     code: 'party_version_sequence',
@@ -1337,6 +1469,28 @@ describe('append-only records', () => {
     await book(world, prepaid(world));
     await periodEvent(world, '2026-03');
     await (await issuing(world)).issue(1, { date: '2026-04-02' });
+    const spv = await submittable(world);
+    await spv.step(await spv.submit(), 1, 'authorized');
+    await world.db.write(async (tx) => {
+      await tx.insert(spvSyncWindows).values({
+        companyId: world.company,
+        seq: 1,
+        from: 1,
+        to: 2,
+        messages: 1,
+        createdBy: world.owner,
+      });
+      await tx.insert(spvMessages).values({
+        companyId: world.company,
+        id: '1',
+        uploadId: '1',
+        kind: 'buyer_message',
+        createdAtAnaf: 1,
+        details: 'test',
+        outcome: 'recorded',
+        createdBy: world.owner,
+      });
+    });
     const evidenceId = randomUUID();
     const documentIds = [randomUUID(), randomUUID()];
     await world.db.write(async (tx) => {

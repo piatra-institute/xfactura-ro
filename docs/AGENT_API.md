@@ -75,6 +75,11 @@ Reviewed actions (month close and reopen) follow the same pattern: request, appr
 | `sales.issue` | write | no | human | Issue an invoice or credit note with the next number and propose its recognition. |
 | `parties.recordDetails` | write | yes | — | A new version of a partner's invoicing details. |
 | `parties.get` | read | yes | — | A partner with its current invoicing details. |
+| `spv.submit` | write | no | human | Authorize and send an issued document's XML to the SPV, once. |
+| `spv.refresh` | write | yes | — | Ask how a submitted upload was processed. |
+| `spv.sync` | write | yes | — | Read the SPV inbox for a window; import, confirm and resolve. |
+| `spv.importArchive` | write | yes | — | Read an archive downloaded from the SPV website, kept as evidence. |
+| `spv.submissions`, `spv.messages` | read | yes | — | Submissions with their steps; messages and what each became. |
 | `bank.import`, `bank.movements` | write / read | yes | — | MT940/camt.053 statements and their movements. |
 | `treasury.createAccount` | manage | no | human | Configure a bank or cash account. |
 | `treasury.accounts` | read | yes | — | Bank and cash accounts. |

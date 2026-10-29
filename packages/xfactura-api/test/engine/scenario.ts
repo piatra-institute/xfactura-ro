@@ -12,16 +12,22 @@ import { Database } from '../../source/engine/db/database';
 import { user } from '../../source/engine/db/schema';
 import { LocalObjectStore } from '../../source/engine/adapters/object-store';
 import { Engine } from '../../source/engine/engine';
+import type { EFacturaPort } from '../../source/engine/adapters/efactura';
 
 export const secret = 'synthetic-engine-secret-at-least-32-characters';
 
 /** A company on a fresh engine, with an owner, a reviewer and a viewer. */
-export async function scenario(options: { year?: number } = {}) {
+export async function scenario(
+  options: { year?: number; efactura?: EFacturaPort; clock?: () => number } = {},
+) {
   const directory = await mkdtemp(join(tmpdir(), 'xfactura-scenario-'));
   const db = new Database(`file:${directory}/books.db`);
   await db.migrate();
   const objects = new LocalObjectStore(join(directory, 'objects'));
-  const engine = new Engine(db, objects, secret);
+  const engine = new Engine(db, objects, secret, {
+    ...(options.efactura ? { efactura: options.efactura } : {}),
+    ...(options.clock ? { clock: options.clock } : {}),
+  });
   const people = async (...names: string[]) => {
     const ids = names.map(() => randomUUID());
     const now = new Date();
