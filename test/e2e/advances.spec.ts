@@ -324,13 +324,78 @@ test('reviews bank advances, matched invoices, final allocations, unused credits
     },
     grant.token,
   );
-  await post(second);
+  const secondEntry = await post(second);
   await statement(
     '2026-05-01',
     '2026-05-31',
     '1072.60',
+    '1060.50',
+    'BANK-REFUND,2026-05-10,-12.10,RON,Partial refund before invoice\n',
+  );
+  const partialAgreement = await source(
+    'restituire-partiala.txt',
+    'Separate written agreement returns half of the second bank advance before invoice',
+  );
+  const partialRefund = await invoke(
+    'advances.proposeRefund',
+    {
+      financialYearId: year.id,
+      paymentId: second.id,
+      movementId: (await invoke('bank.movements', { matched: false })).items[0].id,
+      evidenceId: partialAgreement.id,
+      decisionDate: '2026-05-10',
+      periodBasis: 'current_period_event',
+      net: '10.00',
+      reason: 'Restituirea parțială a celui de-al doilea avans înainte de facturare',
+    },
+    grant.token,
+  );
+  await page.reload();
+  await expect(card).toContainText('Sumă restituită');
+  await expect(card).toContainText('TVA stornată');
+  await expect(card).toContainText('Avans înainte de restituire');
+  await expect(card).toContainText('Avans rămas');
+  await expect(card).toContainText('24,20');
+  await expect(card).toContainText('12,10');
+  await expect(card.getByRole('button', { name: 'Deschide avansul', exact: true })).toBeVisible();
+  await page.screenshot({
+    path: info.outputPath(`advance-partial-refund-${info.project.name}.png`),
+    fullPage: true,
+  });
+  await card.getByRole('button', { name: 'Deschide avansul', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator(`#journal-${secondEntry.id}`)).toHaveAttribute('open', '');
+  await expect(page.locator(`#journal-${secondEntry.id}`).locator('summary')).toBeFocused();
+  await page.goto(location);
+  await reviewAndPost();
+  const partialRefundEntry = await invoke('ledger.post', {
+    id: partialRefund.id,
+    version: partialRefund.version,
+    hash: partialRefund.hash,
+  });
+  expect(await invoke('advances.getPayment', { id: second.id, date: '2026-05-31' })).toMatchObject({
+    status: 'open',
+    remainingGross: '12.10',
+    refundedGross: '12.10',
+  });
+  expect(
+    await invoke('advances.reconcile', { financialYearId: year.id, date: '2026-05-31' }),
+  ).toMatchObject({ status: 'reconciled' });
+  expect(
+    (await invoke('advances.payments', { date: '2026-05-31', onlyOpen: true })).items.map(
+      (row: { id: string }) => row.id,
+    ),
+  ).toContain(second.id);
+  await statement(
+    '2026-06-01',
+    '2026-06-30',
+    '1060.50',
     '1048.40',
-    'BANK-REFUND,2026-05-10,-24.20,RON,Refund before invoice\n',
+    'FINAL-REFUND,2026-06-01,-12.10,RON,Remaining refund before invoice\n',
+  );
+  const finalAgreement = await source(
+    'restituire-sold.txt',
+    'Separate agreement returns only the remaining second advance after the partial refund',
   );
   await invoke(
     'advances.proposeRefund',
@@ -338,28 +403,34 @@ test('reviews bank advances, matched invoices, final allocations, unused credits
       financialYearId: year.id,
       paymentId: second.id,
       movementId: (await invoke('bank.movements', { matched: false })).items[0].id,
-      evidenceId: agreement.id,
-      decisionDate: '2026-05-10',
+      evidenceId: finalAgreement.id,
+      decisionDate: '2026-06-01',
       periodBasis: 'current_period_event',
-      reason: 'Restituirea integrală a celui de-al doilea avans înainte de facturare',
+      reason: 'Restituirea soldului rămas, cu avansul și prima restituire păstrate',
     },
     grant.token,
   );
   await page.reload();
-  await expect(card).toContainText('Sumă restituită');
-  await expect(card).toContainText('TVA stornată');
-  await expect(card.getByRole('button', { name: 'Deschide avansul', exact: true })).toBeVisible();
+  await expect(card).toContainText('Restituirea anterioară');
+  await expect(card).toContainText('12,10');
+  await expect(card).toContainText('0,00');
   await page.screenshot({
-    path: info.outputPath(`advance-refund-${info.project.name}.png`),
+    path: info.outputPath(`advance-final-refund-${info.project.name}.png`),
     fullPage: true,
   });
+  await card.getByRole('button', { name: 'Deschide restituirea', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator(`#journal-${partialRefundEntry.id}`)).toHaveAttribute('open', '');
+  await expect(page.locator(`#journal-${partialRefundEntry.id}`).locator('summary')).toBeFocused();
+  await page.goto(location);
   await reviewAndPost();
-  expect(await invoke('advances.getPayment', { id: second.id, date: '2026-05-31' })).toMatchObject({
+  expect(await invoke('advances.getPayment', { id: second.id, date: '2026-06-30' })).toMatchObject({
     status: 'refunded',
     remainingGross: '0.00',
+    refundedGross: '24.20',
   });
   expect(
-    await invoke('advances.reconcile', { financialYearId: year.id, date: '2026-05-31' }),
+    await invoke('advances.reconcile', { financialYearId: year.id, date: '2026-06-30' }),
   ).toMatchObject({ status: 'reconciled' });
   expect(await invoke('vat.summary', { financialYearId: year.id })).toMatchObject({
     status: 'reconciled',

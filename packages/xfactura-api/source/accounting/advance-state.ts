@@ -50,7 +50,7 @@ export async function loadAdvancePayments(tx: Transaction, companyId: string, id
       ),
     );
   const refunds = await tx
-    .select({ record: advanceRefunds, date: journals.date })
+    .select({ record: advanceRefunds, date: journals.date, body: proposals.body })
     .from(advanceRefunds)
     .innerJoin(
       journals,
@@ -59,19 +59,31 @@ export async function loadAdvancePayments(tx: Transaction, companyId: string, id
         eq(journals.id, advanceRefunds.journalId),
       ),
     )
-    .where(and(eq(advanceRefunds.companyId, companyId), inArray(advanceRefunds.paymentId, ids)));
+    .innerJoin(
+      proposals,
+      and(
+        eq(proposals.companyId, advanceRefunds.companyId),
+        eq(proposals.id, advanceRefunds.proposalId),
+      ),
+    )
+    .where(and(eq(advanceRefunds.companyId, companyId), inArray(advanceRefunds.paymentId, ids)))
+    .orderBy(asc(journals.number));
   return roots.map((root) => {
     const body = generalBodySchema.parse(root.proposal.body),
       treatment = body.advancePayment;
     requireCondition(treatment, 'ADVANCE_SOURCE', 'Sursa avansului nu este disponibilă.', 500);
     const match = matches.find((row) => row.record.paymentId === root.record.paymentId),
-      refund = refunds.find((row) => row.record.paymentId === root.record.paymentId);
+      ownRefunds = refunds
+        .filter((row) => row.record.paymentId === root.record.paymentId)
+        .map((row) => ({ ...row, treatment: generalBodySchema.parse(row.body).advanceRefund! })),
+      refund = ownRefunds.at(-1);
     return {
       ...root,
       body,
       treatment,
       match,
       refund,
+      refunds: ownRefunds,
       hash: sha256(
         canonical({
           proposalHash: root.proposal.hash,
@@ -84,15 +96,41 @@ export async function loadAdvancePayments(tx: Transaction, companyId: string, id
               }
             : null,
           refund: refund ? { journalId: refund.record.journalId, date: refund.date } : null,
+          ...(ownRefunds.length > 1
+            ? {
+                priorRefunds: ownRefunds
+                  .slice(0, -1)
+                  .map((row) => ({ journalId: row.record.journalId, date: row.date })),
+              }
+            : {}),
         }),
       ),
     };
   });
 }
 export type AdvancePaymentState = Awaited<ReturnType<typeof loadAdvancePayments>>[number];
+export function advancePaymentRemaining(state: AdvancePaymentState, date?: string) {
+  const refunds = state.refunds.filter((row) => !date || row.date <= date);
+  const used = { net: 0n, tax: 0n, gross: 0n, controlAmount: 0n };
+  for (const { treatment } of refunds) {
+    used.net += toBani(treatment.net);
+    used.tax += toBani(treatment.tax);
+    used.gross += toBani(treatment.gross);
+    used.controlAmount += toBani(treatment.controlAmount);
+  }
+  return {
+    used,
+    net: toBani(state.treatment.net) - used.net,
+    tax: toBani(state.treatment.tax) - used.tax,
+    gross: toBani(state.treatment.gross) - used.gross,
+    controlAmount: toBani(state.treatment.controlAmount) - used.controlAmount,
+  };
+}
 export function advancePaymentView(state: AdvancePaymentState, date: string) {
   const match = state.match && state.match.date <= date ? state.match : undefined,
-    refund = state.refund && state.refund.date <= date ? state.refund : undefined;
+    refunds = state.refunds.filter((row) => row.date <= date),
+    refund = refunds.at(-1),
+    remaining = advancePaymentRemaining(state, date);
   return {
     id: state.record.paymentId,
     movementId: state.record.movementId,
@@ -108,11 +146,34 @@ export function advancePaymentView(state: AdvancePaymentState, date: string) {
     controlAmount: state.treatment.controlAmount,
     serviceExpectedOn: state.treatment.serviceExpectedOn,
     evidenceId: state.treatment.evidenceId,
-    remainingGross: match || refund ? '0.00' : state.treatment.gross,
-    remainingControl: match || refund ? '0.00' : state.treatment.controlAmount,
+    remainingGross: match ? '0.00' : fromBani(remaining.gross),
+    remainingControl: match ? '0.00' : fromBani(remaining.controlAmount),
     invoiceId: match?.record.invoiceId ?? null,
     refundJournalId: refund?.record.journalId ?? null,
-    status: match ? ('invoiced' as const) : refund ? ('refunded' as const) : ('open' as const),
+    status: match
+      ? ('invoiced' as const)
+      : remaining.gross === 0n
+        ? ('refunded' as const)
+        : ('open' as const),
+    ...(refunds.some((row) => row.treatment.refundBasis)
+      ? {
+          refundedNet: fromBani(remaining.used.net),
+          refundedTax: fromBani(remaining.used.tax),
+          refundedGross: fromBani(remaining.used.gross),
+          remainingNet: match ? '0.00' : fromBani(remaining.net),
+          remainingTax: match ? '0.00' : fromBani(remaining.tax),
+          refunds: refunds.map((row) => ({
+            journalId: row.record.journalId,
+            financialYearId: generalBodySchema.parse(row.body).financialYearId,
+            date: row.date,
+            evidenceId: row.treatment.evidenceId,
+            net: row.treatment.net,
+            tax: row.treatment.tax,
+            gross: row.treatment.gross,
+            controlAmount: row.treatment.controlAmount,
+          })),
+        }
+      : {}),
     hash: state.hash,
   };
 }

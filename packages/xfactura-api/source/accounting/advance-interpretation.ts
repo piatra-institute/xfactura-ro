@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, gt, inArray, lte } from 'drizzle-orm';
 import type { Transaction } from './db';
 import type { Actor } from './commands';
 import {
@@ -16,12 +16,24 @@ import {
   type GeneralBody,
   type PostingLine,
 } from './domain';
-import { allocations, companies, evidence, movementPostings, movements, periods } from './schema';
+import {
+  allocations,
+  companies,
+  evidence,
+  movementPostings,
+  movements,
+  periods,
+  regimeEvents,
+} from './schema';
 import { financialYearForDate, regimesAt } from './foundation';
 import { invoiceRule } from './accounting-catalogue';
 import { treasuryAccount, movementEvidence } from './treasury';
 import { interpretInvoice } from './invoice-postings';
-import { loadAdvancePayments, type AdvanceInvoiceState } from './advance-state';
+import {
+  advancePaymentRemaining,
+  loadAdvancePayments,
+  type AdvanceInvoiceState,
+} from './advance-state';
 import { sha256 } from './object-store';
 
 export const taxIdentity = (value: string) => value.trim().replace(/^RO/i, '');
@@ -50,6 +62,35 @@ export async function advanceEvidence(tx: Transaction, actor: Actor, id: string)
     .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.id, id)));
   requireCondition(source, 'NOT_FOUND', 'Documentul justificativ nu este disponibil.', 404);
   return source;
+}
+/** Endpoints alone cannot establish a stable registration path across an intervening change. */
+export async function checkAdvanceRegistrationPath(
+  tx: Transaction,
+  companyId: string,
+  from: string,
+  to: string,
+  normal: boolean,
+) {
+  const changes = await tx
+    .select({ axis: regimeEvents.axis, value: regimeEvents.value })
+    .from(regimeEvents)
+    .where(
+      and(
+        eq(regimeEvents.companyId, companyId),
+        inArray(regimeEvents.axis, ['vat', 'vat_collection']),
+        gt(regimeEvents.effectiveFrom, from),
+        lte(regimeEvents.effectiveFrom, to),
+      ),
+    );
+  requireCondition(
+    changes.every((row) =>
+      row.axis === 'vat'
+        ? row.value === (normal ? 'normal_vat' : 'non_vat')
+        : !normal || row.value === 'no',
+    ),
+    'UNSUPPORTED_REGISTRATION_TRANSITION',
+    'Schimbările intermediare ale înregistrării TVA necesită un tratament distinct.',
+  );
 }
 export async function advanceMovement(
   tx: Transaction,
@@ -279,15 +320,17 @@ export async function interpretAdvanceInvoice(
   for (const payment of payments.sort((a, b) =>
     a.record.paymentId.localeCompare(b.record.paymentId),
   )) {
-    const p = payment.treatment;
+    const p = payment.treatment,
+      remaining = advancePaymentRemaining(payment);
     requireCondition(
-      !payment.match && !payment.refund,
+      !payment.match && remaining.gross > 0n,
       'ADVANCE_PAYMENT_RESOLVED',
       'Avansul bancar este deja facturat sau restituit.',
       409,
     );
     requireCondition(
       payment.journal.date <= input.recognitionDate &&
+        payment.refunds.every((row) => row.date <= input.recognitionDate) &&
         p.direction === expected.invoice.direction &&
         taxIdentity(p.counterparty.taxId) === taxIdentity(party.taxId) &&
         p.account === input.account &&
@@ -297,6 +340,13 @@ export async function interpretAdvanceInvoice(
       'Factura trebuie să corespundă partenerului, cotei și serviciilor avansului.',
     );
     const atPayment = await advanceRegistration(tx, actor.companyId, payment.journal.date);
+    await checkAdvanceRegistrationPath(
+      tx,
+      actor.companyId,
+      p.date,
+      input.recognitionDate,
+      atPayment.normal,
+    );
     requireCondition(
       atPayment.normal === reg.normal &&
         atPayment.ids.every((id) => p.registrationIds.includes(id)),
@@ -311,9 +361,9 @@ export async function interpretAdvanceInvoice(
       financialYearId: payment.body.financialYearId,
       proposalHash: payment.proposal.hash,
       stateHash: payment.hash,
-      net: p.net,
-      tax: p.tax,
-      gross: p.gross,
+      net: fromBani(remaining.net),
+      tax: fromBani(remaining.tax),
+      gross: fromBani(remaining.gross),
     });
   }
   if (assigned.length) {

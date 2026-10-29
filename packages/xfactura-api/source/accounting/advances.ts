@@ -1,5 +1,6 @@
 import { and, asc, eq, exists, gt, lte, sql } from 'drizzle-orm';
 import { z } from 'zod';
+import { alias } from 'drizzle-orm/sqlite-core';
 import { Commands, type Actor } from './commands';
 import {
   advancePaymentInput,
@@ -251,25 +252,35 @@ export class Advances {
               ),
             ),
         );
-        const refunded = exists(
-          tx
-            .select({ id: advanceRefunds.paymentId })
-            .from(advanceRefunds)
-            .innerJoin(
-              journals,
-              and(
-                eq(journals.companyId, advanceRefunds.companyId),
-                eq(journals.id, advanceRefunds.journalId),
-              ),
-            )
-            .where(
-              and(
-                eq(advanceRefunds.companyId, advancePayments.companyId),
-                eq(advanceRefunds.paymentId, advancePayments.paymentId),
-                lte(journals.date, body.date),
-              ),
+        const refundJournal = alias(journals, 'advance_refund_journal'),
+          refundProposal = alias(proposals, 'advance_refund_proposal');
+        const refundedGross = tx
+          .select({
+            amount: sql<bigint>`coalesce(sum(cast(replace(json_extract(${refundProposal.body},'$.advanceRefund.gross'),'.','') as integer)),0)`,
+          })
+          .from(advanceRefunds)
+          .innerJoin(
+            refundJournal,
+            and(
+              eq(refundJournal.companyId, advanceRefunds.companyId),
+              eq(refundJournal.id, advanceRefunds.journalId),
             ),
-        );
+          )
+          .innerJoin(
+            refundProposal,
+            and(
+              eq(refundProposal.companyId, advanceRefunds.companyId),
+              eq(refundProposal.id, advanceRefunds.proposalId),
+            ),
+          )
+          .where(
+            and(
+              eq(advanceRefunds.companyId, advancePayments.companyId),
+              eq(advanceRefunds.paymentId, advancePayments.paymentId),
+              lte(refundJournal.date, body.date),
+            ),
+          );
+        const refunded = sql`${refundedGross}>=cast(replace(json_extract(${proposals.body},'$.advancePayment.gross'),'.','') as integer)`;
         const rows = await tx
           .select({ id: advancePayments.paymentId })
           .from(advancePayments)

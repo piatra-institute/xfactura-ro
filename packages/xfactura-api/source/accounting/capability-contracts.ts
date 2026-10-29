@@ -403,6 +403,25 @@ export const advancePaymentOutput = z.object({
   remainingControl: decimalString,
   invoiceId: idSchema.nullable(),
   refundJournalId: idSchema.nullable(),
+  remainingNet: decimalString.optional(),
+  remainingTax: decimalString.optional(),
+  refundedNet: decimalString.optional(),
+  refundedTax: decimalString.optional(),
+  refundedGross: decimalString.optional(),
+  refunds: z
+    .array(
+      z.object({
+        journalId: idSchema,
+        financialYearId: idSchema,
+        date: dateSchema,
+        evidenceId: idSchema,
+        net: decimalString,
+        tax: decimalString,
+        gross: decimalString,
+        controlAmount: decimalString,
+      }),
+    )
+    .optional(),
   status: z.enum(['open', 'invoiced', 'refunded']),
   hash: hashSchema,
 });

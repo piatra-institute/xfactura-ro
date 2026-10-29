@@ -309,6 +309,27 @@
       "when": 1793250148868,
       "tag": "0043_sequential_credit_guards",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "6",
+      "when": 1793251941007,
+      "tag": "0044_prepare_partial_refunds",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "6",
+      "when": 1793251957321,
+      "tag": "0045_partial_advance_refunds",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "6",
+      "when": 1793251974776,
+      "tag": "0046_partial_refund_guards",
+      "breakpoints": true
     }
   ]
 }

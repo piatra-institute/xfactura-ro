@@ -11,7 +11,8 @@ type Props = {
 
 export function AdvancePaymentDetails({ body, path, showJournal }: Props) {
   const payment = body.advancePayment,
-    refund = body.advanceRefund;
+    refund = body.advanceRefund,
+    basis = refund?.refundBasis;
   if (!payment && !refund) return null;
   const item = payment ?? refund!;
   return (
@@ -51,6 +52,36 @@ export function AdvancePaymentDetails({ body, path, showJournal }: Props) {
             <dt>Data acordului</dt>
             <dd>{refund.decisionDate}</dd>
           </div>
+          {basis ? (
+            <>
+              <div>
+                <dt>Avans înainte de restituire</dt>
+                <dd>{formatMoney(basis.before.gross)}</dd>
+              </div>
+              <div>
+                <dt>Avans rămas</dt>
+                <dd>{formatMoney(basis.after.gross)}</dd>
+              </div>
+              {basis.priorRefundJournalId ? (
+                <div>
+                  <dt>Restituirea anterioară</dt>
+                  <dd>
+                    <button
+                      className="acc-secondary"
+                      onClick={() =>
+                        showJournal(
+                          basis.priorRefundJournalId!,
+                          basis.priorRefundFinancialYearId ?? undefined,
+                        )
+                      }
+                    >
+                      Deschide restituirea
+                    </button>
+                  </dd>
+                </div>
+              ) : null}
+            </>
+          ) : null}
         </>
       ) : null}
       <div>

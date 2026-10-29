@@ -1359,8 +1359,8 @@ export const advanceRefunds = sqliteTable(
     createdAt: createdAt(),
   },
   (t) => [
-    primaryKey({ columns: [t.companyId, t.paymentId] }),
-    uniqueIndex('advance_refund_movement').on(t.companyId, t.movementId),
+    primaryKey({ columns: [t.companyId, t.movementId] }),
+    index('advance_refund_payment').on(t.companyId, t.paymentId),
     uniqueIndex('advance_refund_journal').on(t.companyId, t.journalId),
     foreignKey({
       columns: [t.companyId, t.paymentId],

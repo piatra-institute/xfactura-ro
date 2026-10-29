@@ -416,7 +416,7 @@ export class Capabilities {
           service.advances.proposeCreditNote(actor, key, body, { id, version }),
       ),
       'advances.proposeRefund': define(
-        'Prepare the full documented bank refund of an unmatched, uninvoiced advance; never moves money.',
+        'Prepare a documented bank refund of an unmatched, uninvoiced advance. Omit net to return the exact remaining balance, or supply a positive net for a partial refund at the original rate. Retain earlier refunds and the amount available for a later invoice. Requires exact human approval; never moves money.',
         advanceRefundInput,
         proposalOutput,
         (actor, key, body) => service.advances.proposeRefund(actor, key, body),

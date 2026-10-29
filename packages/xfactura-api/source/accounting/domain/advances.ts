@@ -84,6 +84,7 @@ export const advanceRefundInput = z
     decisionDate: dateSchema,
     periodBasis: z.literal('current_period_event'),
     reason: z.string().trim().min(10).max(1000),
+    net: moneySchema.optional(),
   })
   .strict();
 const amounts = { net: moneySchema, tax: moneySchema, gross: moneySchema };
@@ -168,7 +169,7 @@ export const advanceCreditSchema = z
   })
   .strict();
 export const advanceRefundSchema = advanceRefundInput
-  .omit({ financialYearId: true })
+  .omit({ financialYearId: true, net: true })
   .extend({
     schemaVersion: z.literal(1),
     date: dateSchema,
@@ -190,6 +191,17 @@ export const advanceRefundSchema = advanceRefundInput
     ruleId: z.string(),
     ruleHash: hash,
     registrationIds: z.array(idSchema),
+    refundBasis: z
+      .object({
+        requestedNet: moneySchema.nullable(),
+        priorRefundCount: z.number().int().nonnegative(),
+        priorRefundJournalId: idSchema.nullable(),
+        priorRefundFinancialYearId: idSchema.nullable(),
+        before: z.object({ ...amounts, controlAmount: moneySchema }).strict(),
+        after: z.object({ ...amounts, controlAmount: moneySchema }).strict(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type AdvancePaymentInput = z.infer<typeof advancePaymentInput>;
