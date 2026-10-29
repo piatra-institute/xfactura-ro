@@ -15,9 +15,11 @@ export interface ReadPlan {
   /** Posted entries, with their lines and tax entries (for reversals and corrections). */
   entries?: string[];
   openItems?: OpenItemQuery[];
+  /** Reported bank movements. */
+  movements?: string[];
   parties?: string[];
-  /** Dates at which the company profile (VAT status, regimes, …) is needed. */
-  profileAt?: LocalDate[];
+  /** The company's dated profile facts (VAT status, regimes, …), read with `profileAt`. */
+  profile?: boolean;
 }
 
 export interface OpenItemQuery {
@@ -34,7 +36,7 @@ export interface OpenItemQuery {
 /** One recorded read. `version` identifies the state read: for an open item, its number of
  * posted lines; for an immutable record, its content hash. */
 export interface ReadSetEntry {
-  kind: 'evidence' | 'document' | 'entry' | 'openItem' | 'party' | 'profile';
+  kind: 'evidence' | 'document' | 'entry' | 'openItem' | 'movement' | 'party' | 'profile';
   id: string;
   version: string;
 }
@@ -64,6 +66,20 @@ export interface EvidenceRecord {
   hash: string;
   filename: string;
   mediaType: string;
+}
+
+/** A movement as the bank reported it, with the ledger account its treasury account uses. */
+export interface MovementRecord {
+  id: string;
+  treasuryAccountId: string;
+  ledgerAccount: string;
+  currency: string;
+  bookingDate: LocalDate;
+  valueDate: LocalDate | null;
+  /** Signed: positive for money received, negative for money paid. */
+  amountMinor: bigint;
+  reference: string;
+  counterparty: string | null;
 }
 
 export interface PartyRecord {
@@ -105,6 +121,7 @@ export interface Loaded {
   documents: ReadonlyMap<string, DocumentRecord>;
   entries: ReadonlyMap<string, PostedEntry>;
   openItems: ReadonlyMap<string, OpenItemState>;
+  movements: ReadonlyMap<string, MovementRecord>;
   parties: ReadonlyMap<string, PartyRecord>;
   profile: readonly ProfileFact[];
 }
@@ -132,7 +149,8 @@ export interface Treatment<Input = unknown> {
   version: number;
   description: string;
   input: ZodType<Input>;
-  /** Identifies what the proposal recognizes; a company recognizes each subject once. */
+  /** Identifies what the proposal recognizes. A company recognizes each subject once, across all
+   * treatments: every treatment that recognizes a document uses `document:<id>`. */
   subject(input: Input): string;
   plan(input: Input): ReadPlan;
   evaluate(input: Input, loaded: Loaded, rules: RuleContext): Evaluation;

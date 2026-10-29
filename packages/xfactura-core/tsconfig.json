@@ -9,8 +9,7 @@
     "noEmit": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "isolatedModules": true,
-    "noUncheckedIndexedAccess": true
+    "isolatedModules": true
   },
   "include": ["src/**/*.ts"]
 }

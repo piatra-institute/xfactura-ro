@@ -367,7 +367,8 @@ export const proposals = sqliteTable(
     id: text('id').notNull(),
     companyId: companyId(),
     treatmentId: text('treatment_id').notNull(),
-    /** One recognition per subject: a document, a movement, a schedule month, … */
+    /** What the proposal recognizes: a document, a movement, a schedule month, … At most one
+     * proposal per subject is open (not withdrawn), and a subject is posted at most once. */
     subjectKey: text('subject_key').notNull(),
     documentId: text('document_id'),
     createdBy: author(),
@@ -375,7 +376,7 @@ export const proposals = sqliteTable(
   },
   (t) => [
     primaryKey({ columns: [t.companyId, t.id] }),
-    uniqueIndex('proposal_subject').on(t.companyId, t.subjectKey),
+    index('proposal_subject').on(t.companyId, t.subjectKey),
     foreignKey({
       columns: [t.companyId, t.documentId],
       foreignColumns: [documents.companyId, documents.id],
@@ -692,6 +693,98 @@ export const taxEntries = sqliteTable(
       foreignColumns: [entries.companyId, entries.id],
     }),
     check('tax_entry_ledger', sql`${t.lineNo} is not null or ${t.ledgerBani} = 0`),
+  ],
+);
+
+// Treasury
+
+/** A bank or cash account and the ledger account its balance is kept on. */
+export const treasuryAccounts = sqliteTable(
+  'acc_treasury_accounts',
+  {
+    id: text('id').notNull(),
+    companyId: companyId(),
+    kind: text('kind', { enum: ['bank', 'cash'] }).notNull(),
+    name: text('name').notNull(),
+    iban: text('iban'),
+    currency: text('currency').notNull(),
+    ledgerAccount: text('ledger_account').notNull(),
+    openedOn: text('opened_on').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.id] }),
+    uniqueIndex('treasury_iban').on(t.companyId, t.iban),
+    uniqueIndex('treasury_ledger_account').on(t.companyId, t.ledgerAccount),
+    foreignKey({
+      columns: [t.companyId, t.ledgerAccount],
+      foreignColumns: [ledgerAccounts.companyId, ledgerAccounts.code],
+    }),
+  ],
+);
+export const bankStatements = sqliteTable(
+  'acc_bank_statements',
+  {
+    id: text('id').notNull(),
+    companyId: companyId(),
+    treasuryAccountId: text('treasury_account_id').notNull(),
+    evidenceId: text('evidence_id').notNull(),
+    format: text('format').notNull(),
+    sourceId: text('source_id').notNull(),
+    from: text('date_from').notNull(),
+    to: text('date_to').notNull(),
+    openingMinor: bani('opening_minor').notNull(),
+    closingMinor: bani('closing_minor').notNull(),
+    financialHash: text('financial_hash').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.id] }),
+    uniqueIndex('bank_statement_identity').on(t.companyId, t.treasuryAccountId, t.financialHash),
+    index('bank_statement_period').on(t.companyId, t.treasuryAccountId, t.to),
+    foreignKey({
+      columns: [t.companyId, t.treasuryAccountId],
+      foreignColumns: [treasuryAccounts.companyId, treasuryAccounts.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.evidenceId],
+      foreignColumns: [evidence.companyId, evidence.id],
+    }),
+  ],
+);
+/** One reported bank movement, kept once however many statements report it. */
+export const bankMovements = sqliteTable(
+  'acc_bank_movements',
+  {
+    id: text('id').notNull(),
+    companyId: companyId(),
+    treasuryAccountId: text('treasury_account_id').notNull(),
+    statementId: text('statement_id').notNull(),
+    sourceId: text('source_id').notNull(),
+    bookingDate: text('booking_date').notNull(),
+    valueDate: text('value_date'),
+    amountMinor: bani('amount_minor').notNull(),
+    currency: text('currency').notNull(),
+    reference: text('reference').notNull(),
+    counterparty: text('counterparty'),
+    counterpartyAccount: text('counterparty_account'),
+    details: canonicalJson('details_json'),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.id] }),
+    uniqueIndex('bank_movement_identity').on(t.companyId, t.treasuryAccountId, t.sourceId),
+    index('bank_movement_date').on(t.companyId, t.treasuryAccountId, t.bookingDate),
+    foreignKey({
+      columns: [t.companyId, t.treasuryAccountId],
+      foreignColumns: [treasuryAccounts.companyId, treasuryAccounts.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.statementId],
+      foreignColumns: [bankStatements.companyId, bankStatements.id],
+    }),
+    check('bank_movement_amount', sql`${t.amountMinor} <> 0`),
   ],
 );
 

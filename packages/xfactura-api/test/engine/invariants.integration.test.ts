@@ -10,6 +10,8 @@ import {
   actionRequests,
   agentGrants,
   audit,
+  bankMovements,
+  bankStatements,
   commands,
   documentLinks,
   documents,
@@ -25,7 +27,9 @@ import {
   policyRevocations,
   postingPolicies,
   profileFacts,
+  proposals,
   taxPeriodEvents,
+  treasuryAccounts,
   withdrawals,
 } from '../../source/engine/db/schema';
 import {
@@ -165,6 +169,17 @@ function prepaid(world: World) {
 
 const entry = 'inv_entry_guard';
 const attacks: Attack[] = [
+  {
+    trigger: entry,
+    code: 'subject_posted',
+    name: 'posting a subject a second time',
+    run: async (world) => {
+      const first = await approved(world, sale(world), { subjectKey: 'document:once' });
+      await withdraw(world, first.proposed.proposalId);
+      await book(world, sale(world), { subjectKey: 'document:once' });
+      return post(world, first.proposed, { approvalId: first.approvalId });
+    },
+  },
   {
     trigger: entry,
     code: 'proposal_version_missing',
@@ -635,6 +650,23 @@ const attacks: Attack[] = [
       await withdraw(world, proposed.proposalId);
       return propose(world, sale(world), { proposalId: proposed.proposalId, version: 2 });
     },
+  },
+  {
+    trigger: 'inv_proposal_subject',
+    code: 'subject_taken',
+    name: 'opening a second proposal for the same subject',
+    run: async (world) =>
+      world.db.write((tx) =>
+        tx.insert(proposals).values(
+          ['a', 'b'].map(() => ({
+            id: randomUUID(),
+            companyId: world.company,
+            treatmentId: 'test.treatment',
+            subjectKey: 'document:same',
+            createdBy: world.owner,
+          })),
+        ),
+      ),
   },
   {
     trigger: 'inv_withdrawal_guard',
@@ -1232,6 +1264,45 @@ describe('append-only records', () => {
         creditTurnover: 100000n,
         closingBani: -100000n,
         closingMinor: -100000n,
+      });
+      const treasuryId = randomUUID();
+      const statementId = randomUUID();
+      await tx.insert(treasuryAccounts).values({
+        id: treasuryId,
+        companyId: world.company,
+        kind: 'bank',
+        name: 'Cont curent',
+        iban: 'RO49AAAA1B31007593840000',
+        currency: 'RON',
+        ledgerAccount: '5121',
+        openedOn: '2026-01-01',
+        createdBy: world.owner,
+      });
+      await tx.insert(bankStatements).values({
+        id: statementId,
+        companyId: world.company,
+        treasuryAccountId: treasuryId,
+        evidenceId,
+        format: 'mt940',
+        sourceId: 'S1',
+        from: '2026-03-01',
+        to: '2026-03-31',
+        openingMinor: 0n,
+        closingMinor: 100n,
+        financialHash: 'c'.repeat(64),
+        createdBy: world.owner,
+      });
+      await tx.insert(bankMovements).values({
+        id: randomUUID(),
+        companyId: world.company,
+        treasuryAccountId: treasuryId,
+        statementId,
+        sourceId: 'bank:1',
+        bookingDate: '2026-03-05',
+        amountMinor: 100n,
+        currency: 'RON',
+        reference: 'Încasare',
+        details: '{}',
       });
       await tx.insert(fxRates).values({
         source: 'BNR',

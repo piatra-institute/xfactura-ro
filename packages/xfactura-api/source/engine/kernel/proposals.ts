@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, asc, desc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, notExists } from 'drizzle-orm';
 import { requireCondition } from 'xfactura-core/errors';
 import { canonical, derivedId, hashOf } from 'xfactura-core/hash';
 import {
@@ -241,12 +241,27 @@ export class Proposals {
       { input, revision: revision ?? null },
       'write',
       async (tx) => {
-        const subjectKey = `${treatment.id}:${treatment.subject(input)}`;
+        const subjectKey = treatment.subject(input);
+        // The open proposal for this subject, if any; a withdrawal frees the subject.
         const [existing] = await tx
           .select()
           .from(proposals)
           .where(
-            and(eq(proposals.companyId, actor.companyId), eq(proposals.subjectKey, subjectKey)),
+            and(
+              eq(proposals.companyId, actor.companyId),
+              eq(proposals.subjectKey, subjectKey),
+              notExists(
+                tx
+                  .select({ id: withdrawals.proposalId })
+                  .from(withdrawals)
+                  .where(
+                    and(
+                      eq(withdrawals.companyId, proposals.companyId),
+                      eq(withdrawals.proposalId, proposals.id),
+                    ),
+                  ),
+              ),
+            ),
           );
         const latest = existing
           ? await this.latestVersion(tx, actor.companyId, existing.id)

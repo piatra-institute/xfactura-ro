@@ -3,6 +3,8 @@ import { z } from 'zod';
 import type { Treatment } from 'xfactura-core/kernel';
 import { vatDefinitions, vatVersions } from 'xfactura-core/ro/vat';
 import { generalJournal, reversal } from 'xfactura-core/ro/treatments/ledger';
+import { creditRecognition, invoiceRecognition } from 'xfactura-core/ro/treatments/invoices';
+import { settlement } from 'xfactura-core/ro/treatments/settlement';
 import { ParameterRegister } from 'xfactura-core/rules';
 import type { Database } from './db/database';
 import { agentGrants } from './db/schema';
@@ -34,6 +36,15 @@ import {
   yearInput,
 } from './modules/company';
 import { Evidence, evidenceInput, evidenceView } from './modules/evidence';
+import { documentView, importInput, Invoices } from './modules/invoices';
+import { VatRegisters, vatJournalInput, vatJournalView } from './modules/vat';
+import {
+  bankImportInput,
+  movementQuery,
+  Treasury,
+  treasuryAccountInput,
+  treasuryChecks,
+} from './modules/treasury';
 
 const id = z.uuid();
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -63,6 +74,9 @@ export class Engine {
   readonly configuration: Configuration;
   readonly agents: Agents;
   readonly evidence: Evidence;
+  readonly invoices: Invoices;
+  readonly vat: VatRegisters;
+  readonly treasury: Treasury;
 
   constructor(
     readonly db: Database,
@@ -81,9 +95,16 @@ export class Engine {
       options.register ?? defaultRegister(),
       this.policies,
     );
-    this.proposals.addTreatment(generalJournal, reversal, ...(options.treatments ?? []));
+    this.proposals.addTreatment(
+      generalJournal,
+      reversal,
+      invoiceRecognition,
+      creditRecognition,
+      settlement,
+      ...(options.treatments ?? []),
+    );
     this.actions = new Actions(this.commands);
-    this.actions.add(closeHandler(options.closeChecks ?? []));
+    this.actions.add(closeHandler([...treasuryChecks, ...(options.closeChecks ?? [])]));
     this.actions.add(reopenHandler);
     this.reports = new Reports(this.commands);
     this.companies = new Companies(this.commands, secret);
@@ -95,6 +116,9 @@ export class Engine {
         .map((operation) => operation.id),
     );
     this.evidence = new Evidence(this.commands, objects);
+    this.invoices = new Invoices(this.commands, objects);
+    this.vat = new VatRegisters(this.commands);
+    this.treasury = new Treasury(this.commands, objects);
     this.operations.add(...this.catalogue());
   }
 
@@ -378,6 +402,84 @@ export class Engine {
         input: ok({ id }).strict(),
         output: actionView,
         run: (actor, key, input) => this.actions.execute(actor, key, input),
+      }),
+      define({
+        id: 'invoices.import',
+        description:
+          'Importă o factură sau notă de credit e-Factura (XML UBL) dintr-un document păstrat.',
+        permission: 'write',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: importInput,
+        output: documentView,
+        run: (actor, key, input) => this.invoices.import(actor, key, input),
+      }),
+      define({
+        id: 'treasury.createAccount',
+        description: 'Configurează un cont bancar sau o casă și contul contabil pe care se ține.',
+        permission: 'manage',
+        agent: false,
+        effect: 'manage',
+        approval: 'human',
+        input: treasuryAccountInput,
+        output: z.unknown(),
+        run: (actor, key, input) => this.treasury.createAccount(actor, key, input),
+      }),
+      define({
+        id: 'treasury.accounts',
+        description: 'Conturile bancare și casele companiei.',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: z.object({}).strict(),
+        output: z.array(z.unknown()),
+        run: (actor) => this.treasury.accounts(actor),
+      }),
+      define({
+        id: 'bank.import',
+        description: 'Importă extrase MT940 sau camt.053 dintr-un document păstrat.',
+        permission: 'write',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: bankImportInput,
+        output: z.object({ statements: z.array(z.unknown()) }),
+        run: (actor, key, input) => this.treasury.import(actor, key, input),
+      }),
+      define({
+        id: 'bank.movements',
+        description: 'Mișcările bancare raportate și dacă sunt explicate.',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: movementQuery,
+        output: z.array(z.unknown()),
+        run: (actor, _, input) => this.treasury.movements(actor, input),
+      }),
+      define({
+        id: 'vat.journal',
+        description: 'Jurnalul de vânzări sau de cumpărări (registru de lucru, nu declarație).',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: vatJournalInput,
+        output: vatJournalView,
+        run: (actor, _, input) => this.vat.journal(actor, input),
+      }),
+      define({
+        id: 'documents.list',
+        description: 'Documentele importate (facturi, note de credit), după dată.',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: z.object({ kinds: z.array(z.string()).max(20).optional() }).strict(),
+        output: z.array(documentView),
+        run: (actor, _, input) => this.invoices.list(actor, input),
       }),
       define({
         id: 'evidence.record',

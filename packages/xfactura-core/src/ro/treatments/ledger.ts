@@ -108,7 +108,9 @@ export const generalJournal: Treatment<GeneralJournalInput> = {
   input: generalJournalInput,
   agent: true,
   subject: (input) =>
-    input.purpose === 'opening' ? `opening:${input.date}` : `${input.purpose}:${input.reference}`,
+    input.purpose === 'opening'
+      ? `opening:${input.date}`
+      : `journal:${input.purpose}:${input.reference}`,
   plan: (input) => ({
     evidence: [input.evidenceId],
     openItems: [{ ids: input.lines.flatMap((line) => (line.openItem ? [line.openItem] : [])) }],

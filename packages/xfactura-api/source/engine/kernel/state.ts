@@ -1,10 +1,11 @@
-import { and, asc, eq, inArray, lte, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import { hashOf } from 'xfactura-core/hash';
 import type {
   AccountInfo,
   ControlKind,
   DocumentRecord,
   EvidenceRecord,
+  MovementRecord,
   FiscalYear,
   LineSpec,
   Loaded,
@@ -22,6 +23,7 @@ import type { Transaction } from '../db/database';
 import {
   documents,
   entries,
+  bankMovements,
   evidence,
   fiscalYears,
   ledgerAccounts,
@@ -30,6 +32,7 @@ import {
   parties,
   profileFacts,
   taxEntries,
+  treasuryAccounts,
 } from '../db/schema';
 
 const date = (value: string) => value as LocalDate;
@@ -243,6 +246,34 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
   for (const item of [...itemMap.values()].sort((a, b) => (a.id < b.id ? -1 : 1)))
     readSet.push({ kind: 'openItem', id: item.id, version: String(item.movements) });
 
+  const movementMap = new Map<string, MovementRecord>();
+  if (plan.movements?.length)
+    for (const { movement, account } of await tx
+      .select({ movement: bankMovements, account: treasuryAccounts })
+      .from(bankMovements)
+      .innerJoin(
+        treasuryAccounts,
+        and(
+          eq(treasuryAccounts.companyId, bankMovements.companyId),
+          eq(treasuryAccounts.id, bankMovements.treasuryAccountId),
+        ),
+      )
+      .where(and(eq(bankMovements.companyId, companyId), inArray(bankMovements.id, plan.movements)))
+      .orderBy(asc(bankMovements.id))) {
+      movementMap.set(movement.id, {
+        id: movement.id,
+        treasuryAccountId: movement.treasuryAccountId,
+        ledgerAccount: account.ledgerAccount,
+        currency: movement.currency,
+        bookingDate: date(movement.bookingDate),
+        valueDate: movement.valueDate ? date(movement.valueDate) : null,
+        amountMinor: movement.amountMinor,
+        reference: movement.reference,
+        counterparty: movement.counterparty,
+      });
+      readSet.push({ kind: 'movement', id: movement.id, version: movement.sourceId });
+    }
+
   const partyMap = new Map<string, PartyRecord>();
   if (plan.parties?.length)
     for (const row of await tx
@@ -262,18 +293,17 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
     }
 
   let profile: ProfileFact[] = [];
-  if (plan.profileAt?.length) {
-    const until = plan.profileAt.reduce((a, b) => (a > b ? a : b));
+  if (plan.profile) {
     const rows = await tx
       .select()
       .from(profileFacts)
-      .where(and(eq(profileFacts.companyId, companyId), lte(profileFacts.effectiveFrom, until)))
+      .where(eq(profileFacts.companyId, companyId))
       .orderBy(asc(profileFacts.effectiveFrom), asc(profileFacts.createdAt), asc(profileFacts.id));
     const superseded = new Set(rows.map((row) => row.supersedesId).filter(Boolean));
     profile = rows
       .filter((row) => !superseded.has(row.id))
       .map((row) => ({ axis: row.axis, value: row.value, effectiveFrom: date(row.effectiveFrom) }));
-    readSet.push({ kind: 'profile', id: until, version: hashOf(profile) });
+    readSet.push({ kind: 'profile', id: 'company', version: hashOf(profile) });
   }
 
   const loaded: Loaded = {
@@ -282,6 +312,7 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
     documents: documentMap,
     entries: entryMap,
     openItems: itemMap,
+    movements: movementMap,
     parties: partyMap,
     profile,
   };

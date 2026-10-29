@@ -210,6 +210,7 @@ export async function propose(
   value: Effect,
   options: {
     proposalId?: string;
+    subjectKey?: string;
     version?: number;
     blocking?: boolean;
     readSet?: { kind: string; id: string; version: string }[];
@@ -228,7 +229,7 @@ export async function propose(
         id: proposalId,
         companyId: world.company,
         treatmentId: 'test.treatment',
-        subjectKey: proposalId,
+        subjectKey: options.subjectKey ?? proposalId,
         createdBy: world.owner,
       });
     await tx.insert(proposalVersions).values({

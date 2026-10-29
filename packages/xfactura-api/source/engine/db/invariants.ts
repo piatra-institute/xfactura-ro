@@ -45,6 +45,9 @@ const appendOnly = [
   'acc_action_requests',
   'acc_action_decisions',
   'acc_action_executions',
+  'acc_treasury_accounts',
+  'acc_bank_statements',
+  'acc_bank_movements',
   'ref_fx_rates',
 ];
 // Tables with narrowly guarded updates (below) that are never deleted from.
@@ -225,6 +228,15 @@ const scheduleRowFields: Field[] = [
 ];
 
 const entryChecks: Check[] = [
+  {
+    code: 'subject_posted',
+    rule: 'A subject (document, movement, …) is posted at most once.',
+    violation: `EXISTS (
+      SELECT 1 FROM acc_entries e
+      JOIN acc_proposals p ON p.company_id = e.company_id AND p.id = e.proposal_id
+      WHERE e.company_id = NEW.company_id AND p.subject_key = (
+        SELECT subject_key FROM acc_proposals WHERE company_id = NEW.company_id AND id = NEW.proposal_id))`,
+  },
   {
     code: 'proposal_version_missing',
     rule: 'An entry posts an existing proposal version.',
@@ -557,6 +569,21 @@ const triggers: Trigger[] = [
         code: 'withdrawn',
         rule: 'A withdrawn proposal cannot be revised.',
         violation: isWithdrawn,
+      },
+    ],
+  },
+  {
+    name: 'inv_proposal_subject',
+    on: 'BEFORE INSERT ON acc_proposals',
+    checks: [
+      {
+        code: 'subject_taken',
+        rule: 'A subject has at most one proposal that is not withdrawn.',
+        violation: `EXISTS (
+          SELECT 1 FROM acc_proposals p
+          WHERE p.company_id = NEW.company_id AND p.subject_key = NEW.subject_key
+            AND NOT EXISTS (
+              SELECT 1 FROM acc_withdrawals w WHERE w.company_id = p.company_id AND w.proposal_id = p.id))`,
       },
     ],
   },
