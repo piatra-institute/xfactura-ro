@@ -112,11 +112,22 @@ export class InvoiceArchives {
       requireCondition(parsed, 'ARCHIVE_STATE', 'Reîncercați importul arhivei.', 409);
       // Reject every company/identity conflict before writing any extracted object.
       const identities = new Map<string, string>();
+      const creditFamilies = new Map<string, string>();
       for (const member of parsed) {
         if (!member.invoice) continue;
         try {
           const plan = await inspectInvoice(tx, actor, member.invoice, sha256(member.bytes)),
             prior = identities.get(plan.sourceKey);
+          if (plan.creditIdentityKey) {
+            const previousFamily = creditFamilies.get(plan.creditIdentityKey);
+            requireCondition(
+              !previousFamily || previousFamily === plan.family,
+              'INVOICE_SOURCE_CONFLICT',
+              'Aceeași corecție are reprezentări 380/381 diferite în arhivă.',
+              409,
+            );
+            creditFamilies.set(plan.creditIdentityKey, plan.family);
+          }
           requireCondition(
             !prior || prior === plan.hash,
             'INVOICE_SOURCE_CONFLICT',

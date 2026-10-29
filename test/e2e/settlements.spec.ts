@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { invoiceXml } from '../../packages/xfactura-api/test/accounting/fixtures/invoice';
+import { negativeInvoiceXml } from '../../packages/xfactura-api/test/accounting/fixtures/negative-invoice';
 import { iban, camt, camtEntry } from '../../packages/xfactura-api/test/accounting/fixtures/bank';
 
 test('verifies a cross-year credit and source-linked settlement prepared through the agent API', async ({
@@ -131,11 +132,11 @@ test('verifies a cross-year credit and source-linked settlement prepared through
   });
   const creditXml = await source(
     'credit-2026.xml',
-    invoiceXml({
+    negativeInvoiceXml({
       direction: 'sale',
-      credit: true,
       number: 'CN-2026',
       originalNumber: 'INV-2025',
+      originalDate: '2025-12-20',
       date: '2026-01-15',
       net: '20.00',
       tax: '4.20',
@@ -164,6 +165,28 @@ test('verifies a cross-year credit and source-linked settlement prepared through
   const selector = page.getByRole('combobox', { name: 'Exercițiu financiar', exact: true });
   const proposal = page.locator('.acc-review');
   await expect(proposal).toContainText('Motivul corecției');
+  await expect(proposal).toContainText('Factură storno (380)');
+  await expect(proposal).toContainText('Total în factura storno');
+  await expect(proposal).toContainText('-24,20');
+  const [stornoDownload] = await Promise.all([
+    page.waitForEvent('download'),
+    proposal.getByRole('link', { name: 'credit-2026.xml', exact: true }).click(),
+  ]);
+  const stornoStream = await stornoDownload.createReadStream(),
+    stornoChunks: Buffer[] = [];
+  for await (const chunk of stornoStream) stornoChunks.push(chunk);
+  expect(Buffer.concat(stornoChunks).toString()).toBe(
+    negativeInvoiceXml({
+      direction: 'sale',
+      number: 'CN-2026',
+      originalNumber: 'INV-2025',
+      originalDate: '2025-12-20',
+      date: '2026-01-15',
+      net: '20.00',
+      tax: '4.20',
+      gross: '24.20',
+    }),
+  );
   await expect(proposal).toContainText('Corecție TVA colectată');
   await expect(proposal).toContainText('-4,20');
   await proposal.getByRole('button', { name: 'INV-2025', exact: true }).click();

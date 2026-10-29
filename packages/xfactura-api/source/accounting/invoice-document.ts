@@ -1,6 +1,13 @@
 import { z } from 'zod';
 import { sourceXml, type XmlElement as Element } from './source-xml';
-import { Amount, dateSchema, moneySchema, signedMoneySchema, requireCondition } from './domain';
+import {
+  Amount,
+  dateSchema,
+  moneySchema,
+  signedMoneySchema,
+  requireCondition,
+  toBani,
+} from './domain';
 
 export const invoiceParserVersion = 'ubl-invoice-1';
 const partySchema = z
@@ -14,9 +21,43 @@ const rateSchema = z
   .string()
   .regex(/^(0|[1-9]\d{0,2})(\.\d{1,4})?$/)
   .transform((value) => new Amount(value).toString());
+const quantitySchema = z
+  .string()
+  .regex(/^-?(0|[1-9]\d{0,15})(\.\d{1,6})?$/)
+  .transform((value) => new Amount(value).toFixed());
+const priceSchema = z
+  .string()
+  .regex(/^(0|[1-9]\d{0,15})(\.\d{1,8})?$/)
+  .transform((value) => new Amount(value).toFixed());
+const negativeSourceSchema = z
+  .object({
+    typeCode: z.literal('380'),
+    polarity: z.literal('negative'),
+    lines: z
+      .array(
+        z
+          .object({
+            lineId: z.string().min(1).max(100),
+            quantity: quantitySchema,
+            unitCode: z.string().min(1).max(10),
+            unitPrice: priceSchema,
+            priceBaseQuantity: quantitySchema,
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(1000),
+  })
+  .strict();
 export const invoiceDocumentSchema = z
   .object({
-    parserVersion: z.enum([invoiceParserVersion, 'ubl-invoice-2', 'ubl-invoice-3']),
+    parserVersion: z.enum([
+      invoiceParserVersion,
+      'ubl-invoice-2',
+      'ubl-invoice-3',
+      'ubl-invoice-4',
+    ]),
+    sourceInvoice: negativeSourceSchema.optional(),
     documentAdjustments: z
       .array(
         z
@@ -95,6 +136,17 @@ export const invoiceDocumentSchema = z
   })
   .strict();
 export type InvoiceDocument = z.infer<typeof invoiceDocumentSchema>;
+
+// Fixed input scales permit exact rational half-up rounding, even at maximum precision.
+function negativeLineBani(quantity: string, unitPrice: string, baseQuantity: string) {
+  const scaled = (value: string, places: number) => {
+    const [whole, fraction = ''] = value.split('.');
+    return BigInt(whole + fraction.padEnd(places, '0'));
+  };
+  const numerator = -scaled(quantity, 6) * scaled(unitPrice, 8),
+    denominator = scaled(baseQuantity, 6) * 1_000_000n;
+  return -((2n * numerator + denominator) / (2n * denominator));
+}
 
 const cbc = 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2';
 const cac = 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2';
@@ -189,6 +241,30 @@ export function invoiceDocumentFromXml(root: Element): InvoiceDocument {
     'Totalul TVA în moneda facturii lipsește sau este ambiguu.',
   );
   const totals = one(root, 'LegalMonetaryTotal')!;
+  const negative =
+    !credit &&
+    typeCode === '380' &&
+    new Amount(amount(totals, 'TaxExclusiveAmount', currency, false, true)).lt(0);
+  const sourceLines: z.infer<typeof negativeSourceSchema>['lines'] = [];
+  function monetary(node: Element, local: string, optional = false) {
+    const raw = amount(node, local, currency, optional, negative);
+    requireCondition(
+      !negative || new Amount(raw).lte(0),
+      'NEGATIVE_INVOICE_SIGN',
+      'Factura storno necesită sume negative sau zero consecvente.',
+    );
+    return negative ? new Amount(raw).negated().toFixed(2) : raw;
+  }
+  if (negative)
+    requireCondition(
+      children(root, 'AllowanceCharge').length === 0 &&
+        ['AllowanceTotalAmount', 'ChargeTotalAmount', 'PrepaidAmount'].every(
+          (field) => amount(totals, field, currency, true, true) === '0.00',
+        ) &&
+        rounding(totals, currency) === '0.00',
+      'UNSUPPORTED_NEGATIVE_INVOICE',
+      'Stornările cu ajustări globale, avansuri sau rotunjiri necesită un tratament separat.',
+    );
   const adjustmentNodes = children(root, 'AllowanceCharge');
   requireCondition(
     adjustmentNodes.length <= 100,
@@ -253,6 +329,11 @@ export function invoiceDocumentFromXml(root: Element): InvoiceDocument {
     'XML_REFERENCE',
     'Referințele facturilor sunt prea multe sau ambigue.',
   );
+  requireCondition(
+    !negative || (references.length === 1 && references[0].issueDate !== null),
+    'NEGATIVE_INVOICE_REFERENCE',
+    'Factura storno trebuie să identifice numărul și data unei singure facturi originale.',
+  );
   const lines = children(root, credit ? 'CreditNoteLine' : 'InvoiceLine').map((node) => {
     const item = one(node, 'Item')!;
     const category = one(item, 'ClassifiedTaxCategory')!;
@@ -261,29 +342,67 @@ export function invoiceDocumentFromXml(root: Element): InvoiceDocument {
       'XML_TAX',
       'Schema de taxare nu este TVA.',
     );
+    const net = amount(node, 'LineExtensionAmount', currency, false, true);
+    if (negative) {
+      const quantityNode = one(node, 'InvoicedQuantity', cbc)!,
+        price = one(node, 'Price')!,
+        quantity = quantitySchema.parse(value(node, 'InvoicedQuantity')),
+        unitCode = quantityNode.attributes.unitCode,
+        base = one(price, 'BaseQuantity', cbc, true),
+        priceBaseQuantity = base ? quantitySchema.parse(value(price, 'BaseQuantity')) : '1',
+        priceNode = one(price, 'PriceAmount', cbc)!,
+        unitPrice = priceSchema.parse(value(price, 'PriceAmount'));
+      requireCondition(
+        children(node, 'AllowanceCharge').length === 0 &&
+          children(price, 'AllowanceCharge').length === 0 &&
+          priceNode.attributes.currencyID === currency &&
+          !!unitCode &&
+          (!base?.attributes.unitCode || base.attributes.unitCode === unitCode) &&
+          new Amount(quantity).lt(0) &&
+          new Amount(unitPrice).gt(0) &&
+          new Amount(priceBaseQuantity).gt(0) &&
+          new Amount(net).lt(0) &&
+          negativeLineBani(quantity, unitPrice, priceBaseQuantity) === toBani(net),
+        'NEGATIVE_INVOICE_LINE',
+        'Stornarea necesită cantități negative, prețuri pozitive și valori de linie reconciliate, fără ajustări de linie.',
+      );
+      sourceLines.push({
+        lineId: value(node, 'ID')!,
+        quantity,
+        unitCode,
+        unitPrice,
+        priceBaseQuantity,
+      });
+    }
     return {
       id: value(node, 'ID')!,
       description: value(item, 'Name')!,
-      net: amount(node, 'LineExtensionAmount', currency, false, true),
+      net: negative ? new Amount(net).negated().toFixed(2) : net,
       vatCategory: value(category, 'ID')!,
       vatRate: value(category, 'Percent', true),
     };
   });
   const document = invoiceDocumentSchema.parse({
-    parserVersion: adjustments.length
-      ? 'ubl-invoice-3'
-      : typeCode === '386' ||
-          references.length > 1 ||
-          lines.some((line) => new Amount(line.net).lt(0))
-        ? 'ubl-invoice-2'
-        : invoiceParserVersion,
+    parserVersion: negative
+      ? 'ubl-invoice-4'
+      : adjustments.length
+        ? 'ubl-invoice-3'
+        : typeCode === '386' ||
+            references.length > 1 ||
+            lines.some((line) => new Amount(line.net).lt(0))
+          ? 'ubl-invoice-2'
+          : invoiceParserVersion,
     ...(adjustments.length ? { documentAdjustments: adjustments } : {}),
-    ...(typeCode === '386' ||
+    ...(negative
+      ? { sourceInvoice: { typeCode: '380', polarity: 'negative', lines: sourceLines } }
+      : {}),
+    ...(negative ||
+    typeCode === '386' ||
     references.length > 1 ||
     lines.some((line) => new Amount(line.net).lt(0))
       ? { invoiceTypeCode: typeCode, invoiceReferences: references }
       : {}),
-    documentType: credit ? 'credit_note' : 'invoice',
+    documentType: credit || negative ? 'credit_note' : 'invoice',
     number: value(root, 'ID'),
     issueDate: value(root, 'IssueDate'),
     taxPointDate: value(root, 'TaxPointDate', true),
@@ -301,8 +420,8 @@ export function invoiceDocumentFromXml(root: Element): InvoiceDocument {
         'Schema de taxare nu este TVA.',
       );
       return {
-        base: amount(node, 'TaxableAmount', currency),
-        tax: amount(node, 'TaxAmount', currency),
+        base: monetary(node, 'TaxableAmount'),
+        tax: monetary(node, 'TaxAmount'),
         category: value(category, 'ID'),
         rate: value(category, 'Percent', true),
         exemptionReason:
@@ -311,15 +430,15 @@ export function invoiceDocumentFromXml(root: Element): InvoiceDocument {
       };
     }),
     totals: {
-      lineNet: amount(totals, 'LineExtensionAmount', currency),
-      net: amount(totals, 'TaxExclusiveAmount', currency),
-      tax: amount(taxTotal[0], 'TaxAmount', currency),
-      gross: amount(totals, 'TaxInclusiveAmount', currency),
+      lineNet: monetary(totals, 'LineExtensionAmount'),
+      net: monetary(totals, 'TaxExclusiveAmount'),
+      tax: monetary(taxTotal[0], 'TaxAmount'),
+      gross: monetary(totals, 'TaxInclusiveAmount'),
       allowances: amount(totals, 'AllowanceTotalAmount', currency, true),
       charges: amount(totals, 'ChargeTotalAmount', currency, true),
       prepaid: amount(totals, 'PrepaidAmount', currency, true),
       rounding: rounding(totals, currency),
-      payable: amount(totals, 'PayableAmount', currency),
+      payable: monetary(totals, 'PayableAmount'),
     },
   });
   const t = document.totals;

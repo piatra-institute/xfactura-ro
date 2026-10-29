@@ -222,6 +222,18 @@ export default function GeneralDetails({
           />
         ) : null}
         <dl className="acc-review-meta">
+          {invoice.sourceCredit ? (
+            <>
+              <div>
+                <dt>Document de corecție</dt>
+                <dd>Factură storno (380)</dd>
+              </div>
+              <div>
+                <dt>Total în factura storno</dt>
+                <dd>{formatMoney(invoice.sourceCredit.gross)}</dd>
+              </div>
+            </>
+          ) : null}
           {invoice.documentCharge ? (
             <>
               <div>

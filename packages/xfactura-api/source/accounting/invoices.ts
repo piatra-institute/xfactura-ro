@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, asc, eq, gt } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { Commands, type Actor } from './commands';
 import type { Transaction } from './db';
@@ -35,32 +35,50 @@ export async function inspectInvoice(
     'Factura trebuie să identifice compania ca emitent sau beneficiar.',
   );
   const direction = sale ? ('sale' as const) : ('purchase' as const);
-  const sourceKey = sha256(
-    canonical([
-      direction,
-      parsed.documentType,
+  const family = parsed.sourceInvoice ? 'invoice' : parsed.documentType,
+    identity = [
       parsed.supplier.country,
       cui(parsed.supplier.taxId),
       parsed.number,
       parsed.issueDate.slice(0, 4),
-    ]),
-  );
+    ],
+    sourceKey = sha256(canonical([direction, family, ...identity])),
+    alternateKey =
+      parsed.documentType === 'credit_note'
+        ? sha256(
+            canonical([direction, family === 'invoice' ? 'credit_note' : 'invoice', ...identity]),
+          )
+        : null,
+    creditIdentityKey =
+      parsed.documentType === 'credit_note'
+        ? sha256(canonical([direction, 'credit', ...identity]))
+        : null;
   const hash = sha256(canonical(parsed));
-  const [duplicate] = await tx
+  const retained = await tx
     .select()
     .from(invoiceDocuments)
     .where(
       and(
         eq(invoiceDocuments.companyId, actor.companyId),
-        eq(invoiceDocuments.sourceKey, sourceKey),
+        inArray(invoiceDocuments.sourceKey, alternateKey ? [sourceKey, alternateKey] : [sourceKey]),
       ),
     );
+  const duplicate = retained.find((row) => row.sourceKey === sourceKey);
+  requireCondition(
+    !retained.some(
+      (row) => row.sourceKey === alternateKey && row.body.documentType === 'credit_note',
+    ),
+    'INVOICE_SOURCE_CONFLICT',
+    'Aceeași corecție are reprezentări 380/381 diferite. Verificați sursele înainte de contabilizare.',
+    409,
+  );
   let sameLegacySource = false;
   if (
     duplicate &&
     duplicate.hash !== hash &&
     parsed.parserVersion === 'ubl-invoice-3' &&
-    duplicate.body.parserVersion !== 'ubl-invoice-3' &&
+    (duplicate.body.parserVersion === 'ubl-invoice-1' ||
+      duplicate.body.parserVersion === 'ubl-invoice-2') &&
     sourceHash
   ) {
     const { documentAdjustments: _adjustments, ...previousShape } = parsed;
@@ -79,7 +97,7 @@ export async function inspectInvoice(
     'Aceeași factură are conținut diferit. Verificați ambele surse.',
     409,
   );
-  return { direction, sourceKey, hash, duplicate };
+  return { direction, sourceKey, hash, duplicate, family, creditIdentityKey };
 }
 export async function retainInvoice(
   tx: Transaction,

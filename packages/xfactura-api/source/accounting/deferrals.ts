@@ -82,7 +82,7 @@ export class Deferrals {
           409,
         );
         const { parentDeferralId, changeBasis, ...invoiceInput } = body;
-        const interpreted = await interpretDeferralInvoice(tx, actor, invoiceInput);
+        const interpreted = await interpretDeferralInvoice(tx, actor, invoiceInput, 'supplement');
         const result = await attachDeferralSupplement(tx, actor, interpreted, {
           parentDeferralId,
           changeBasis,

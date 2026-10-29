@@ -41,6 +41,7 @@ export async function interpretDeferralInvoice(
   tx: Transaction,
   actor: Actor,
   input: DeferralInput,
+  origin: 'subscription' | 'supplement' = 'subscription',
 ) {
   const result = await interpretInvoice(
     tx,
@@ -56,7 +57,7 @@ export async function interpretDeferralInvoice(
       deduction: input.deduction,
       counterpartyVatCollection: input.counterpartyVatCollection,
     },
-    'early_subscription',
+    origin === 'supplement' ? 'early_supplement' : 'early_subscription',
   );
   requireCondition(
     input.evidenceDate <= result.invoice.body.issueDate,
@@ -207,7 +208,12 @@ export async function checkDeferralInvoicePosting(
     'MULTIPLE_ORIGINS',
     'Factura are un singur tratament de recunoaștere.',
   );
-  const interpreted = await interpretDeferralInvoice(tx, actor, invoiceRequest(body));
+  const interpreted = await interpretDeferralInvoice(
+    tx,
+    actor,
+    invoiceRequest(body),
+    body.invoice.deferral.supplement ? 'supplement' : 'subscription',
+  );
   const expected = body.invoice.deferral.supplement
     ? await attachDeferralSupplement(tx, actor, interpreted, body.invoice.deferral.supplement)
     : interpreted;
@@ -226,7 +232,12 @@ export async function checkDeferralInvoicePosting(
   return true;
 }
 export async function checkDeferralSource(tx: Transaction, actor: Actor, state: DeferralState) {
-  const interpreted = await interpretDeferralInvoice(tx, actor, invoiceRequest(state.body));
+  const interpreted = await interpretDeferralInvoice(
+    tx,
+    actor,
+    invoiceRequest(state.body),
+    state.treatment.supplement ? 'supplement' : 'subscription',
+  );
   const expected = state.treatment.supplement
     ? await attachDeferralSupplement(
         tx,

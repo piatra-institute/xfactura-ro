@@ -157,6 +157,16 @@ export const invoiceTreatmentSchema = z
     tax: moneySchema,
     gross: moneySchema,
     deductibleTax: moneySchema,
+    sourceCredit: z
+      .object({
+        schemaVersion: z.literal(1),
+        typeCode: z.literal('380'),
+        net: signedMoneySchema,
+        tax: signedMoneySchema,
+        gross: signedMoneySchema,
+      })
+      .strict()
+      .optional(),
     documentAllowance: z
       .object({
         schemaVersion: z.literal(1),

@@ -48,7 +48,7 @@ export async function interpretInvoice(
   tx: Transaction,
   actor: Actor,
   input: InvoicePostingInput,
-  timing: 'service' | 'early_subscription' | 'early_advance' = 'service',
+  timing: 'service' | 'early_subscription' | 'early_supplement' | 'early_advance' = 'service',
 ) {
   const [invoice] = await tx
     .select()
@@ -75,6 +75,14 @@ export async function interpretInvoice(
   const doc = invoice.body,
     totals = doc.totals;
   requireCondition(
+    doc.documentType !== 'invoice' ||
+      doc.originalInvoiceNumber === null ||
+      doc.lines.some((line) => new Amount(line.net).lt(0)) ||
+      timing === 'early_supplement',
+    'UNSUPPORTED_REFERENCE_TREATMENT',
+    'Factura cu referință la o operațiune anterioară necesită un tratament explicit de corecție sau regularizare.',
+  );
+  requireCondition(
     doc.documentType === 'invoice' &&
       doc.currency === 'RON' &&
       doc.supplier.country === 'RO' &&
@@ -88,7 +96,7 @@ export async function interpretInvoice(
           input.serviceDate > doc.issueDate &&
           input.taxPointDate <= doc.issueDate &&
           (!doc.taxPointDate || doc.taxPointDate === input.taxPointDate)
-      : timing === 'early_subscription'
+      : timing === 'early_subscription' || timing === 'early_supplement'
         ? input.recognitionDate === doc.issueDate &&
           input.taxPointDate === doc.issueDate &&
           input.serviceDate >= doc.issueDate &&
@@ -311,6 +319,15 @@ export async function checkInvoicePosting(tx: Transaction, actor: Actor, body: G
     !document || document.body.invoiceTypeCode !== '386' || body.invoice.advance,
     'ADVANCE_INVOICE_REQUIRED',
     'Factura de avans necesită tratamentul distinct în 4092/419.',
+  );
+  requireCondition(
+    !document ||
+      document.body.documentType !== 'invoice' ||
+      document.body.originalInvoiceNumber === null ||
+      body.invoice.advanceFinal ||
+      body.invoice.deferral?.supplement,
+    'UNSUPPORTED_REFERENCE_TREATMENT',
+    'Referința la o operațiune anterioară necesită un tratament explicit.',
   );
   if (await checkAdvanceInvoicePosting(tx, actor, body)) return;
   if (await checkAdvanceFinalPosting(tx, actor, body)) return;

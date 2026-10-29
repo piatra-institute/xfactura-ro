@@ -358,7 +358,7 @@ export class Capabilities {
         (actor, key, body) => service.invoices.propose(actor, key, body),
       ),
       'invoices.proposeCreditNote': define(
-        'Prepare a linked service credit note using the original approved tax treatment and an evidenced current-period decision.',
+        'Prepare a linked service credit from a retained positive CreditNote 381 or a negative Invoice 380 storno. Match the original invoice and its source reference/date; retain the original approved VAT treatment and an evidenced current-period decision. Signed source amounts never authorize a new ordinary sale/purchase or bypass exact human approval.',
         creditNoteInput,
         proposalOutput,
         (actor, key, body) => service.invoices.proposeCreditNote(actor, key, body),

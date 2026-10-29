@@ -29,7 +29,7 @@ Discovery reports only implemented capabilities available to the current princip
 | `invoices.import`, `invoices.list`, `invoices.get`, `invoices.propose` | Retained UBL facts and bounded domestic service treatments. |
 | `invoices.importArchive`, `invoices.archive` | Atomic retained ZIP import and immutable manifest; extracted invoice/signature/supporting bytes remain distinct, with no acceptance or posting claim. |
 | `invoices.sources` | Bounded archive/member provenance for an invoice, including exact XML variants. |
-| `invoices.proposeCreditNote`, `invoices.reviseCreditNote` | Linked current-period commercial credits retaining the original tax treatment. |
+| `invoices.proposeCreditNote`, `invoices.reviseCreditNote` | Linked current-period credits from positive 381 or bounded negative 380 sources, retaining original tax treatment and exact human authority. |
 | `positions.get`, `positions.list` | Dated invoice receivables/payables, credits, settlements and refunds. |
 | `accruals.propose`, `accruals.revise` | Evidenced service purchases in 408, with estimated recoverable VAT awaiting the invoice in 4428. |
 | `accruals.matchInvoice`, `accruals.reviseMatch` | Exact partial/grouped later-invoice matches; clear the unbilled liability without another expense. |
@@ -175,6 +175,15 @@ Stable bank references reuse movement identities across imports/formats while pr
 5. Use `invoices.archive` for the retained manifest and `invoices.sources` with `{invoiceId, limit, cursor}` for source origins. `evidence.read` or authenticated download retrieves the original ZIP and exact member bytes under its own scope.
 
 Limits are 10 MiB compressed, 100 entries, 10 MiB per file, 40 MiB expanded and 200:1 per-file expansion. Unsupported/encrypted/nested archives and unsafe paths fail closed. A malformed, foreign-company or conflicting invoice rejects the whole batch. Fixing an import requires new retained source evidence; never modify original bytes or silently discard a failed member. Both repeated and concurrent identical imports preserve one manifest and the original normalized invoice identities. Every retry rechecks live authorization, including revoked grants.
+
+## Negative type-380 invoices (storno)
+
+1. Retain the original XML with negative amounts, or its ZIP through the existing evidence/import commands. A simple negative Invoice 380 becomes a v4 credit fact with positive internal amounts and a `sourceInvoice` marker retaining signed quantities, positive prices/base quantities and units. Each line reconciles exactly; header and tax values must share negative/zero polarity. The source remains an Invoice-family identity.
+2. Read the original posted invoice and match the source's single original number **and date**, parties, direction, currency and VAT category/rate. Prepare `invoices.proposeCreditNote` with `{financialYearId, invoiceId, originalInvoiceId, recognitionDate, decisionDate, treatmentEvidenceId, kind: "cancellation" | "commercial_discount", periodBasis: "current_period_event", reason}`. The economic decision needs separate evidence; the source sign alone does not determine its accounting period.
+3. Inspect server-derived `invoice.sourceCredit: {schemaVersion: 1, typeCode: "380", net, tax, gross}`. These are signed source amounts, such as `-20.00/-4.20/-24.20`; ordinary credit magnitudes/ledger effects remain explicit alongside them. Use the existing human `books.approve` and scoped exact `ledger.post`. `invoices.reviseCreditNote` requires `id`/`version` and a new human approval after any stale-history change.
+4. Read dated positions and working VAT. Paid originals may become refundable; use existing settlement commands for a retained opposite bank movement. No command sends money. Dedicated unused-advance and future-service cancellation commands preserve their separate authority; an ordinary credit command cannot cancel those balances.
+
+`NEGATIVE_INVOICE_SIGN`, `NEGATIVE_INVOICE_LINE` and `NEGATIVE_INVOICE_REFERENCE` require a consistent signed source, exact quantity/price arithmetic and one dated original. `UNSUPPORTED_NEGATIVE_INVOICE` rejects global adjustments, prepayments and rounding. Mixed-sign lines, price/line adjustments and negative 381/386 sources fail parsing. `CREDIT_ORIGIN`/`CREDIT_VAT_RATE` require the actual original and its tax rate. `INVOICE_SOURCE_CONFLICT` rejects changed source content or duplicate negative-380/positive-381 representations, including within a ZIP; it never guesses that they are separate transactions. Ordinary positive invoices carrying preceding-invoice references return `UNSUPPORTED_REFERENCE_TREATMENT`; supported final-advance and supplementary-service workflows retain explicit reference handling. Historical errors, annual adjusting events and positive reversal of a storno need separate treatments. Import/format support does not mean official validation or ANAF acceptance.
 
 ## Original invoice allowances
 

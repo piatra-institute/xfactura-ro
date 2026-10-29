@@ -70,6 +70,11 @@ export async function interpretCreditNote(
     'Corecția trebuie să identifice factura originală și aceleași părți, sens și monedă.',
   );
   requireCondition(
+    !doc.sourceInvoice || doc.invoiceReferences?.[0]?.issueDate === base.issueDate,
+    'CREDIT_ORIGIN',
+    'Data facturii originale din storno trebuie să coincidă cu sursa contabilizată.',
+  );
+  requireCondition(
     input.recognitionDate >= original.journal.date &&
       doc.issueDate >= base.issueDate &&
       input.decisionDate >= base.issueDate &&
@@ -188,6 +193,7 @@ export async function interpretCreditNote(
     advanceFinal: _advanceFinal,
     documentAllowance: _documentAllowance,
     documentCharge: _documentCharge,
+    sourceCredit: _sourceCredit,
     ...originalTreatment
   } = previous;
   const treatment = invoiceTreatmentSchema.parse({
@@ -200,6 +206,17 @@ export async function interpretCreditNote(
     tax: totals.tax,
     gross: totals.gross,
     deductibleTax,
+    ...(doc.sourceInvoice
+      ? {
+          sourceCredit: {
+            schemaVersion: 1,
+            typeCode: '380',
+            net: new Amount(totals.net).negated().toFixed(2),
+            tax: new Amount(totals.tax).negated().toFixed(2),
+            gross: new Amount(totals.gross).negated().toFixed(2),
+          },
+        }
+      : {}),
     registrationIds: [
       ...new Set([
         ...previous.registrationIds,
