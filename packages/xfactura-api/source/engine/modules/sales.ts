@@ -82,6 +82,9 @@ export const issueInput = invoiceFieldsSchema
     precedingDocumentIds: z.array(z.uuid()).max(50).default([]),
     /** The revenue account to recognize on, instead of the series default. */
     revenueAccount: z.string().regex(accountCodePattern).optional(),
+    /** Why lines at the reduced rate qualify for it: the supply of Codul fiscal art. 291 alin. (2)
+     * they are, kept with the issue. */
+    reducedRateBasis: z.string().trim().min(10).max(300).optional(),
   })
   .strict();
 export type IssueInput = z.infer<typeof issueInput>;
@@ -529,6 +532,7 @@ export class Sales {
           buyerId: _b,
           precedingDocumentIds,
           revenueAccount: _r,
+          reducedRateBasis: _basis,
           ...fields
         } = input;
         invoice = calculateInvoice({
@@ -559,8 +563,9 @@ export class Sales {
     };
   }
 
-  /** Standard-rated lines carry the rate in force at the tax point; a company outside VAT
-   * invoices only operations not subject to it. Reduced rates are not in the register yet. */
+  /** Standard-rated lines carry the standard rate in force at the tax point, or the reduced
+   * rate with the supply of art. 291 alin. (2) that justifies it; a company outside VAT invoices
+   * only operations not subject to it. */
   private async rates(
     tx: Transaction,
     companyId: string,
@@ -587,15 +592,34 @@ export class Sales {
       const rate = rules.param<string>('ro.vat.rate', 'vat_chargeability_date', taxPoint, {
         category: 'S',
       });
-      const wrong = [
+      let reduced: string | null = null;
+      try {
+        reduced = rules.param<string>('ro.vat.rate.reduced', 'vat_chargeability_date', taxPoint);
+      } catch (error) {
+        if (!(error instanceof RuleGapError)) throw error;
+      }
+      const other = [
         ...new Set(
           vats.filter((vat) => vat.category === 'S' && vat.rate !== rate).map((vat) => vat.rate),
         ),
       ];
-      return wrong.map((value) => ({
-        code: 'VAT_RATE',
-        message: `Cota ${value}% nu este cota standard în vigoare la ${taxPoint} (${rate}%); cotele reduse nu sunt încă în registrul de reguli.`,
-      }));
+      return other.flatMap((value): Problem[] =>
+        value === reduced
+          ? input.reducedRateBasis
+            ? []
+            : [
+                {
+                  code: 'REDUCED_RATE_BASIS',
+                  message: `Cota redusă de ${value}% se aplică doar livrărilor și prestărilor de la art. 291 alin. (2) din Codul fiscal: precizați temeiul.`,
+                },
+              ]
+          : [
+              {
+                code: 'VAT_RATE',
+                message: `Cota ${value}% nu este în vigoare la ${taxPoint}: cota standard este ${rate}%${reduced ? `, cota redusă ${reduced}%` : ''}.`,
+              },
+            ],
+      );
     } catch (error) {
       if (!(error instanceof RuleGapError)) throw error;
       return [

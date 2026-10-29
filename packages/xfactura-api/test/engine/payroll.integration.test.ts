@@ -2,7 +2,8 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { employees, parties } from '../../source/engine/db/schema';
 import type { ProposalView } from '../../source/engine/kernel/views';
-import { scenario, type Scenario } from './scenario';
+import { iban } from './fixtures/bank';
+import { journal, scenario, type Scenario } from './scenario';
 
 const open: Scenario[] = [];
 afterAll(async () => {
@@ -58,7 +59,7 @@ async function employer(options: { policy?: '635' | '6458' } = {}) {
     const employee = await s.invoke<{ id: string; partyId: string }>(
       s.owner,
       'payroll.employees.record',
-      { lastName: name[0], firstName: name[1], cnp: code },
+      { lastName: name[0], firstName: name[1], cnp: code, healthFund: 'RO-GL' },
     );
     const contract = await s.invoke<{ contractId: string }>(s.owner, 'payroll.contracts.record', {
       employeeId: employee.id,
@@ -119,10 +120,73 @@ describe('payroll', () => {
       'D 646 93.00',
       'C 436 93.00',
     ]);
-    await s.post(await s.approve(proposal));
+    const posted = await s.post(await s.approve(proposal));
     expect(await balance(s, '421')).toEqual({ debit: '0.00', credit: '2699.00' });
     expect(await balance(s, '436')).toEqual({ debit: '0.00', credit: '93.00' });
     expect((await s.refused(prepare()))?.code).toBe('RUN_POSTED');
+
+    // November's statement pays the net salary and, in one transfer, what is owed to ANAF.
+    await s.invoke(s.owner, 'treasury.createAccount', {
+      kind: 'bank',
+      name: 'Cont curent',
+      iban,
+      currency: 'RON',
+      ledgerAccount: '5121',
+      openedOn: '2026-01-01',
+    });
+    const { id: opening } = await s.evidence('balanta-deschidere.pdf');
+    await s.book(
+      'ledger.general',
+      journal(
+        opening,
+        [
+          { account: '5121', side: 'D', amount: '10000.00' },
+          { account: '1012', side: 'C', amount: '10000.00' },
+        ],
+        { date: '2026-01-01', purpose: 'opening' },
+      ),
+    );
+    const statement = [
+      ':20:NOVEMBER2026',
+      `:25:${iban}`,
+      ':28C:001/001',
+      ':60F:C261101RON10000,00',
+      ':61:2611101110D2699,00NTRFSAL-10//BANK-SAL-01',
+      ':86:Salariu octombrie',
+      ':61:2611201120D1719,00NTRFCONTUL-UNIC//BANK-ANAF-01',
+      ':86:Contributii si impozit octombrie',
+      ':62F:C261130RON5582,00',
+      ':64:C261130RON5582,00',
+    ].join('\n');
+    const { id: file } = await s.invoke<{ id: string }>(s.owner, 'evidence.record', {
+      filename: 'extras-noiembrie.sta',
+      mediaType: 'text/plain',
+      base64: Buffer.from(statement).toString('base64'),
+    });
+    await s.invoke(s.owner, 'bank.import', { evidenceId: file, financialYearId: s.year.id });
+    const movements = await s.invoke<{ id: string; amount: string }[]>(
+      s.owner,
+      'bank.movements',
+      {},
+    );
+    const item = (account: string) =>
+      posted.effect!.openItems.find((open) => open.controlAccount === account)!.id;
+    const movement = (amount: string) => movements.find((row) => row.amount === amount)!.id;
+    await s.book('bank.settle', {
+      movementId: movement('-2699.00'),
+      allocations: [{ openItem: item('421'), amount: '2699.00' }],
+    });
+    await s.book('bank.settle', {
+      movementId: movement('-1719.00'),
+      allocations: [
+        { openItem: item('4315'), amount: '1031.00' },
+        { openItem: item('4316'), amount: '413.00' },
+        { openItem: item('444'), amount: '182.00' },
+        { openItem: item('436'), amount: '93.00' },
+      ],
+    });
+    for (const account of ['421', '4315', '4316', '444', '436'])
+      expect(await balance(s, account)).toEqual({ debit: '0.00', credit: '0.00' });
   });
 
   test('the CNP is kept sealed, and the employee is the same party as a buyer who is this person', async () => {
@@ -146,6 +210,7 @@ describe('payroll', () => {
             lastName: 'Ionescu',
             firstName: 'Dan',
             cnp: code,
+            healthFund: 'RO-GL',
           }),
         )
       )?.code,
@@ -157,6 +222,7 @@ describe('payroll', () => {
             lastName: 'X',
             firstName: 'Y',
             cnp: '1800101123456',
+            healthFund: 'RO-GL',
           }),
         )
       )?.code,
@@ -170,7 +236,7 @@ describe('payroll', () => {
       dailyHours: 4,
     });
     const run = await without.prepare();
-    expect(run.lines[0]).toMatchObject({ casEmployer: '456.00', cassEmployer: '183.00' });
+    expect(run.lines[0]).toMatchObject({ casEmployer: '406.00', cassEmployer: '163.00' });
     expect((await without.recognize(run)).issues.map((issue) => issue.code)).toContain(
       'POLICY_MISSING',
     );
@@ -182,13 +248,25 @@ describe('payroll', () => {
       'D 641 2500.00',
       'C 421 2500.00',
       'D 421 951.00',
-      'D 635 639.00',
-      'C 4315 1081.00',
-      'C 4316 433.00',
+      'D 635 569.00',
+      'C 4315 1031.00',
+      'C 4316 413.00',
       'C 444 76.00',
       'D 646 56.00',
       'C 436 56.00',
     ]);
+    await s.post(await s.approve(proposal));
+  });
+
+  test("CAM is owed on the employer's total base, rounded once", async () => {
+    const { s, hire, prepare, recognize } = await employer({ policy: '635' });
+    await hire(['Marin', 'Ioana'], cnp('295030412345'), { baseSalary: '2500', dailyHours: 4 });
+    await hire(['Vasile', 'Ion'], cnp('188020312345'), { baseSalary: '2500', dailyHours: 4 });
+    const run = await prepare();
+    // Each line's CAM rounds 56.25 to 56; the total base of 5,000 owes 112.50, so 113.
+    expect(run.lines.map((line) => line.cam)).toEqual(['56.00', '56.00']);
+    const proposal = await recognize(run);
+    expect(lines(proposal)).toContain('C 436 113.00');
     await s.post(await s.approve(proposal));
   });
 

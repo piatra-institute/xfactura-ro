@@ -1,11 +1,20 @@
 import { describe, expect, test } from 'bun:test';
 import { citationProblems, clauses, legalSources, unsourced } from '../src/ro/sources';
 import { fxVersions } from '../src/ro/fx';
+import { dividendVersions } from '../src/ro/dividends';
+import { microVersions } from '../src/ro/micro';
 import { payrollVersions } from '../src/ro/payroll';
 import { procedureVersions } from '../src/ro/procedure';
 import { vatVersions } from '../src/ro/vat';
 
-const versions = [...vatVersions, ...fxVersions, ...procedureVersions, ...payrollVersions];
+const versions = [
+  ...vatVersions,
+  ...fxVersions,
+  ...procedureVersions,
+  ...payrollVersions,
+  ...microVersions,
+  ...dividendVersions,
+];
 
 describe('source register', () => {
   test('every parameter version cites registered clauses, and located clauses have snapshots', () => {
@@ -21,15 +30,12 @@ describe('source register', () => {
 
   test('reports the parameters still cited only to texts nobody has read', () => {
     // The FX rate-date conventions, the rounding of declarations and payroll amounts, and the
-    // minimum wage with its relief cite acts not yet snapshotted.
+    // 2025 minimum wage cite acts not yet snapshotted.
     expect(unsourced(versions).map((version) => version.id)).toEqual([
       'ro.fx.rate_date.accounting/2024-01-01',
       'ro.fx.rate_date.vat/2024-01-01',
       'ro.declaration.rounding/2016-01-01',
       'ro.payroll.minimum_wage/2025-01-01',
-      'ro.payroll.minimum_wage/2026-07-01',
-      'ro.payroll.minimum_wage_relief/2026-01-01',
-      'ro.payroll.minimum_wage_relief/2026-07-01',
       'ro.payroll.amount_rounding/2026-01-01',
     ]);
   });

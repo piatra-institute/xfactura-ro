@@ -181,6 +181,47 @@ export const legalSources: readonly LegalSource[] = [
     ],
   },
   {
+    id: 'ANAF/D112-0726',
+    kind: 'official_document',
+    title:
+      'Structura și validările declarației 112 pentru lunile de raportare din 07/2026 (anexa validări, 07.09.2026)',
+    issuer: 'ANAF',
+    publication: null,
+    urls: [
+      'https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/structura_D112_0726_070926.pdf',
+    ],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/structura_D112_0726_070926.pdf',
+        sha256: '3c7c78aee3588357da0b801aa322107071abc010ed25727eb705ca3c5b6edfce',
+        retrievedOn: '2026-10-29',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
+    id: 'OUG156/2024',
+    kind: 'act',
+    title: 'Ordonanța de urgență a Guvernului nr. 156/2024',
+    issuer: 'Guvernul României',
+    publication: null,
+    urls: [],
+    fetch: false,
+    snapshots: [],
+  },
+  {
+    id: 'HG2139/2004',
+    kind: 'act',
+    title:
+      'Hotărârea Guvernului nr. 2.139/2004 pentru aprobarea Catalogului privind clasificarea și duratele normale de funcționare a mijloacelor fixe',
+    issuer: 'Guvernul României',
+    publication: 'Monitorul Oficial nr. 46 din 13 ianuarie 2005',
+    urls: ['https://legislatie.just.ro/Public/DetaliiDocumentAfis/58613'],
+    fetch: false,
+    snapshots: [],
+  },
+  {
     id: 'HG1506/2024',
     kind: 'act',
     title:
@@ -343,12 +384,124 @@ export const clauses: readonly Clause[] = [
     summary: 'Cota redusă de TVA este 11%, pentru livrările și prestările enumerate.',
   },
   {
+    id: 'ANAF/Cod-fiscal-consolidat:art.47(1)(c)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 47 alin. (1) lit. c) și art. 54 alin. (3)',
+    status: 'located',
+    summary:
+      'Microîntreprinderea a realizat la 31 decembrie a anului precedent venituri de cel mult echivalentul a 100.000 euro (de la 1 ianuarie 2026), la cursul de la închiderea exercițiului financiar.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.47(1)(g)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 47 alin. (1) lit. g) și art. 51 alin. (4)',
+    status: 'located',
+    summary:
+      'Microîntreprinderea are cel puțin un salariat cu normă întreagă (sau fracțiuni de normă însumând o normă, sau un contract de administrare ori mandat remunerat cel puțin cu salariul minim).',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.51(1)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 51 alin. (1)',
+    status: 'located',
+    summary: 'Cota impozitului pe veniturile microîntreprinderilor este 1%.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.52(1),(5)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 52 alin. (1) și (5)',
+    status: 'located',
+    summary:
+      'Peste 100.000 euro venituri în cursul anului, cumulat de la începutul anului la cursul de la închiderea exercițiului precedent, microîntreprinderea datorează impozit pe profit din trimestrul depășirii.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.53',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 53 alin. (1) și (2)',
+    status: 'located',
+    summary:
+      'Baza impozabilă: veniturile din orice sursă, din care se scad veniturile enumerate (stocuri, producția de imobilizări, subvenții, diferențe de curs valutar, reduceri comerciale acordate, dividende de la persoane juridice române etc.) și la care se adaugă reducerile comerciale primite și, în trimestrul IV, diferența favorabilă de curs valutar a anului.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.56(1)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 56 alin. (1) și (2)',
+    status: 'located',
+    summary:
+      'Impozitul se calculează și se plătește trimestrial, până la 25 a lunii următoare trimestrului, cu declarația aferentă.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.43(2)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 43 alin. (1)–(3)',
+    status: 'located',
+    summary:
+      'Dividendele plătite unei persoane juridice române se impozitează cu 16% din dividendul brut; impozitul se reține la plată și se plătește până la 25 a lunii următoare, iar pentru dividendele distribuite și neplătite până la sfârșitul anului, până la 25 ianuarie.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.43(4)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 43 alin. (4)',
+    status: 'located',
+    summary:
+      'Scutirea dividendelor între persoane juridice române: beneficiarul deține cel puțin 10% de cel puțin un an și ambele plătesc, fără opțiune, impozit pe profit sau unul care îl substituie.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.97(7)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 97 alin. (7) și nota privind art. VII din Legea nr. 141/2025',
+    status: 'located',
+    summary:
+      'Dividendele plătite persoanelor fizice se impozitează cu 16%, impozit final reținut la plată, pentru dividendele distribuite începând cu 1 ianuarie 2026.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.28',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 28 alin. (2), (5), (6) și (11)',
+    status: 'located',
+    summary:
+      'Amortizarea fiscală: metoda liniară pentru construcții, liniară, degresivă sau accelerată pentru echipamente și computere, liniară sau degresivă pentru celelalte; începe cu luna următoare punerii în funcțiune.',
+  },
+  {
+    id: 'OMFP1802/2014:pct.238',
+    source: 'OMFP1802/2014',
+    locator: 'pct. 238 alin. (1)–(3)',
+    status: 'located',
+    summary:
+      'Amortizarea se aplică valorii de intrare, începe cu luna următoare punerii în funcțiune și continuă până la recuperarea integrală; duratele contabile, stabilite prin politicile contabile, pot diferi de cele fiscale.',
+  },
+  {
+    id: 'HG2139/2004:catalog',
+    source: 'HG2139/2004',
+    locator:
+      'anexa: Catalogul privind clasificarea și duratele normale de funcționare a mijloacelor fixe',
+    status: 'pending',
+    summary:
+      'Codul de clasificare și intervalul duratei normale de funcționare a fiecărui mijloc fix.',
+  },
+  {
     id: 'OMFP1243/2018:art.1,4',
     source: 'OMFP1243/2018',
     locator: 'art. 1 și art. 4',
     status: 'located',
     summary:
       'Introduce în planul de conturi conturile 4315, 4316, 436 (pasiv) și 646, pentru contribuțiile datorate pentru veniturile realizate de la 1 ianuarie 2018.',
+  },
+  {
+    id: 'ANAF/D112-0726:salariul-minim',
+    source: 'ANAF/D112-0726',
+    locator: 'modificări: Suma300, Suma200, salMin și suma limită B2_5P',
+    status: 'located',
+    summary:
+      'Salariul minim 4.050 lei (01–06/2026) și 4.325 lei (07–12/2026); suma care nu se include în baze 300 lei (OUG 156/2024, 01–06/2026) și 200 lei (OUG 89/2025, 07–12/2026), cu plafonul venitului de 4.300, respectiv 4.600 lei; suma limită pentru contribuția minimă: (salariul minim − suma) / zile lucrătoare × zile, la leu.',
+  },
+  {
+    id: 'OUG156/2024:salariul-minim',
+    source: 'OUG156/2024',
+    locator: 'dispozițiile privind suma care nu se include în bazele de calcul (de localizat)',
+    status: 'pending',
+    summary:
+      'Suma de 300 lei care nu se include în bazele de calcul pentru salariații plătiți cu salariul minim.',
   },
   {
     id: 'HG1506/2024:art.1',

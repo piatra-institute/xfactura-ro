@@ -79,6 +79,14 @@ describe('issuing', () => {
       (await preview(input)).problems.map((problem) => problem.code);
     // 19% stopped being the standard rate on 2025-08-01.
     expect(await problems({ lines: [service('100', '19')] })).toEqual(['VAT_RATE']);
+    // The reduced rate needs the supply of art. 291 alin. (2) that justifies it.
+    expect(await problems({ lines: [service('100', '11')] })).toEqual(['REDUCED_RATE_BASIS']);
+    expect(
+      await problems({
+        lines: [service('100', '11')],
+        reducedRateBasis: 'art. 291 alin. (2) lit. h): cazare în sectorul hotelier',
+      }),
+    ).toEqual([]);
     expect(await problems({ currency: 'EUR' })).toEqual(['VAT_CURRENCY']);
     // The VAT rates are reviewed only until the end of 2026.
     expect(await problems({ issueDate: '2027-01-04' })).toEqual(['RULE_GAP']);

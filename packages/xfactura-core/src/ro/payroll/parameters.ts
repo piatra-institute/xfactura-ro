@@ -127,8 +127,20 @@ export const payrollVersions: ParameterVersion[] = [
   version('ro.payroll.cas.rate', '25', [code('art.138(a)')]),
   version('ro.payroll.cass.rate', '10', [code('art.156')]),
   version('ro.payroll.cam.rate', '2.25', [code('art.220^3(1)')]),
-  version('ro.payroll.minimum_wage', '4050', ['HG1506/2024:art.1'], '2025-01-01', '2026-06-30'),
-  version('ro.payroll.minimum_wage', '4325', ['HG146/2026:art.1'], '2026-07-01'),
+  version('ro.payroll.minimum_wage', '4050', ['HG1506/2024:art.1'], '2025-01-01', '2025-12-31'),
+  version(
+    'ro.payroll.minimum_wage',
+    '4050',
+    ['HG1506/2024:art.1', 'ANAF/D112-0726:salariul-minim'],
+    '2026-01-01',
+    '2026-06-30',
+  ),
+  version(
+    'ro.payroll.minimum_wage',
+    '4325',
+    ['HG146/2026:art.1', 'ANAF/D112-0726:salariul-minim'],
+    '2026-07-01',
+  ),
   version(
     'ro.payroll.personal_deduction',
     {
@@ -186,14 +198,14 @@ export const payrollVersions: ParameterVersion[] = [
   version(
     'ro.payroll.minimum_wage_relief',
     { amount: '300', grossCeiling: '4300' },
-    ['OUG89/2025:salariul-minim'],
+    ['OUG156/2024:salariul-minim', 'ANAF/D112-0726:salariul-minim'],
     '2026-01-01',
     '2026-06-30',
   ),
   version(
     'ro.payroll.minimum_wage_relief',
     { amount: '200', grossCeiling: '4600' },
-    ['OUG89/2025:salariul-minim'],
+    ['OUG89/2025:salariul-minim', 'ANAF/D112-0726:salariul-minim'],
     '2026-07-01',
     '2026-12-31',
   ),

@@ -41,6 +41,9 @@ export const employeeInput = z
     cnp: z.string().regex(/^\d{13}$/),
     /** Needed only when the CNP does not give the century (codes 7, 8 and 9). */
     birthDate: localDate.optional(),
+    /** The health insurance house the employee is insured with: a county (RO-GL, RO-B) or
+     * OPSNAJ. */
+    healthFund: z.string().regex(/^(RO-[A-Z]{1,2}|OPSNAJ)$/),
   })
   .strict();
 
@@ -216,6 +219,9 @@ export class Payroll {
         partyId,
         cnpSealed: this.sealer.seal(actor.companyId, input.cnp),
         birthDate,
+        lastName: input.lastName,
+        firstName: input.firstName,
+        healthFund: input.healthFund,
         createdBy: actor.actorId,
       });
       return { id, partyId, name: existing?.name ?? name };

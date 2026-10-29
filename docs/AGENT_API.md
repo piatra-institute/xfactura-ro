@@ -88,6 +88,8 @@ Reviewed actions (month close and reopen) follow the same pattern: request, appr
 | `payroll.employees.list`, `payroll.contracts.list` | read | no | — | Employees without CNPs; contracts with every version. |
 | `payroll.runs.prepare` | write | no | — | Compute a month's payroll; computing again supersedes the earlier run. |
 | `payroll.runs.get`, `payroll.runs.list` | read | no | — | Payroll runs with their lines and problems. |
+| `assets.register`, `assets.list` | write / read | yes | — | A fixed asset's card; the register with depreciation booked. |
+| `assets.dispose` | write | no | — | Record that an asset left use, before derecognizing it. |
 | `spv.submit` | write | no | human | Authorize and send an issued document's XML to the SPV, once. |
 | `spv.refresh` | write | yes | — | Ask how a submitted upload was processed. |
 | `spv.sync` | write | yes | — | Read the SPV inbox for a window; import, confirm and resolve. |

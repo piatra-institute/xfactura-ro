@@ -77,6 +77,8 @@ export const profileAxes = {
   'policy.storno': ['red', 'black'],
   // Where contributions borne in an employee's name (the part-time minimum) are expensed.
   'policy.payroll.employer_share': ['635', '6458'],
+  // Whether an asset is depreciated for the month it is disposed of.
+  'policy.assets.disposal_month': ['included', 'excluded'],
 } as const;
 export const profileInput = z
   .object({

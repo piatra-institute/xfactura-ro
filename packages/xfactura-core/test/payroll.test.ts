@@ -103,8 +103,9 @@ describe('payroll: gross to net', () => {
     });
   });
 
-  test('above the minimum wage: the deduction band, and the tax base rounded at more than 50 bani', () => {
-    // 5,000 is 675 above the minimum: band 651–700, 13% of 4,325 = 562.25; base 2,687.75 → 2,688.
+  test('above the minimum wage: the deduction band, in whole lei', () => {
+    // 5,000 is 675 above the minimum: band 651–700, 13% of 4,325 = 562.25, declared as 562 lei;
+    // base 2,688.
     expect(slip(pay({ salary: 5000 }).result)).toEqual({
       gross: 5000,
       relief: 0,
@@ -112,7 +113,7 @@ describe('payroll: gross to net', () => {
       cass: 500,
       casEmployer: 0,
       cassEmployer: 0,
-      deduction: 562.25,
+      deduction: 562,
       taxBase: 2688,
       tax: 269,
       net: 2981,
@@ -142,29 +143,30 @@ describe('payroll: gross to net', () => {
     // 4,400 is 75 above the minimum: 2 dependents → 29%; 15% for under 26; 2 × 100 lei.
     const { result } = pay({ salary: 4400, dependents: 2, under26: true, childrenInSchool: 2 });
     expect(result?.deduction).toEqual({
-      basic: lei(1254.25),
-      young: lei(648.75),
+      basic: lei(1254),
+      young: lei(649),
       children: lei(200),
       total: lei(2103),
     });
     expect(slip(result)).toMatchObject({ taxBase: 757, tax: 76, net: 2784 });
   });
 
-  test('part time: contributions at least on the minimum wage, the difference borne by the employer', () => {
+  test('part time: contributions at least on the minimum wage less the relief, the difference borne by the employer', () => {
+    // ANAF's D112 structure: (4,325 − 200) lei for the active days, in whole lei.
     const half = pay({ salary: 2500, dailyHours: 4 });
     expect(slip(half.result)).toEqual({
       gross: 2500,
       relief: 0,
       cas: 625,
       cass: 250,
-      casEmployer: 456,
-      cassEmployer: 183,
+      casEmployer: 406,
+      cassEmployer: 163,
       deduction: 865,
       taxBase: 760,
       tax: 76,
       net: 1549,
       cam: 56,
-      cost: 3195,
+      cost: 3125,
     });
     const student = pay({ salary: 2500, dailyHours: 4, minimumExemption: 'student' });
     expect(slip(student.result)).toMatchObject({ casEmployer: 0, cassEmployer: 0, cost: 2556 });

@@ -38,7 +38,13 @@
     "./ro/declarations/d390": "./src/ro/declarations/d390.ts",
     "./ro/payroll": "./src/ro/payroll/index.ts",
     "./ro/treatments/payroll": "./src/ro/treatments/payroll.ts",
-    "./ro/declarations/d394": "./src/ro/declarations/d394.ts"
+    "./ro/declarations/d394": "./src/ro/declarations/d394.ts",
+    "./ro/declarations/d112": "./src/ro/declarations/d112.ts",
+    "./ro/micro": "./src/ro/micro.ts",
+    "./ro/treatments/micro-tax": "./src/ro/treatments/micro-tax.ts",
+    "./ro/dividends": "./src/ro/dividends.ts",
+    "./ro/treatments/dividends": "./src/ro/treatments/dividends.ts",
+    "./ro/treatments/assets": "./src/ro/treatments/assets.ts"
   },
   "dependencies": {
     "@noble/hashes": "2.4.0",

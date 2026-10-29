@@ -1,4 +1,18 @@
-import { and, asc, desc, eq, inArray, isNotNull, lte, ne, sql, type SQL } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNotNull,
+  like,
+  lte,
+  ne,
+  or,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import { hashOf } from 'xfactura-core/hash';
 import type {
   AccountBalance,
@@ -16,15 +30,20 @@ import type {
   PartyRecord,
   PayrollRunState,
   PostedEntry,
+  AccountTurnover,
+  AssetState,
   ProfileFact,
   ReadPlan,
   ReadSetEntry,
   TaxEntrySpec,
   TaxPeriodLedger,
 } from 'xfactura-core/kernel';
+import { turnoverKey } from 'xfactura-core/kernel';
 import type { LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
 import {
+  assetEvents,
+  assets,
   documents,
   entries,
   bankMovements,
@@ -504,9 +523,119 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
         unionDues: row.unionDues,
         net: row.net,
         cam: row.cam,
+        camBase: BigInt(
+          (JSON.parse(row.result) as { steps?: { code: string; amount: string }[] }).steps?.find(
+            (step) => step.code === 'cam.base',
+          )?.amount ?? '0',
+        ),
       })),
     });
     readSet.push({ kind: 'payrollRun', id, version: `${run.resultHash}/${last!.state}` });
+  }
+
+  const turnover = new Map<string, AccountTurnover[]>();
+  for (const query of plan.turnover ?? []) {
+    const key = turnoverKey(query);
+    if (turnover.has(key)) continue;
+    const prefixes = or(...query.prefixes.map((prefix) => like(lines.account, `${prefix}%`)));
+    const range = and(
+      eq(lines.companyId, companyId),
+      gte(entries.date, query.from),
+      lte(entries.date, query.to),
+      prefixes,
+    );
+    const join = and(eq(entries.companyId, lines.companyId), eq(entries.id, lines.entryId));
+    const rows = await tx
+      .select({
+        account: lines.account,
+        debit:
+          sql<bigint>`sum(CASE WHEN ${lines.side} = 'D' THEN ${lines.bani} ELSE 0 END)`.mapWith(
+            BigInt,
+          ),
+        credit:
+          sql<bigint>`sum(CASE WHEN ${lines.side} = 'C' THEN ${lines.bani} ELSE 0 END)`.mapWith(
+            BigInt,
+          ),
+      })
+      .from(lines)
+      .innerJoin(entries, join)
+      .where(range)
+      .groupBy(lines.account)
+      .orderBy(asc(lines.account));
+    const [mark] = await tx
+      .select({
+        count: sql<number>`count(*)`.mapWith(Number),
+        last: sql<number>`COALESCE(max(${entries.seq}), 0)`.mapWith(Number),
+      })
+      .from(lines)
+      .innerJoin(entries, join)
+      .where(range);
+    turnover.set(key, rows);
+    // Any line posted in the range changes the count or the last sequence.
+    readSet.push({ kind: 'turnover', id: key, version: `${mark!.count}/${mark!.last}` });
+  }
+
+  const assetMap = new Map<string, AssetState>();
+  if (plan.assets) {
+    const cards = await tx
+      .select()
+      .from(assets)
+      .where(eq(assets.companyId, companyId))
+      .orderBy(asc(assets.number));
+    const disposals = new Map(
+      (
+        await tx
+          .select({ assetId: assetEvents.assetId, date: assetEvents.date })
+          .from(assetEvents)
+          .where(and(eq(assetEvents.companyId, companyId), eq(assetEvents.kind, 'disposed')))
+      ).map((row) => [row.assetId, row.date]),
+    );
+    const booked = await tx
+      .select({
+        item: lines.item,
+        account: lines.account,
+        bani: sql<bigint>`sum(CASE WHEN ${lines.side} = 'C' THEN ${lines.bani} ELSE -${lines.bani} END)`.mapWith(
+          BigInt,
+        ),
+        count: sql<number>`count(*)`.mapWith(Number),
+        last: sql<number>`max(${entries.seq})`.mapWith(Number),
+      })
+      .from(lines)
+      .innerJoin(
+        entries,
+        and(eq(entries.companyId, lines.companyId), eq(entries.id, lines.entryId)),
+      )
+      .where(and(eq(lines.companyId, companyId), isNotNull(lines.item), like(lines.account, '28%')))
+      .groupBy(lines.item, lines.account);
+    let marks = 0;
+    let last = 0;
+    for (const card of cards) {
+      const row = booked.find(
+        (item) => item.item === card.id && item.account === card.depreciationAccount,
+      );
+      marks += row?.count ?? 0;
+      last = Math.max(last, row?.last ?? 0);
+      assetMap.set(card.id, {
+        id: card.id,
+        number: card.number,
+        name: card.name,
+        account: card.account,
+        depreciationAccount: card.depreciationAccount,
+        expenseAccount: card.expenseAccount,
+        value: card.valueBani,
+        lifeMonths: card.lifeMonths,
+        commissionedOn: card.commissionedOn as LocalDate,
+        disposedOn: (disposals.get(card.id) as LocalDate | undefined) ?? null,
+        depreciated: row?.bani ?? 0n,
+      });
+    }
+    // The register and the depreciation booked for it: a new asset, a disposal or a posted
+    // depreciation line changes the version.
+    readSet.push({
+      kind: 'assets',
+      id: 'register',
+      version: `${cards.length}/${disposals.size}/${marks}/${last}`,
+    });
   }
 
   const loaded: Loaded = {
@@ -522,6 +651,8 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
     balances,
     taxLedger,
     payrollRuns: payrollRunMap,
+    turnover,
+    assets: assetMap,
   };
   return { loaded, readSet };
 }
@@ -562,6 +693,8 @@ export function mergeStates(
     balances: first.loaded.balances.length ? first.loaded.balances : second.loaded.balances,
     taxLedger: merge(first.loaded.taxLedger, second.loaded.taxLedger),
     payrollRuns: merge(first.loaded.payrollRuns, second.loaded.payrollRuns),
+    turnover: merge(first.loaded.turnover, second.loaded.turnover),
+    assets: merge(first.loaded.assets, second.loaded.assets),
   };
   const seen = new Set<string>();
   const readSet = [...first.readSet, ...second.readSet]

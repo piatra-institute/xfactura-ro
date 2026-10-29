@@ -10,6 +10,8 @@ import {
   actionRequests,
   agentGrants,
   artifactEvents,
+  assetEvents,
+  assets,
   audit,
   bankMovements,
   bankStatements,
@@ -328,6 +330,53 @@ async function submittable(world: World) {
       }),
     );
   return { submit, step };
+}
+
+/** A fixed asset in the register, written directly; `extra` overrides its card. */
+async function assetRecord(world: World, extra: Partial<typeof assets.$inferInsert> = {}) {
+  const id = randomUUID();
+  const evidenceId = randomUUID();
+  await world.db.write(async (tx) => {
+    await tx.insert(evidence).values({
+      id: evidenceId,
+      companyId: world.company,
+      hash: randomUUID().replace(/-/g, '').padEnd(64, '0'),
+      filename: 'pv.pdf',
+      mediaType: 'application/pdf',
+      size: 1,
+      createdBy: world.owner,
+    });
+    await tx.insert(assets).values({
+      id,
+      companyId: world.company,
+      number: `MF-${id.slice(0, 6)}`,
+      name: 'Laptop',
+      catalogCode: '2.2.9',
+      account: '214',
+      depreciationAccount: '2814',
+      expenseAccount: '6811',
+      valueBani: 600000n,
+      lifeMonths: 36,
+      fiscalLifeMonths: 36,
+      commissionedOn: '2026-03-15',
+      evidenceId,
+      createdBy: world.owner,
+      ...extra,
+    });
+  });
+  const dispose = (seq: number, date: string) =>
+    world.db.write((tx) =>
+      tx.insert(assetEvents).values({
+        companyId: world.company,
+        assetId: id,
+        seq,
+        kind: 'disposed',
+        date,
+        evidenceId,
+        createdBy: world.owner,
+      }),
+    );
+  return { id, dispose };
 }
 
 /** An employee with one contract and a prepared payroll run, written directly. */
@@ -1298,6 +1347,28 @@ const attacks: Attack[] = [
     },
   },
   {
+    trigger: 'inv_asset_guard',
+    code: 'asset_accounts',
+    name: 'a fixed asset on an expense account',
+    run: (world) => assetRecord(world, { account: '6028' }),
+  },
+  {
+    trigger: 'inv_asset_event_guard',
+    code: 'asset_disposal',
+    name: 'disposing of an asset before its commissioning',
+    run: async (world) => (await assetRecord(world)).dispose(1, '2026-03-01'),
+  },
+  {
+    trigger: 'inv_asset_event_guard',
+    code: 'asset_disposal',
+    name: 'disposing of an asset twice',
+    run: async (world) => {
+      const { dispose } = await assetRecord(world);
+      await dispose(1, '2026-06-30');
+      return dispose(2, '2026-07-31');
+    },
+  },
+  {
     trigger: 'inv_employment_terms_guard',
     code: 'terms_sequence',
     name: "skipping a version of a contract's terms",
@@ -1716,6 +1787,7 @@ describe('append-only records', () => {
     const spv = await submittable(world);
     await spv.step(await spv.submit(), 1, 'authorized');
     await (await payrollRecords(world)).line();
+    await (await assetRecord(world)).dispose(1, '2026-06-30');
     await world.db.write(async (tx) => {
       await tx.insert(spvSyncWindows).values({
         companyId: world.company,

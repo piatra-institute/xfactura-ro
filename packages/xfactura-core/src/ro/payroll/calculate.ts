@@ -1,4 +1,4 @@
-import { divRound, parseScaled } from '../../money';
+import { parseScaled } from '../../money';
 import { RuleGapError, type RuleContext } from '../../rules';
 import { monthStart, type Month } from '../../time';
 import type { DeductionTable, MinimumWageRelief, SupplementaryDeduction } from './parameters';
@@ -79,7 +79,7 @@ export interface PayResult {
 }
 
 const code = (clause: string) => `ANAF/Cod-fiscal-consolidat:${clause}`;
-const RELIEF = 'OUG89/2025:salariul-minim';
+const D112 = 'ANAF/D112-0726:salariul-minim';
 const sum = (values: readonly bigint[]) => values.reduce((total, value) => total + value, 0n);
 const max = (a: bigint, b: bigint) => (a > b ? a : b);
 const min = (a: bigint, b: bigint) => (a < b ? a : b);
@@ -185,7 +185,7 @@ function compute(input: PayInput, rules: RuleContext) {
       if (cash <= BigInt(grossCeiling) * 100n) relief = min(BigInt(amount) * 100n, cash);
     }
   }
-  if (relief) step('relief', relief, [RELIEF]);
+  if (relief) step('relief', relief, [D112]);
 
   const casRate = param<string>('ro.payroll.cas.rate');
   const cassRate = param<string>('ro.payroll.cass.rate');
@@ -195,18 +195,21 @@ function compute(input: PayInput, rules: RuleContext) {
   const cas = step('cas', contribution(casBase, casRate), [code('art.138(a)')]);
   const cass = step('cass', contribution(cassBase, cassRate), [code('art.156')]);
 
-  // The minimum contribution: on the minimum wage for the contract's active working days.
+  // The minimum contribution, for the contract's active working days: on the minimum wage less
+  // the minimum-wage relief, in whole lei, as ANAF's D112 structure computes it. The relief only
+  // lowers it, so it is read only when the contributions could fall below the minimum's.
   let casEmployer = 0n;
   let cassEmployer = 0n;
   if (!input.minimumExemption && input.activeDays > 0) {
     const days = BigInt(input.activeDays);
     const of = BigInt(input.workingDays);
-    const floor = (percent: string) => {
-      const { numerator, denominator } = ofPercent(minimumWage * days - relief * of, percent);
-      return toLeu(numerator, denominator * of, amountRounding);
-    };
-    casEmployer = max(0n, floor(casRate) - cas);
-    cassEmployer = max(0n, floor(cassRate) - cass);
+    if (casBase * of < minimumWage * days || cassBase * of < minimumWage * days) {
+      const { amount } = param<MinimumWageRelief>('ro.payroll.minimum_wage_relief');
+      const minimumBase = toLeu((minimumWage - BigInt(amount) * 100n) * days, of, amountRounding);
+      casEmployer = max(0n, contribution(minimumBase, casRate) - cas);
+      cassEmployer = max(0n, contribution(minimumBase, cassRate) - cass);
+      if (casEmployer || cassEmployer) step('minimum.base', minimumBase, [D112]);
+    }
     if (casEmployer) step('cas.employer', casEmployer, [code('art.146(5^6)-(5^9)')]);
     if (cassEmployer) step('cass.employer', cassEmployer, [code('art.168(6^1)')]);
   }
@@ -224,9 +227,10 @@ function compute(input: PayInput, rules: RuleContext) {
     const band = excess <= 0n ? 0 : Number((excess + stepBani - 1n) / stepBani);
     const row = table.rows[band];
     const withinSpan = excess <= BigInt(table.span) * 100n;
+    // Whole lei, rounded arithmetically, as the D112 declares the deductions.
     const percentOfMinimum = (percent: string) => {
       const { numerator, denominator } = ofPercent(minimumWage, percent);
-      return divRound(numerator, denominator, 'halfAwayFromZero');
+      return toLeu(numerator, denominator, 'leu_half_up');
     };
     if (row && withinSpan) basic = percentOfMinimum(row[Math.min(input.dependents, 4)]!);
     if (input.under26 && withinSpan) young = percentOfMinimum(supplementary.youngPercent);
@@ -234,8 +238,8 @@ function compute(input: PayInput, rules: RuleContext) {
   }
   const unionDeducted = input.mainJob ? input.unionDues : 0n;
   const total = min(basic + young + children, max(0n, netIncome - unionDeducted));
-  if (basic) step('deduction.basic', basic, [code('art.77')]);
-  if (young) step('deduction.young', young, [code('art.77')]);
+  if (basic) step('deduction.basic', basic, [code('art.77'), D112]);
+  if (young) step('deduction.young', young, [code('art.77'), D112]);
   if (children) step('deduction.children', children, [code('art.77')]);
   if (total !== basic + young + children) step('deduction.limited', total, [code('art.77')]);
   if (unionDeducted) step('union', unionDeducted, [code('art.78(2)(a)')]);

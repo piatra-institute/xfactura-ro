@@ -50,6 +50,20 @@
       "when": 1793298524509,
       "tag": "0006_payroll",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1793300730403,
+      "tag": "0007_assets",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1793301318830,
+      "tag": "0008_employee_details",
+      "breakpoints": true
     }
   ]
 }

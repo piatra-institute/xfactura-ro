@@ -12,6 +12,11 @@ import { revaluation } from 'xfactura-core/ro/treatments/revaluation';
 import { vatSettlement } from 'xfactura-core/ro/treatments/vat-settlement';
 import { crossBorderRecognition } from 'xfactura-core/ro/treatments/cross-border';
 import { payrollRecognition } from 'xfactura-core/ro/treatments/payroll';
+import { microTax } from 'xfactura-core/ro/treatments/micro-tax';
+import { assetDepreciation, assetDerecognition } from 'xfactura-core/ro/treatments/assets';
+import { microDefinitions, microVersions } from 'xfactura-core/ro/micro';
+import { dividendDefinitions, dividendVersions } from 'xfactura-core/ro/dividends';
+import { dividendDistribution, dividendWithholding } from 'xfactura-core/ro/treatments/dividends';
 import { ParameterRegister } from 'xfactura-core/rules';
 import { clause, sourceOf } from 'xfactura-core/ro/sources';
 import { addDays, bucharestDate } from 'xfactura-core/time';
@@ -66,6 +71,8 @@ import type { EFacturaPort } from './adapters/efactura';
 import type { DeclarationValidator } from './adapters/declaration-validator';
 import { d300Declaration } from './modules/d300';
 import { d390Declaration } from './modules/d390';
+import { d394Declaration } from './modules/d394';
+import { d112Declaration } from './modules/d112';
 import {
   artifactInput,
   artifactView,
@@ -78,6 +85,7 @@ import {
   type DeclarationKind,
 } from './modules/declarations';
 import { employeeInput, Payroll, runIdInput, runInput, termsInput } from './modules/payroll';
+import { assetInput, Assets, disposalInput } from './modules/assets';
 import {
   issueInput,
   issueView,
@@ -151,8 +159,22 @@ function parameters(register: ParameterRegister) {
 
 export const defaultRegister = () =>
   new ParameterRegister(
-    [...vatDefinitions, ...fxDefinitions, ...procedureDefinitions, ...payrollDefinitions],
-    [...vatVersions, ...fxVersions, ...procedureVersions, ...payrollVersions],
+    [
+      ...vatDefinitions,
+      ...fxDefinitions,
+      ...procedureDefinitions,
+      ...payrollDefinitions,
+      ...microDefinitions,
+      ...dividendDefinitions,
+    ],
+    [
+      ...vatVersions,
+      ...fxVersions,
+      ...procedureVersions,
+      ...payrollVersions,
+      ...microVersions,
+      ...dividendVersions,
+    ],
   );
 
 /** The accounting engine: one kernel, its modules and the operation catalogue they expose. */
@@ -180,6 +202,7 @@ export class Engine {
   readonly spv: Spv;
   readonly declarations: Declarations;
   readonly payroll: Payroll;
+  readonly assets: Assets;
 
   constructor(
     readonly db: Database,
@@ -212,6 +235,11 @@ export class Engine {
       vatSettlement,
       crossBorderRecognition,
       payrollRecognition,
+      microTax,
+      dividendDistribution,
+      dividendWithholding,
+      assetDepreciation,
+      assetDerecognition,
       ...(options.treatments ?? []),
     );
     this.actions = new Actions(this.commands);
@@ -242,10 +270,13 @@ export class Engine {
     this.declarations.add(
       d300Declaration((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
       d390Declaration((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
+      d394Declaration((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
+      d112Declaration(secret),
       ...(options.declarations ?? []),
     );
     this.actions.add(this.declarations.authorizeHandler());
     this.actions.add(this.declarations.reopenHandler());
+    this.assets = new Assets(this.commands);
     this.payroll = new Payroll(this.commands, secret, (tx, companyId) =>
       this.proposals.ruleContext(tx, companyId),
     );
@@ -694,6 +725,41 @@ export class Engine {
         input: declarationReopenInput,
         output: actionView,
         run: (actor, key, input) => this.actions.request(actor, key, 'declarations.reopen', input),
+      }),
+      define({
+        id: 'assets.register',
+        description:
+          'Înregistrează un mijloc fix în registru: cont, cod din catalog, valoare, durate contabilă și fiscală, punere în funcțiune.',
+        permission: 'write',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: assetInput,
+        output: z.object({ id: z.string(), number: z.string() }),
+        run: (actor, key, input) => this.assets.register(actor, key, input),
+      }),
+      define({
+        id: 'assets.dispose',
+        description:
+          'Înregistrează scoaterea din funcțiune a unui mijloc fix (casare, vânzare), cu documentul ei.',
+        permission: 'write',
+        agent: false,
+        effect: 'prepare',
+        approval: 'none',
+        input: disposalInput,
+        output: z.object({ assetId: z.string(), disposedOn: z.string() }),
+        run: (actor, key, input) => this.assets.dispose(actor, key, input),
+      }),
+      define({
+        id: 'assets.list',
+        description: 'Registrul mijloacelor fixe, cu amortizarea înregistrată și valoarea rămasă.',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: z.object({}).strict(),
+        output: z.array(z.unknown()),
+        run: (actor) => this.assets.list(actor),
       }),
       define({
         id: 'payroll.employees.record',

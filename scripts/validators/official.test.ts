@@ -14,6 +14,13 @@ import {
   type InvoiceDraft,
   type InvoicerInvoice,
 } from '../../packages/xfactura-core/src/einvoice';
+import {
+  calculateD112,
+  checkD112,
+  writeD112,
+  type D112,
+  type D112Insured,
+} from '../../packages/xfactura-core/src/ro/declarations/d112';
 import { writeD300, type D300 } from '../../packages/xfactura-core/src/ro/declarations/d300';
 import {
   checkD394,
@@ -207,7 +214,7 @@ describe('official EN 16931 validation', () => {
   );
 });
 
-// ANAF's DUKIntegrator with the D300 and D394 validators, as installed by `bun run validators:fetch`.
+// ANAF's DUKIntegrator with the D300, D394 and D112 validators, as installed by `bun run validators:fetch`.
 const duk = path.join(root, '.validators/anaf/dist');
 const anaf =
   existsSync(path.join(duk, 'DUKIntegrator.jar')) && Bun.which('java') !== null ? test : test.skip;
@@ -270,7 +277,10 @@ const vatReturns: Record<string, D300> = {
 };
 
 /** DUKIntegrator's verdict per document: "ok", or its errors (E:) and warnings (A:). */
-async function validateAnaf(declaration: 'D300' | 'D394', documents: Record<string, string>) {
+async function validateAnaf(
+  declaration: 'D300' | 'D394' | 'D112',
+  documents: Record<string, string>,
+) {
   const directory = await mkdtemp(path.join(tmpdir(), `xfactura-${declaration.toLowerCase()}-`));
   try {
     const results = await Promise.all(
@@ -549,6 +559,271 @@ describe('official D394 validation', () => {
       expect(results.duplicate).toContain('R218.4');
       expect(results['no-county']).toContain('R222.3');
       expect(results.unallocated).toContain('R112.2');
+    },
+    120_000,
+  );
+});
+
+type Employment = D112Insured['employment'];
+type Income = D112Insured['income'];
+
+/** A full-time employee at the main job for every working day of October 2026 (22). */
+const insured = (
+  person: Pick<D112Insured, 'cnp' | 'lastName' | 'firstName' | 'from'> &
+    Partial<Omit<D112Insured, 'employment' | 'income'>> & {
+      employment: Partial<Employment>;
+      income: Partial<Income>;
+    },
+): D112Insured => ({
+  healthFund: 'RO-GL',
+  sickLeaveInsured: true,
+  unemploymentInsured: true,
+  ...person,
+  employment: {
+    type: '1',
+    pensioner: false,
+    contract: 'N',
+    normHours: 8,
+    baseSalary: 0,
+    hoursWorked: 176,
+    hoursSuspended: 0,
+    daysWorked: 22,
+    unemploymentBase: 0,
+    camBase: 0,
+    cassBase: 0,
+    cass: 0,
+    casBase: 0,
+    cas: 0,
+    relief: 0,
+    ...person.employment,
+  },
+  income: {
+    mainJob: true,
+    cash: 0,
+    mealVouchers: 0,
+    holidayVouchers: 0,
+    dependents: 0,
+    deduction: { basic: 0, young: 0, children: 0 },
+    otherDeductions: 0,
+    taxBase: 0,
+    tax: 0,
+    paid: 0,
+    ...person.income,
+  },
+});
+
+const payroll = (people: D112Insured[]): D112 => ({
+  period: { year: 2026, month: 10 },
+  correction: false,
+  declarant: { lastName: 'Popescu', firstName: 'Ana', role: 'Administrator' },
+  employer: {
+    cui: '18547290',
+    caen: '6201',
+    name: 'Exemplu Servicii SRL',
+    registeredOffice: { address: 'Str. Lungă nr. 10, Galați, jud. Galați', phone: '0236000000' },
+    healthFund: 'RO-GL',
+  },
+  insured: people,
+});
+
+// The payroll engine's amounts for October 2026, in lei; the unemployment base is the base salary.
+const partTimeEmployee = insured({
+  cnp: '2850722170021',
+  lastName: 'Georgescu',
+  firstName: 'Elena',
+  from: '2025-02-15',
+  // CAS 625 + 406 and CASS 250 + 163 borne by the employer: 25% and 10% of the structure's
+  // limit sum, (4325 − 200) × 22 / 22 = 4125 lei.
+  minimum: { kind: 'due', base: 4125 },
+  employment: {
+    contract: 'P4',
+    hoursWorked: 88,
+    baseSalary: 2500,
+    unemploymentBase: 2500,
+    camBase: 2500,
+    cassBase: 2500,
+    cass: 250,
+    casBase: 2500,
+    cas: 625,
+  },
+  income: {
+    cash: 2500,
+    deduction: { basic: 865, young: 0, children: 0 },
+    taxBase: 760,
+    tax: 76,
+    paid: 1549,
+  },
+});
+const fullTimeEmployee = insured({
+  cnp: '1781105170030',
+  lastName: 'Dumitrescu',
+  firstName: 'Andrei',
+  from: '2023-09-01',
+  employment: {
+    baseSalary: 5000,
+    unemploymentBase: 5000,
+    camBase: 5000,
+    cassBase: 5000,
+    cass: 500,
+    casBase: 5000,
+    cas: 1250,
+  },
+  // The engine's 562.25 lei of deduction, rounded to whole lei as the structure rounds.
+  income: {
+    cash: 5000,
+    deduction: { basic: 562, young: 0, children: 0 },
+    taxBase: 2688,
+    tax: 269,
+    paid: 2981,
+  },
+});
+const payrolls: Record<string, D112> = {
+  // The minimum wage, 200 lei of it outside every base.
+  'minimum-wage': payroll([
+    insured({
+      cnp: '1900315170013',
+      lastName: 'Ionescu',
+      firstName: 'Mihai',
+      from: '2024-03-01',
+      employment: {
+        type: '51',
+        baseSalary: 4325,
+        unemploymentBase: 4325,
+        camBase: 4125,
+        cassBase: 4125,
+        cass: 413,
+        casBase: 4125,
+        cas: 1031,
+        relief: 200,
+      },
+      income: {
+        cash: 4325,
+        deduction: { basic: 865, young: 0, children: 0 },
+        taxBase: 1816,
+        tax: 182,
+        paid: 2699,
+      },
+    }),
+  ]),
+  'part-time': payroll([partTimeEmployee, fullTimeEmployee]),
+  // Meal vouchers in the CASS base and the tax, not in the CAS or CAM bases.
+  'meal-vouchers': payroll([
+    insured({
+      cnp: '2931204170043',
+      lastName: 'Constantinescu',
+      firstName: 'Ioana',
+      from: '2022-06-01',
+      employment: {
+        baseSalary: 6000,
+        unemploymentBase: 6000,
+        camBase: 6000,
+        cassBase: 6800,
+        cass: 680,
+        casBase: 6000,
+        cas: 1500,
+      },
+      income: { cash: 6000, mealVouchers: 800, taxBase: 4620, tax: 462, paid: 3358 },
+    }),
+  ]),
+};
+
+describe('official D112 validation', () => {
+  anaf(
+    'DUKIntegrator accepts the October 2026 payrolls without errors or warnings',
+    async () => {
+      expect(checkD112(payrolls['minimum-wage']!)).toEqual([]);
+      expect(checkD112(payrolls['meal-vouchers']!)).toEqual([]);
+      expect(checkD112(payrolls['part-time']!)).toEqual([]);
+      const owed = (name: string) =>
+        Object.fromEntries(
+          calculateD112(payrolls[name]!).obligations.map(({ code, owed }) => [code, owed]),
+        );
+      expect(owed('minimum-wage')).toEqual({ '602': 182n, '412': 1031n, '432': 413n, '480': 93n });
+      expect(owed('part-time')).toEqual({
+        '602': 345n,
+        '412': 1875n,
+        '432': 750n,
+        '480': 169n,
+        '458': 406n,
+        '459': 163n,
+      });
+      expect(owed('meal-vouchers')).toEqual({
+        '602': 462n,
+        '412': 1500n,
+        '432': 680n,
+        '480': 135n,
+      });
+      const results = await validateAnaf(
+        'D112',
+        Object.fromEntries(
+          Object.entries(payrolls).map(([name, model]) => [name, writeD112(model)]),
+        ),
+      );
+      expect(results).toEqual(
+        Object.fromEntries(Object.keys(payrolls).map((name) => [name, 'ok'])),
+      );
+    },
+    120_000,
+  );
+
+  anaf(
+    'DUKIntegrator rejects what checkD112 rejects, and a wrong control sum or contribution',
+    async () => {
+      const xml = writeD112(payrolls['part-time']!);
+      const mutate = (from: string, to: string) => {
+        expect(xml).toContain(from);
+        return xml.replace(from, to);
+      };
+      const { minimum: _minimum, ...unflagged } = partTimeEmployee;
+      const fullTime = (employment: Partial<Employment>) =>
+        payroll([
+          { ...fullTimeEmployee, employment: { ...fullTimeEmployee.employment, ...employment } },
+        ]);
+      const rejected: Record<string, D112> = {
+        unflagged: payroll([unflagged]),
+        'low-limit': payroll([{ ...partTimeEmployee, minimum: { kind: 'due', base: 4123 } }]),
+        'relief-type-1': fullTime({
+          relief: 200,
+          camBase: 4800,
+          cassBase: 4800,
+          cass: 480,
+          casBase: 4800,
+          cas: 1200,
+        }),
+        'type-51-part-time': fullTime({ type: '51', contract: 'P4', hoursWorked: 88 }),
+        'under-15': payroll([{ ...fullTimeEmployee, cnp: '5111101170066' }]),
+      };
+      expect(
+        Object.fromEntries(
+          Object.entries(rejected).map(([name, model]) => [
+            name,
+            checkD112(model).map((check) => `${check.severity}:${check.code}`),
+          ]),
+        ),
+      ).toEqual({
+        unflagged: ['error:D112_MINIMUM'],
+        'low-limit': ['error:D112_MINIMUM'],
+        'relief-type-1': ['error:D112_RELIEF'],
+        'type-51-part-time': ['error:D112_TYPE'],
+        'under-15': ['error:D112_CNP'],
+      });
+      const results = await validateAnaf('D112', {
+        'control-sum': mutate('totalPlata_A="3708"', 'totalPlata_A="3709"'),
+        cass: mutate('A_12="500"', 'A_12="520"'),
+        'employer-cas': mutate('A_14D="406"', 'A_14D="405"'),
+        ...Object.fromEntries(
+          Object.entries(rejected).map(([name, model]) => [name, writeD112(model)]),
+        ),
+      });
+      expect(results['control-sum']).toStartWith('E:');
+      expect(results['control-sum']).toContain('A19.1');
+      expect(results.cass).toContain('S25');
+      expect(results['employer-cas']).toContain('SP5A');
+      expect(results.unflagged).toContain('S9c1.1');
+      expect(results['low-limit']).toContain('SP1A.3');
+      expect(results['relief-type-1']).toContain('S1a1');
+      expect(results['type-51-part-time']).toContain('A_1 (51) >50 doar pt CIM cu norma intreaga');
+      expect(results['under-15']).toContain('S1.2');
     },
     120_000,
   );

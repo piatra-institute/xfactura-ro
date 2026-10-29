@@ -8,8 +8,9 @@ import {
   type PayrollLineState,
   type Treatment,
 } from '../../kernel';
-import { formatMoney } from '../../money';
-import { monthEnd, type Month } from '../../time';
+import { divRound, formatMoney, parseScaled } from '../../money';
+import { RuleGapError } from '../../rules';
+import { monthEnd, monthStart, type Month } from '../../time';
 
 const block = (code: string, message: string, path?: string): Issue => ({
   code,
@@ -47,7 +48,7 @@ export const payrollRecognition: Treatment<PayrollInput> = {
   agent: true,
   subject: (input) => `payroll:${input.month}:${input.round}`,
   plan: (input) => ({ payrollRuns: [input.runId], parties: [input.authorityId], profile: true }),
-  evaluate(input, loaded) {
+  evaluate(input, loaded, rules) {
     const issues: Issue[] = [];
     const run = loaded.payrollRuns.get(input.runId);
     const date = monthEnd(input.month as Month);
@@ -155,7 +156,26 @@ export const payrollRecognition: Treatment<PayrollInput> = {
       '444',
       total((line) => line.tax),
     );
-    const cam = total((line) => line.cam);
+    // CAM is owed on the employer's total base, rounded once, as the D112 declares it.
+    let cam: bigint;
+    try {
+      const at = monthStart(input.month as Month);
+      const rate = rules.param<string>('ro.payroll.cam.rate', 'payroll_month_start', at);
+      if (
+        rules.param<string>('ro.payroll.amount_rounding', 'payroll_month_start', at) !==
+        'leu_half_up'
+      )
+        throw new Error('Unknown rounding.');
+      cam =
+        divRound(
+          total((line) => line.camBase) * parseScaled(rate, 4),
+          100_000_000n,
+          'halfAwayFromZero',
+        ) * 100n;
+    } catch (error) {
+      if (!(error instanceof RuleGapError)) throw error;
+      return { effect: null, issues: [block('RULE_GAP', error.message)] };
+    }
     if (cam > 0n) lines.push({ account: '646', side: 'D', bani: cam });
     liability('cam', '436', cam);
 

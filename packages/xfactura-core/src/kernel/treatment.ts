@@ -29,6 +29,43 @@ export interface ReadPlan {
   taxPeriods?: { tax: string; period: string }[];
   /** Payroll runs with their computed lines. A run never changes; superseding it does. */
   payrollRuns?: string[];
+  /** Debit and credit turnover of the accounts under some prefixes, posted in a date range. */
+  turnover?: TurnoverQuery[];
+  /** Every fixed asset in the register, with the depreciation booked for it. */
+  assets?: boolean;
+}
+
+/** A fixed asset as registered, with what the ledger holds for it; amounts in bani. */
+export interface AssetState {
+  id: string;
+  number: string;
+  name: string;
+  account: string;
+  depreciationAccount: string;
+  expenseAccount: string;
+  value: bigint;
+  /** Accounting useful life, in months. */
+  lifeMonths: number;
+  commissionedOn: LocalDate;
+  disposedOn: LocalDate | null;
+  /** Depreciation booked on its depreciation account (lines carrying the asset as their item). */
+  depreciated: bigint;
+}
+
+export interface TurnoverQuery {
+  prefixes: string[];
+  from: LocalDate;
+  to: LocalDate;
+}
+
+/** The read key of a turnover query, as `Loaded.turnover` holds it. */
+export const turnoverKey = (query: TurnoverQuery) =>
+  `${[...query.prefixes].sort().join(',')}|${query.from}|${query.to}`;
+
+export interface AccountTurnover {
+  account: string;
+  debit: bigint;
+  credit: bigint;
 }
 
 export interface OpenItemQuery {
@@ -59,7 +96,9 @@ export interface ReadSetEntry {
     | 'balance'
     | 'taxPeriod'
     | 'artifact'
-    | 'payrollRun';
+    | 'payrollRun'
+    | 'turnover'
+    | 'assets';
   id: string;
   version: string;
 }
@@ -201,6 +240,8 @@ export interface PayrollLineState {
   unionDues: bigint;
   net: bigint;
   cam: bigint;
+  /** The CAM base: CAM is owed on the employer's total, rounded once. */
+  camBase: bigint;
 }
 
 export interface PayrollRunState {
@@ -227,6 +268,9 @@ export interface Loaded {
   /** By `${tax}|${period}`. */
   taxLedger: ReadonlyMap<string, TaxPeriodLedger>;
   payrollRuns: ReadonlyMap<string, PayrollRunState>;
+  /** By `turnoverKey(query)`: each account with posted lines in the range. */
+  turnover: ReadonlyMap<string, readonly AccountTurnover[]>;
+  assets: ReadonlyMap<string, AssetState>;
 }
 
 /** The company profile value on an axis at a date, or null when nothing is recorded. */

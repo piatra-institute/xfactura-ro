@@ -1241,6 +1241,69 @@ export const outbox = sqliteTable(
   ],
 );
 
+// Fixed assets: the register; the ledger holds their value and depreciation.
+
+export const assets = sqliteTable(
+  'acc_assets',
+  {
+    id: text('id').notNull(),
+    companyId: companyId(),
+    /** Inventory number. */
+    number: text('number').notNull(),
+    name: text('name').notNull(),
+    /** Classification code of the fixed-asset catalogue (HG 2139/2004). */
+    catalogCode: text('catalog_code').notNull(),
+    account: text('account').notNull(),
+    depreciationAccount: text('depreciation_account').notNull(),
+    expenseAccount: text('expense_account').notNull(),
+    valueBani: bani('value_bani').notNull(),
+    /** Accounting useful life, by the company's policies. */
+    lifeMonths: counter('life_months').notNull(),
+    /** Useful life for tax purposes, within the catalogue's range. */
+    fiscalLifeMonths: counter('fiscal_life_months').notNull(),
+    commissionedOn: text('commissioned_on').notNull(),
+    /** The purchase document, when the asset was bought. */
+    documentId: text('document_id'),
+    /** The commissioning record (proces-verbal de punere în funcțiune). */
+    evidenceId: text('evidence_id').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.id] }),
+    uniqueIndex('asset_number').on(t.companyId, t.number),
+    foreignKey({
+      columns: [t.companyId, t.evidenceId],
+      foreignColumns: [evidence.companyId, evidence.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.documentId],
+      foreignColumns: [documents.companyId, documents.id],
+    }),
+  ],
+);
+
+export const assetEvents = sqliteTable(
+  'acc_asset_events',
+  {
+    companyId: companyId(),
+    assetId: text('asset_id').notNull(),
+    seq: counter('seq').notNull(),
+    kind: text('kind', { enum: ['disposed'] }).notNull(),
+    date: text('date').notNull(),
+    evidenceId: text('evidence_id').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.assetId, t.seq] }),
+    foreignKey({
+      columns: [t.companyId, t.assetId],
+      foreignColumns: [assets.companyId, assets.id],
+    }),
+  ],
+);
+
 // Payroll: personal data. The CNP is kept sealed (encrypted with the server's key); its hash is
 // the employee's party identity, as for buyers who are individuals.
 
@@ -1253,6 +1316,12 @@ export const employees = sqliteTable(
     /** The CNP, encrypted; never returned by a view. */
     cnpSealed: text('cnp_sealed').notNull(),
     birthDate: text('birth_date').notNull(),
+    /** As the D112 declares them; the party's name joins them. */
+    lastName: text('last_name'),
+    firstName: text('first_name'),
+    /** The health insurance house the employee is insured with (ISO 3166-2:RO county, or
+     * OPSNAJ). */
+    healthFund: text('health_fund'),
     createdBy: author(),
     createdAt: createdAt(),
   },

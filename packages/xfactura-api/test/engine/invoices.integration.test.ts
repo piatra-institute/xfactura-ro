@@ -117,6 +117,22 @@ describe('recognition', () => {
     expect(
       codes(await s.propose('invoices.recognize', { documentId: nineteen.id, account: '704' })),
     ).toEqual(['VAT_RATE']);
+    // The reduced rate in force posts once the reviewer confirms the supply qualifies for it.
+    const eleven = await importInvoice(s, {
+      number: 'F-11',
+      rate: '11',
+      tax: '11.00',
+      gross: '111.00',
+    });
+    const reduced = await s.propose('invoices.recognize', {
+      documentId: eleven.id,
+      account: '628',
+    });
+    expect(reduced.issues.map((issue) => `${issue.code}/${issue.severity}`)).toEqual([
+      'REDUCED_RATE/ack',
+    ]);
+    expect((await s.refused(s.approve(reduced)))?.code).toBeDefined();
+    await s.post(await s.approve(reduced, s.reviewer, ['REDUCED_RATE']));
     const missing = await scenario();
     open.push(missing);
     const unknown = await importInvoice(missing, { number: 'F-2' });

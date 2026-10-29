@@ -58,6 +58,15 @@
       "sha256": "8a762aed61ff568561a6b42c8e464289eb43911d55dab57d04ade715c9e4fb37",
       "extract": ["D394Validator.jar", "D394Pdf.jar"],
       "into": "dist/lib"
+    },
+    {
+      "name": "anaf",
+      "description": "ANAF D112 validator and PDF generator (reporting months from 07/2026, structure of 07.09.2026)",
+      "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/D112_09102026.zip",
+      "sha256": "247e5a784386a3a547cf7ce8a242fcb1759aab6b062b37f0ad3dacf3a5c5be67",
+      "extract": ["D112/D112Validator.jar", "D112/D112Pdf.jar"],
+      "into": "dist/lib",
+      "flatten": true
     }
   ],
   "manual": [

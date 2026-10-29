@@ -62,6 +62,8 @@ const appendOnly = [
   'acc_payroll_runs',
   'acc_payroll_run_events',
   'acc_payroll_lines',
+  'acc_assets',
+  'acc_asset_events',
   'ref_fx_rates',
 ];
 // Tables with narrowly guarded updates (below) that are never deleted from.
@@ -743,6 +745,29 @@ const payrollChecks = {
   ] satisfies Check[],
 };
 
+const assetChecks: Record<'cards' | 'events', Check[]> = {
+  cards: [
+    {
+      code: 'asset_accounts',
+      rule: 'A fixed asset is on a fixed-asset account (20x–21x), depreciated on 28x against a 68x expense, with a positive value and life.',
+      violation: `NOT (NEW.account GLOB '2[01]*' AND NEW.depreciation_account GLOB '28*'
+          AND NEW.expense_account GLOB '68*' AND NEW.value_bani > 0
+          AND NEW.life_months > 0 AND NEW.fiscal_life_months > 0)`,
+    },
+  ],
+  events: [
+    {
+      code: 'asset_disposal',
+      rule: 'An asset is disposed of once, on or after its commissioning.',
+      violation: `NEW.seq <> 1 + COALESCE((
+          SELECT max(seq) FROM acc_asset_events WHERE company_id = NEW.company_id AND asset_id = NEW.asset_id), 0)
+        OR EXISTS (
+          SELECT 1 FROM acc_asset_events WHERE company_id = NEW.company_id AND asset_id = NEW.asset_id AND kind = 'disposed')
+        OR NEW.date < (SELECT commissioned_on FROM acc_assets WHERE company_id = NEW.company_id AND id = NEW.asset_id)`,
+    },
+  ],
+};
+
 // 3. Triggers
 
 type Trigger = { name: string; on: string; checks: Check[] };
@@ -1039,6 +1064,16 @@ const triggers: Trigger[] = [
     name: 'inv_payroll_run_event_guard',
     on: 'BEFORE INSERT ON acc_payroll_run_events',
     checks: payrollChecks.events,
+  },
+  {
+    name: 'inv_asset_guard',
+    on: 'BEFORE INSERT ON acc_assets',
+    checks: assetChecks.cards,
+  },
+  {
+    name: 'inv_asset_event_guard',
+    on: 'BEFORE INSERT ON acc_asset_events',
+    checks: assetChecks.events,
   },
   {
     name: 'inv_payroll_line_guard',

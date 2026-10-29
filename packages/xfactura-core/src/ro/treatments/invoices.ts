@@ -20,7 +20,7 @@ import {
   parseMoney,
 } from '../../money';
 import { selectRate } from '../fx';
-import type { RuleContext } from '../../rules';
+import { RuleGapError, type RuleContext } from '../../rules';
 import { isLocalDate, type LocalDate } from '../../time';
 import { invoiceDocumentSchema, type InvoiceDocument } from '../../ubl/invoice-document';
 
@@ -32,6 +32,9 @@ export const invoiceKinds = {
   purchaseCredit: 'creditNote.received',
 } as const;
 
+/** Purchases recognized on an expense or on a fixed asset (intangible 20x, tangible 21x). */
+const fixedAsset = /^2[01]/;
+const purchaseAccount = /^(6|2[01])/;
 const block = (code: string, message: string, path?: string): Issue => ({
   code,
   severity: 'block',
@@ -88,10 +91,26 @@ function vatFor(invoice: Invoice, loaded: Loaded, rules: RuleContext, taxPoint: 
     const rate = rules.param<string>('ro.vat.rate', 'vat_chargeability_date', taxPoint, {
       category: 'S',
     });
-    if (tax.rate !== rate)
+    if (tax.rate !== rate) {
+      let reduced: string | null = null;
+      try {
+        reduced = rules.param<string>('ro.vat.rate.reduced', 'vat_chargeability_date', taxPoint);
+      } catch (error) {
+        if (!(error instanceof RuleGapError)) throw error;
+      }
+      // The reduced rate applies only to the supplies of art. 291 alin. (2): the reviewer confirms.
       issues.push(
-        block('VAT_RATE', `Cota din document (${tax.rate}%) diferă de cota în vigoare (${rate}%).`),
+        tax.rate === reduced
+          ? warn(
+              'REDUCED_RATE',
+              `Cota redusă de ${reduced}% se aplică doar livrărilor și prestărilor de la art. 291 alin. (2) din Codul fiscal: confirmați că operațiunea se încadrează.`,
+            )
+          : block(
+              'VAT_RATE',
+              `Cota din document (${tax.rate}%) diferă de cotele în vigoare (${rate}%${reduced ? `, ${reduced}%` : ''}).`,
+            ),
       );
+    }
   } else if (tax.category !== 'O' || ron(tax.tax) !== 0n)
     issues.push(block('TAX_CATEGORY', `Categoria TVA ${tax.category} cere un tratament separat.`));
   if (invoice.direction === 'sale') {
@@ -235,13 +254,15 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
     const vat = vatFor(invoice, loaded, rules, taxPoint);
     const amounts = amountsFor(invoice, loaded, rules, taxPoint);
     const issues = [...vat.issues, ...amounts.issues];
-    if (direction === 'sale' ? !input.account.startsWith('70') : !input.account.startsWith('6'))
+    if (
+      direction === 'sale' ? !input.account.startsWith('70') : !purchaseAccount.test(input.account)
+    )
       issues.push(
         block(
           'ACCOUNT',
           direction === 'sale'
             ? 'Folosiți un cont de venituri (70x).'
-            : 'Folosiți un cont de cheltuieli (6xx).',
+            : 'Folosiți un cont de cheltuieli (6xx) sau de imobilizări (20x, 21x).',
           'account',
         ),
       );
@@ -299,7 +320,9 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
     const item = {
       ref: 'counterparty',
       kind: direction === 'sale' ? ('receivable' as const) : ('payable' as const),
-      controlAccount: direction === 'sale' ? '4111' : '401',
+      // Suppliers of fixed assets are held on 404, other suppliers on 401.
+      controlAccount:
+        direction === 'sale' ? '4111' : fixedAsset.test(input.account) ? '404' : '401',
       partyId,
       currency: fx?.code ?? LEDGER_CURRENCY,
       normalSide: direction === 'sale' ? ('D' as const) : ('C' as const),
@@ -352,13 +375,19 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
         );
       }
       lines.push(
-        line({ account: '401', side: 'C', bani: gross, openItem: item.ref, partyId }, fx?.gross),
+        line(
+          { account: item.controlAccount, side: 'C', bani: gross, openItem: item.ref, partyId },
+          fx?.gross,
+        ),
       );
     } else {
       // Non-deductible VAT is part of the expense; the tax entry records it without a VAT line.
       lines.push(line({ account: input.account, side: 'D', bani: gross }, fx?.gross));
       lines.push(
-        line({ account: '401', side: 'C', bani: gross, openItem: item.ref, partyId }, fx?.gross),
+        line(
+          { account: item.controlAccount, side: 'C', bani: gross, openItem: item.ref, partyId },
+          fx?.gross,
+        ),
       );
       taxEntries.push(
         vatEntry(
@@ -526,10 +555,22 @@ export const creditRecognition: Treatment<CreditInput> = {
         lines.push({ account: '4426', side: 'D', bani: -tax });
         taxEntries.push(entry(1, tax, tax));
       }
-      lines.push({ account: '401', side: 'C', bani: -gross, openItem: item!.id, partyId });
+      lines.push({
+        account: item!.controlAccount,
+        side: 'C',
+        bani: -gross,
+        openItem: item!.id,
+        partyId,
+      });
     } else {
       lines.push({ account: input.account, side: 'D', bani: -gross });
-      lines.push({ account: '401', side: 'C', bani: -gross, openItem: item!.id, partyId });
+      lines.push({
+        account: item!.controlAccount,
+        side: 'C',
+        bani: -gross,
+        openItem: item!.id,
+        partyId,
+      });
       taxEntries.push(entry(undefined, 0n, 0n));
     }
     const effect: Effect = {

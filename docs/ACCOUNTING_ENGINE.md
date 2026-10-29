@@ -66,8 +66,8 @@ The chart is OMFP 1802/2014 as published, plus the accounts later orders added, 
 ### `invoices.recognize`: domestic service invoice
 
 - **Document:** an imported invoice (380) issued or received by the company.
-- **Input:** a revenue (70x) or expense (6xx) account; for purchases, deduction `full` or `none`; optionally the service date.
-- **Supported:** one VAT category and rate on every line; category S at the register's rate for the tax point (`taxPointDate`, else issue date), or category O.
+- **Input:** a revenue (70x) or expense (6xx) account, or for a purchase a fixed-asset account (20x, 21x), whose supplier is then held on 404; for purchases, deduction `full` or `none`; optionally the service date.
+- **Supported:** one VAT category and rate on every line; category S at the register's standard rate for the tax point (`taxPointDate`, else issue date) or at its reduced rate, or category O. The reduced rate applies only to the supplies of Codul fiscal art. 291 alin. (2), so it is an `ack` warning (`REDUCED_RATE`): the reviewer confirms the operation qualifies.
   - The company's `vat.status` on the tax-point date must be recorded.
   - A VAT payer's sale must use S; a non-payer's sale must use O.
   - A non-payer cannot deduct: a purchase with VAT books it into the expense and records a non-deductible tax entry.
@@ -132,7 +132,30 @@ The chart is OMFP 1802/2014 as published, plus the accounts later orders added, 
 - **Input:** a prepared payroll run, its month and round, and the tax authority as a partner.
 - **Effect:** salaries in money owed to each employee (641 = 421, an open item per contract under the employee's party); CAS, CASS and tax withheld from them (421 = 4315, 4316, 444); contributions the company bears in an employee's name (the part-time minimum) on the account of `policy.payroll.employer_share`; CAM (646 = 436). The contributions and the tax are open items of the authority. Meal vouchers are taxed by the run and booked when handed over.
 - **Reads** the run as one read-set entry (its result hash and state): a run computed again after approval makes the posting stale, in the application and in the database.
+- **Paid** through `bank.settle`: the net salary settles the employee's 421 item, and one transfer to ANAF can settle the 4315, 4316, 444 and 436 items together.
 - **Refused:** a run with unresolved problems or superseded, a company not recorded as an employer, union dues (the union is not modelled yet), and a run needing the employer-share policy without it. One posting per month; a posted month cannot be computed again until corrections are supported.
+
+### `tax.micro`: micro-enterprise tax of a quarter
+
+- **Input:** the quarter, a posting date on or after its end, the tax authority as a partner, a round, and determinations for accounts whose revenue the law excludes only in some cases.
+- **Base** (Codul fiscal art. 53, read in ANAF's consolidated text): the quarter's revenues of any source (class 7, net of corrections and of 709), less those excluded by their nature (711, 712, 721, 722, 725, 741x, 7584 and FX gains 765), less what the determinations exclude, plus commercial discounts received (609) and, in the fourth quarter, the year's net favorable FX difference (765 less 665). Revenues on 781x, 786x, 7581, 7588, 768, 761x and 762 need a determination, with its evidence and the letter of art. 53 alin. (1) that applies, before the tax is computed. The base is rounded to whole lei and taxed at `ro.micro.rate` (1%).
+- **Effect:** Dr 698 / Cr 4418, an open item of the authority.
+- **Refused:** a company not recorded as micro (`income_tax`), a year's turnover (70x) above `ro.micro.revenue_limit_eur` (100,000 euro from 2026) at the BNR rate of the previous year's end, which makes the company owe profit tax from that quarter, a missing rate, and a zero tax. The reviewer acknowledges each quarter that the company had a full-time-equivalent employee (art. 47 alin. (1) lit. g)).
+- **Reads** the quarter's and the year's turnover of classes 6 and 7: an entry posted in either range after approval makes the posting stale. Year-end closing entries, when built, will have to be left out of these reads.
+
+### `dividends.distribute` and `dividends.withhold`: dividends
+
+- **Distribution:** the shareholders' decision as evidence, its date, and each shareholder's gross dividend. Dr 1171 / Cr 457, an open item owed to each shareholder. The total may not exceed the retained profit on 1171 at the decision date. Interim dividends are not supported (their account, 463, is not in the chart yet).
+- **Withholding,** when a dividend is paid (or on the year's last day for dividends distributed and still unpaid, art. 43 alin. (3)): the gross paid, the distribution it comes from, and the tax authority. Dr 457 / Cr 446, owed to the authority, at `ro.dividend.tax_rate` for the distribution date: 16% for individuals (art. 97 alin. (7)) and for Romanian companies (art. 43), from 2026. The net is then paid through `bank.settle` against the same 457 item.
+- **Refused:** paying more than is owed or before the decision, and non-resident shareholders. For a company shareholder, the reviewer confirms that the exemption of art. 43 alin. (4) does not apply; an exempt dividend is paid gross with nothing withheld.
+
+### `assets.depreciate`: a month's depreciation
+
+- **Register:** `assets.register` records a fixed asset's card: inventory number, the catalogue code (HG 2139/2004, a text still to obtain), its account (20x, 21x), depreciation (28x) and expense (68x) accounts, entry value, accounting and fiscal lives in months, commissioning date with its record, and the purchase invoice. `assets.list` shows each with the depreciation booked and the value remaining.
+- **Effect:** for the month, straight-line depreciation of every asset commissioned in an earlier month (OMFP 1802/2014 pct. 238): Dr 68x / Cr 28x, each asset's line carrying it as its item, so the ledger holds its accumulated depreciation. The monthly parts are rounded so they add up, and the last month reaches the full value.
+- **Refused:** a month in which an asset's booked depreciation is not that of the months before (a month missed or booked twice), and a month with nothing to depreciate.
+- **Disposal:** `assets.dispose` records that an asset left use, with its record; `assets.derecognize` then takes it off the books (Dr 28x depreciation booked, Dr 6583 the value not recovered / Cr its account). Whether the disposal month is depreciated is the company's policy `policy.assets.disposal_month` (included or excluded); without it, depreciation and derecognition of that asset stop. A sale is invoiced separately.
+- Fiscal depreciation (art. 28), revaluation and impairment are not built yet.
 
 ### `fx.revalue`: month-end revaluation
 
@@ -151,7 +174,7 @@ The company's own invoices are issued through the books, so the number, the XML 
   - a party's details are missing;
   - the buyer is an individual (the B2C identification rules are not sourced yet);
   - the company's VAT status on the tax point is unknown or contradicts its details;
-  - a standard-rated line is not at the rate the register gives for the tax point (reduced rates are not in the register yet), or the rate is a rule gap (for example after 2026-12-31);
+  - a standard-rated line is at neither the standard nor the reduced rate the register gives for the tax point, a reduced-rate line has no `reducedRateBasis` (the supply of art. 291 alin. (2) it is, kept with the issue), or the rate is a rule gap (for example after 2026-12-31);
   - the invoice fails the e-Factura checks (Romanian county and Bucharest sector, lei VAT for foreign currency, the corrected invoice of a credit note);
   - the date is earlier than the series' last issue, or the number already appears on a sales document, imported or issued.
 - **Database guards.** Numbers in a series are consecutive from the first number, never go back in date, match the document's type, number and date, are never reused across sales documents, and cite recorded party details.
@@ -181,11 +204,13 @@ Payroll data is personal: employees' CNPs are encrypted at rest (AES-256-GCM und
 
 The calculation (`xfactura-core/src/ro/payroll`) follows the Fiscal Code articles it cites, read in ANAF's consolidated text:
 - CAS 25% on salary in money, CASS 10% also on meal and holiday vouchers, tax 10% on the net income less the personal deduction and union dues at the main job, CAM 2.25% on salary in money;
-- the personal deduction by the table of art. 77 (percentages of the minimum wage by 50-lei bands up to 2,000 lei above it and by dependents), 15% of the minimum wage under 26, 100 lei per child in school, limited to the net income and not reduced for part time;
-- CAS and CASS at least on the minimum wage for the contract's active working days, the difference borne by the employer, except in the cases of art. 146 alin. (5^7);
+- the personal deduction, in whole lei as D112 declares it, by the table of art. 77 (percentages of the minimum wage by 50-lei bands up to 2,000 lei above it and by dependents), 15% of the minimum wage under 26, 100 lei per child in school, limited to the net income and not reduced for part time;
+- CAS and CASS at least on the minimum wage less the minimum-wage relief, for the contract's active working days and in whole lei, as ANAF's D112 structure computes the limit (4,325 − 200 lei from July 2026), the difference borne by the employer, except in the cases of art. 146 alin. (5^7);
 - the tax base rounded to whole lei with 50 bani and less dropped (the methodological norms), contributions and tax half up (the procedure code's rule, pending its text).
 
-The minimum wage (4,050 lei until June 2026, 4,325 lei from July 2026) and the minimum-wage relief (300 lei up to 4,300 lei gross until June 2026, 200 lei up to 4,600 lei from July) cite acts not yet obtained (HG 1506/2024, HG 146/2026, OUG 89/2025): they are known from published reports, listed by `unsourced`, and the relief is applied only where it is unambiguous (a full month of a full-time main-job contract at the minimum wage); otherwise the line is stopped. The Fiscal Code values apply from 2026-01-01, the snapshot's date; earlier months are a rule gap. Leave pay, sick leave, benefits in kind, and D112 are not built yet.
+The minimum wage (4,050 lei until June 2026, 4,325 lei from July 2026) and the minimum-wage relief (300 lei up to 4,300 lei gross until June 2026, 200 lei up to 4,600 lei from July) are read in ANAF's D112 structure for 2026; their acts (HG 1506/2024, HG 146/2026, OUG 156/2024, OUG 89/2025) are still to obtain. The relief is applied only where it is unambiguous (a full month of a full-time main-job contract at the minimum wage); otherwise the line is stopped. The Fiscal Code values apply from 2026-01-01, the snapshot's date; earlier months are a rule gap. Leave pay, sick leave and benefits in kind are not built yet.
+
+CAM is posted on the employer's total base, rounded once, as D112 declares it.
 
 ## Declarations
 
@@ -213,7 +238,15 @@ Operations without a row yet (goods across the border, domestic reverse charge, 
 
 **D390 (VIES recapitulative statement)** lists a month's intra-Community operations by partner, from ANAF's structure "D390 XML 2020" (namespace v3): services supplied to EU businesses as type P and services acquired from EU suppliers as type S, each partner's bases summed and rounded to whole lei. It is monthly even for quarterly VAT payers, reads the month's entries by their tax point, and is informative: authorizing it locks no tax ledger. ANAF's validator checks every partner's VAT code against its country's algorithm. Goods (L, T, A, R) are not produced yet.
 
-**D394 (domestic supplies and acquisitions)** has its writer in `xfactura-core/src/ro/declarations/d394.ts`, from ANAF's structure of 15.09.2025 (namespace v5, periods from 08/2025), checked against ANAF's validator: partners by type and rate, individuals one record each, the summaries, invoice series and the control sum. Preparing it from the books is next.
+**D394 (domestic supplies and acquisitions)** is written by `xfactura-core/src/ro/declarations/d394.ts` from ANAF's structure of 15.09.2025 (namespace v5, periods from 08/2025), with the partner counts, summaries and control sum ANAF's validator checks. From the books, for the company's VAT period (monthly L, quarterly T):
+- domestic invoices of the period's VAT ledger, grouped by partner and rate: supplies (L) and acquisitions (A), with the number of invoices, and base and VAT rounded to whole lei; credit notes reduce their group;
+- a partner is registered for VAT when its code on the invoice is RO followed by a valid CUI; other customers are reported with their CUI or CNP, or, without one, by the address of their invoicing details; a supplier charging VAT without a VAT code blocks the statement;
+- the series are those the engine issued in the period (the range allocated and the numbers issued), the issued credit notes are listed as storno invoices, and invoices issued outside them (the previous invoicer) must be declared with their ranges and count;
+- an issued invoice not yet in the VAT ledger, a refund requested by the period's D300 without the nature of the operations (or the reverse), and TVA la încasare block it;
+- the header takes the company's invoicing details and, as options, the CAEN code, phone, representative, who prepared it, and the consent and affiliated-persons answers.
+Services across the border are not in it (D390 and D300 report them); acquisitions from suppliers applying TVA la încasare (AI), simplified invoices and receipts are not produced yet.
+
+**D112 (contributions, wage tax and the insured)** is written by `xfactura-core/src/ro/declarations/d112.ts` from ANAF's structure for months from 07/2026 (namespace v7). From the books it declares the month's posted payroll run: each employee's insured type (51 with the minimum-wage relief), contract and hours, days, bases, contributions withheld and borne by the employer (obligations 458 and 459), deductions, tax and the amount paid, the CNP opened from its seal for the declaration only; CAM is computed once on the employer's total. Amounts must be whole lei. It locks no tax ledger. The unemployment base (A_9) is declared as the salary paid in money, an interpretation awaiting the expert's review.
 
 Steps are recorded in order, and the database allows only the documented transitions; a tax period is locked only in the name of an authorized return of that tax and period. A rectification is a new return that supersedes the earlier one.
 
@@ -289,12 +322,12 @@ A close records closing balances per account and currency and joins a hash chain
   - invoice-level allowances and charges as separate treatments;
   - CSV bank statements.
 - **Not built yet:**
-  - the live ANAF client and its OAuth authorization, and verification of the Ministry's signature; reduced VAT rates in the register; B2C identification;
-  - VAT categories other than S/O, TVA la încasare, domestic reverse charge, goods across the border, pro-rata; D394 from the books, e-TVA;
-  - payroll beyond salary in money and vouchers (leave pay, sick leave, benefits in kind, union dues), corrections of a posted month, and D112;
-  - fixed assets;
+  - the live ANAF client and its OAuth authorization, and verification of the Ministry's signature; B2C identification;
+  - VAT categories other than S/O, TVA la încasare, domestic reverse charge, goods across the border, pro-rata; D394 for TVA la încasare, simplified invoices and receipts; e-TVA;
+  - payroll beyond salary in money and vouchers (leave pay, sick leave, benefits in kind, union dues), and corrections of a posted month;
+  - asset disposal, revaluation and fiscal depreciation; leasing and loans;
   - stock;
-  - micro and profit tax;
+  - profit tax, interim dividends, dividends to non-residents, and the D100 and D205 returns;
   - year-end close;
   - statutory register layouts and official filings.
 
