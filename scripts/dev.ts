@@ -1,6 +1,6 @@
 const children = [
   ['bun', '--watch', 'packages/xfactura-api/source/index.ts'],
-  ['bun', '--watch', 'packages/xfactura-api/source/accounting/worker.ts'],
+  ['bun', '--watch', 'packages/xfactura-api/source/engine/worker.ts'],
   ['bun', 'run', '--cwd', 'packages/xfactura-web', 'dev'],
 ].map((command, index) =>
   Bun.spawn(command, {

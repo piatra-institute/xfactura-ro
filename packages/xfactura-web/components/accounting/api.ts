@@ -40,6 +40,10 @@ export async function command<T>(path: string, body: unknown, method = 'POST') {
   pending.delete(signature);
   return result;
 }
+/** Invokes a company capability; the same input retried reuses its idempotency key. */
+export function invoke<T>(companyId: string, operation: string, input: unknown = {}) {
+  return command<T>(`${companyPath(companyId)}/capabilities/${operation}`, input);
+}
 export async function upload(companyId: string, file: File) {
   const body = new FormData();
   body.set('file', file);
@@ -73,9 +77,10 @@ export async function signOut() {
     throw new ApiError('Deconectarea nu a reușit. Încercați din nou.', response.status);
   pending.clear();
 }
-export function formatMoney(value: string) {
-  const [whole, fraction = '00'] = value.split('.');
-  return `${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ' ')},${fraction.padEnd(2, '0')} RON`;
+export function formatMoney(value: string, currency = 'RON') {
+  const negative = value.startsWith('-');
+  const [whole, fraction = '00'] = value.replace('-', '').split('.');
+  return `${negative ? '−' : ''}${whole!.replace(/\B(?=(\d{3})+(?!\d))/g, ' ')},${fraction.padEnd(2, '0')} ${currency}`;
 }
 export function field(data: FormData, name: string) {
   return String(data.get(name) ?? '').trim();

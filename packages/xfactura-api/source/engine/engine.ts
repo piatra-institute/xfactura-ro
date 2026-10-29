@@ -41,6 +41,8 @@ import { Evidence, evidenceInput, evidenceView } from './modules/evidence';
 import { documentView, importInput, Invoices } from './modules/invoices';
 import { VatRegisters, vatJournalInput, vatJournalView } from './modules/vat';
 import { bnrImportInput, fxChecks, FxRates, rateQuery } from './modules/fx';
+import { Exports } from './modules/exports';
+import { positionQuery, Positions } from './modules/positions';
 import {
   bankImportInput,
   movementQuery,
@@ -82,6 +84,8 @@ export class Engine {
   readonly vat: VatRegisters;
   readonly treasury: Treasury;
   readonly fx: FxRates;
+  readonly exports: Exports;
+  readonly positions: Positions;
 
   constructor(
     readonly db: Database,
@@ -93,7 +97,7 @@ export class Engine {
       closeChecks?: CloseCheck[];
     } = {},
   ) {
-    this.commands = new Commands(db, this.operations.agentAllowed);
+    this.commands = new Commands(db, this.operations.policy);
     this.policies = new PostingPolicies(this.commands);
     this.proposals = new Proposals(
       this.commands,
@@ -128,6 +132,8 @@ export class Engine {
     this.vat = new VatRegisters(this.commands);
     this.treasury = new Treasury(this.commands, objects);
     this.fx = new FxRates(this.commands, objects);
+    this.exports = new Exports(this.commands, objects);
+    this.positions = new Positions(this.commands);
     this.operations.add(...this.catalogue());
   }
 
@@ -274,6 +280,18 @@ export class Engine {
         }).strict(),
         output: proposalView,
         run: (actor, key, input) => this.proposals.post(actor, key, input),
+      }),
+      define({
+        id: 'openItems.list',
+        description:
+          'Pozițiile deschise (creanțe, datorii, avansuri) cu soldurile lor, pe partener.',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: positionQuery,
+        output: z.array(z.unknown()),
+        run: (actor, _, input) => this.positions.list(actor, input),
       }),
       define({
         id: 'ledger.trialBalance',
@@ -511,6 +529,41 @@ export class Engine {
         input: z.object({ kinds: z.array(z.string()).max(20).optional() }).strict(),
         output: z.array(documentView),
         run: (actor, _, input) => this.invoices.list(actor, input),
+      }),
+      define({
+        id: 'exports.request',
+        description:
+          'Cere un export complet al companiei: toate înregistrările și documentele originale.',
+        permission: 'review',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: z.object({}).strict(),
+        output: z.object({
+          id: z.string(),
+          status: z.string(),
+          size: z.number().nullable(),
+          hash: z.string().nullable(),
+          error: z.string().nullable(),
+        }),
+        run: (actor, key) => this.exports.request(actor, key),
+      }),
+      define({
+        id: 'exports.get',
+        description: 'Starea unui export; fișierul se descarcă de la /exports/{id}.',
+        permission: 'review',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: ok({ id }).strict(),
+        output: z.object({
+          id: z.string(),
+          status: z.string(),
+          size: z.number().nullable(),
+          hash: z.string().nullable(),
+          error: z.string().nullable(),
+        }),
+        run: (actor, _, input) => this.exports.get(actor, input.id),
       }),
       define({
         id: 'evidence.record',

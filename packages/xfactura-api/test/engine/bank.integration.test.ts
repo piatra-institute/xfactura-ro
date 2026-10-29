@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import type { ProposalView } from '../../source/engine/kernel/views';
-import { iban, mt940 } from '../accounting/fixtures/bank';
-import { invoiceXml, type XmlInput } from '../accounting/fixtures/invoice';
+import { iban, mt940 } from './fixtures/bank';
+import { invoiceXml, type XmlInput } from './fixtures/invoice';
 import { journal, scenario, type Scenario } from './scenario';
 
 const open: Scenario[] = [];

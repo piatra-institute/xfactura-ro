@@ -60,5 +60,8 @@ export class OperationRegistry {
     return [...this.operations.values()].sort((a, b) => (a.id < b.id ? -1 : 1));
   }
 
-  agentAllowed = (id: string) => this.operations.get(id)?.agent ?? false;
+  policy = (id: string) => {
+    const operation = this.operations.get(id);
+    return operation && { agent: operation.agent, permission: operation.permission };
+  };
 }

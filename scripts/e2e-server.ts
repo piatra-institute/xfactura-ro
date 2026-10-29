@@ -2,9 +2,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { Database } from '../packages/xfactura-api/source/accounting/db';
-import { migrate } from '../packages/xfactura-api/source/accounting/migrate';
-import { createAuth } from '../packages/xfactura-api/source/accounting/auth';
+import { Database } from '../packages/xfactura-api/source/engine/db/database';
+import { createAuth } from '../packages/xfactura-api/source/engine/http/auth';
 
 const directory = await mkdtemp(join(tmpdir(), 'xfactura-browser-'));
 const databaseUrl = `file:${join(directory, 'books.db')}`;
@@ -12,34 +11,16 @@ const authSecret = randomBytes(32).toString('hex');
 const publicUrl = 'http://localhost:3100';
 const db = new Database(databaseUrl);
 try {
-  await migrate(db);
+  await db.migrate();
   const auth = createAuth(db, { publicUrl, authSecret }, true);
-  for (const name of [
-    'desktop',
-    'mobile',
-    'corrections-desktop',
-    'corrections-mobile',
-    'agents-desktop',
-    'agents-mobile',
-    'ledger-desktop',
-    'ledger-mobile',
-    'settlements-desktop',
-    'settlements-mobile',
-    'accruals-desktop',
-    'accruals-mobile',
-    'unbilled-sales-desktop',
-    'unbilled-sales-mobile',
-    'accrual-adjustments-desktop',
-    'accrual-adjustments-mobile',
-    'deferrals-desktop',
-    'deferrals-mobile',
-    'advances-desktop',
-    'advances-mobile',
-  ]) {
-    await auth.api.signUpEmail({
-      body: { email: `${name}@example.test`, name, password: 'synthetic-browser-password' },
-    });
-  }
+  // One person per spec and browser project, so login rate limits and data never collide.
+  for (const spec of ['accounting', 'bank'])
+    for (const project of ['desktop', 'mobile']) {
+      const name = `${spec}-${project}`;
+      await auth.api.signUpEmail({
+        body: { email: `${name}@example.test`, name, password: 'synthetic-browser-password' },
+      });
+    }
 } finally {
   await db.close();
 }
@@ -72,7 +53,7 @@ const children = [
     stdout: 'inherit',
     stderr: 'inherit',
   }),
-  Bun.spawn(['bun', 'packages/xfactura-api/source/accounting/worker.ts'], {
+  Bun.spawn(['bun', 'packages/xfactura-api/source/engine/worker.ts'], {
     env: shared,
     stdout: 'inherit',
     stderr: 'inherit',

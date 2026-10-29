@@ -1,12 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import type { Overview } from 'xfactura-api/accounting-types';
 import { ApiError, command, field, get, signIn, signOut } from './api';
 import Workspace from './workspace';
 
 type Person = { id: string; name: string; email: string };
-type Company = Overview['company'];
+type Company = { id: string; name: string; cui: string };
 
 export default function AccountingPage() {
   const [person, setPerson] = useState<Person | null>(null);
@@ -16,7 +15,7 @@ export default function AccountingPage() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
-  async function createCompany(body: Pick<Company, 'name' | 'cui' | 'year'>) {
+  async function createCompany(body: { name: string; cui: string; year: number }) {
     setBusy(true);
     setError('');
     try {
@@ -183,8 +182,11 @@ export default function AccountingPage() {
                 </details>
               </div>
             ) : null}
-            {selected ? (
-              <Workspace key={selected} companyId={selected} />
+            {companies.some((company) => company.id === selected) ? (
+              <Workspace
+                key={selected}
+                company={companies.find((company) => company.id === selected)!}
+              />
             ) : (
               <section className="acc-onboarding">
                 <h1>Companie nouă</h1>

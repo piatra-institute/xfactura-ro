@@ -123,10 +123,15 @@ export async function appendAudit(
   });
 }
 
+/** What the operation registry declares about an operation. */
+export type OperationPolicy = (
+  operation: string,
+) => { agent: boolean; permission: Permission } | undefined;
+
 export class Commands {
   constructor(
     readonly db: Database,
-    private readonly agentAllowed: (operation: string) => boolean,
+    private readonly policy: OperationPolicy,
   ) {}
 
   authorize(
@@ -135,17 +140,20 @@ export class Commands {
     permission: Permission,
     operation: string,
   ) {
-    return authorize(tx, actor, permission, operation, this.agentAllowed);
+    return authorize(tx, actor, permission, operation, (id) => this.policy(id)?.agent ?? false);
   }
 
-  /** An authorized read in a consistent snapshot. */
+  /** An authorized read in a consistent snapshot, at the permission its operation declares. */
   async read<T>(
     actor: Actor,
     operation: string,
     read: (tx: Transaction, access: Access) => Promise<T>,
   ) {
     idSchema.parse(actor.companyId);
-    return this.db.read(async (tx) => read(tx, await this.authorize(tx, actor, 'read', operation)));
+    const permission = this.policy(operation)?.permission ?? 'read';
+    return this.db.read(async (tx) =>
+      read(tx, await this.authorize(tx, actor, permission, operation)),
+    );
   }
 
   /**

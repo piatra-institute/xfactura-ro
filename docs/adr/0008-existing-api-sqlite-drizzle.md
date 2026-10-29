@@ -1,5 +1,7 @@
 # Keep accounting in the existing API and SQLite stack
 
+Amended by [ADR 0009](0009-pure-core-package.md). Since the kernel switchover ([ADR 0010](0010-append-only-kernel.md)) the accounting modules live in `packages/xfactura-api/source/engine`.
+
 ## Decision
 
 Place accounting domain and adapter modules inside `packages/xfactura-api/source/accounting`. Keep the existing web/API packages. Shared contracts may use explicit package exports; a module with one application consumer does not require its own package.

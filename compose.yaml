@@ -33,7 +33,7 @@ services:
     environment: *accounting-environment
     volumes:
       - accounting-data:/app/.accounting
-    command: ['bun', 'packages/xfactura-api/source/accounting/worker.ts']
+    command: ['bun', 'packages/xfactura-api/source/engine/worker.ts']
     depends_on:
       api:
         condition: service_healthy

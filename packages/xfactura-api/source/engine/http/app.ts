@@ -157,6 +157,21 @@ export function createApp(
     });
   });
 
+  app.get(`${base}/exports/:exportId`, async (c) => {
+    const { bytes, hash } = await engine.exports.download(
+      actor(c),
+      idSchema.parse(c.req.param('exportId')),
+    );
+    return new Response(new Uint8Array(bytes), {
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Disposition': `attachment; filename="xfactura-${c.req.param('companyId')}.json"`,
+        'Cache-Control': 'no-store',
+        'X-Content-SHA256': hash,
+      },
+    });
+  });
+
   app.onError((error, c) => {
     const failure = wireError(error);
     if (failure.status === 401 && c.req.path.endsWith('/mcp'))

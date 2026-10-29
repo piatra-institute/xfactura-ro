@@ -42,6 +42,14 @@ export class Database {
   /** Applies generated migrations, then installs the invariants (ADR 0010). */
   async migrate() {
     await this.initialize();
+    // The previous engine's books used another schema and cannot be upgraded (ADR 0012).
+    const previous = await this.client.execute(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'acc_journals'",
+    );
+    if (previous.rows.length)
+      throw new Error(
+        'This database holds the previous accounting engine. Move it aside and run the migration on a new database.',
+      );
     await migrateDrizzle(this.orm, {
       migrationsFolder: fileURLToPath(new URL('./migrations', import.meta.url)),
     });

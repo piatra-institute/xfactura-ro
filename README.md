@@ -28,13 +28,11 @@ Open [localhost:3000/contabilitate](http://localhost:3000/contabilitate). `dev` 
 
 ## Accounting coverage
 
-xFactura has a working ledger and bounded domestic RON accounting workflows. It is not yet a complete sole-system accounting suite for a Romanian SRL: full VAT/FX, native assets/payroll/accounting stock/production, calculated micro/profit tax, annual close and official reporting remain required. The [implementation matrix](docs/IMPLEMENTATION.md) owns current coverage and recorded evidence; the [roadmap](docs/ROADMAP.md) owns remaining work and the company/year completion gate.
+Accounting runs on one append-only kernel: documents and evidence feed pure treatments, every effect is approved by a person for its exact hash (or posted under a human-approved policy), and the database itself refuses unapproved, unbalanced or altered entries. It covers the general ledger, e-Factura service invoices and credit notes in lei or foreign currency, MT940/camt.053 bank settlement, BNR rates with realized and month-end FX differences, working VAT journals, the trial balance and reviewed month close.
 
-Current building blocks include general openings/postings and analytical accounts; retained e-Factura XML/ZIP sources; supported service invoices, credits/storno and price adjustments; native receivables/payables and RON settlements; accruals, unbilled services, deferred-service schedules and advances; working VAT registers; exact human approval; and export/local recovery. Exact inputs and exclusions live in [ACCOUNTING_ENGINE.md](docs/ACCOUNTING_ENGINE.md), rather than being inferred from this summary.
+It is not yet a complete accounting system for a Romanian SRL: VAT settlement and declarations, payroll, assets, stock, micro and profit tax and year-end close remain to be built, and every fiscal parameter is still awaiting review by an expert contabil. [IMPLEMENTATION.md](docs/IMPLEMENTATION.md) owns current coverage, [ACCOUNTING_ENGINE.md](docs/ACCOUNTING_ENGINE.md) the exact behavior, and [ROADMAP.md](docs/ROADMAP.md) the remaining work.
 
-External agents use the existing company-scoped API/MCP and the same deterministic commands as the application. The black accounting interface reviews evidence, effects and decisions. A built-in Piatra AI/BYOK accounting agent is planned separately; it is not a dependency of accounting. [AGENT_API.md](docs/AGENT_API.md) owns implemented tools and authorization; [FEATURE_VISION.md](docs/FEATURE_VISION.md) describes future explanations, continuous close, safe automation and other target experiences.
-
-The public invoicer retains its own browser-local data and JSON/PDF/XML workflows. Its inventory list is separate from a future accounting stock/valuation engine. Original-file import does not establish ANAF acceptance, and a working VAT register or successful monthly close is not an official declaration.
+The public invoicer retains its own browser-local data and JSON/PDF/XML workflows. Importing an invoice does not establish ANAF acceptance, and a VAT journal or a closed month is not a declaration.
 
 ## SQLite and Turso
 
@@ -44,40 +42,16 @@ For Turso, set `DATABASE_URL` to the libSQL database URL and `DATABASE_AUTH_TOKE
 
 ## Schema changes
 
-The accounting schema lives in [schema.ts](packages/xfactura-api/source/accounting/schema.ts). Business queries use Drizzle.
+The accounting schema lives in [schema.ts](packages/xfactura-api/source/engine/db/schema.ts). Generate a migration after changing it, review the SQL, and apply it:
 
 ```sh
 bun run db:generate --name=describe_the_change
 bun run db:migrate
 ```
 
-Review the generated migration and snapshot together. The archive tables, indexes, foreign keys and checks in `0026_invoice_archives.sql` are generated from `schema.ts`. Its companion `0027_invoice_archive_guards.sql` contains hand-written SQLite triggers for immutable manifests and member projections; Drizzle Kit does not model those trigger definitions. `generate --custom` creates an empty migration for this unsupported DDL, rather than generating its SQL. See [Drizzle Kit custom migrations](https://orm.drizzle.team/docs/drizzle-kit-generate#custom-migrations). `0001_posting_guards.sql` is a Drizzle custom migration for database invariants that schema declarations cannot express: balanced atomic postings, immutability and closed-period protection. SQLite table rebuilds can remove triggers; recheck those guards whenever a generated migration rebuilds a protected table. The later correction migration adds its own approval, exact-line and immutable-link guards without rebuilding the original tables. Do not hand-write table migrations or apply schema pushes to accounting books.
+Database invariants are not migrations. They are declared, with a plain-language rule for each, in [invariants.ts](packages/xfactura-api/source/engine/db/invariants.ts) and installed by `db:migrate` after the generated migrations; a changed invariant is replaced and a removed one dropped. The invariant test suite fails if any guard is missing or ineffective. Applied migrations are never edited.
 
-The bank tables, indexes, foreign keys and checks in `0028_bank_statement_files.sql` are also Drizzle-generated. `0029_bank_statement_file_guards.sql` defines only the SQLite manifest/projection invariants that Drizzle cannot represent. A populated `0027` upgrade proves existing CSV source identities and cached results remain intact.
-
-`0030_subscription_discounts.sql` is a Drizzle custom migration for SQLite trigger changes only. It adds no table, index or column: existing invoice-credit records retain commercial discounts. Drizzle creates the empty custom migration shell; its unsupported trigger definitions are written and tested explicitly, including a populated `0029` upgrade.
-
-`0031_deferral_reschedules.sql` is generated from the Drizzle schema, including its table, index, checks and foreign keys. `0032_deferral_reschedule_guards.sql` is a generated custom-migration shell with explicitly written SQLite invariants for exact approval, immutable calendars and current-plan releases/credits. Populated `0021`, `0029` and `0030` books preserve their original facts, hashes, approvals and postings through the upgrade. Applied migrations are never rewritten.
-
-`0033_unbilled_sale_adjustments.sql` is generated from the Drizzle schema. Its companion `0034_unbilled_sale_adjustment_guards.sql` contains explicitly written SQLite posting/projection invariants in a generated custom-migration shell. A populated `0032` upgrade preserves old facts, hashes and an approved unbilled-invoice match through both migrations.
-
-`0035_actual_day_allocation_guards.sql` changes only two SQLite triggers for versioned actual-day plans and future calendar amendments; no table, index or column change is required. Drizzle generated the custom shell/snapshot/journal entry; the unsupported trigger definitions are explicit SQL. A populated pre-daily `0034` upgrade preserves old monthly schedules, hashes, cached commands and pending approvals.
-
-`0036_scope_reduction_guards.sql` also requires no table, index or column change. Drizzle generated the custom shell/snapshot/journal entry; explicit SQLite trigger definitions protect partial scope credits and the resulting effective releases. Existing full cancellations and old pending approvals remain compatible through a populated `0035` upgrade.
-
-`0037_deferral_supplements.sql` is Drizzle-generated table/index/check/foreign-key DDL. Its companion `0038_deferral_supplement_guards.sql` is a generated custom shell with explicit SQLite origin, projection and immutability invariants. A populated `0036` upgrade preserves old books and exact pending approvals; earlier applied migrations are unchanged.
-
-`0039_evidenced_monthly_guards.sql` changes only three SQLite triggers for explicit monthly benefit plans, separate service confirmations and reviewed future amounts. Drizzle generated the custom shell/snapshot/journal entry after ordinary schema generation confirmed no DDL change. The unsupported trigger definitions are explicit SQL. A populated `0038` upgrade preserves old monthly facts, hashes, cached results and an approved release. Earlier applied migrations are unchanged.
-
-`0040_documented_scope_guards.sql` changes only two SQLite triggers for explicit monthly scope credits and the resulting release plan. Drizzle generated the custom shell/snapshot/journal entry after ordinary schema generation confirmed no DDL change; the unsupported trigger definitions are written explicitly. A populated `0039` upgrade preserves an existing explicit monthly plan, service evidence and an approved release. Earlier applied migrations are unchanged.
-
-`0041_reduced_calendar_guards.sql` changes two SQLite triggers for calendar reviews and releases after partial scope cancellation. Drizzle generated the custom shell/snapshot/journal entry; the unsupported trigger definitions are written explicitly. Ordinary schema generation reports no DDL change. A populated `0040` upgrade preserves an approved earlier calendar, its hash and all original financial records; applying it after upgrade adds no journal. Earlier applied migrations are unchanged.
-
-Drizzle-generated `0042_sequential_service_credits.sql` adds the cancellation sequence and replaces the one-per-source unique index. Its generated custom companion `0043` supplies only unsupported SQLite trigger definitions. A populated `0041` upgrade preserves the existing credit and an approved reduced monthly release before accepting another credit. Earlier applied migrations remain unchanged.
-
-For partial bank refunds, Drizzle generated the `0045` table rebuild and index/foreign-key copy. The generated custom `0044`/`0046` shells prepare and restore only the unsupported SQLite triggers around that rebuild. Populated `0025`/`0043` upgrades retain existing refunds and old exact approvals; applied migrations remain unchanged.
-
-Generated custom `0052_negative_invoice_guards.sql` adds only unsupported SQLite source, signed-credit and reference/effect guards. There is no ordinary schema change. Populated `0051` upgrades preserve v1/v2/v3 sources, posted credits and pending exact 381 approvals. The source adapter uses additive normalization v4 only for negative type-380 documents; existing source hashes remain unchanged. Earlier applied migrations are not edited.
+The kernel started from a new baseline on 29 October 2026 ([ADR 0012](docs/adr/0012-baseline-reset-and-oracles.md)). `db:migrate` refuses a database created by the previous engine: move `.accounting/` aside and migrate a new one.
 
 ## Docker Compose
 
@@ -117,6 +91,7 @@ Inside Compose, run backup with `docker compose exec api bun run backup /app/.ac
 ```sh
 bun run test
 bun run test:integration
+bun run test:perf
 bun run typecheck
 bun run lint
 bun run format:check
@@ -129,7 +104,7 @@ Browser tests use isolated temporary books, API port 8189 and web port 3100. Eac
 
 The versioned API is mounted in the existing `xfactura-api` server. Its OpenAPI document is served at `/api/accounting/openapi.json`. [ARCHITECTURE.md](docs/ARCHITECTURE.md) describes the domain boundaries and [DESIGN.md](docs/DESIGN.md) the interface conventions.
 
-Scoped accounting agents use the shared capability API or MCP at `/api/accounting/v1/companies/{companyId}/mcp`. Human-issued credentials expire, can be revoked and cannot approve their own work. MCP supports 2025 and 2026 protocol clients; browser OAuth delegation and the built-in Piatra AI/BYOK accounting agent remain planned. [AGENT_API.md](docs/AGENT_API.md) documents capabilities, connection and exact approvals. Accounting does not require an inference provider.
+Scoped accounting agents use the shared capability API or MCP at `/api/accounting/v1/companies/{companyId}/mcp`. Human-issued credentials expire, can be revoked, end when their issuer's membership changes, and never approve anything. MCP supports 2025 and 2026 protocol clients; browser OAuth delegation and the built-in Piatra AI/BYOK accounting agent remain planned. [AGENT_API.md](docs/AGENT_API.md) documents capabilities, connection and exact approvals. Accounting does not require an inference provider.
 
 ## License and credits
 

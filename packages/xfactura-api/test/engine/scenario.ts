@@ -20,7 +20,8 @@ export async function scenario(options: { year?: number } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'xfactura-scenario-'));
   const db = new Database(`file:${directory}/books.db`);
   await db.migrate();
-  const engine = new Engine(db, new LocalObjectStore(join(directory, 'objects')), secret);
+  const objects = new LocalObjectStore(join(directory, 'objects'));
+  const engine = new Engine(db, objects, secret);
   const people = async (...names: string[]) => {
     const ids = names.map(() => randomUUID());
     const now = new Date();
@@ -81,6 +82,8 @@ export async function scenario(options: { year?: number } = {}) {
   const s = {
     engine,
     db,
+    objects,
+    directory,
     company,
     owner,
     reviewer,
@@ -90,7 +93,7 @@ export async function scenario(options: { year?: number } = {}) {
     join: join_,
     invoke,
     refused,
-    async evidence(filename = 'nota.pdf', content = randomUUID()) {
+    async evidence(filename = 'nota.pdf', content: string = randomUUID()) {
       return invoke<{ id: string }>(owner, 'evidence.record', {
         filename,
         mediaType: 'application/pdf',

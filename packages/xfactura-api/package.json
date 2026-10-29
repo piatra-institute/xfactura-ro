@@ -12,8 +12,7 @@
     "dev": "bun --watch source/index.ts",
     "start": "bun source/index.ts",
     "db.push": "drizzle-kit push:sqlite",
-    "db:generate": "drizzle-kit generate --config=drizzle.accounting.config.ts",
-    "db:generate:engine": "drizzle-kit generate --config=drizzle.engine.config.ts"
+    "db:generate": "drizzle-kit generate --config=drizzle.engine.config.ts"
   },
   "dependencies": {
     "@better-auth/drizzle-adapter": "1.7.13",
@@ -55,7 +54,6 @@
     "rimraf": "^5.0.5"
   },
   "exports": {
-    "./accounting": "./source/accounting/domain/index.ts",
-    "./accounting-types": "./source/accounting/contracts.ts"
+    "./contracts": "./source/engine/contracts.ts"
   }
 }

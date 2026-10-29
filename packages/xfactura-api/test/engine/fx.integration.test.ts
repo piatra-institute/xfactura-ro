@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import type { ProposalView } from '../../source/engine/kernel/views';
-import { invoiceXml } from '../accounting/fixtures/invoice';
+import { invoiceXml } from './fixtures/invoice';
 import { scenario, type Scenario } from './scenario';
 
 // Synthetic BNR file and documents. Every expected amount below is computed by hand:

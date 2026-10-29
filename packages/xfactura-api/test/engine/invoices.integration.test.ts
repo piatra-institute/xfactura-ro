@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import type { ProposalView } from '../../source/engine/kernel/views';
-import { invoiceXml, type XmlInput } from '../accounting/fixtures/invoice';
+import { invoiceXml, type XmlInput } from './fixtures/invoice';
 import { scenario, type Scenario } from './scenario';
 
 const open: Scenario[] = [];

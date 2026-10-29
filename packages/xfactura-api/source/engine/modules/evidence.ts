@@ -94,7 +94,7 @@ export class Evidence {
 
   async read(actor: Actor, id: string) {
     idSchema.parse(id);
-    return this.commands.read(actor, 'evidence.download', async (tx) => {
+    return this.commands.read(actor, 'evidence.get', async (tx) => {
       const [record] = await tx
         .select()
         .from(evidence)
