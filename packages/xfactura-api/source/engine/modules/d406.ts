@@ -771,6 +771,13 @@ export function d406Declaration(
             'D406_SPLIT',
             `Nota ${header.number} este repartizată pe mai multe conturi sau cote: liniile ei nu se raportează încă în D406.`,
           );
+        // Advance invoices and the final invoices deducting them: their lines on 419 or 409x are
+        // not attributed yet.
+        if (vat.length && own.some((line) => /^(419|409[12])/.test(line.account)))
+          problem(
+            'D406_ADVANCE',
+            `Nota ${header.number} înregistrează sau regularizează un avans: liniile ei nu se raportează încă în D406.`,
+          );
         const transactionLines = own.map((line, index): D406Line => {
           const currency =
             line.currency && line.currencyMinor

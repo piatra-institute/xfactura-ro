@@ -18,6 +18,7 @@ import { payrollRecognition } from 'xfactura-core/ro/treatments/payroll';
 import { microTax } from 'xfactura-core/ro/treatments/micro-tax';
 import { assetDepreciation, assetDerecognition } from 'xfactura-core/ro/treatments/assets';
 import { legalReserve, resultClosing, resultTransfer } from 'xfactura-core/ro/treatments/year-end';
+import { deferral, deferralRelease } from 'xfactura-core/ro/treatments/deferrals';
 import { microDefinitions, microVersions } from 'xfactura-core/ro/micro';
 import { dividendDefinitions, dividendVersions } from 'xfactura-core/ro/dividends';
 import { etvaDefinitions, etvaVersions } from 'xfactura-core/ro/etva';
@@ -66,6 +67,7 @@ import { documentView, importInput, Invoices } from './modules/invoices';
 import { InvoicerImport, invoicerImportInput, invoicerImportView } from './modules/invoicer-import';
 import { VatRegisters, vatJournalInput, vatJournalView } from './modules/vat';
 import { bnrImportInput, fxChecks, FxRates, rateQuery } from './modules/fx';
+import { deferralChecks } from './modules/deferrals';
 import { Exports } from './modules/exports';
 import { positionQuery, Positions } from './modules/positions';
 import {
@@ -284,11 +286,19 @@ export class Engine {
       resultClosing,
       legalReserve,
       resultTransfer,
+      deferral,
+      deferralRelease,
       ...(options.treatments ?? []),
     );
     this.actions = new Actions(this.commands);
     this.actions.add(
-      closeHandler([...treasuryChecks, ...fxChecks, ...spvChecks, ...(options.closeChecks ?? [])]),
+      closeHandler([
+        ...treasuryChecks,
+        ...fxChecks,
+        ...spvChecks,
+        ...deferralChecks,
+        ...(options.closeChecks ?? []),
+      ]),
     );
     this.actions.add(reopenHandler);
     this.reports = new Reports(this.commands);

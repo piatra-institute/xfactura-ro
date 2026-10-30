@@ -58,6 +58,7 @@ import {
   payrollRunEvents,
   payrollRuns,
   profileFacts,
+  scheduleRows,
   taxEntries,
   treasuryAccounts,
 } from '../db/schema';
@@ -267,9 +268,41 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
     if (query.partyId) where.push(eq(openItems.partyId, query.partyId));
     if (query.kind) where.push(eq(openItems.kind, query.kind));
     if (query.foreign) where.push(ne(openItems.currency, 'RON'));
-    for (const item of await loadOpenItems(tx, companyId, where))
-      if (!query.openOnly || item.balanceBani !== 0n || item.balanceMinor !== 0n)
-        itemMap.set(item.id, item);
+    const items = (await loadOpenItems(tx, companyId, where)).filter(
+      (item) => !query.openOnly || item.balanceBani !== 0n || item.balanceMinor !== 0n,
+    );
+    if (query.schedules && items.length) {
+      const rows = await tx
+        .select()
+        .from(scheduleRows)
+        .where(
+          and(
+            eq(scheduleRows.companyId, companyId),
+            inArray(
+              scheduleRows.openItemId,
+              items.map((item) => item.id),
+            ),
+          ),
+        )
+        .orderBy(asc(scheduleRows.dueDate), asc(scheduleRows.rowKey));
+      for (const item of items) {
+        const own = rows.filter((row) => row.openItemId === item.id);
+        const latest = Math.max(...own.map((row) => row.version));
+        const current = own.filter((row) => row.version === latest);
+        if (current.length)
+          item.schedule = {
+            method: current[0]!.method,
+            rows: current.map((row) => ({
+              key: row.rowKey,
+              due: date(row.dueDate),
+              bani: row.bani,
+              counterAccount: row.counterAccount,
+            })),
+          };
+      }
+    }
+    for (const item of items)
+      if (!itemMap.has(item.id) || item.schedule) itemMap.set(item.id, item);
   }
   for (const item of [...itemMap.values()].sort((a, b) => (a.id < b.id ? -1 : 1)))
     readSet.push({ kind: 'openItem', id: item.id, version: String(item.movements) });

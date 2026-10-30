@@ -69,6 +69,13 @@ The chart is OMFP 1802/2014 as published, plus the accounts later orders added, 
 - **Input:**
   - **One account** for every line: a revenue (70x) or expense (6xx) account, or for a purchase a fixed-asset account (20x, 21x), whose supplier is then held on 404. For purchases, the deduction is `full` or `none`.
   - **Or `allocations`:** each VAT category's taxable amount (`S-21`, `S-11`, `O`) split over accounts in the document's currency, each part with its own deduction. A category's parts must add up to its amount; allowances and charges are inside it.
+  - **Advances:**
+    - An advance invoice puts its part on 419 (received from a customer) or 4091/4092 (paid to a supplier), opening an advance of the partner.
+    - The final invoice's negative line deducting the advance goes to the same account and names the advance it settles (`advance`). The negative line is in the advance's VAT category, as e-Factura writes it, so the VAT follows.
+    - Only advance parts may be negative.
+    - An advance can't be settled beyond what it holds (`OPEN_ITEM_REVERSED`).
+    - Purchase advances are deductible in full.
+    - Advances in foreign currency are not settled yet.
   - Optionally the service date.
 - **Supported:** the categories of the document's VAT breakdown, each S at the register's standard rate for the tax point (`taxPointDate`, else issue date) or at its reduced rate, or O. The reduced rate applies only to the supplies of Codul fiscal art. 291 alin. (2), so it is an `ack` warning (`REDUCED_RATE`): the reviewer confirms the operation qualifies.
   - The company's `vat.status` on the tax-point date must be recorded.
@@ -185,6 +192,17 @@ The chart is OMFP 1802/2014 as published, plus the accounts later orders added, 
       - 267 and the accounts the microentities' balance sheet doesn't list are problems.
     - Still given rather than read: F20 rd. 01a and F30's other chapters.
 - Not built yet: the physical inventory and its differences, provisions, and the statements of small and larger entities.
+
+### `deferrals.defer` and `deferrals.release`: amounts for later months (471, 472)
+
+- **`deferrals.defer`** moves an expense (6xx) or revenue (70x) already booked, such as a yearly subscription or insurance, to 471 or 472.
+  - The amount becomes an open item of the partner, with a schedule of equal monthly releases over `months` from the month `from`; the remainder goes to the first months.
+  - Its evidence shows the period covered. Releases start in the deferral's month or later.
+  - Lines: Dr 471 / Cr expense, or Dr revenue / Cr 472.
+- **`deferrals.release`** books a month's share on its last day, back to the account the amount came from.
+  - It releases what each open deferral's schedule has due by then, less what was already released (the schedule's total less the item's balance). A missed month is caught up, and nothing is released twice.
+  - With nothing due, it is refused (`NOTHING_TO_RELEASE`). A month with a release due does not close.
+- Schedules are read with their open items (an open-item query with `schedules`). They never change, so the item's version covers them.
 
 ### `fx.revalue`: month-end revaluation
 
@@ -307,7 +325,7 @@ Services across the border are not in it (D390 and D300 report them); acquisitio
 - **VAT codes** go on the base line, through a mapping table (`saft/tax-codes.ts`) in which each row quotes ANAF's description. A code with no certain SAF-T code (`O`, 9%, 5%, partial deduction) is a problem, never a guess.
 - **Validation:** ANAF's D406 validator runs only in ANAF's SAF-T kit, pinned separately (`anaf-saft`). The engine sends D406 there and every other return to the general DUKIntegrator, and records which kit ran.
 - **The validator doesn't check** that entries balance, the control totals, or currency conversion. Those are the writer's own checks (`checkD406`).
-- **Not produced yet:** payroll TaxTypes (their lines carry 000), the annual assets file, the stock file, invoices with document-level allowances, invoices split over accounts or rates (`D406_SPLIT`), and invoices without UBL XML.
+- **Not produced yet:** payroll TaxTypes (their lines carry 000), the annual assets file, the stock file, invoices with document-level allowances, invoices split over accounts or rates (`D406_SPLIT`), advance invoices and their deduction (`D406_ADVANCE`), and invoices without UBL XML.
 
 **Obligations calendar.** `obligations.calendar` lists the returns whose periods end in a range of months, with their deadlines and where each one stands: due, overdue, prepared, authorized, filed, accepted, rejected, or blocked when its deadline isn't sourced for the period.
 - **Which returns apply** is read from the profile and the books:
@@ -375,6 +393,7 @@ Closing is a reviewed action: `periods.close.request`, then `actions.approve` on
 | Unexplained bank movements booked in the month | block |
 | Ledger balance different from a statement's closing balance, or a statement that does not continue the previous one | block |
 | Foreign-currency monetary balances not revalued at month end | warn |
+| Amounts deferred to 471 or 472 with a release due by month end (`DEFERRAL_DUE`) | block |
 
 A close records closing balances per account and currency and joins a hash chain of period events. Reopening is reviewed the same way and requires later months to be reopened first.
 
@@ -394,8 +413,6 @@ A close records closing balances per account and currency and joins a hash chain
 ## Not implemented
 
 - **Removed in the kernel switchover, to be rebuilt as treatments:**
-  - deferred revenue and expense schedules (471/472);
-  - advances (4092/419);
   - purchase accruals (408);
   - unbilled sales (418);
   - CSV bank statements.

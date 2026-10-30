@@ -9,6 +9,7 @@ import {
   type Issue,
   type LineSpec,
   type Loaded,
+  type OpenItemSpec,
   type TaxEntrySpec,
   type Treatment,
 } from '../../kernel';
@@ -208,7 +209,8 @@ function amountsFor(invoice: Invoice, loaded: Loaded, rules: RuleContext, taxPoi
   };
 }
 
-const amountPattern = /^(0|[1-9]\d{0,15})(\.\d{1,2})?$/;
+/** An allocated amount: negative only for an advance deducted by the final invoice. */
+const amountPattern = /^-?(0|[1-9]\d{0,15})(\.\d{1,2})?$/;
 
 export const recognitionInput = z
   .object({
@@ -221,7 +223,9 @@ export const recognitionInput = z
     /**
      * Instead of `account`: each VAT category's taxable amount (BT-116) split over accounts, in
      * the document's currency. A category is `S-<rate>` or `O`, and its parts add up to its
-     * amount; allowances and charges are inside it.
+     * amount; allowances and charges are inside it. An advance invoice puts its part on 419
+     * (4091, 4092 for a purchase); the final invoice's negative line deducting it goes there too,
+     * naming the advance it settles.
      */
     allocations: z
       .array(
@@ -232,6 +236,8 @@ export const recognitionInput = z
             amount: z.string().regex(amountPattern),
             /** Input VAT deduction of this part, for a purchase. */
             deduction: z.enum(['full', 'none']).default('full'),
+            /** The advance (its open item) a negative part on 419, 4091 or 4092 settles. */
+            advance: z.uuid().optional(),
           })
           .strict(),
       )
@@ -349,7 +355,16 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
   input: recognitionInput,
   agent: true,
   subject: (input) => `document:${input.documentId}`,
-  plan: (input) => ({ documents: [input.documentId], profile: true }),
+  plan: (input) => {
+    const advances = (input.allocations ?? []).flatMap((part) =>
+      part.advance ? [part.advance] : [],
+    );
+    return {
+      documents: [input.documentId],
+      profile: true,
+      ...(advances.length ? { openItems: [{ ids: advances }] } : {}),
+    };
+  },
   followUp(input, loaded) {
     const parsed = invoiceDocumentSchema.safeParse(loaded.documents.get(input.documentId)?.body);
     if (!parsed.success || parsed.data.currency === LEDGER_CURRENCY) return null;
@@ -367,7 +382,13 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
     const vat = vatCategories(invoice, loaded, rules, taxPoint);
     const amounts = amountsFor(invoice, loaded, rules, taxPoint);
     const issues = [...vat.issues, ...amounts.issues];
-    const parts = input.allocations ?? [
+    const parts: {
+      account: string;
+      vat: string;
+      amount: string;
+      deduction: 'full' | 'none';
+      advance?: string;
+    }[] = input.allocations ?? [
       ...vat.categories.map((item) => ({
         account: input.account!,
         vat: item.key,
@@ -375,20 +396,71 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
         deduction: input.deduction,
       })),
     ];
+    // Advances: received from customers on 419, paid to suppliers on 4091 (stocks) or 4092
+    // (services), each an open item of the partner.
+    const advanceAccount = direction === 'sale' ? /^419$/ : /^409[12]$/;
+    const advanceKind = direction === 'sale' ? 'advance.received' : 'advance.paid';
+    const isAdvance = parts.map((part) => advanceAccount.test(part.account));
+    const negative = parts.map((part) => part.amount.startsWith('-'));
     parts.forEach((part, index) => {
+      const path = input.allocations ? `allocations.${index}` : 'account';
       if (
-        direction === 'sale' ? !part.account.startsWith('70') : !purchaseAccount.test(part.account)
+        !isAdvance[index] &&
+        (direction === 'sale'
+          ? !part.account.startsWith('70')
+          : !purchaseAccount.test(part.account))
       )
         issues.push(
           block(
             'ACCOUNT',
             direction === 'sale'
-              ? 'Folosiți un cont de venituri (70x).'
-              : 'Folosiți un cont de cheltuieli (6xx) sau de imobilizări (20x, 21x).',
+              ? 'Folosiți un cont de venituri (70x) sau de avansuri (419).'
+              : 'Folosiți un cont de cheltuieli (6xx), de imobilizări (20x, 21x) sau de avansuri (4091, 4092).',
             input.allocations ? `allocations.${index}.account` : 'account',
           ),
         );
+      if (negative[index] && !isAdvance[index])
+        issues.push(
+          block('ALLOCATION', 'Doar un avans se scade cu o sumă negativă (419, 4091, 4092).', path),
+        );
+      if (isAdvance[index] && negative[index]) {
+        const held = part.advance ? loaded.openItems.get(part.advance) : undefined;
+        if (
+          !held ||
+          held.kind !== advanceKind ||
+          held.partyId !== invoice.record.partyId ||
+          held.controlAccount !== part.account
+        )
+          issues.push(
+            block(
+              'ADVANCE',
+              'Indicați avansul acestui partener, din același cont, pe care îl regularizează linia (advance).',
+              path,
+            ),
+          );
+      } else if (part.advance)
+        issues.push(
+          block('ADVANCE', 'Avansul se indică doar pe linia negativă care îl regularizează.', path),
+        );
+      if (isAdvance[index] && direction === 'purchase' && part.deduction !== 'full')
+        issues.push(block('ADVANCE', 'Avansurile se înregistrează cu TVA dedusă integral.', path));
     });
+    if (amounts.fx && negative.some(Boolean))
+      issues.push(
+        block('ADVANCE_CURRENCY', 'Regularizarea avansurilor în valută nu este încă suportată.'),
+      );
+    for (const item of vat.categories)
+      if (
+        parts.some((part, p) => part.vat === item.key && negative[p]) &&
+        parts.some((part) => part.vat === item.key && part.deduction === 'none')
+      )
+        issues.push(
+          block(
+            'ADVANCE',
+            `Categoria ${item.key} scade un avans: părțile ei se înregistrează cu TVA dedusă.`,
+            'allocations',
+          ),
+        );
     const assets = parts.filter((part) => fixedAsset.test(part.account)).length;
     if (direction === 'purchase' && assets && assets !== parts.length)
       issues.push(
@@ -480,6 +552,12 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
     categories.forEach((item, c) => {
       const members = parts.flatMap((part, p) => (part.vat === item.key ? [p] : []));
       const weights = members.map((p) => partMinor[p]!);
+      // A category deducting an advance has only deductible parts: its VAT is booked whole.
+      if (weights.some((weight) => weight < 0n)) {
+        partTax[members[0]!] = categoryTax[c]!;
+        partTaxMinor[members[0]!] = item.minorTax;
+        return;
+      }
       share(categoryTax[c]!, weights).forEach((value, i) => (partTax[members[i]!] = value));
       share(item.minorTax, weights).forEach((value, i) => (partTaxMinor[members[i]!] = value));
     });
@@ -514,14 +592,31 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
       lines.push(
         line({ account: '4111', side: 'D', bani: gross, openItem: item.ref, partyId }, fx?.gross),
       );
+    const advanceItems: OpenItemSpec[] = [];
     parts.forEach((part, p) => {
       const kept = direction === 'purchase' && !deductible[p];
+      // An advance invoiced opens the partner's advance; a negative part settles one.
+      let advance: Pick<LineSpec, 'openItem' | 'partyId'> = {};
+      if (isAdvance[p] && !negative[p]) {
+        advanceItems.push({
+          ref: `advance-${p}`,
+          kind: advanceKind,
+          controlAccount: part.account,
+          partyId,
+          currency: LEDGER_CURRENCY,
+          normalSide: direction === 'sale' ? 'C' : 'D',
+          mayReverse: false,
+          documentId: invoice.record.id,
+        });
+        advance = { openItem: `advance-${p}`, partyId };
+      } else if (isAdvance[p]) advance = { openItem: part.advance!, partyId };
       lines.push(
         line(
           {
             account: part.account,
             side: direction === 'sale' ? 'C' : 'D',
             bani: partNet[p]! + (kept ? partTax[p]! : 0n),
+            ...advance,
           },
           partMinor[p]! + (kept ? partTaxMinor[p]! : 0n),
         ),
@@ -590,7 +685,7 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
       journalCode: direction === 'sale' ? 'VANZARI' : 'CUMPARARI',
       description: `${direction === 'sale' ? 'Factură emisă' : 'Factură primită'} ${body.number}`,
       lines,
-      openItems: [item],
+      openItems: [item, ...advanceItems],
       taxEntries,
       schedules: [],
       explanation: {

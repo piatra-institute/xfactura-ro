@@ -51,6 +51,7 @@
     "./ro/declarations/d100": "./src/ro/declarations/d100.ts",
     "./ro/calendar": "./src/ro/calendar.ts",
     "./ro/treatments/year-end": "./src/ro/treatments/year-end.ts",
+    "./ro/treatments/deferrals": "./src/ro/treatments/deferrals.ts",
     "./ro/payroll/sick-leave": "./src/ro/payroll/sick-leave.ts",
     "./ro/annual/s1005": "./src/ro/annual/s1005.ts",
     "./ro/annual/s1005-accounts": "./src/ro/annual/s1005-accounts.ts",

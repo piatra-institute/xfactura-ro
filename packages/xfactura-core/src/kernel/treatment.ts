@@ -1,7 +1,15 @@
 import type { ZodType } from 'zod';
 import type { RuleContext } from '../rules';
 import type { LocalDate } from '../time';
-import type { Effect, Issue, JsonValue, LineSpec, OpenItemKind, TaxEntrySpec } from './effect';
+import type {
+  Effect,
+  Issue,
+  JsonValue,
+  LineSpec,
+  OpenItemKind,
+  ScheduleRow,
+  TaxEntrySpec,
+} from './effect';
 import type { OpenItemInfo } from './validate';
 
 /**
@@ -77,6 +85,8 @@ export interface OpenItemQuery {
   kind?: OpenItemKind;
   /** Only items whose balance is not zero. */
   openOnly?: boolean;
+  /** With each item's schedule (its latest version), when it has one. */
+  schedules?: boolean;
   /** Only items held in a currency other than RON. */
   foreign?: boolean;
 }
@@ -121,6 +131,9 @@ export interface OpenItemState extends OpenItemInfo {
   dueDate: LocalDate | null;
   /** Number of posted lines; the item's version in the read-set. */
   movements: number;
+  /** The item's schedule, loaded on request: its method and rows, in due order. Rows are written
+   * with the entry that creates them and never change, so the item's version covers them. */
+  schedule?: { method: string; rows: readonly ScheduleRow[] };
 }
 
 export interface EvidenceRecord {

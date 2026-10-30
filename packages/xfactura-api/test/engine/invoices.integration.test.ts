@@ -334,6 +334,168 @@ describe('invoices on several accounts and rates', () => {
   });
 });
 
+describe('advances (419, 4091, 4092)', () => {
+  const advanceOf = async (s: Scenario, kind: string) => {
+    const [item] = await s.invoke<{ id: string; balance: string }[]>(s.owner, 'openItems.list', {
+      kind,
+    });
+    return item!;
+  };
+
+  test('an advance invoiced to a customer, then deducted on the final invoice by a negative line', async () => {
+    const s = await company();
+    const advance = await importInvoice(s, {
+      number: 'V-AV1',
+      direction: 'sale',
+      date: '2026-10-05',
+      net: '3000.00',
+      tax: '630.00',
+      gross: '3630.00',
+    });
+    const advanced = await s.propose('invoices.recognize', {
+      documentId: advance.id,
+      allocations: [{ account: '419', vat: 'S-21', amount: '3000.00' }],
+    });
+    expect(lines(advanced)).toEqual(['D 4111 3630.00', 'C 419 3000.00', 'C 4427 630.00']);
+    await s.post(await s.approve(advanced));
+    const held = await advanceOf(s, 'advance.received');
+
+    // The final invoice: 10,000 lei of services less the 3,000-lei advance, VAT on 7,000.
+    const final = await importInvoice(s, {
+      number: 'V-FIN',
+      direction: 'sale',
+      date: '2026-10-25',
+      net: '7000.00',
+      tax: '1470.00',
+      gross: '8470.00',
+      lines: [
+        { rate: '21', net: '10000.00' },
+        { rate: '21', net: '-3000.00', name: 'Avans încasat (V-AV1)' },
+      ],
+    });
+    const propose = (amount: string, advance?: string) =>
+      s.propose('invoices.recognize', {
+        documentId: final.id,
+        allocations: [
+          { account: '704', vat: 'S-21', amount: '10000.00' },
+          { account: '419', vat: 'S-21', amount, ...(advance ? { advance } : {}) },
+        ],
+      });
+    const settled = await propose('-3000.00', held.id);
+    expect(lines(settled)).toEqual([
+      'D 4111 8470.00',
+      'C 704 10000.00',
+      'C 419 -3000.00',
+      'C 4427 1470.00',
+    ]);
+    await s.post(await s.approve(settled));
+    expect(await balance(s, '419')).toEqual({ debit: '0.00', credit: '0.00' });
+    expect(await balance(s, '4427')).toEqual({ debit: '0.00', credit: '2100.00' });
+    expect(await balance(s, '704')).toEqual({ debit: '0.00', credit: '10000.00' });
+  });
+
+  test('a supplier’s advance on 4092, settled by the final invoice', async () => {
+    const s = await company();
+    const advance = await importInvoice(s, {
+      number: 'F-AV1',
+      date: '2026-10-05',
+      net: '1000.00',
+      tax: '210.00',
+      gross: '1210.00',
+    });
+    const paid = await s.propose('invoices.recognize', {
+      documentId: advance.id,
+      allocations: [{ account: '4092', vat: 'S-21', amount: '1000.00' }],
+    });
+    expect(lines(paid)).toEqual(['D 4092 1000.00', 'D 4426 210.00', 'C 401 1210.00']);
+    await s.post(await s.approve(paid));
+    const held = await advanceOf(s, 'advance.paid');
+    const final = await importInvoice(s, {
+      number: 'F-FIN',
+      date: '2026-10-25',
+      net: '4000.00',
+      tax: '840.00',
+      gross: '4840.00',
+      lines: [
+        { rate: '21', net: '5000.00' },
+        { rate: '21', net: '-1000.00' },
+      ],
+    });
+    const settled = await s.propose('invoices.recognize', {
+      documentId: final.id,
+      allocations: [
+        { account: '628', vat: 'S-21', amount: '5000.00' },
+        { account: '4092', vat: 'S-21', amount: '-1000.00', advance: held.id },
+      ],
+    });
+    expect(lines(settled)).toEqual([
+      'D 628 5000.00',
+      'D 4092 -1000.00',
+      'D 4426 840.00',
+      'C 401 4840.00',
+    ]);
+    await s.post(await s.approve(settled));
+    expect(await balance(s, '4092')).toEqual({ debit: '0.00', credit: '0.00' });
+  });
+
+  test('a negative part settles a named advance of the partner, and never more than it holds', async () => {
+    const s = await company();
+    const advance = await importInvoice(s, {
+      number: 'V-AV2',
+      direction: 'sale',
+      date: '2026-10-05',
+      net: '3000.00',
+      tax: '630.00',
+      gross: '3630.00',
+    });
+    await s.book('invoices.recognize', {
+      documentId: advance.id,
+      allocations: [{ account: '419', vat: 'S-21', amount: '3000.00' }],
+    });
+    const held = await advanceOf(s, 'advance.received');
+    let attempt = 0;
+    const final = async (allocations: unknown[]) => {
+      const document = await importInvoice(s, {
+        number: `V-FIN-${++attempt}`,
+        direction: 'sale',
+        date: '2026-10-25',
+        net: '6000.00',
+        tax: '1260.00',
+        gross: '7260.00',
+        lines: [
+          { rate: '21', net: '10000.00' },
+          { rate: '21', net: '-4000.00' },
+        ],
+      });
+      return s.propose('invoices.recognize', { documentId: document.id, allocations });
+    };
+    // Without the advance it settles.
+    expect(
+      codes(
+        await final([
+          { account: '704', vat: 'S-21', amount: '10000.00' },
+          { account: '419', vat: 'S-21', amount: '-4000.00' },
+        ]),
+      ),
+    ).toEqual(['ADVANCE']);
+    // A negative amount anywhere but an advance.
+    expect(
+      codes(
+        await final([
+          { account: '704', vat: 'S-21', amount: '10000.00' },
+          { account: '708', vat: 'S-21', amount: '-4000.00' },
+        ]),
+      ),
+    ).toEqual(['ALLOCATION']);
+    // 4,000 lei against an advance of 3,000: the advance would turn over.
+    const over = await final([
+      { account: '704', vat: 'S-21', amount: '10000.00' },
+      { account: '419', vat: 'S-21', amount: '-4000.00', advance: held.id },
+    ]);
+    expect(codes(over)).toEqual(['OPEN_ITEM_REVERSED']);
+  });
+});
+
 describe('credit notes', () => {
   async function saleWithCredit(s: Scenario, amounts: { net: string; tax: string; gross: string }) {
     const original = await importInvoice(s, { number: 'V-10', direction: 'sale' });
