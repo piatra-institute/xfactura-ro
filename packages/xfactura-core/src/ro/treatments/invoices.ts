@@ -13,6 +13,7 @@ import {
   type Treatment,
 } from '../../kernel';
 import {
+  allocate,
   convertMinor,
   formatMoney,
   isSupportedCurrency,
@@ -207,32 +208,144 @@ function amountsFor(invoice: Invoice, loaded: Loaded, rules: RuleContext, taxPoi
   };
 }
 
+const amountPattern = /^(0|[1-9]\d{0,15})(\.\d{1,2})?$/;
+
 export const recognitionInput = z
   .object({
     documentId: z.uuid(),
-    /** Revenue account (70x) for a sale; expense account (6xx) for a purchase. */
-    account: z.string().regex(accountCodePattern),
-    /** Input VAT deduction for a purchase; ignored for a sale. */
+    /** Every line on one account: revenue (70x) for a sale; expense (6xx) or fixed asset (20x,
+     * 21x) for a purchase. */
+    account: z.string().regex(accountCodePattern).optional(),
+    /** Input VAT deduction for a purchase booked on one account; ignored for a sale. */
     deduction: z.enum(['full', 'none']).default('full'),
+    /**
+     * Instead of `account`: each VAT category's taxable amount (BT-116) split over accounts, in
+     * the document's currency. A category is `S-<rate>` or `O`, and its parts add up to its
+     * amount; allowances and charges are inside it.
+     */
+    allocations: z
+      .array(
+        z
+          .object({
+            account: z.string().regex(accountCodePattern),
+            vat: z.string().regex(/^(S-\d{1,2}(\.\d{1,2})?|O)$/),
+            amount: z.string().regex(amountPattern),
+            /** Input VAT deduction of this part, for a purchase. */
+            deduction: z.enum(['full', 'none']).default('full'),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(50)
+      .optional(),
     /** When the service was provided, if it differs from the tax point. */
     serviceDate: z
       .string()
       .refine((value): boolean => isLocalDate(value))
       .optional(),
   })
-  .strict();
+  .strict()
+  .refine((input) => (input.account === undefined) !== (input.allocations === undefined), {
+    message: 'Indicați fie contul, fie repartizarea pe conturi (allocations).',
+  });
 export type RecognitionInput = z.infer<typeof recognitionInput>;
 
+const categoryKey = (category: string, rate: string | null) =>
+  category === 'S' ? `S-${rate}` : category;
+
 /**
- * Recognizes a domestic RON service invoice: revenue and output VAT for a sale, expense and
+ * The VAT categories of a document as its breakdown (BG-23) gives them, each at a rate the rule
+ * register has in force on the tax-point date, with the company's registration on that date.
+ */
+function vatCategories(invoice: Invoice, loaded: Loaded, rules: RuleContext, taxPoint: LocalDate) {
+  const issues: Issue[] = [];
+  const body = invoice.body;
+  const status = profileAt(loaded, 'vat.status', taxPoint);
+  if (!status)
+    issues.push(
+      block('DETERMINATION_MISSING', 'Înregistrați regimul TVA al companiei pentru această dată.'),
+    );
+  const categories = body.taxes.map((tax) => ({
+    key: categoryKey(tax.category, tax.rate),
+    category: tax.category,
+    rate: tax.rate,
+    base: tax.base,
+    tax: tax.tax,
+  }));
+  const keys = new Set(categories.map((item) => item.key));
+  if (
+    keys.size !== categories.length ||
+    body.lines.some((line) => !keys.has(categoryKey(line.vatCategory, line.vatRate)))
+  )
+    issues.push(
+      block('TAX_BREAKDOWN', 'Liniile documentului nu corespund defalcării TVA pe categorii.'),
+    );
+  let standard: string | undefined;
+  let reduced: string | null | undefined;
+  for (const tax of categories) {
+    if (tax.category === 'S') {
+      standard ??= rules.param<string>('ro.vat.rate', 'vat_chargeability_date', taxPoint, {
+        category: 'S',
+      });
+      if (tax.rate !== standard) {
+        if (reduced === undefined) {
+          reduced = null;
+          try {
+            reduced = rules.param<string>(
+              'ro.vat.rate.reduced',
+              'vat_chargeability_date',
+              taxPoint,
+            );
+          } catch (error) {
+            if (!(error instanceof RuleGapError)) throw error;
+          }
+        }
+        // The reduced rate applies only to the supplies of art. 291 alin. (2): the reviewer
+        // confirms.
+        issues.push(
+          tax.rate === reduced
+            ? warn(
+                'REDUCED_RATE',
+                `Cota redusă de ${reduced}% se aplică doar livrărilor și prestărilor de la art. 291 alin. (2) din Codul fiscal: confirmați că operațiunea se încadrează.`,
+              )
+            : block(
+                'VAT_RATE',
+                `Cota din document (${tax.rate}%) diferă de cotele în vigoare (${standard}%${reduced ? `, ${reduced}%` : ''}).`,
+              ),
+        );
+      }
+    } else if (tax.category !== 'O' || ron(tax.tax) !== 0n)
+      issues.push(
+        block('TAX_CATEGORY', `Categoria TVA ${tax.category} cere un tratament separat.`),
+      );
+    if (invoice.direction === 'sale') {
+      if (status === 'normal_vat' && tax.category !== 'S')
+        issues.push(
+          block('TAX_CATEGORY', 'Un plătitor de TVA facturează această operațiune cu TVA.'),
+        );
+      if (status === 'non_vat' && tax.category !== 'O')
+        issues.push(block('TAX_CATEGORY', 'Un neplătitor de TVA nu colectează TVA.'));
+    }
+  }
+  return { issues, status, categories };
+}
+
+/** `total` split by `weights`, or zeros when the weights are all zero. */
+const share = (total: bigint, weights: readonly bigint[]) =>
+  weights.some((weight) => weight !== 0n) ? allocate(total, weights) : weights.map(() => 0n);
+
+/**
+ * Recognizes a domestic invoice: revenue and output VAT for a sale, expense or fixed asset and
  * deductible (or non-deductible) VAT for a purchase, with the receivable or payable as an open
- * item of the counterparty. VAT comes from the rule register at the tax-point date.
+ * item of the counterparty. VAT comes from the rule register at the tax-point date. An invoice
+ * goes on one account, or its VAT categories are split over accounts (`allocations`), each part
+ * with its own deduction: one tax entry per category, one line per part.
  */
 export const invoiceRecognition: Treatment<RecognitionInput> = {
   id: 'invoices.recognize',
   version: 1,
   description:
-    'Factură de servicii în lei: venit sau cheltuială, TVA și creanța sau datoria față de partener.',
+    'Factură internă: venit, cheltuială sau imobilizare pe unul sau mai multe conturi, TVA pe cote și creanța sau datoria față de partener.',
   input: recognitionInput,
   agent: true,
   subject: (input) => `document:${input.documentId}`,
@@ -251,32 +364,81 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
     const { body, direction } = invoice;
     const taxPoint = date(body.taxPointDate ?? body.issueDate);
     const taxPeriod = vatPeriodOf(loaded, taxPoint);
-    const vat = vatFor(invoice, loaded, rules, taxPoint);
+    const vat = vatCategories(invoice, loaded, rules, taxPoint);
     const amounts = amountsFor(invoice, loaded, rules, taxPoint);
     const issues = [...vat.issues, ...amounts.issues];
-    if (
-      direction === 'sale' ? !input.account.startsWith('70') : !purchaseAccount.test(input.account)
-    )
+    const parts = input.allocations ?? [
+      ...vat.categories.map((item) => ({
+        account: input.account!,
+        vat: item.key,
+        amount: item.base,
+        deduction: input.deduction,
+      })),
+    ];
+    parts.forEach((part, index) => {
+      if (
+        direction === 'sale' ? !part.account.startsWith('70') : !purchaseAccount.test(part.account)
+      )
+        issues.push(
+          block(
+            'ACCOUNT',
+            direction === 'sale'
+              ? 'Folosiți un cont de venituri (70x).'
+              : 'Folosiți un cont de cheltuieli (6xx) sau de imobilizări (20x, 21x).',
+            input.allocations ? `allocations.${index}.account` : 'account',
+          ),
+        );
+    });
+    const assets = parts.filter((part) => fixedAsset.test(part.account)).length;
+    if (direction === 'purchase' && assets && assets !== parts.length)
       issues.push(
         block(
-          'ACCOUNT',
-          direction === 'sale'
-            ? 'Folosiți un cont de venituri (70x).'
-            : 'Folosiți un cont de cheltuieli (6xx) sau de imobilizări (20x, 21x).',
-          'account',
+          'ACCOUNT_MIX',
+          'Imobilizările și cheltuielile de pe aceeași factură cer furnizori diferiți (404 și 401): înregistrați-le separat.',
+          'allocations',
         ),
       );
+    const docMinor = (value: string) => parseMoney(value, body.currency);
+    if (input.allocations) {
+      for (const part of input.allocations)
+        if (!vat.categories.some((item) => item.key === part.vat))
+          issues.push(
+            block('ALLOCATION', `Factura nu are categoria TVA ${part.vat}.`, 'allocations'),
+          );
+      for (const item of vat.categories) {
+        const allocated = input.allocations
+          .filter((part) => part.vat === item.key)
+          .reduce((sum, part) => sum + docMinor(part.amount), 0n);
+        if (allocated !== docMinor(item.base))
+          issues.push(
+            block(
+              'ALLOCATION',
+              `Baza categoriei ${item.key} este ${item.base} ${body.currency}; repartizarea însumează ${formatMoney(allocated, body.currency)}.`,
+              'allocations',
+            ),
+          );
+      }
+    }
     if (ron(body.totals.prepaid) !== 0n)
       issues.push(block('PREPAID', 'Facturile cu avans dedus cer tratamentul de avansuri.'));
     if (body.totals.rounding !== '0.00')
       issues.push(block('ROUNDING', 'Rotunjirea sumei de plată cere un tratament separat.'));
     if (
       direction === 'purchase' &&
-      input.deduction === 'full' &&
       vat.status === 'non_vat' &&
-      vat.category === 'S'
+      parts.some(
+        (part) =>
+          part.deduction === 'full' &&
+          vat.categories.find((item) => item.key === part.vat)?.category === 'S',
+      )
     )
-      issues.push(block('DEDUCTION', 'Un neplătitor de TVA nu deduce TVA.', 'deduction'));
+      issues.push(
+        block(
+          'DEDUCTION',
+          'Un neplătitor de TVA nu deduce TVA.',
+          input.allocations ? 'allocations' : 'deduction',
+        ),
+      );
     if (input.serviceDate && input.serviceDate.slice(0, 7) !== taxPoint.slice(0, 7))
       issues.push(
         warn(
@@ -287,10 +449,40 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
     if (!invoice.record.partyId) issues.push(block('PARTY', 'Documentul nu are partener.'));
     if (issues.some((issue) => issue.severity === 'block')) return { effect: null, issues };
 
-    const { net, tax, gross, base, fx } = amounts as Required<Omit<typeof amounts, 'fx'>> &
+    const { tax, gross, fx } = amounts as Required<Omit<typeof amounts, 'fx'>> &
       Pick<typeof amounts, 'fx'>;
     const partyId = invoice.record.partyId!;
-    const code = vat.category === 'S' ? `S-${vat.rate}` : 'O';
+    // Each part's net and each category's base and VAT in lei: a foreign-currency document's
+    // totals (amountsFor) split in proportion to its own amounts, so they add up exactly.
+    const categories = vat.categories.map((item) => ({
+      ...item,
+      minorBase: docMinor(item.base),
+      minorTax: docMinor(item.tax),
+    }));
+    const partMinor = parts.map((part) => docMinor(part.amount));
+    const partNet = fx ? share(amounts.net!, partMinor) : partMinor;
+    const categoryTax = fx
+      ? share(
+          tax,
+          categories.map((item) => item.minorTax),
+        )
+      : categories.map((item) => item.minorTax);
+    const categoryBase = fx
+      ? share(
+          amounts.base!,
+          categories.map((item) => item.minorBase),
+        )
+      : categories.map((item) => item.minorBase);
+    // Within a category, its VAT split over the parts in proportion to their net amounts: the
+    // deductible share goes to 4426, the rest into the expense.
+    const partTax = parts.map(() => 0n);
+    const partTaxMinor = parts.map(() => 0n);
+    categories.forEach((item, c) => {
+      const members = parts.flatMap((part, p) => (part.vat === item.key ? [p] : []));
+      const weights = members.map((p) => partMinor[p]!);
+      share(categoryTax[c]!, weights).forEach((value, i) => (partTax[members[i]!] = value));
+      share(item.minorTax, weights).forEach((value, i) => (partTaxMinor[members[i]!] = value));
+    });
     // Every line of a foreign-currency document records its currency amount and rate.
     const line = (spec: LineSpec, minor?: bigint, rate?: FxRate): LineSpec =>
       fx && minor !== undefined
@@ -304,107 +496,93 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
             },
           }
         : spec;
-    const vatCurrency = fx
-      ? {
-          currency: {
-            code: fx.code,
-            baseMinor: fx.net,
-            taxMinor: fx.tax,
-            rateId: fx.vat.id,
-            rate: fx.vat.rate,
-          },
-        }
-      : {};
     const lines: LineSpec[] = [];
     const taxEntries: TaxEntrySpec[] = [];
     const item = {
       ref: 'counterparty',
       kind: direction === 'sale' ? ('receivable' as const) : ('payable' as const),
       // Suppliers of fixed assets are held on 404, other suppliers on 401.
-      controlAccount:
-        direction === 'sale' ? '4111' : fixedAsset.test(input.account) ? '404' : '401',
+      controlAccount: direction === 'sale' ? '4111' : assets ? '404' : '401',
       partyId,
       currency: fx?.code ?? LEDGER_CURRENCY,
       normalSide: direction === 'sale' ? ('D' as const) : ('C' as const),
       mayReverse: false,
       documentId: invoice.record.id,
     };
-    if (direction === 'sale') {
+    const deductible = parts.map((part) => direction === 'purchase' && part.deduction === 'full');
+    if (direction === 'sale')
       lines.push(
         line({ account: '4111', side: 'D', bani: gross, openItem: item.ref, partyId }, fx?.gross),
       );
-      lines.push(line({ account: input.account, side: 'C', bani: net }, fx?.net));
-      if (tax !== 0n) {
-        lines.push(line({ account: '4427', side: 'C', bani: tax }, fx?.tax, fx?.vat));
-        taxEntries.push(
-          vatEntry(
-            invoice,
-            {
-              baseBani: base,
-              taxBani: tax,
-              deductibleBani: 0n,
-              ledgerBani: tax,
-              line: 2,
-              taxPoint,
-              taxPeriod,
-              ...vatCurrency,
-            },
-            code,
-          ),
-        );
-      }
-    } else if (input.deduction === 'full' || tax === 0n) {
-      lines.push(line({ account: input.account, side: 'D', bani: net }, fx?.net));
-      if (tax !== 0n) {
-        lines.push(line({ account: '4426', side: 'D', bani: tax }, fx?.tax, fx?.vat));
-        taxEntries.push(
-          vatEntry(
-            invoice,
-            {
-              baseBani: base,
-              taxBani: tax,
-              deductibleBani: tax,
-              ledgerBani: tax,
-              line: 1,
-              taxPoint,
-              taxPeriod,
-              ...vatCurrency,
-            },
-            code,
-          ),
-        );
-      }
+    parts.forEach((part, p) => {
+      const kept = direction === 'purchase' && !deductible[p];
       lines.push(
         line(
-          { account: item.controlAccount, side: 'C', bani: gross, openItem: item.ref, partyId },
-          fx?.gross,
+          {
+            account: part.account,
+            side: direction === 'sale' ? 'C' : 'D',
+            bani: partNet[p]! + (kept ? partTax[p]! : 0n),
+          },
+          partMinor[p]! + (kept ? partTaxMinor[p]! : 0n),
         ),
       );
-    } else {
-      // Non-deductible VAT is part of the expense; the tax entry records it without a VAT line.
-      lines.push(line({ account: input.account, side: 'D', bani: gross }, fx?.gross));
-      lines.push(
-        line(
-          { account: item.controlAccount, side: 'C', bani: gross, openItem: item.ref, partyId },
-          fx?.gross,
-        ),
+    });
+    categories.forEach((category, c) => {
+      if (categoryTax[c] === 0n) return;
+      const members = parts.flatMap((part, p) => (part.vat === category.key ? [p] : []));
+      const deducted = members.reduce((sum, p) => sum + (deductible[p] ? partTax[p]! : 0n), 0n);
+      const deductedMinor = members.reduce(
+        (sum, p) => sum + (deductible[p] ? partTaxMinor[p]! : 0n),
+        0n,
       );
-      taxEntries.push(
-        vatEntry(
+      const ledger = direction === 'sale' ? categoryTax[c]! : deducted;
+      if (ledger !== 0n)
+        lines.push(
+          line(
+            {
+              account: direction === 'sale' ? '4427' : '4426',
+              side: direction === 'sale' ? 'C' : 'D',
+              bani: ledger,
+            },
+            direction === 'sale' ? category.minorTax : deductedMinor,
+            fx?.vat,
+          ),
+        );
+      taxEntries.push({
+        ...vatEntry(
           invoice,
           {
-            baseBani: base,
-            taxBani: tax,
-            deductibleBani: 0n,
-            ledgerBani: 0n,
+            baseBani: categoryBase[c]!,
+            taxBani: categoryTax[c]!,
+            deductibleBani: direction === 'sale' ? 0n : deducted,
+            ledgerBani: ledger,
+            ...(ledger !== 0n ? { line: lines.length - 1 } : {}),
             taxPoint,
             taxPeriod,
-            ...vatCurrency,
+            ...(fx
+              ? {
+                  currency: {
+                    code: fx.code,
+                    baseMinor: category.minorBase,
+                    taxMinor: category.minorTax,
+                    rateId: fx.vat.id,
+                    rate: fx.vat.rate,
+                  },
+                }
+              : {}),
           },
-          code,
+          category.category === 'S' ? `S-${category.rate}` : 'O',
+        ),
+        key: categories.length === 1 ? 'vat' : `vat:${category.key}`,
+      });
+    });
+    if (direction === 'purchase')
+      lines.push(
+        line(
+          { account: item.controlAccount, side: 'C', bani: gross, openItem: item.ref, partyId },
+          fx?.gross,
         ),
       );
-    }
     const effect: Effect = {
       schema: 'effect@1',
       date: date(body.issueDate),
@@ -421,9 +599,18 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
           : `${body.number} din ${body.issueDate}: bază ${body.totals.net}, TVA ${body.totals.tax}, total ${body.totals.gross} lei.`,
         details: {
           taxPoint,
-          category: vat.category,
-          rate: vat.rate,
-          deduction: direction === 'purchase' ? input.deduction : null,
+          ...(categories.length === 1
+            ? { category: categories[0]!.category, rate: categories[0]!.rate }
+            : { categories: categories.map((category) => category.key) }),
+          deduction: direction === 'purchase' && !input.allocations ? input.deduction : null,
+          ...(input.allocations
+            ? {
+                allocations: parts.map(
+                  (part) =>
+                    `${part.account} ${part.vat} ${part.amount}${direction === 'purchase' ? ` ${part.deduction}` : ''}`,
+                ),
+              }
+            : {}),
         },
       },
     };

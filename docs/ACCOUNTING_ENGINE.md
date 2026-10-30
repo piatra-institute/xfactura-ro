@@ -63,11 +63,14 @@ The chart is OMFP 1802/2014 as published, plus the accounts later orders added, 
 - Tax entries are mirrored in the reversal's own tax period and linked to their origin.
 - A reversal that would push a settled open item past zero is refused.
 
-### `invoices.recognize`: domestic service invoice
+### `invoices.recognize`: domestic invoice
 
 - **Document:** an imported invoice (380) issued or received by the company.
-- **Input:** a revenue (70x) or expense (6xx) account, or for a purchase a fixed-asset account (20x, 21x), whose supplier is then held on 404; for purchases, deduction `full` or `none`; optionally the service date.
-- **Supported:** one VAT category and rate on every line; category S at the register's standard rate for the tax point (`taxPointDate`, else issue date) or at its reduced rate, or category O. The reduced rate applies only to the supplies of Codul fiscal art. 291 alin. (2), so it is an `ack` warning (`REDUCED_RATE`): the reviewer confirms the operation qualifies.
+- **Input:**
+  - **One account** for every line: a revenue (70x) or expense (6xx) account, or for a purchase a fixed-asset account (20x, 21x), whose supplier is then held on 404. For purchases, the deduction is `full` or `none`.
+  - **Or `allocations`:** each VAT category's taxable amount (`S-21`, `S-11`, `O`) split over accounts in the document's currency, each part with its own deduction. A category's parts must add up to its amount; allowances and charges are inside it.
+  - Optionally the service date.
+- **Supported:** the categories of the document's VAT breakdown, each S at the register's standard rate for the tax point (`taxPointDate`, else issue date) or at its reduced rate, or O. The reduced rate applies only to the supplies of Codul fiscal art. 291 alin. (2), so it is an `ack` warning (`REDUCED_RATE`): the reviewer confirms the operation qualifies.
   - The company's `vat.status` on the tax-point date must be recorded.
   - A VAT payer's sale must use S; a non-payer's sale must use O.
   - A non-payer cannot deduct: a purchase with VAT books it into the expense and records a non-deductible tax entry.
@@ -79,12 +82,15 @@ The chart is OMFP 1802/2014 as published, plus the accounts later orders added, 
   | Purchase, deductible | Dr expense net / Dr 4426 VAT / Cr 401 gross |
   | Purchase, non-deductible | Dr expense gross / Cr 401 gross |
 
-  The receivable or payable is an open item of the counterparty, linked to the document.
+  - There is one line per part, one VAT line per category, and one tax entry per category (key `vat`, or `vat:S-21` and so on when there are several).
+  - A non-deductible part takes its share of its category's VAT.
+  - In foreign currency, the document's totals in lei are split in proportion to its own amounts, so the totals stay exact.
+  - The receivable or payable is an open item of the counterparty, linked to the document.
 - **Foreign currency:**
   - The document must state its VAT in lei (BT-6 = RON, BT-111).
   - Revenue or expense converts at the accounting rate on the issue date. VAT in lei is the stated BT-111 amount, and a difference from the BNR VAT rate is an `ack` warning.
   - Every line records its currency amount and rate, and the open item is held in the document currency.
-- **Refused:** several VAT categories or rates, other categories (AE, E, K, Z, …), prepaid amounts (advances), payable rounding and missing rates.
+- **Refused:** allocations that don't cover each category exactly, fixed assets and expenses on one invoice (404 and 401), other categories (AE, E, K, Z, …), prepaid amounts (advances), payable rounding and missing rates.
 - **Warned (`ack`):** a service date in another month than the tax point, which may need a regularization.
 
 ### `invoices.credit`: credit note against the original
@@ -173,7 +179,11 @@ The chart is OMFP 1802/2014 as published, plus the accounts later orders added, 
     - F20 and F30 chapter XIX are read from the year's turnover of classes 6 and 7, without the closing journal. Classes 6 and 7 still open, an unmapped balance (VAT accounts left unsettled, for example) or a 121 that differs from the result are problems.
     - The previous year's column comes from the engine's previous year when it keeps one. Otherwise its balance sheet comes from the opening entries, and the preparer gives its F20 and F30 chapter XIX rows as filed.
     - From the preparer: the identification the books don't hold, and the row of each account the form spreads over several rows (debts due within a year or later). A balance belonging to several rows is kept on analytic accounts.
-    - Still given rather than read: F20 rd. 01a, F30's other chapters, and F40 (it needs the asset register).
+    - F40 (fixed assets) is read from the same balances as F10, so it ties to F10 to the leu, plus the year's movements: increases are the debits of the fixed-asset accounts, reductions their credits, and the same for depreciation and impairment, as OMF 2036/2025 defines the columns.
+      - Each row takes the accounts the order's detailed balance sheet gives the same category (for example 213 + 223, and 214 + 224).
+      - The part of a reduction that was scrapping is given by the preparer.
+      - 267 and the accounts the microentities' balance sheet doesn't list are problems.
+    - Still given rather than read: F20 rd. 01a and F30's other chapters.
 - Not built yet: the physical inventory and its differences, provisions, and the statements of small and larger entities.
 
 ### `fx.revalue`: month-end revaluation
@@ -297,9 +307,9 @@ Services across the border are not in it (D390 and D300 report them); acquisitio
 - **VAT codes** go on the base line, through a mapping table (`saft/tax-codes.ts`) in which each row quotes ANAF's description. A code with no certain SAF-T code (`O`, 9%, 5%, partial deduction) is a problem, never a guess.
 - **Validation:** ANAF's D406 validator runs only in ANAF's SAF-T kit, pinned separately (`anaf-saft`). The engine sends D406 there and every other return to the general DUKIntegrator, and records which kit ran.
 - **The validator doesn't check** that entries balance, the control totals, or currency conversion. Those are the writer's own checks (`checkD406`).
-- **Not produced yet:** payroll TaxTypes (their lines carry 000), the annual assets file, the stock file, invoices with document-level allowances, and invoices without UBL XML.
+- **Not produced yet:** payroll TaxTypes (their lines carry 000), the annual assets file, the stock file, invoices with document-level allowances, invoices split over accounts or rates (`D406_SPLIT`), and invoices without UBL XML.
 
-**Obligations calendar.** `obligations.calendar` lists the returns whose periods end in a range of months, with their deadlines and where each one stands: due, overdue, prepared, authorized, filed, accepted, rejected, or blocked when its deadline isn't sourced.
+**Obligations calendar.** `obligations.calendar` lists the returns whose periods end in a range of months, with their deadlines and where each one stands: due, overdue, prepared, authorized, filed, accepted, rejected, or blocked when its deadline isn't sourced for the period.
 - **Which returns apply** is read from the profile and the books:
   - VAT payers file D300 and D394 for each VAT period, and D390 for the months with services across the EU border.
   - Every company files D406, for each VAT period, or quarterly outside VAT. The date from which its category reports isn't checked.
@@ -314,7 +324,8 @@ Services across the border are not in it (D390 and D300 report them); acquisitio
 - **How deadlines move:**
   - A deadline on a non-working day moves to the next working day: the procedure code's art. 75 refers to the Civil Procedure Code, whose art. 181 is still to be read.
   - What falls due on 25 December is due on 21 December, or the working day before it (procedure code art. 155(2), read in ANAF's 2019 consolidation; the text in force couldn't be read).
-- **D394 is a gap:** ANAF publishes only the initial OPANAF 3769/2015, whose 25th was later changed.
+- **D394:** the 30th of the next month, or the end of February for January (OPANAF 3769/2015 art. 8 as rewritten by OPANAF 2328/2016; later changes to that article aren't checked).
+- **Past the horizon:** the deadlines were read through 2026, so later periods show as blocked.
 
 Steps are recorded in order, and the database allows only the documented transitions; a tax period is locked only in the name of an authorized return of that tax and period. A rectification is a new return that supersedes the earlier one.
 
@@ -387,16 +398,15 @@ A close records closing balances per account and currency and joins a hash chain
   - advances (4092/419);
   - purchase accruals (408);
   - unbilled sales (418);
-  - invoice-level allowances and charges as separate treatments;
   - CSV bank statements.
 - **Not built yet:**
   - verification of the Ministry's signature; B2C identification;
-  - VAT categories other than S/O, TVA la încasare, domestic reverse charge, goods across the border, pro-rata; D394 for TVA la încasare, simplified invoices and receipts; reading the P300 file;
+  - VAT categories other than S/O, TVA la încasare, domestic reverse charge, goods across the border, pro-rata, partial deduction (for example 50% for cars); credit notes on several rates; D394 for TVA la încasare, simplified invoices and receipts; reading the P300 file;
   - payroll beyond salary in money, vouchers, annual leave and sick leave for ordinary illness (other indemnity codes, benefits in kind), and corrections of a posted month;
-  - asset disposal, revaluation and fiscal depreciation; leasing and loans;
+  - asset revaluation and fiscal depreciation; leasing and loans;
+  - cash register, receipts and treasury advances (542), expense reports;
   - stock;
-  - profit tax, interim dividends, dividends to non-residents, and the D100 and D205 returns;
-  - year-end close;
-  - statutory register layouts and official filings.
+  - profit tax, interim dividends, dividends to non-residents;
+  - the statements of small and larger entities; physical inventory and provisions.
 
 [ROADMAP.md](ROADMAP.md) orders this work.

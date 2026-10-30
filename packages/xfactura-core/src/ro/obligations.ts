@@ -18,8 +18,9 @@ export const obligationKinds = [
 export type ObligationKind = (typeof obligationKinds)[number];
 
 export const deadlineSchema = z.discriminatedUnion('kind', [
-  /** A day of the month after the period's last month. */
-  z.object({ kind: z.literal('next_month_day'), day: z.number().int().min(1).max(28) }).strict(),
+  /** A day of the month after the period's last month, or that month's last day when it is
+   * shorter (D394's 30th is the 28th or 29th in February). */
+  z.object({ kind: z.literal('next_month_day'), day: z.number().int().min(1).max(31) }).strict(),
   /** The last calendar day of the month after the period. */
   z.object({ kind: z.literal('next_month_last_day') }).strict(),
   /** The last day of February of the year after the period's. */
@@ -79,14 +80,16 @@ const version = (
 });
 const day25 = { kind: 'next_month_day', day: 25 };
 
-/**
- * The deadlines as the texts read on 30.10.2026 give them, from the first period this engine
- * reports. D394's is a gap: ANAF publishes only the order's initial text (the 25th), which was
- * amended since, so the deadline in force is to be sourced.
- */
+/** The deadlines as the texts read on 30.10.2026 give them. */
 export const obligationVersions: ParameterVersion[] = [
   version('ro.deadline.D300', day25, ['ANAF/Cod-fiscal-consolidat:art.323(1)'], '2016-01-01'),
   version('ro.deadline.D390', day25, ['OPANAF591/2016:anexa4.pct.1.1'], '2016-01-01'),
+  version(
+    'ro.deadline.D394',
+    { kind: 'next_month_day', day: 30 },
+    ['OPANAF2328/2016:art.I'],
+    '2016-07-01',
+  ),
   version('ro.deadline.D112', day25, ['ANAF/Cod-fiscal-consolidat:art.147(1)'], '2016-01-01'),
   version(
     'ro.deadline.D100.micro',
@@ -130,6 +133,7 @@ export const obligationVersions: ParameterVersion[] = [
   ),
 ];
 
+const pad = (value: number) => String(value).padStart(2, '0');
 const lastDayOf = (year: number, month: number) =>
   new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10) as LocalDate;
 const isWorkingDay = (day: LocalDate) => workingDaysBetween(day, day).length === 1;
@@ -170,7 +174,10 @@ export function obligationDue(
   const next = month === 12 ? { year: year + 1, month: 1 } : { year, month: month + 1 };
   const nominal =
     deadline.kind === 'next_month_day'
-      ? (`${next.year}-${String(next.month).padStart(2, '0')}-${String(deadline.day).padStart(2, '0')}` as LocalDate)
+      ? ([
+          lastDayOf(next.year, next.month),
+          `${next.year}-${pad(next.month)}-${pad(deadline.day)}`,
+        ].sort()[0]! as LocalDate)
       : deadline.kind === 'next_month_last_day'
         ? lastDayOf(next.year, next.month)
         : deadline.kind === 'february_last_day'

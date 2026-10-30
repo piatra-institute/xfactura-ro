@@ -246,6 +246,24 @@ export const legalSources: readonly LegalSource[] = [
     ],
   },
   {
+    id: 'OPANAF2328/2016',
+    kind: 'act',
+    title:
+      'Ordinul președintelui ANAF nr. 2.328/2016 pentru modificarea Ordinului președintelui ANAF nr. 3.769/2015 (termenul declarației 394)',
+    issuer: 'ANAF',
+    publication: 'Monitorul Oficial nr. 601 din 8 august 2016',
+    urls: ['https://static.anaf.ro/static/10/Anaf/legislatie/OPANAF_2328_2016.pdf'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/legislatie/OPANAF_2328_2016.pdf',
+        sha256: 'fab9323458cd5e7f60b5812a5381bd871885e333de9dc4f032a970b11608e71e',
+        retrievedOn: '2026-10-30',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
     id: 'OPANAF1783/2021',
     kind: 'act',
     title:
@@ -1034,13 +1052,13 @@ export const clauses: readonly Clause[] = [
       'Declarația recapitulativă (390) se depune lunar până la data de 25 inclusiv a lunii următoare celei în care a intervenit exigibilitatea.',
   },
   {
-    id: 'OPANAF3769/2015:anexa2.pct.2',
-    source: 'OPANAF3769/2015',
+    id: 'OPANAF2328/2016:art.I',
+    source: 'OPANAF2328/2016',
     locator:
-      'anexa nr. 2 pct. 2 (textul inițial: 25 a lunii următoare; termenul în vigoare a fost modificat și nu este sursat)',
-    status: 'pending',
+      'art. I (art. 8 din Ordinul nr. 3.769/2015; modificările ulterioare ale art. 8 nu sunt verificate)',
+    status: 'located',
     summary:
-      'Termenul de depunere al declarației informative 394 față de încheierea perioadei de raportare.',
+      'Declarația 394 se depune până în data de 30 inclusiv a lunii următoare încheierii perioadei de raportare; pentru ianuarie, până la 28, respectiv 29 februarie.',
   },
   {
     id: 'OPANAF1783/2021:anexa4.pct.1-4',

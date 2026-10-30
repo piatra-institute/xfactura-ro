@@ -54,6 +54,7 @@
     "./ro/payroll/sick-leave": "./src/ro/payroll/sick-leave.ts",
     "./ro/annual/s1005": "./src/ro/annual/s1005.ts",
     "./ro/annual/s1005-accounts": "./src/ro/annual/s1005-accounts.ts",
+    "./ro/annual/s1005-assets": "./src/ro/annual/s1005-assets.ts",
     "./ro/saft/d406": "./src/ro/saft/d406.ts",
     "./ro/saft/accounts": "./src/ro/saft/accounts.ts",
     "./ro/saft/tax-codes": "./src/ro/saft/tax-codes.ts"

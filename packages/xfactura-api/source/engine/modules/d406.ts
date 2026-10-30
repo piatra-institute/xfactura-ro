@@ -761,6 +761,16 @@ export function d406Declaration(
             'D406_TAX_LINE',
             `Nota ${header.number} are TVA, dar nicio linie pe care să se raporteze baza.`,
           );
+        // An invoice split over accounts or rates has several base lines; which part of its VAT
+        // and of its UBL lines each one carries is not attributed yet.
+        if (
+          vat.length &&
+          own.filter((line) => !line.openItemId && !/^442/.test(line.account)).length > 1
+        )
+          problem(
+            'D406_SPLIT',
+            `Nota ${header.number} este repartizată pe mai multe conturi sau cote: liniile ei nu se raportează încă în D406.`,
+          );
         const transactionLines = own.map((line, index): D406Line => {
           const currency =
             line.currency && line.currencyMinor

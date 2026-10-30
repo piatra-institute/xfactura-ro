@@ -43,21 +43,22 @@ describe('obligations calendar', () => {
       'D100 2026-09 2026-10-26 overdue',
       'D112 2026-09 2026-10-26 overdue',
       'D300 2026-09 2026-10-26 overdue',
+      'D394 2026-09 2026-10-30 due',
       // 31 October is a Saturday.
       'D406 2026-09 2026-11-02 due',
       'D112 2026-10 2026-11-25 due',
       'D300 2026-10 2026-11-25 due',
       // 30 November and 1 December are public holidays.
+      'D394 2026-10 2026-12-02 due',
       'D406 2026-10 2026-12-02 due',
       // Due on 25 December, so on 21 December.
       'D112 2026-11 2026-12-21 due',
       'D300 2026-11 2026-12-21 due',
+      'D394 2026-11 2026-12-30 due',
       'D406 2026-11 2026-12-31 due',
-      // D394's deadline in force is not sourced: blocked, never guessed.
-      'D394 2026-09 - blocked',
-      'D394 2026-10 - blocked',
-      'D394 2026-11 - blocked',
     ]);
+    // The deadlines were read through 2026: a later period is blocked, never guessed.
+    expect(await calendar('2027-01', '2027-01')).toContain('D300 2027-01 - blocked');
   });
 
   test('a company outside VAT files D406 quarterly, and its statements 150 days after the year', async () => {

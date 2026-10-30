@@ -58,8 +58,23 @@ describe('filing deadlines', () => {
     });
   });
 
-  test('an unsourced deadline is a gap, never a guess', () => {
-    expect(() => due('D394', '2026-10-01', '2026-10-31')).toThrow(RuleGapError);
+  test('D394 on the 30th, in February on its last day', () => {
+    // 30 November and 1 December 2026 are public holidays.
+    expect(due('D394', '2026-10-01', '2026-10-31')).toMatchObject({
+      nominal: '2026-11-30',
+      due: '2026-12-02',
+    });
+    // 28 February 2026 is a Saturday; 2024 is a leap year.
+    expect(due('D394', '2026-01-01', '2026-01-31')).toMatchObject({
+      nominal: '2026-02-28',
+      due: '2026-03-02',
+    });
+    expect(due('D394', '2024-01-01', '2024-01-31').nominal).toBe('2024-02-29');
+    expect(due('D394', '2026-07-01', '2026-09-30').due).toBe('2026-10-30');
+  });
+
+  test('a deadline before its source is a gap, never a guess', () => {
+    expect(() => due('D394', '2016-01-01', '2016-01-31')).toThrow(RuleGapError);
     expect(() => due('D406', '2021-10-01', '2021-12-31')).toThrow(RuleGapError);
   });
 

@@ -15,8 +15,10 @@ import {
   type S1005F10Row,
   type S1005F20Row,
   type S1005F30Row,
+  type S1005F40Row,
   type S1005PreparerQuality,
 } from 'xfactura-core/ro/annual/s1005';
+import { s1005F40FromLedger } from 'xfactura-core/ro/annual/s1005-assets';
 import {
   s1005Columns,
   s1005Formulas,
@@ -115,12 +117,12 @@ export const s1005Options = z
           .strict(),
       )
       .default({}),
-    /** The rows the books do not hold yet: F20 rd. 01a, F30 outside chapter XIX (employees,
-     * receivables and debts by kind, …) and F40 (from the asset register). */
-    informative: z
-      .object({ F20: rows.optional(), F30: rows.optional(), F40: rows.optional() })
-      .strict()
-      .default({}),
+    /** The rows the books do not hold yet: F20 rd. 01a and F30 outside chapter XIX (employees,
+     * receivables and debts by kind, …). */
+    informative: z.object({ F20: rows.optional(), F30: rows.optional() }).strict().default({}),
+    /** F40 col. 4: the part of a row's reductions that is dismantling and scrapping, in lei,
+     * for each row with reductions. */
+    scrapped: z.record(z.string().regex(/^\d{2}$/), z.number().int().min(0).safe()).optional(),
     /** The previous year's F20 and F30 account rows as filed, when that year is not kept in the
      * engine (its balance sheet comes from the opening entries). */
     previous: z
@@ -208,6 +210,31 @@ async function turnover(
   return rows.map((row) => ({ account: row.account, debit: row.debit, credit: row.credit }));
 }
 
+/** The year's debits and credits by account, without the opening entries: F40's increases and
+ * reductions. */
+async function movements(
+  tx: Transaction,
+  companyId: string,
+  year: { from: string; to: string },
+): Promise<S1005LedgerEntry[]> {
+  const rows = await tx
+    .select({ account: lines.account, debit: debitSum, credit: creditSum })
+    .from(lines)
+    .innerJoin(entries, join)
+    .where(
+      and(
+        eq(lines.companyId, companyId),
+        gte(entries.date, year.from),
+        lte(entries.date, year.to),
+        sql`(substr(${lines.account}, 1, 1) = '2' OR substr(${lines.account}, 1, 3) IN ('409', '490'))`,
+        ne(entries.journalCode, 'DESCHIDERE'),
+      ),
+    )
+    .groupBy(lines.account)
+    .orderBy(asc(lines.account));
+  return rows.map((row) => ({ account: row.account, debit: row.debit, credit: row.credit }));
+}
+
 async function financialYear(tx: Transaction, companyId: string, end: string) {
   const [row] = await tx
     .select()
@@ -270,7 +297,7 @@ const toCells = (values: (number | null)[]): S1005Cells =>
 
 /** The informative rows as cells, refusing the rows the books give. */
 function informativeRows<Row extends string>(
-  form: 'F20' | 'F30' | 'F40',
+  form: 'F20' | 'F30',
   given: Record<string, (number | null)[]> | undefined,
   problems: DeclarationProblem[],
 ) {
@@ -328,8 +355,10 @@ function withRows(ledger: S1005LedgerEntry[], choices: Options['rows']): S1005Le
  * account (F20) and F30 chapter XIX from the year's turnover of classes 6 and 7 without the
  * closing into 121. The previous year's column is the engine's previous financial year when it
  * keeps one; otherwise its balance sheet is the year's opening entries and its profit and loss
- * account the rows filed for it. The identification, the rows of accounts the form spreads over
- * several rows and the informative rows the books do not hold are the preparer's.
+ * account the rows filed for it. F40 comes from the same balances and the year's movements of the
+ * fixed-asset accounts. The identification, the rows of accounts the form spreads over several
+ * rows, the scrapped part of F40's reductions and the informative rows the books do not hold are
+ * the preparer's.
  */
 export function s1005Declaration(): DeclarationKind {
   return {
@@ -379,6 +408,8 @@ export function s1005Declaration(): DeclarationKind {
 
       // The previous year's column.
       let previous: Pick<S1005LedgerRows, 'F10' | 'F20' | 'F30'> | undefined;
+      // F10 col. 1 account by account, which F40's opening balances repeat.
+      let openingLei: S1005LedgerRows['closing'] = [];
       const before = await financialYear(tx, companyId, `${Number(year) - 1}-12-31`);
       const opening = await balances(tx, companyId, {
         from: current!.from,
@@ -395,6 +426,7 @@ export function s1005Declaration(): DeclarationKind {
         });
         problems.push(...ledgerProblems(rows, `Exercițiul ${Number(year) - 1}: `));
         previous = rows;
+        openingLei = rows.closing;
         if (options.previous)
           problems.push({
             code: 'S1005_PREVIOUS',
@@ -403,6 +435,7 @@ export function s1005Declaration(): DeclarationKind {
       } else if (opening.length) {
         const rows = s1005FromLedger({ closing: withRows(opening, options.rows), turnover: [] });
         problems.push(...ledgerProblems(rows, 'Soldurile de deschidere: '));
+        openingLei = rows.closing;
         if (!options.previous)
           problems.push({
             code: 'S1005_PREVIOUS',
@@ -429,8 +462,20 @@ export function s1005Declaration(): DeclarationKind {
       const informative = {
         F20: informativeRows<S1005F20Row>('F20', options.informative.F20, problems),
         F30: informativeRows<S1005F30Row>('F30', options.informative.F30, problems),
-        F40: informativeRows('F40', options.informative.F40, problems),
       };
+      const assets = s1005F40FromLedger({
+        opening: openingLei,
+        closing: books.closing,
+        movements: await movements(tx, companyId, current!),
+        ...(options.scrapped
+          ? { scrapped: options.scrapped as Partial<Record<S1005F40Row, number>> }
+          : {}),
+      });
+      problems.push(
+        ...assets.issues
+          .filter((issue) => issue.severity === 'error')
+          .map((issue) => ({ code: issue.code, message: issue.message })),
+      );
       if (problems.length) return fail();
 
       const [company] = await tx.select().from(companies).where(eq(companies.id, companyId));
@@ -457,7 +502,7 @@ export function s1005Declaration(): DeclarationKind {
         F10: columns.F10,
         F20: { ...columns.F20, ...informative.F20 },
         F30: { ...columns.F30, ...informative.F30 },
-        F40: informative.F40,
+        F40: assets.F40,
       };
       let completed: S1005;
       try {

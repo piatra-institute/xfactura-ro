@@ -213,6 +213,127 @@ describe('recognition', () => {
   });
 });
 
+describe('invoices on several accounts and rates', () => {
+  const mixed = {
+    number: 'F-MIX',
+    net: '1200.00',
+    tax: '232.00',
+    gross: '1432.00',
+    taxes: [
+      { rate: '21', net: '1000.00', tax: '210.00' },
+      { rate: '11', net: '200.00', tax: '22.00' },
+    ],
+  };
+  const vat = (proposal: ProposalView) =>
+    proposal.effect?.taxEntries.map(
+      (entry) =>
+        `${entry.key} ${entry.code} ${entry.base}/${entry.amount} deducted ${entry.deductible} line ${entry.line ?? '-'}`,
+    );
+
+  test('each VAT category split over accounts, each part with its own deduction', async () => {
+    const s = await company();
+    const document = await importInvoice(s, mixed);
+    const proposal = await s.propose('invoices.recognize', {
+      documentId: document.id,
+      allocations: [
+        { account: '628', vat: 'S-21', amount: '700.00' },
+        { account: '6022', vat: 'S-21', amount: '300.00' },
+        // Protocol at the reduced rate, its VAT not deducted.
+        { account: '623', vat: 'S-11', amount: '200.00', deduction: 'none' },
+      ],
+    });
+    expect(lines(proposal)).toEqual([
+      'D 628 700.00',
+      'D 6022 300.00',
+      'D 623 222.00',
+      'D 4426 210.00',
+      'C 401 1432.00',
+    ]);
+    expect(vat(proposal)).toEqual([
+      'vat:S-21 S-21 1000.00/210.00 deducted 210.00 line 3',
+      'vat:S-11 S-11 200.00/22.00 deducted 0.00 line -',
+    ]);
+    await s.post(await s.approve(proposal, s.reviewer, ['REDUCED_RATE']));
+    expect(await balance(s, '401')).toEqual({ debit: '0.00', credit: '1432.00' });
+  });
+
+  test('one account takes every category; a sale collects VAT by rate', async () => {
+    const s = await company();
+    const purchase = await importInvoice(s, mixed);
+    const single = await s.propose('invoices.recognize', {
+      documentId: purchase.id,
+      account: '628',
+    });
+    expect(lines(single)).toEqual([
+      'D 628 1000.00',
+      'D 628 200.00',
+      'D 4426 210.00',
+      'D 4426 22.00',
+      'C 401 1432.00',
+    ]);
+    const sale = await importInvoice(s, { ...mixed, number: 'V-MIX', direction: 'sale' });
+    const recognized = await s.propose('invoices.recognize', {
+      documentId: sale.id,
+      account: '704',
+    });
+    expect(lines(recognized)).toEqual([
+      'D 4111 1432.00',
+      'C 704 1000.00',
+      'C 704 200.00',
+      'C 4427 210.00',
+      'C 4427 22.00',
+    ]);
+    expect(vat(recognized)).toEqual([
+      'vat:S-21 S-21 1000.00/210.00 deducted 0.00 line 3',
+      'vat:S-11 S-11 200.00/22.00 deducted 0.00 line 4',
+    ]);
+  });
+
+  test('allocations must cover each category exactly, and keep assets apart from expenses', async () => {
+    const s = await company();
+    let attempt = 0;
+    const propose = async (allocations: unknown[]) => {
+      const document = await importInvoice(s, { ...mixed, number: `F-MIX-${++attempt}` });
+      return s.propose('invoices.recognize', { documentId: document.id, allocations });
+    };
+    expect(
+      codes(
+        await propose([
+          { account: '628', vat: 'S-21', amount: '900.00' },
+          { account: '623', vat: 'S-11', amount: '200.00' },
+        ]),
+      ),
+    ).toEqual(['REDUCED_RATE', 'ALLOCATION']);
+    expect(
+      codes(
+        await propose([
+          { account: '628', vat: 'S-21', amount: '1000.00' },
+          { account: '623', vat: 'S-19', amount: '200.00' },
+        ]),
+      ),
+    ).toEqual(['REDUCED_RATE', 'ALLOCATION', 'ALLOCATION']);
+    expect(
+      codes(
+        await propose([
+          { account: '2131', vat: 'S-21', amount: '1000.00' },
+          { account: '623', vat: 'S-11', amount: '200.00' },
+        ]),
+      ),
+    ).toEqual(['REDUCED_RATE', 'ACCOUNT_MIX']);
+    expect(
+      (
+        await s.refused(
+          s.propose('invoices.recognize', {
+            documentId: (await importInvoice(s, { ...mixed, number: 'F-MIX-BOTH' })).id,
+            account: '628',
+            allocations: [{ account: '628', vat: 'S-21', amount: '1000.00' }],
+          }),
+        )
+      )?.code,
+    ).toBeDefined();
+  });
+});
+
 describe('credit notes', () => {
   async function saleWithCredit(s: Scenario, amounts: { net: string; tax: string; gross: string }) {
     const original = await importInvoice(s, { number: 'V-10', direction: 'sale' });

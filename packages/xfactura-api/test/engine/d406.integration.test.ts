@@ -528,6 +528,34 @@ describe('D406 from the books', () => {
     ).toContain('STALE');
   });
 
+  test('refuses an invoice split over accounts or rates rather than misattribute its lines', async () => {
+    const { s, document, prepare } = await september();
+    const split = await document({
+      number: 'F-MIX',
+      counterparty: '26000039',
+      date: '2026-09-12',
+      net: '1200.00',
+      tax: '232.00',
+      gross: '1432.00',
+      taxes: [
+        { rate: '21', net: '1000.00', tax: '210.00' },
+        { rate: '11', net: '200.00', tax: '22.00' },
+      ],
+    });
+    const proposal = await s.propose('invoices.recognize', {
+      documentId: split.id,
+      allocations: [
+        { account: '628', vat: 'S-21', amount: '1000.00' },
+        { account: '6022', vat: 'S-11', amount: '200.00' },
+      ],
+    });
+    await s.post(await s.approve(proposal, s.reviewer, ['REDUCED_RATE']));
+    const refused = await s.refused(prepare('2026-09', { contact, accounts: { '623': '6231' } }));
+    expect(
+      (refused?.details as { problems: { code: string }[] }).problems.map((item) => item.code),
+    ).toEqual(['D406_SPLIT']);
+  });
+
   test('identifies an individual by the CNP kept sealed, which no problem shows', async () => {
     const { s, prepare } = await september();
     const person = await s.invoke<{ id: string }>(s.owner, 'parties.create', {

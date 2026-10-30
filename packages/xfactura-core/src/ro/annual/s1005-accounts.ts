@@ -370,6 +370,9 @@ export type S1005MappingIssue = {
 };
 
 export type S1005LedgerRows = {
+  /** Each closing balance in whole lei as F10 adds it, debit positive: the statement of fixed
+   * assets (F40) reads its balances from here so that it ties to F10 to the leu. */
+  closing: { account: string; lei: number }[];
   F10: Partial<Record<S1005F10Row, number>>;
   F20: Partial<Record<S1005F20Row, number>>;
   /** Chapter XIX's account rows. */
@@ -621,6 +624,7 @@ export function s1005FromLedger(year: S1005LedgerYear): S1005LedgerRows {
       Record<Row, number>
     >;
   return {
+    closing: closingEntries.map(({ entry, lei }) => ({ account: entry.account, lei: Number(lei) })),
     F10: toNumbers<S1005F10Row>(assign('F10', s1005F10Formulas, closingEntries, issues)),
     F20: toNumbers<S1005F20Row>(assign('F20', s1005F20Formulas, turnoverEntries, issues)),
     F30: toNumbers<S1005F30Row>(assign('F30', s1005F30Formulas, turnoverEntries, issues)),
