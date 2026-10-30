@@ -246,6 +246,42 @@ export const legalSources: readonly LegalSource[] = [
     ],
   },
   {
+    id: 'L70/2015',
+    kind: 'act',
+    title:
+      'Legea nr. 70/2015 pentru întărirea disciplinei financiare privind operațiunile de încasări și plăți în numerar (text publicat de ANAF, actualizat până la Legea nr. 344/2018; modificată ulterior prin Legea nr. 296/2023 și Legea nr. 239/2025)',
+    issuer: 'Parlamentul României',
+    publication: 'Monitorul Oficial nr. 242 din 9 aprilie 2015',
+    urls: ['https://static.anaf.ro/static/10/Anaf/legislatie/L_70_2015.pdf'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/legislatie/L_70_2015.pdf',
+        sha256: '772976efe067b1a229291afbe7a6a430c01bad29ad3c1f9edcb4ccf6cd6f5571',
+        retrievedOn: '2026-10-30',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
+    id: 'ANAF/Ploiesti-ghid-numerar-2026',
+    kind: 'official_document',
+    title:
+      'ANAF, DGRFP Ploiești: Disciplina financiară privind operațiunile de încasări și plăți în numerar (31 iulie 2026), după Legea nr. 70/2015 actualizată prin Legea nr. 239/2025; copie publicată de startupcafe.ro, documentul ANAF fiind listat la Asistență contribuabili – Ghiduri',
+    issuer: 'ANAF',
+    publication: null,
+    urls: ['https://startupcafe.ro/wp-content/uploads/2026/08/ghid-anaf-2026-plati-numerar.pdf'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://startupcafe.ro/wp-content/uploads/2026/08/ghid-anaf-2026-plati-numerar.pdf',
+        sha256: '3cee4bbfea9845a5522b89b87893af5468a4a020193ec86fbb05584790126a80',
+        retrievedOn: '2026-10-30',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
     id: 'OPANAF2328/2016',
     kind: 'act',
     title:
@@ -1050,6 +1086,39 @@ export const clauses: readonly Clause[] = [
     status: 'located',
     summary:
       'Declarația recapitulativă (390) se depune lunar până la data de 25 inclusiv a lunii următoare celei în care a intervenit exigibilitatea.',
+  },
+  {
+    id: 'L70/2015:art.3(1)',
+    source: 'L70/2015',
+    locator: 'art. 3 alin. (1) lit. a), c), e) (neschimbat în ghidul ANAF din 2026)',
+    status: 'located',
+    summary:
+      'Încasări în numerar de la persoane juridice și PFA de cel mult 5.000 lei pe zi de la o persoană; plăți de cel mult 5.000 lei pe zi către o persoană și 10.000 lei pe zi în total; plăți din avansuri spre decontare de cel mult 5.000 lei pe zi.',
+  },
+  {
+    id: 'L70/2015:art.4',
+    source: 'L70/2015',
+    locator: 'art. 4 alin. (1) și (4) (neschimbat în ghidul ANAF din 2026)',
+    status: 'located',
+    summary:
+      'Încasări de la și plăți către persoane fizice de cel mult 10.000 lei pe zi de la sau către o persoană; plățile fragmentate peste plafon sunt interzise.',
+  },
+  {
+    id: 'L70/2015:art.4^2',
+    source: 'L70/2015',
+    locator:
+      'art. 4^2 (introdus după 2018; textul legii nu este citit, ci ghidul ANAF care îl redă)',
+    status: 'pending',
+    summary:
+      'Numerarul din casierie nu poate depăși la sfârșitul zilei 50.000 lei, cu excepția sumelor pentru salarii și alte plăți către persoane fizice, timp de 3 zile lucrătoare.',
+  },
+  {
+    id: 'ANAF/Ploiesti-ghid-numerar-2026:plafoane',
+    source: 'ANAF/Ploiesti-ghid-numerar-2026',
+    locator: 'secțiunile „Plafoane zilnice maxime” și „Plafonul maxim de numerar în casierie”',
+    status: 'located',
+    summary:
+      'În 2026: 5.000 lei pe zi de la sau către un operator economic (10.000 lei pe zi plăți în total), 10.000 lei pe zi de la sau către o persoană fizică, 5.000 lei pe zi din avansuri spre decontare, 50.000 lei numerar în casierie la sfârșitul zilei.',
   },
   {
     id: 'OPANAF2328/2016:art.I',

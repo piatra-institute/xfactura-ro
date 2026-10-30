@@ -204,6 +204,14 @@ The chart is OMFP 1802/2014 as published, plus the accounts later orders added, 
   - With nothing due, it is refused (`NOTHING_TO_RELEASE`). A month with a release due does not close.
 - Schedules are read with their open items (an open-item query with `schedules`). They never change, so the item's version covers them.
 
+### `accruals.record` and `accruals.settle`: invoices not yet received or issued (408, 418)
+
+- **`accruals.record`** books a service in its month before its invoice: received from a supplier (Dr expense / Cr 408) or rendered to a customer (Dr 418 / Cr revenue).
+  - The amount is net of VAT and is an open item of the partner, justified by a contract, report or timesheet.
+  - The accrual keeps the account it was booked on as a one-row schedule.
+- **`accruals.settle`** reverses the accrual on the invoice's day, once the invoice is booked. The invoice must be the same partner's, and the open balance is reversed in full. The difference between the invoice and the estimate falls in the invoice's month.
+- **VAT:** it comes from the invoice, at the invoice's tax point. Putting VAT not yet chargeable on 4428 at the accrual is a policy the engine doesn't apply. Whether the reversal method suits the company is for the expert accountant to confirm.
+
 ### `fx.revalue`: month-end revaluation
 
 - **Input:** a month-end date and a round number (a later round re-revalues after further entries).
@@ -382,6 +390,20 @@ The engine talks to ANAF through an e-Factura port (upload, status, message list
   - its dates fall in the selected financial year.
 - Each reported movement is kept once per account by its bank identity; a repeat with a different amount or date is refused. Re-importing a file adds nothing.
 
+**Cash** (in lei, on 531x):
+- **`cash.record`** books a receipt or payment by its receipt (chitanță) or cash slip number. The number goes into the cash register.
+  - It can settle open items (an invoice paid in cash), open a new item for the person, or book to accounts without partners.
+  - New items: an advance for expenses paid on 542, other debtors on 461, an associate's money received on 4551, other creditors on 462.
+  - The cash desk can't go negative.
+- **Legea nr. 70/2015 limits** are cited parameters (`ro.cash.limits`) with the 2026 values of ANAF's guide.
+  - A movement above one person's daily limit (5,000 lei for a company or PFA, 10,000 lei for an individual) needs acknowledging, as does cash above 50,000 lei at the end of the day.
+  - Not checked yet: a day's several movements with the same person added up, and the total of 10,000 lei a day paid to companies. The law's exemptions (taxes, salaries, travel) are for the reviewer.
+- **`cash.expenseReport`** (decont) books the expenses paid out of an advance against 542.
+  - What is left comes back as a cash receipt settling the same advance.
+  - Spending more than the advance is refused: the difference is paid first, as a further advance.
+  - VAT on receipts isn't deducted yet.
+- **`cash.register`** produces the cash register for a date range: for each day, the balance carried over, every receipt and payment with its document, and the day's balance.
+
 ## Month close
 
 Closing is a reviewed action: `periods.close.request`, then `actions.approve` on the exact preview hash, then `actions.execute`. Execution re-runs the preview and requires it to be unchanged. The preview lists every finding:
@@ -413,15 +435,13 @@ A close records closing balances per account and currency and joins a hash chain
 ## Not implemented
 
 - **Removed in the kernel switchover, to be rebuilt as treatments:**
-  - purchase accruals (408);
-  - unbilled sales (418);
   - CSV bank statements.
 - **Not built yet:**
   - verification of the Ministry's signature; B2C identification;
   - VAT categories other than S/O, TVA la încasare, domestic reverse charge, goods across the border, pro-rata, partial deduction (for example 50% for cars); credit notes on several rates; D394 for TVA la încasare, simplified invoices and receipts; reading the P300 file;
   - payroll beyond salary in money, vouchers, annual leave and sick leave for ordinary illness (other indemnity codes, benefits in kind), and corrections of a posted month;
   - asset revaluation and fiscal depreciation; leasing and loans;
-  - cash register, receipts and treasury advances (542), expense reports;
+  - VAT deducted from receipts and simplified invoices; cash payments in D406's payments section;
   - stock;
   - profit tax, interim dividends, dividends to non-residents;
   - the statements of small and larger entities; physical inventory and provisions.

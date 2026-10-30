@@ -107,6 +107,7 @@ const journals: Readonly<Record<string, { description: string; type: string }>> 
   VANZARI: { description: 'Jurnal de vânzări', type: 'VANZARI' },
   CUMPARARI: { description: 'Jurnal de cumpărări', type: 'CUMPARARI' },
   BANCA: { description: 'Registru de bancă', type: 'BANCA' },
+  CASA: { description: 'Registru de casă', type: 'CASA' },
   DIVERSE: { description: 'Note contabile diverse', type: 'DIVERSE' },
   SALARII: { description: 'Jurnal de salarii', type: 'SALARII' },
   AMORTIZARE: { description: 'Note de calcul al amortizării', type: 'AMORTIZ' },

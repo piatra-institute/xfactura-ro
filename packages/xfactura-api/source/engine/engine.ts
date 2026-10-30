@@ -19,6 +19,13 @@ import { microTax } from 'xfactura-core/ro/treatments/micro-tax';
 import { assetDepreciation, assetDerecognition } from 'xfactura-core/ro/treatments/assets';
 import { legalReserve, resultClosing, resultTransfer } from 'xfactura-core/ro/treatments/year-end';
 import { deferral, deferralRelease } from 'xfactura-core/ro/treatments/deferrals';
+import { accrual, accrualSettlement } from 'xfactura-core/ro/treatments/accruals';
+import {
+  cashDefinitions,
+  cashMovement,
+  cashVersions,
+  expenseReport,
+} from 'xfactura-core/ro/treatments/cash';
 import { microDefinitions, microVersions } from 'xfactura-core/ro/micro';
 import { dividendDefinitions, dividendVersions } from 'xfactura-core/ro/dividends';
 import { etvaDefinitions, etvaVersions } from 'xfactura-core/ro/etva';
@@ -68,6 +75,7 @@ import { InvoicerImport, invoicerImportInput, invoicerImportView } from './modul
 import { VatRegisters, vatJournalInput, vatJournalView } from './modules/vat';
 import { bnrImportInput, fxChecks, FxRates, rateQuery } from './modules/fx';
 import { deferralChecks } from './modules/deferrals';
+import { cashRegister, cashRegisterInput } from './modules/cash';
 import { Exports } from './modules/exports';
 import { positionQuery, Positions } from './modules/positions';
 import {
@@ -193,6 +201,7 @@ export const defaultRegister = () =>
       ...fxDefinitions,
       ...procedureDefinitions,
       ...obligationDefinitions,
+      ...cashDefinitions,
       ...payrollDefinitions,
       ...sickLeaveDefinitions,
       ...microDefinitions,
@@ -204,6 +213,7 @@ export const defaultRegister = () =>
       ...fxVersions,
       ...procedureVersions,
       ...obligationVersions,
+      ...cashVersions,
       ...payrollVersions,
       ...sickLeaveVersions,
       ...microVersions,
@@ -288,6 +298,10 @@ export class Engine {
       resultTransfer,
       deferral,
       deferralRelease,
+      accrual,
+      accrualSettlement,
+      cashMovement,
+      expenseReport,
       ...(options.treatments ?? []),
     );
     this.actions = new Actions(this.commands);
@@ -986,6 +1000,18 @@ export class Engine {
         input: z.object({}).strict(),
         output: z.array(z.unknown()),
         run: (actor) => this.payroll.listRuns(actor),
+      }),
+      define({
+        id: 'cash.register',
+        description:
+          'Registrul de casă: pe zile, soldul reportat, încasările și plățile în numerar cu documentele lor și soldul zilei.',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: cashRegisterInput,
+        output: z.unknown(),
+        run: (actor, _, input) => cashRegister(this.commands, actor, input),
       }),
       define({
         id: 'obligations.calendar',
