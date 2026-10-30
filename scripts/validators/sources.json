@@ -86,13 +86,15 @@
       "into": "dist/lib"
     },
     {
-      "name": "anaf",
-      "description": "ANAF D406 (SAF-T) validators and PDF generator (16.02.2026)",
-      "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/D406_20260216.zip",
-      "sha256": "ec9c1d1970b7c0560fb76e8c65812f65c79098805f910ec1b6c2a890b8f5c8df",
-      "extract": ["D406/D406Validator.jar", "D406/D406TValidator.jar", "D406/D406Pdf.jar"],
-      "into": "dist/lib",
-      "flatten": true
+      "name": "anaf-saft",
+      "description": "ANAF's SAF-T kit (DUKIntegrator 1.4.18.3.3 with the D406 and D406T validators J2.2.8, 16.02.2026), in its own folder: its DUKIntegrator and dec libraries differ from the general kit's, and only they load the D406 validator; the Windows JREs are not extracted",
+      "url": "https://static.anaf.ro/static/10/Anaf/Informatii_R/duk_SAFT_an_luna_20260216.zip",
+      "sha256": "ad9ea1aca869c9a98094bf65de693a6eb3b45d3e0cf4580b64c973542d82ec06",
+      "extract": [
+        "duk_SAFT_an_luna/dist/DUKIntegrator.jar",
+        "duk_SAFT_an_luna/dist/lib/",
+        "duk_SAFT_an_luna/dist/config/"
+      ]
     },
     {
       "name": "anaf",

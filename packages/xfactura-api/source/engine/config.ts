@@ -32,6 +32,11 @@ export function config() {
     anafValidatorDir: resolve(
       process.env.ACCOUNTING_ANAF_VALIDATOR_DIR ?? resolve(root, '.validators/anaf/dist'),
     ),
+    /** ANAF's SAF-T kit, the only one that validates D406 (`anaf-saft` in the validator sources). */
+    anafSaftValidatorDir: resolve(
+      process.env.ACCOUNTING_ANAF_SAFT_VALIDATOR_DIR ??
+        resolve(root, '.validators/anaf-saft/duk_SAFT_an_luna/dist'),
+    ),
     /** The application registered on ANAF's portal for OAuth; without it the SPV stays offline.
      * ANAF's test environment unless ACCOUNTING_ANAF_ENVIRONMENT is `prod`. */
     anaf:

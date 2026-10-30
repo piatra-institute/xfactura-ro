@@ -81,6 +81,7 @@ Reviewed actions (month close and reopen) follow the same pattern: request, appr
 | `declarations.prepare`, `declarations.validate` | write | yes | — | Prepare a return from the books in ANAF's format; run ANAF's validator. |
 | `declarations.authorize.request` | review | no | — | Request the reviewed authorization that locks the tax period. |
 | `declarations.pdf`, `declarations.list` | write / read | yes | — | ANAF's PDF of an authorized return; returns with their steps. |
+| `obligations.calendar` | read | yes | — | The returns due for periods ending in a range of months: deadline (moved off non-working days) and status. |
 | `declarations.importSigned`, `declarations.recordOutcome` | write | yes | — | The signed PDF (must carry the authorized XML); ANAF's answer. |
 | `declarations.recordSubmission` | write | no | human | The filing, with ANAF's registration number. |
 | `declarations.reopen.request` | review | no | — | Reviewed reopening of a filed tax period for rectification. |

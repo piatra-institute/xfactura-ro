@@ -15,6 +15,7 @@ import {
   type PayIssue,
   type PayResult,
 } from 'xfactura-core/ro/payroll';
+import { d112PrescriptionPlaces } from 'xfactura-core/ro/declarations/d112';
 import {
   cappedIncome,
   sickIndemnity,
@@ -137,6 +138,16 @@ export const runInput = z
                       .strict()
                       .optional(),
                     hospitalized: z.boolean().default(false),
+                    /** Who prescribed it (D112's Nomenclator 8): the family doctor, a hospital,
+                     * an ambulatory specialist or the health insurance house. D112 needs it. */
+                    place: z.enum(d112PrescriptionPlaces).optional(),
+                    /** The diagnosis code written on the certificate, kept sealed: health data
+                     * only D112 opens. */
+                    diagnosis: z
+                      .string()
+                      .trim()
+                      .regex(/^[0-9A-Za-z]{1,3}$/)
+                      .optional(),
                   })
                   .strict(),
               )
@@ -231,10 +242,30 @@ export function birthDateOf(cnp: string): string | null {
 }
 
 type Terms = typeof employmentTerms.$inferSelect;
-/** A certificate as the run keeps it, with its episode for the next month's continuation. */
-type StoredSick = {
+/** A certificate as the run keeps it in the line's input: what was given, what was paid (bani as
+ * strings), and its episode for the next month's continuation. */
+export type StoredSick = {
   series: string;
   number: string;
+  code: string;
+  issued: string;
+  from: string;
+  to: string;
+  continues?: { series: string; number: string };
+  hospitalized: boolean;
+  place?: (typeof d112PrescriptionPlaces)[number];
+  /** The diagnosis code, sealed for the company. */
+  diagnosisSealed?: string;
+  /** Working days of the certificate, all suspended. */
+  days: number;
+  unpaidDays: number;
+  employerDays: number;
+  fundDays: number;
+  dailyAverage: string;
+  percent: string;
+  employer: string;
+  fund: string;
+  /** The episode up to this certificate: `days` calendar days ending on `to`. */
   episode: SickEpisode & {
     base: { income: string; days: number };
     days: number;
@@ -787,7 +818,7 @@ export class Payroll {
   ) {
     const issues: PayIssue[] = [];
     const items: PayInput['items'][number][] = [];
-    const record: Record<string, unknown>[] = [];
+    const record: StoredSick[] = [];
     let suspendedDays = 0;
     type Episode = SickEpisode & { base: SickBase; days: number; percent: string; to: string };
     const episodes = new Map<string, Episode>();
@@ -914,6 +945,11 @@ export class Payroll {
         from: given.from,
         to: given.to,
         ...(given.continues ? { continues: given.continues } : {}),
+        hospitalized: given.hospitalized,
+        ...(given.place ? { place: given.place } : {}),
+        ...(given.diagnosis
+          ? { diagnosisSealed: this.sealer.seal(companyId, given.diagnosis) }
+          : {}),
         days: result.days,
         unpaidDays: result.unpaidDays,
         employerDays: result.employerDays,

@@ -16,6 +16,7 @@ import {
   proposalVersions,
   proposals,
 } from '../db/schema';
+import type { Transaction } from '../db/database';
 import type { Actor, Commands } from './commands';
 import { lineSpec } from './state';
 
@@ -88,6 +89,106 @@ const sides = (net: bigint) => ({
   debit: ron(net > 0n ? net : 0n),
   credit: ron(net < 0n ? -net : 0n),
 });
+
+/** The justifying document of each entry: its type, number and date (OMFP 2634/2015 pct. 45). */
+export async function justifyingDocuments(
+  tx: Transaction,
+  companyId: string,
+  page: (typeof entries.$inferSelect)[],
+) {
+  const found = new Map<string, { type: string; number: string | null; date: string }>();
+  if (!page.length) return found;
+  const rows = await tx
+    .select({
+      entryId: entries.id,
+      treatmentId: proposals.treatmentId,
+      documentId: proposals.documentId,
+      input: proposalVersions.input,
+    })
+    .from(entries)
+    .innerJoin(
+      proposals,
+      and(eq(proposals.companyId, entries.companyId), eq(proposals.id, entries.proposalId)),
+    )
+    .innerJoin(
+      proposalVersions,
+      and(
+        eq(proposalVersions.companyId, entries.companyId),
+        eq(proposalVersions.proposalId, entries.proposalId),
+        eq(proposalVersions.version, entries.version),
+      ),
+    )
+    .where(
+      and(
+        eq(entries.companyId, companyId),
+        inArray(
+          entries.id,
+          page.map((entry) => entry.id),
+        ),
+      ),
+    );
+  // The recognized document: the proposal's, or the one its input names.
+  const documentOf = (row: (typeof rows)[number]) =>
+    row.documentId ??
+    ((JSON.parse(row.input) as { documentId?: unknown }).documentId as string | undefined) ??
+    null;
+  const documentIds = rows.flatMap((row) => {
+    const id = documentOf(row);
+    return id ? [id] : [];
+  });
+  const docs = new Map(
+    (documentIds.length
+      ? await tx
+          .select({ id: documents.id, kind: documents.kind, body: documents.body })
+          .from(documents)
+          .where(and(eq(documents.companyId, companyId), inArray(documents.id, documentIds)))
+      : []
+    ).map((row) => [row.id, row]),
+  );
+  const movementIds = rows.flatMap((row) =>
+    row.treatmentId === 'bank.settle'
+      ? [(JSON.parse(row.input) as { movementId: string }).movementId]
+      : [],
+  );
+  const movements = new Map(
+    (movementIds.length
+      ? await tx
+          .select()
+          .from(bankMovements)
+          .where(
+            and(eq(bankMovements.companyId, companyId), inArray(bankMovements.id, movementIds)),
+          )
+      : []
+    ).map((row) => [row.id, row]),
+  );
+  for (const row of rows) {
+    const entry = page.find((item) => item.id === row.entryId)!;
+    const input = JSON.parse(row.input) as Record<string, unknown>;
+    const documentId = documentOf(row);
+    const document = documentId ? docs.get(documentId) : undefined;
+    if (document) {
+      const body = invoiceDocumentSchema.safeParse(JSON.parse(document.body));
+      found.set(row.entryId, {
+        type: documentTypes[document.kind] ?? document.kind,
+        number: body.success ? body.data.number : null,
+        date: body.success ? body.data.issueDate : entry.date,
+      });
+      continue;
+    }
+    const movement =
+      row.treatmentId === 'bank.settle' ? movements.get(String(input.movementId)) : undefined;
+    found.set(row.entryId, {
+      type: documentTypes[row.treatmentId] ?? 'Notă contabilă',
+      number: movement
+        ? movement.reference
+        : typeof input.reference === 'string'
+          ? input.reference
+          : String(input.month ?? input.quarter ?? input.period ?? entry.number),
+      date: movement ? movement.bookingDate : entry.date,
+    });
+  }
+  return found;
+}
 
 export class Reports {
   constructor(private readonly commands: Commands) {}
@@ -215,106 +316,6 @@ export class Reports {
     });
   }
 
-  /** The justifying document of each entry: its type, number and date (OMFP 2634/2015 pct. 45). */
-  private async justifying(
-    tx: Parameters<Parameters<Commands['db']['read']>[0]>[0],
-    companyId: string,
-    page: (typeof entries.$inferSelect)[],
-  ) {
-    const found = new Map<string, { type: string; number: string | null; date: string }>();
-    if (!page.length) return found;
-    const rows = await tx
-      .select({
-        entryId: entries.id,
-        treatmentId: proposals.treatmentId,
-        documentId: proposals.documentId,
-        input: proposalVersions.input,
-      })
-      .from(entries)
-      .innerJoin(
-        proposals,
-        and(eq(proposals.companyId, entries.companyId), eq(proposals.id, entries.proposalId)),
-      )
-      .innerJoin(
-        proposalVersions,
-        and(
-          eq(proposalVersions.companyId, entries.companyId),
-          eq(proposalVersions.proposalId, entries.proposalId),
-          eq(proposalVersions.version, entries.version),
-        ),
-      )
-      .where(
-        and(
-          eq(entries.companyId, companyId),
-          inArray(
-            entries.id,
-            page.map((entry) => entry.id),
-          ),
-        ),
-      );
-    // The recognized document: the proposal's, or the one its input names.
-    const documentOf = (row: (typeof rows)[number]) =>
-      row.documentId ??
-      ((JSON.parse(row.input) as { documentId?: unknown }).documentId as string | undefined) ??
-      null;
-    const documentIds = rows.flatMap((row) => {
-      const id = documentOf(row);
-      return id ? [id] : [];
-    });
-    const docs = new Map(
-      (documentIds.length
-        ? await tx
-            .select({ id: documents.id, kind: documents.kind, body: documents.body })
-            .from(documents)
-            .where(and(eq(documents.companyId, companyId), inArray(documents.id, documentIds)))
-        : []
-      ).map((row) => [row.id, row]),
-    );
-    const movementIds = rows.flatMap((row) =>
-      row.treatmentId === 'bank.settle'
-        ? [(JSON.parse(row.input) as { movementId: string }).movementId]
-        : [],
-    );
-    const movements = new Map(
-      (movementIds.length
-        ? await tx
-            .select()
-            .from(bankMovements)
-            .where(
-              and(eq(bankMovements.companyId, companyId), inArray(bankMovements.id, movementIds)),
-            )
-        : []
-      ).map((row) => [row.id, row]),
-    );
-    for (const row of rows) {
-      const entry = page.find((item) => item.id === row.entryId)!;
-      const input = JSON.parse(row.input) as Record<string, unknown>;
-      const documentId = documentOf(row);
-      const document = documentId ? docs.get(documentId) : undefined;
-      if (document) {
-        const body = invoiceDocumentSchema.safeParse(JSON.parse(document.body));
-        found.set(row.entryId, {
-          type: documentTypes[document.kind] ?? document.kind,
-          number: body.success ? body.data.number : null,
-          date: body.success ? body.data.issueDate : entry.date,
-        });
-        continue;
-      }
-      const movement =
-        row.treatmentId === 'bank.settle' ? movements.get(String(input.movementId)) : undefined;
-      found.set(row.entryId, {
-        type: documentTypes[row.treatmentId] ?? 'Notă contabilă',
-        number: movement
-          ? movement.reference
-          : typeof input.reference === 'string'
-            ? input.reference
-            : String(input.month ?? input.quarter ?? input.period ?? entry.number),
-        date: movement ? movement.bookingDate : entry.date,
-      });
-    }
-    return found;
-  }
-
   /** Registrul-jurnal: entries in recording order, with their lines. */
   journal(actor: Actor, input: z.infer<typeof journalInput>) {
     return this.commands.read(actor, 'ledger.journal', async (tx) => {
@@ -347,7 +348,7 @@ export class Reports {
             )
             .orderBy(asc(lines.entryId), asc(lines.lineNo))
         : [];
-      const justifying = await this.justifying(tx, actor.companyId, page);
+      const justifying = await justifyingDocuments(tx, actor.companyId, page);
       return {
         entries: page.map((entry) => ({
           id: entry.id,

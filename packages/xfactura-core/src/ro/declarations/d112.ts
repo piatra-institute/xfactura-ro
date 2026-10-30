@@ -1,5 +1,7 @@
 import { DomainError } from '../../errors';
+import type { LocalDate } from '../../time';
 import { element, serializeXml } from '../../xml/write';
+import { workingDaysBetween } from '../calendar';
 import { counties } from '../geo';
 import { isValidCnp, isValidCui } from '../identifiers';
 import { minimumExemptions, type MinimumExemption } from '../payroll/calculate';
@@ -20,12 +22,26 @@ import { minimumExemptions, type MinimumExemption } from '../payroll/calculate';
  *
  * Covered: an employer owing CAM (datCAM 1), with no secondary establishments, whose insured are
  * employees under an individual employment contract (Nomenclator 5 types 1 and 51), at their main
- * job or elsewhere, in normal working conditions and without medical leave in the month: section A
- * of each insured person, with E1 or E2 and one E3. The structure lets the rest be absent: the
- * insured's sections B and D (several contracts, special or particular conditions, medical leave),
- * C (other categories), det1 (seconded employees) and E4 (redirected tax); the employer's C2, C3,
- * C5, D, E1–E4 (medical leave, work accidents, unemployment fund, construction), F1–F2 (secondary
+ * job or elsewhere, in normal working conditions: section A of each insured person, with E1 or E2
+ * and one E3. The structure lets the rest be absent: the insured's sections B for several
+ * contracts or special or particular conditions, C (other categories), det1 (seconded employees)
+ * and E4 (redirected tax); the employer's C3 (work accidents), C5 (construction), D and E1–E4
+ * (other categories, and the unemployed whom the employment agencies declare), F1–F2 (secondary
  * establishments) and G; non-residents and exemptions from income tax (asigScu).
+ *
+ * Medical leave for ordinary illness (indemnity code 01) is declared per certificate in the
+ * insured's section D, which may not stand beside section A (p. 36, 56): an employee with
+ * certificates is declared in section B instead, one contract in normal conditions, B1 (the
+ * contract), B2 (days worked and their CAS base), B3 (the indemnity days and bases) and B4 (the
+ * totals), then D; the employer adds C2 (the cases, days and amounts by payer and percentage, and
+ * what FNUASS owes back) and C1_12 (the indemnities' CAS base). The structure's E1–E4 of the
+ * employer are for the unemployed (C_1 = 2), declared by the employment agencies, not for
+ * employees. Other indemnity codes, section B with the minimum-contribution difference, and
+ * type 51 with medical leave are refused until sourced. Where the structure (p. 56–62) and the
+ * validator differ, this module follows the validator: D_14a, the employer's days, includes the
+ * day left unpaid under OUG 91/2025 (the validator caps the paid D_14 at 5, not D_14a); D_19 is
+ * D_17 / D_18 rounded to two decimals; the limit sum of section B counts the days worked (B4_1),
+ * not the days worked and the medical-leave days of p. 3.
  *
  * The minimum-wage relief is A_13S of insured type 51, with A_13C = A_13 + A_13S; C1_11 adds it
  * back. Meal and holiday vouchers are in the gross income E3_8 (E3_60, E3_10, E3_75), A_sal2 and
@@ -106,6 +122,59 @@ export type D112ObligationCode = (typeof d112Obligations)[number][0];
  */
 export type D112HealthFund = `RO-${string}` | 'OPSNAJ';
 
+/** D_9 (p. 59), Nomenclator 9 (p. 89): the indemnity codes declared, 01 (ordinary illness); the
+ * others have their own rules and payers and are refused. */
+export const d112SickCodes = ['01'] as const;
+
+/** D_10 (p. 59), Nomenclator 8 (p. 88–89), in its order: who prescribed the certificate. The
+ * validator also accepts 5, CEX, which the XSD's 1–4 does not. */
+export const d112PrescriptionPlaces = ['family_doctor', 'hospital', 'ambulatory', 'cas'] as const;
+export type D112PrescriptionPlace = (typeof d112PrescriptionPlaces)[number];
+
+/** D_28 (p. 61–62): the percentage of the base applied to a code 01 certificate (OUG 158/2005
+ * art. 17). */
+export const d112SickPercents = ['55', '65', '75'] as const;
+export type D112SickPercent = (typeof d112SickPercents)[number];
+
+/** One medical certificate of the month (asiguratD, p. 56–62), as the payroll paid it. */
+export type D112SickCertificate = {
+  /** D_1 (C(5)), D_2 (C(10)), p. 57: series and number, unique in the declaration. */
+  series: string;
+  number: string;
+  /** D_3, D_4 (p. 57): the certificate it continues, without interruption; Data_CMI (p. 57): the
+   * first day of the episode's initial certificate. D_20a and D_21a (p. 61), the differences
+   * recalculated for a continuation, are written as 0: the payroll does not recalculate. */
+  continues?: { series: string; number: string; initialFrom: string };
+  /** D_5 (p. 57–58): the day it was issued, YYYY-MM-DD. */
+  issued: string;
+  /** D_6, D_7 (p. 57–58): its first and last day, both within the reporting month. */
+  from: string;
+  to: string;
+  /** D_9 (p. 59) */
+  code: string;
+  /** D_10 (p. 59) */
+  place: D112PrescriptionPlace;
+  /** D_23 (p. 61): the diagnosis code written on the certificate, C(3). */
+  diagnosis: string;
+  /** D_9b (p. 59), and D_14a less D_14 (p. 60): the episode's first working day, left unpaid
+   * under OUG 91/2025 art. II for certificates issued from 1 February 2026 to 31 December 2027
+   * (p. 5). D_9a, patients of the national health programmes, is not written: the payroll does
+   * not know them. */
+  unpaidDays: number;
+  /** D_14 (p. 60): the working days the employer pays; D_15a, D_15: those FNUASS pays. D_16a and
+   * D_16 add them up. */
+  employerDays: number;
+  fundDays: number;
+  /** D_17, D_18 (p. 60): the insured income of the base, whole lei, and its working days; D_19
+   * (p. 60–61) is computed from them. */
+  base: { income: number; days: number };
+  /** D_28 (p. 61–62) */
+  percent: D112SickPercent;
+  /** D_20, D_21 (p. 61): the indemnity borne by the employer and by FNUASS, whole lei. */
+  employer: number;
+  fund: number;
+};
+
 export type D112Minimum =
   /** asigExc 1, with motivExc: the minimum contribution does not apply (art. 146 alin. (5^7)). */
   | { kind: 'exempt'; reason: MinimumExemption }
@@ -134,39 +203,41 @@ export type D112Insured = {
   unemploymentInsured: boolean;
   /** asigExc, motivExc; absent when the CAS base reaches the minimum wage for the days worked. */
   minimum?: D112Minimum;
-  /** asiguratA */
+  /** asiguratA, or with medical leave asiguratB1–B4 (in brackets) */
   employment: {
-    /** A_1 */
+    /** A_1 (B1_1) */
     type: D112InsuredType;
-    /** A_2 */
+    /** A_2 (B1_2) */
     pensioner: boolean;
-    /** A_3 */
+    /** A_3 (B1_3) */
     contract: D112ContractType;
-    /** A_4: the daily norm of the workplace, 6, 7 or 8 hours. */
+    /** A_4 (B1_4): the daily norm of the workplace, 6, 7 or 8 hours. */
     normHours: number;
-    /** A_sal1: the monthly gross base salary of the contract. */
+    /** A_sal1 (B1_sal1): the monthly gross base salary of the contract. */
     baseSalary: number;
-    /** A_6: hours actually worked in the month. */
+    /** A_6 (B1_6): hours actually worked in the month. */
     hoursWorked: number;
-    /** A_7: hours the contract was suspended in the month. */
+    /** A_7 (B1_7): hours the contract was suspended in the month, medical leave included. */
     hoursSuspended: number;
-    /** A_8: days worked. */
+    /** A_8 (B1_15, B2_2, B4_1): days worked. */
     daysWorked: number;
-    /** A_9: the base for the unemployment benefit; the structure gives no formula. */
+    /** A_9 (B1_10, B4_3): the base for the unemployment benefit; the structure gives no formula. */
     unemploymentBase: number;
-    /** A_5: the CAM base. */
+    /** A_5 (B1_5, B4_14): the CAM base. */
     camBase: number;
-    /** A_11: the CASS base, vouchers included. */
+    /** A_11 (B4_5): the CASS base, vouchers and sick pay included. */
     cassBase: number;
-    /** A_12: CASS withheld. */
+    /** A_12 (B4_6): CASS withheld. */
     cass: number;
-    /** A_13: the CAS base, without vouchers. */
+    /** A_13 (B4_7): the CAS base, without vouchers, sick pay included. */
     casBase: number;
-    /** A_14: CAS withheld. */
+    /** A_14 (B4_8): CAS withheld. */
     cas: number;
     /** A_13S: the minimum-wage amount left out of the bases (OUG 89/2025), type 51 only. */
     relief: number;
   };
+  /** asiguratD: the month's medical certificates; with any, the insured is declared in section B. */
+  sickLeave?: D112SickCertificate[];
   /** asiguratE3, and E1 or E2 */
   income: {
     /** E3_3: 1 at the main job (funcția de bază), 2 elsewhere. */
@@ -250,6 +321,52 @@ export type D112InsuredCalculation = {
   deduction: { total: bigint; supplementary: bigint };
   /** Timp_E3 */
   tax: bigint;
+  /** Section B's medical-leave fields, for an insured with certificates. */
+  sick?: D112SickCalculation;
+};
+
+/** The structure's computed fields of one certificate. */
+export type D112CertificateCalculation = {
+  /** D_14a: the employer's working days, the unpaid one included. */
+  employerDays: number;
+  /** D_16a, D_16: all the certificate's working days, and those paid. */
+  days: number;
+  paidDays: number;
+  /** D_19: D_17 / D_18 in bani, rounded half up as the validator checks it. */
+  dailyAverage: bigint;
+};
+
+export type D112SickCalculation = {
+  /** B3_1, B3_6: the paid working days of medical leave, ΣD_16. */
+  days: number;
+  /** B3_12, B3_13: ΣD_20, ΣD_21. */
+  employer: bigint;
+  fund: bigint;
+  /** B3_7: the CAS base of the indemnities, B3_12 + B3_13. */
+  base: bigint;
+  /** B2_5: the CAS base of the days worked, B4_7 − B3_7. */
+  workBase: bigint;
+  certificates: D112CertificateCalculation[];
+};
+
+/** One row of the employer's C2: cases (certificates), paid working days, of them the employer's
+ * and FNUASS's, and the amounts by payer. */
+export type D112MedicalLeaveRow = {
+  cases: number;
+  days: number;
+  employerDays: number;
+  fundDays: number;
+  employer: bigint;
+  fund: bigint;
+};
+
+export type D112MedicalLeave = {
+  /** Rd.1, C2_11–C2_16: temporary incapacity for work. */
+  incapacity: D112MedicalLeaveRow;
+  /** Rd.1.2–1.4, C2_121–C2_146: code 01 at 55, 65 and 75% of the base. */
+  byPercent: Record<D112SickPercent, D112MedicalLeaveRow>;
+  /** C2_T6, C2_10, C2_140: borne by FNUASS, which the employer paid and recovers. */
+  recoverable: bigint;
 };
 
 export type D112Obligation = {
@@ -284,6 +401,10 @@ export type D112Calculation = {
   grossSalaries: bigint;
   /** C1_11, C1_T1: income in normal working conditions. */
   normalIncome: bigint;
+  /** C1_12, C1_T2: the CAS base of the medical-leave indemnities, ΣB3_7. */
+  sickLeaveBase: bigint;
+  /** angajatorC2, with any medical certificate. */
+  medicalLeave?: D112MedicalLeave;
   /** C4_baza, C4_ct */
   cam: { base: bigint; amount: bigint };
   /** totalPlata_A */
@@ -433,6 +554,40 @@ function inputProblems(model: D112): Problem[] {
     for (const key of ['basic', 'young', 'children'] as const)
       amount(`${path}.income.deduction.${key}`, income.deduction[key], 'Deducerea personală');
     count(`${path}.income.dependents`, income.dependents, 'Numărul persoanelor în întreținere', 99);
+    const certificates = insured.sickLeave ?? [];
+    // B2_5 = B4_7 − B3_7: the CAS base holds the indemnities.
+    const indemnities = certificates.reduce((total, item) => total + item.employer + item.fund, 0);
+    if (isAmount(work.casBase) && work.casBase < indemnities)
+      problems.push({
+        code: 'D112_SICK_BASE',
+        path: `${path}.employment.casBase`,
+        message: `Baza CAS (${work.casBase}) nu cuprinde indemnizațiile de concediu medical (${indemnities}).`,
+      });
+    certificates.forEach((certificate, at) => {
+      const where = `${path}.sickLeave.${at}`;
+      for (const [key, label] of [
+        ['unpaidDays', 'Numărul zilelor neplătite'],
+        ['employerDays', 'Numărul zilelor plătite de angajator'],
+        ['fundDays', 'Numărul zilelor plătite din FNUASS'],
+      ] as const)
+        count(`${where}.${key}`, certificate[key], label, 31);
+      count(`${where}.base.days`, certificate.base.days, 'Numărul zilelor bazei de calcul', 999);
+      amount(`${where}.base.income`, certificate.base.income, 'Veniturile bazei de calcul');
+      amount(`${where}.employer`, certificate.employer, 'Indemnizația suportată de angajator');
+      amount(`${where}.fund`, certificate.fund, 'Indemnizația suportată din FNUASS');
+      if (!(d112SickPercents as readonly string[]).includes(certificate.percent))
+        problems.push({
+          code: 'D112_SICK_PERCENT',
+          path: `${where}.percent`,
+          message: 'Procentul aplicat bazei de calcul este 55, 65 sau 75.',
+        });
+      if (!(d112PrescriptionPlaces as readonly string[]).includes(certificate.place))
+        problems.push({
+          code: 'D112_SICK_PLACE',
+          path: `${where}.place`,
+          message: `Locul de prescriere ${certificate.place} nu există în Nomenclatorul 8.`,
+        });
+    });
     if (!minimum) return;
     if (minimum.kind === 'due')
       amount(`${path}.minimum.base`, minimum.base, 'Suma limită de calcul');
@@ -447,18 +602,46 @@ function inputProblems(model: D112): Problem[] {
   return problems;
 }
 
-const sum = <T>(items: readonly T[], value: (item: T) => bigint) =>
-  items.reduce((total, item) => total + value(item), 0n);
+const sum = <T>(items: readonly T[], value: (item: T, index: number) => bigint) =>
+  items.reduce((total, item, index) => total + value(item, index), 0n);
 const big = (value: number) => BigInt(value);
+
+/** `numerator / denominator`, rounded half up. */
+const halfUp = (numerator: bigint, denominator: bigint) =>
+  (2n * numerator + denominator) / (2n * denominator);
+
+function sickCalculation(insured: D112Insured): D112SickCalculation | undefined {
+  const certificates = insured.sickLeave ?? [];
+  if (!certificates.length) return undefined;
+  const employer = sum(certificates, (certificate) => big(certificate.employer));
+  const fund = sum(certificates, (certificate) => big(certificate.fund));
+  return {
+    days: certificates.reduce((days, item) => days + item.employerDays + item.fundDays, 0),
+    employer,
+    fund,
+    base: employer + fund,
+    workBase: big(insured.employment.casBase) - employer - fund,
+    certificates: certificates.map((certificate) => ({
+      employerDays: certificate.unpaidDays + certificate.employerDays,
+      days: certificate.unpaidDays + certificate.employerDays + certificate.fundDays,
+      paidDays: certificate.employerDays + certificate.fundDays,
+      dailyAverage: certificate.base.days
+        ? halfUp(big(certificate.base.income) * 100n, big(certificate.base.days))
+        : 0n,
+    })),
+  };
+}
 
 function insuredCalculation(insured: D112Insured, index: number): D112InsuredCalculation {
   const { employment: work, income, minimum } = insured;
   const benefits = big(income.mealVouchers) + big(income.holidayVouchers);
+  const sick = sickCalculation(insured);
   let limit = { casBase: 0n, cas: 0n, cassBase: 0n, cass: 0n };
   if (minimum?.kind === 'due') {
     const base = big(minimum.base);
-    const casBase = big(work.casBase) < base ? base : 0n;
-    const cassBase = big(work.cassBase) < base ? base : 0n;
+    // Section B compares the base of the days worked, B2_5, for both (B4_7P, B4_5P).
+    const casBase = (sick?.workBase ?? big(work.casBase)) < base ? base : 0n;
+    const cassBase = (sick?.workBase ?? big(work.cassBase)) < base ? base : 0n;
     limit = {
       casBase,
       cas: contribution(casBase, casRate),
@@ -481,7 +664,36 @@ function insuredCalculation(insured: D112Insured, index: number): D112InsuredCal
     contributions: big(work.cas) + big(work.cass),
     deduction: { total: big(income.deduction.basic) + supplementary, supplementary },
     tax: big(income.tax),
+    ...(sick ? { sick } : {}),
   };
+}
+
+const emptyRow = (): D112MedicalLeaveRow => ({
+  cases: 0,
+  days: 0,
+  employerDays: 0,
+  fundDays: 0,
+  employer: 0n,
+  fund: 0n,
+});
+
+/** angajatorC2 (p. 15–22) from the certificates: every code 01 certificate is a case of Rd.1 and
+ * of the row of its percentage; nothing is recalculated for continuations (Rd.1.5). */
+function medicalLeave(people: readonly D112Insured[]): D112MedicalLeave | undefined {
+  const certificates = people.flatMap((person) => person.sickLeave ?? []);
+  if (!certificates.length) return undefined;
+  const incapacity = emptyRow();
+  const byPercent = { '55': emptyRow(), '65': emptyRow(), '75': emptyRow() };
+  for (const certificate of certificates)
+    for (const row of [incapacity, byPercent[certificate.percent]]) {
+      row.cases += 1;
+      row.days += certificate.employerDays + certificate.fundDays;
+      row.employerDays += certificate.employerDays;
+      row.fundDays += certificate.fundDays;
+      row.employer += big(certificate.employer);
+      row.fund += big(certificate.fund);
+    }
+  return { incapacity, byPercent, recoverable: incapacity.fund };
 }
 
 /**
@@ -520,6 +732,7 @@ export function calculateD112(model: D112): D112Calculation {
   );
   const unemploymentBase = (person: D112Insured) =>
     person.unemploymentInsured && !person.employment.pensioner;
+  const leave = medicalLeave(people);
   return {
     namespace,
     workingDays: workingDaysByMonth[model.period.month]!,
@@ -535,10 +748,15 @@ export function calculateD112(model: D112): D112Calculation {
       people.filter((person) => person.sickLeaveInsured),
       (person) => big(person.employment.cassBase),
     ),
+    // C1_11 = ΣA_13 + ΣB2_5 + ΣA_13S (p. 13); C1_12 = ΣB3_7 (p. 14).
     normalIncome: sum(
-      people,
-      (person) => big(person.employment.casBase) + big(person.employment.relief),
+      insured,
+      (person, index) =>
+        (person.sick?.workBase ?? big(people[index]!.employment.casBase)) +
+        big(people[index]!.employment.relief),
     ),
+    sickLeaveBase: sum(insured, (person) => person.sick?.base ?? 0n),
+    ...(leave ? { medicalLeave: leave } : {}),
     cam,
     controlSum: sum(obligations, (obligation) => obligation.payable),
   };
@@ -566,9 +784,10 @@ function fundCode(fund: string): string {
 
 /**
  * Writes the declaration as one `declaratieUnica` element: the employer with its obligations
- * (angajatorA), counts (B), income in normal working conditions (C1) and CAM (C4), then each
- * insured person with section A, E1 or E2, and E3, attributes in the XSD's order. Every field the
- * structure computes is computed; the others are the model's.
+ * (angajatorA), counts (B), income in normal working conditions (C1), medical leave (C2) and CAM
+ * (C4), then each insured person with section A, or B and D with medical leave, E1 or E2, and E3,
+ * attributes in the XSD's order. Every field the structure computes is computed; the others are
+ * the model's.
  */
 export function writeD112(model: D112): string {
   const calculation = calculateD112(model);
@@ -627,10 +846,10 @@ export function writeD112(model: D112): string {
           B_sal: text(calculation.counts.employees),
           B_brutSalarii: text(calculation.grossSalaries),
         }),
-        // Medical-leave bases (C1_12…), special conditions and exemptions have no amounts here.
+        // Special conditions and exemptions have no amounts here.
         element('angajatorC1', {
           C1_11: text(calculation.normalIncome),
-          C1_12: '0',
+          C1_12: text(calculation.sickLeaveBase),
           C1_13: '0',
           C1_21: '0',
           C1_22: '0',
@@ -639,11 +858,12 @@ export function writeD112(model: D112): string {
           C1_32: '0',
           C1_33: '0',
           C1_T1: text(calculation.normalIncome),
-          C1_T2: '0',
+          C1_T2: text(calculation.sickLeaveBase),
           C1_T: '0',
           C1_T3: '0',
           C1_5: '0',
         }),
+        calculation.medicalLeave && medicalLeaveElement(calculation.medicalLeave),
         element('angajatorC4', {
           C4_baza: text(calculation.cam.base),
           C4_ct: text(calculation.cam.amount),
@@ -654,11 +874,46 @@ export function writeD112(model: D112): string {
   );
 }
 
+/** angajatorC2 (p. 15–22): every row, those of the other indemnity codes at zero. */
+function medicalLeaveElement(leave: D112MedicalLeave) {
+  const row = (prefix: string, values: D112MedicalLeaveRow) => ({
+    [`${prefix}1`]: text(values.cases),
+    [`${prefix}2`]: text(values.days),
+    [`${prefix}3`]: text(values.employerDays),
+    [`${prefix}4`]: text(values.fundDays),
+    [`${prefix}5`]: text(values.employer),
+    [`${prefix}6`]: text(values.fund),
+  });
+  const zero = (...names: string[]) => Object.fromEntries(names.map((name) => [name, '0']));
+  const recoverable = text(leave.recoverable);
+  return element('angajatorC2', {
+    ...row('C2_1', leave.incapacity),
+    // Rd.1.1: infectious diseases with isolation (codes 05 with D_12 35, and 51).
+    ...row('C2_11', emptyRow()),
+    ...row('C2_12', leave.byPercent['55']),
+    ...row('C2_13', leave.byPercent['65']),
+    ...row('C2_14', leave.byPercent['75']),
+    // Rd.1.5: the differences recalculated for continuations (D_20a, D_21a), none here.
+    ...zero('C2_155', 'C2_156'),
+    // Rd.2–5: prevention, maternity, child and patient care, maternal risk.
+    ...row('C2_2', emptyRow()),
+    ...row('C2_21', emptyRow()),
+    ...zero('C2_31', 'C2_32', 'C2_34', 'C2_36'),
+    ...zero('C2_41', 'C2_41a', 'C2_42', 'C2_42a', 'C2_44', 'C2_44a', 'C2_46', 'C2_46a'),
+    ...zero('C2_51', 'C2_52', 'C2_54', 'C2_56'),
+    // Rd.6–8: C2_T6 = C2_16 + C2_26 + C2_36 + C2_46 + C2_56 + C2_46a, to recover from FNUASS.
+    C2_T6: recoverable,
+    C2_10: recoverable,
+    C2_140: recoverable,
+  });
+}
+
 function insuredElement(insured: D112Insured, calculation: D112InsuredCalculation) {
   const { employment: work, income, minimum } = insured;
   const optional = (value: bigint | number) => (value ? text(value) : undefined);
   const main = income.mainJob;
   const contributions = text(calculation.contributions);
+  const sick = calculation.sick;
   return element(
     'asigurat',
     {
@@ -678,31 +933,37 @@ function insuredElement(insured: D112Insured, calculation: D112InsuredCalculatio
           : undefined,
       Timp_E3: text(calculation.tax),
     },
-    element('asiguratA', {
-      A_1: work.type,
-      A_sal1: text(work.baseSalary),
-      A_sal2: text(calculation.income),
-      A_2: flag(work.pensioner),
-      A_3: work.contract,
-      A_4: String(work.normHours),
-      A_5: text(work.camBase),
-      A_6: String(work.hoursWorked),
-      A_7: String(work.hoursSuspended),
-      A_8: String(work.daysWorked),
-      A_9: text(work.unemploymentBase),
-      A_11: text(work.cassBase),
-      A_12: text(work.cass),
-      A_13: text(work.casBase),
-      A_14: text(work.cas),
-      A_13P: text(calculation.limit.casBase),
-      A_14P: text(calculation.limit.cas),
-      A_11P: text(calculation.limit.cassBase),
-      A_12P: text(calculation.limit.cass),
-      A_14D: text(calculation.employer.cas),
-      A_12D: text(calculation.employer.cass),
-      A_13S: text(work.relief),
-      A_13C: text(calculation.reliefIncome),
-    }),
+    sick
+      ? sectionB(insured, calculation, sick)
+      : element('asiguratA', {
+          A_1: work.type,
+          A_sal1: text(work.baseSalary),
+          A_sal2: text(calculation.income),
+          A_2: flag(work.pensioner),
+          A_3: work.contract,
+          A_4: String(work.normHours),
+          A_5: text(work.camBase),
+          A_6: String(work.hoursWorked),
+          A_7: String(work.hoursSuspended),
+          A_8: String(work.daysWorked),
+          A_9: text(work.unemploymentBase),
+          A_11: text(work.cassBase),
+          A_12: text(work.cass),
+          A_13: text(work.casBase),
+          A_14: text(work.cas),
+          A_13P: text(calculation.limit.casBase),
+          A_14P: text(calculation.limit.cas),
+          A_11P: text(calculation.limit.cassBase),
+          A_12P: text(calculation.limit.cass),
+          A_14D: text(calculation.employer.cas),
+          A_12D: text(calculation.employer.cass),
+          A_13S: text(work.relief),
+          A_13C: text(calculation.reliefIncome),
+        }),
+    sick &&
+      (insured.sickLeave ?? []).map((certificate, index) =>
+        certificateElement(certificate, sick.certificates[index]!),
+      ),
     main
       ? element('asiguratE1', {
           E1_1: text(calculation.income),
@@ -724,7 +985,7 @@ function insuredElement(insured: D112Insured, calculation: D112InsuredCalculatio
           E2_4: text(income.tax),
         }),
     element('asiguratE3', {
-      E3_1: 'A',
+      E3_1: sick ? 'B' : 'A',
       E3_2: work.type,
       E3_3: main ? '1' : '2',
       E3_4: 'P',
@@ -746,6 +1007,142 @@ function insuredElement(insured: D112Insured, calculation: D112InsuredCalculatio
       E3_16: text(income.paid),
     }),
   );
+}
+
+/** asiguratB1–B4 (p. 42–51) of one contract in normal working conditions with medical leave:
+ * the days worked and their CAS base in B2, the indemnities' days and CAS base in B3. */
+function sectionB(
+  insured: D112Insured,
+  calculation: D112InsuredCalculation,
+  sick: D112SickCalculation,
+) {
+  const work = insured.employment;
+  const relief = big(work.relief);
+  const days = String(work.daysWorked);
+  // The validator asks the totals with the relief (B2_5C, B3_7C, B4_7C) of every type 51.
+  const withRelief = (value: bigint) => text(work.type === '51' ? value : 0n);
+  return [
+    // B1 (p. 42–45): the contract, as section A's.
+    element('asiguratB1', {
+      B1_1: work.type,
+      B1_sal1: text(work.baseSalary),
+      B1_sal2: text(calculation.income),
+      B1_2: flag(work.pensioner),
+      B1_3: work.contract,
+      B1_4: String(work.normHours),
+      B1_5: text(work.camBase),
+      B1_6: String(work.hoursWorked),
+      B1_7: String(work.hoursSuspended),
+      // B1_8, B1_9, B1_16, B1_17: technical unemployment and sports indemnities (types 31, 42).
+      B1_8: '0',
+      B1_9: '0',
+      B1_10: text(work.unemploymentBase),
+      B1_15: days,
+      B1_16: '0',
+      B1_17: '0',
+    }),
+    // B2 (p. 45–46): B4_1 = B2_2 and B4_7 = B2_5 + B3_7. B2_1, the indicator of special or
+    // particular conditions, is left out for normal ones.
+    element('asiguratB2', {
+      B2_2: days,
+      B2_3: '0',
+      B2_4: '0',
+      B2_5: text(sick.workBase),
+      B2_6: '0',
+      B2_7: '0',
+      B2_5P: text(calculation.limit.casBase),
+      B2_6P: '0',
+      B2_7P: '0',
+      B2_5S: text(relief),
+      B2_5C: withRelief(sick.workBase + relief),
+      B2_6S: '0',
+      B2_6C: '0',
+      B2_7S: '0',
+      B2_7C: '0',
+    }),
+    // B3 (p. 46–48): B3_1 = B3_6 = ΣD_16, B3_7 = B3_12 + B3_13. B3_4, B3_8–B3_11: work
+    // accidents; B3_5: unpaid childcare leave; B3_7D: last month's recalculated difference, none.
+    element('asiguratB3', {
+      B3_1: String(sick.days),
+      B3_2: '0',
+      B3_3: '0',
+      B3_4: '0',
+      B3_5: '0',
+      B3_6: String(sick.days),
+      B3_7: text(sick.base),
+      B3_7D: '0',
+      B3_7S: '0',
+      B3_7C: withRelief(sick.base),
+      B3_8: '0',
+      B3_9: '0',
+      B3_10: '0',
+      B3_11: '0',
+      B3_12: text(sick.employer),
+      B3_13: text(sick.fund),
+    }),
+    // B4 (p. 48–51): the totals, as section A's; the limit sums of art. 146 alin. (5^6).
+    element('asiguratB4', {
+      B4_1: days,
+      B4_2: '0',
+      B4_3: text(work.unemploymentBase),
+      B4_5: text(work.cassBase),
+      B4_6: text(work.cass),
+      B4_7: text(work.casBase),
+      B4_8: text(work.cas),
+      B4_7P: text(calculation.limit.casBase),
+      B4_8P: text(calculation.limit.cas),
+      B4_18: '0',
+      B4_20: '0',
+      B4_5P: text(calculation.limit.cassBase),
+      B4_6P: text(calculation.limit.cass),
+      B4_7S: text(relief),
+      B4_7C: withRelief(big(work.casBase) + relief),
+      B4_8D: text(calculation.employer.cas),
+      B4_6D: text(calculation.employer.cass),
+      B4_14: text(work.camBase),
+    }),
+  ];
+}
+
+/** Bani as lei with two decimals. */
+const decimal = (bani: bigint) => `${bani / 100n}.${String(bani % 100n).padStart(2, '0')}`;
+
+/** asiguratD (p. 56–62) of one code 01 certificate. */
+function certificateElement(
+  certificate: D112SickCertificate,
+  calculation: D112CertificateCalculation,
+) {
+  const { continues } = certificate;
+  return element('asiguratD', {
+    Data_CMI: continues && structureDate(continues.initialFrom),
+    D_1: certificate.series,
+    D_2: certificate.number,
+    D_3: continues?.series,
+    D_4: continues?.number,
+    D_5: structureDate(certificate.issued),
+    D_6: structureDate(certificate.from),
+    D_7: structureDate(certificate.to),
+    D_9: certificate.code,
+    // D_9a, patients of the national health programmes, is not known to the payroll.
+    D_9b: flag(certificate.unpaidDays > 0),
+    D_10: String(d112PrescriptionPlaces.indexOf(certificate.place) + 1),
+    D_14a: String(calculation.employerDays),
+    D_14: String(certificate.employerDays),
+    D_15a: String(certificate.fundDays),
+    D_15: String(certificate.fundDays),
+    D_16a: String(calculation.days),
+    D_16: String(calculation.paidDays),
+    D_17: text(certificate.base.income),
+    D_18: String(certificate.base.days),
+    D_19: decimal(calculation.dailyAverage),
+    D_20: text(certificate.employer),
+    // D_20a, D_21a: required for a continuation of code 01, the recalculated difference.
+    D_20a: continues && '0',
+    D_21: text(certificate.fund),
+    D_21a: continues && '0',
+    D_23: certificate.diagnosis,
+    D_28: certificate.percent,
+  });
 }
 
 export type D112Check = {
@@ -886,6 +1283,7 @@ export function checkD112(model: D112): D112Check[] {
   const workingDays = validPeriod ? workingDaysByMonth[period.month]! : undefined;
   const lastDay = validPeriod ? lastDayOf(period) : undefined;
   const seen = new Set<string>();
+  const certificates = new Set<string>();
   model.insured.forEach((insured, index) => {
     const path = `insured.${index}`;
     const { employment: work, income, minimum } = insured;
@@ -1083,6 +1481,9 @@ export function checkD112(model: D112): D112Check[] {
       error('D112_TAX', `${tax}.tax`, 'Impozitul nu poate depăși baza de calcul.');
     if (income.taxBase > income.cash + income.mealVouchers + income.holidayVouchers)
       warning('D112_TAX', `${tax}.taxBase`, 'Baza de calcul a impozitului depășește venitul brut.');
+
+    if (insured.sickLeave?.length)
+      sickLeaveChecks(insured, path, { period, workingDays, certificates }, add);
   });
 
   if (problems.length || !validPeriod || model.insured.length === 0) return checks;
@@ -1097,4 +1498,210 @@ export function checkD112(model: D112): D112Check[] {
   if (totals.some((value) => value > maxAmount))
     error('D112_TOTAL', 'insured', 'Un total al declarației depășește 15 cifre.');
   return checks;
+}
+
+/** D_17's ceiling for an initial certificate in 07–12/2026: 12 minimum wages for each of the six
+ * months of the base (p. 4, the validator's S106 on 12 × 6 × 4325). */
+const sickBaseCeiling = 12n * 6n * minimumWage;
+
+/** The percentage of C2's rows for a certificate of `days` calendar days (p. 16–20). */
+const tierOf = (days: number): D112SickPercent => (days <= 7 ? '55' : days <= 14 ? '65' : '75');
+
+const calendarDays = (from: string, to: string) =>
+  Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1;
+
+/**
+ * The medical-leave checks of one insured person: section D (p. 56–62) as the validator applies
+ * it, the days and bases section B derives from it, and what this module does not declare yet.
+ */
+function sickLeaveChecks(
+  insured: D112Insured,
+  path: string,
+  context: { period: D112['period']; workingDays: number; certificates: Set<string> },
+  add: (severity: D112Check['severity'], code: string, path: string, message: string) => void,
+) {
+  const error = (code: string, at: string, message: string) => add('error', code, at, message);
+  const warning = (code: string, at: string, message: string) => add('warning', code, at, message);
+  const work = insured.employment;
+  const certificates = insured.sickLeave ?? [];
+  const month = `${context.period.year}-${String(context.period.month).padStart(2, '0')}`;
+  if (certificates.length > 10)
+    error(
+      'D112_SICK_CERTIFICATE',
+      `${path}.sickLeave`,
+      'Se declară cel mult 10 certificate de concediu medical pe asigurat.',
+    );
+  if (work.type === '51' || work.relief > 0)
+    error(
+      'D112_SICK_RELIEF',
+      `${path}.employment.relief`,
+      'Într-o lună cu concediu medical, împărțirea sumei neimpozabile din salariul minim între zilele lucrate (B2_5S) și indemnizații (B3_7S) nu este stabilită: declarați salariatul cu expertul contabil.',
+    );
+  if (insured.minimum?.kind === 'due')
+    error(
+      'D112_SICK_MINIMUM',
+      `${path}.minimum`,
+      'Cu concediu medical, structura ANAF scade din diferența până la contribuția minimă și CAS-ul indemnizației (B4_8D = B4_8P − B4_8), statul de plată doar CAS-ul zilelor lucrate: stabiliți diferența cu expertul contabil.',
+    );
+  const paid = certificates.reduce((days, item) => days + item.employerDays + item.fundDays, 0);
+  if (work.daysWorked + paid > context.workingDays)
+    error(
+      'D112_DAYS',
+      `${path}.employment.daysWorked`,
+      `Zilele lucrate și cele de concediu medical plătite depășesc cele ${context.workingDays} zile lucrătoare ale lunii.`,
+    );
+
+  certificates.forEach((certificate, index) => {
+    const at = `${path}.sickLeave.${index}`;
+    const { continues } = certificate;
+    if (!(d112SickCodes as readonly string[]).includes(certificate.code))
+      error(
+        'D112_SICK_CODE',
+        `${at}.code`,
+        `Concediul medical cu codul de indemnizație ${certificate.code} nu este încă declarat: doar codul 01 (boală obișnuită).`,
+      );
+    for (const [key, value, label, max] of [
+      ['series', certificate.series, 'seria certificatului', 5],
+      ['number', certificate.number, 'numărul certificatului', 10],
+      ['diagnosis', certificate.diagnosis, 'codul de diagnostic', 3],
+      ['continues.series', continues?.series, 'seria certificatului continuat', 5],
+      ['continues.number', continues?.number, 'numărul certificatului continuat', 10],
+    ] as const) {
+      if (value === undefined) continue;
+      const trimmed = value.trim();
+      if (!trimmed || trimmed.length > max)
+        error('D112_TEXT', `${at}.${key}`, `Completați ${label}, de cel mult ${max} caractere.`);
+    }
+    const key = `${certificate.series}/${certificate.number}`;
+    if (context.certificates.has(key))
+      error(
+        'D112_SICK_CERTIFICATE',
+        at,
+        `Certificatul ${certificate.series} ${certificate.number} se declară o singură dată.`,
+      );
+    context.certificates.add(key);
+    if (continues && `${continues.series}/${continues.number}` === key)
+      error('D112_SICK_CERTIFICATE', `${at}.continues`, 'Un certificat nu se continuă pe sine.');
+
+    const dates = [certificate.issued, certificate.from, certificate.to, continues?.initialFrom];
+    if (!dates.every((date) => date === undefined || isDate(date))) {
+      error('D112_DATE', at, 'Datele certificatului se scriu în forma AAAA-LL-ZZ.');
+      return;
+    }
+    if (
+      !certificate.from.startsWith(month) ||
+      !certificate.to.startsWith(month) ||
+      certificate.to < certificate.from
+    ) {
+      error(
+        'D112_SICK_DATES',
+        at,
+        `Certificatul se declară în luna zilelor lui: prima și ultima zi sunt în ${month}.`,
+      );
+      return;
+    }
+    const length = calendarDays(certificate.from, certificate.to);
+    if (continues) {
+      if (continues.initialFrom! >= certificate.from)
+        error(
+          'D112_SICK_DATES',
+          `${at}.continues.initialFrom`,
+          'Episodul începe înaintea certificatului care îl continuă.',
+        );
+      if (certificate.unpaidDays)
+        error(
+          'D112_SICK_DAYS',
+          `${at}.unpaidDays`,
+          'Un certificat în continuare nu mai pierde nicio zi: se diminuează o singură zi pe episod (OUG nr. 91/2025).',
+        );
+    } else {
+      if (certificate.issued < certificate.from)
+        error(
+          'D112_SICK_DATES',
+          `${at}.issued`,
+          'Un certificat inițial nu se acordă înainte de prima lui zi.',
+        );
+      else if (
+        calendarDays(certificate.from, certificate.issued) > 2 &&
+        certificate.place !== 'hospital' &&
+        certificate.place !== 'cas'
+      )
+        warning(
+          'D112_SICK_DATES',
+          `${at}.issued`,
+          'Un certificat inițial se acordă în prima lui zi sau a doua zi, în afara excepțiilor structurii (internare, aviz al medicului expert).',
+        );
+      if (certificate.percent !== tierOf(length))
+        warning(
+          'D112_SICK_PERCENT',
+          `${at}.percent`,
+          `Structura ANAF încadrează un certificat de ${length} zile la ${tierOf(length)}%, nu la ${certificate.percent}%.`,
+        );
+    }
+    if (certificate.place === 'family_doctor' && length > 10)
+      error(
+        'D112_SICK_DATES',
+        `${at}.to`,
+        'Medicul de familie acordă pentru boală obișnuită un certificat de cel mult 10 zile calendaristice.',
+      );
+
+    const days = workingDaysBetween(certificate.from as LocalDate, certificate.to as LocalDate);
+    const declared = certificate.unpaidDays + certificate.employerDays + certificate.fundDays;
+    if (declared !== days.length)
+      error(
+        'D112_SICK_DAYS',
+        at,
+        `Certificatul are ${days.length} zile lucrătoare, nu ${declared} (neplătite, ale angajatorului și ale FNUASS).`,
+      );
+    if (certificate.unpaidDays > 1)
+      error(
+        'D112_SICK_DAYS',
+        `${at}.unpaidDays`,
+        'Se diminuează cel mult o zi lucrătoare pe episod (OUG nr. 91/2025).',
+      );
+    if (certificate.employerDays > 5)
+      error(
+        'D112_SICK_DAYS',
+        `${at}.employerDays`,
+        'Angajatorul plătește cel mult 5 zile lucrătoare de concediu medical (D_14).',
+      );
+    if (certificate.unpaidDays && certificate.place === 'hospital')
+      warning(
+        'D112_SICK_UNPAID',
+        `${at}.unpaidDays`,
+        'Structura ANAF scutește de diminuare certificatele prescrise de spital (D_10 = 2), OUG nr. 91/2025 doar perioadele de spitalizare: confirmați ziua neplătită cu expertul contabil.',
+      );
+
+    const { income, days: baseDays } = certificate.base;
+    if (baseDays > 132)
+      error(
+        'D112_SICK_BASE',
+        `${at}.base.days`,
+        'Baza de calcul are cel mult 132 de zile lucrătoare, ale celor 6 luni.',
+      );
+    if (income > 0 !== baseDays > 0)
+      error(
+        'D112_SICK_BASE',
+        `${at}.base`,
+        'Veniturile și zilele bazei de calcul sunt amândouă zero sau amândouă pozitive.',
+      );
+    if (!continues && big(income) > sickBaseCeiling)
+      error(
+        'D112_SICK_BASE',
+        `${at}.base.income`,
+        `Veniturile bazei de calcul (${income} lei) depășesc 12 salarii minime pe 6 luni, ${sickBaseCeiling} lei.`,
+      );
+    if (certificate.employer > 0 && certificate.employerDays === 0)
+      error(
+        'D112_SICK_AMOUNT',
+        `${at}.employer`,
+        'Indemnizația suportată de angajator cere zile plătite de angajator.',
+      );
+    if (certificate.fund > 0 && certificate.fundDays === 0)
+      error(
+        'D112_SICK_AMOUNT',
+        `${at}.fund`,
+        'Indemnizația suportată din FNUASS cere zile plătite din FNUASS.',
+      );
+  });
 }

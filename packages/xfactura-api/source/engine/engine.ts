@@ -4,6 +4,7 @@ import { requireCondition } from 'xfactura-core/errors';
 import type { Treatment } from 'xfactura-core/kernel';
 import { vatDefinitions, vatVersions } from 'xfactura-core/ro/vat';
 import { fxDefinitions, fxVersions } from 'xfactura-core/ro/fx';
+import { obligationDefinitions, obligationVersions } from 'xfactura-core/ro/obligations';
 import { procedureDefinitions, procedureVersions } from 'xfactura-core/ro/procedure';
 import { payrollDefinitions, payrollVersions } from 'xfactura-core/ro/payroll';
 import { sickLeaveDefinitions, sickLeaveVersions } from 'xfactura-core/ro/payroll/sick-leave';
@@ -83,9 +84,12 @@ import type { DeclarationValidator } from './adapters/declaration-validator';
 import { d300Declaration } from './modules/d300';
 import { d390Declaration } from './modules/d390';
 import { d394Declaration } from './modules/d394';
+import { d406Declaration } from './modules/d406';
 import { d112Declaration } from './modules/d112';
 import { d205Declaration } from './modules/d205';
 import { d100Declaration } from './modules/d100';
+import { calendarInput, obligationsCalendar, obligationView } from './modules/obligations';
+import { s1005Declaration } from './modules/s1005';
 import {
   artifactInput,
   artifactView,
@@ -186,6 +190,7 @@ export const defaultRegister = () =>
       ...vatDefinitions,
       ...fxDefinitions,
       ...procedureDefinitions,
+      ...obligationDefinitions,
       ...payrollDefinitions,
       ...sickLeaveDefinitions,
       ...microDefinitions,
@@ -196,6 +201,7 @@ export const defaultRegister = () =>
       ...vatVersions,
       ...fxVersions,
       ...procedureVersions,
+      ...obligationVersions,
       ...payrollVersions,
       ...sickLeaveVersions,
       ...microVersions,
@@ -229,6 +235,8 @@ export class Engine {
   readonly spv: Spv;
   readonly declarations: Declarations;
   readonly payroll: Payroll;
+  /** The engine's time, for what depends on today (overdue returns). */
+  private readonly clock: () => number;
   readonly assets: Assets;
   readonly etva: Etva;
   readonly anaf: AnafConnections | null;
@@ -253,6 +261,7 @@ export class Engine {
       anaf?: { client: AnafClient; environment: AnafEnvironment; fetch?: typeof fetch };
     } = {},
   ) {
+    this.clock = options.clock ?? Date.now;
     this.commands = new Commands(db, this.operations.policy);
     this.policies = new PostingPolicies(this.commands);
     this.register = options.register ?? defaultRegister();
@@ -329,9 +338,15 @@ export class Engine {
       d300Declaration((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
       d390Declaration((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
       d394Declaration((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
+      d406Declaration(
+        objects,
+        (tx, companyId) => this.proposals.ruleContext(tx, companyId),
+        secret,
+      ),
       d112Declaration(secret),
       d205Declaration(secret),
       d100Declaration(),
+      s1005Declaration(),
       ...(options.declarations ?? []),
     );
     this.actions.add(this.declarations.authorizeHandler());
@@ -961,6 +976,27 @@ export class Engine {
         input: z.object({}).strict(),
         output: z.array(z.unknown()),
         run: (actor) => this.payroll.listRuns(actor),
+      }),
+      define({
+        id: 'obligations.calendar',
+        description:
+          'Calendarul declarațiilor: pentru perioadele încheiate într-un interval de luni, declarațiile care se aplică companiei, termenul fiecăreia (mutat de pe zilele nelucrătoare) și stadiul ei.',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: calendarInput,
+        output: z.array(obligationView),
+        run: (actor, _, input) =>
+          this.commands.read(actor, 'obligations.calendar', async (tx) =>
+            obligationsCalendar(
+              tx,
+              actor.companyId,
+              input,
+              await this.proposals.ruleContext(tx, actor.companyId),
+              input.today ?? new Date(this.clock()).toISOString().slice(0, 10),
+            ),
+          ),
       }),
       define({
         id: 'declarations.list',

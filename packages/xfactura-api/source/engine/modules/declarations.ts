@@ -162,6 +162,23 @@ export class Declarations {
     return found;
   }
 
+  /** The validator that runs a kind: with ANAF's two kits, the SAF-T kit for D406 and the
+   * general kit for the others. */
+  private validatorFor(kind: string) {
+    return this.validator?.for ? this.validator.for(kind) : this.validator;
+  }
+
+  private installedValidator(kind: string) {
+    const validator = this.validatorFor(kind);
+    requireCondition(
+      validator,
+      'VALIDATOR_UNAVAILABLE',
+      `Validatorul ANAF pentru ${kind} nu este instalat.`,
+      503,
+    );
+    return validator;
+  }
+
   /** Prepares a return; when ANAF's validator is installed, validates it at once. */
   async prepare(actor: Actor, key: string, input: z.infer<typeof prepareInput>) {
     const kind = this.kind(input.kind);
@@ -263,7 +280,8 @@ export class Declarations {
         return { artifactId: id };
       },
     );
-    if (this.validator) await this.validate(actor, { artifactId: prepared.artifactId });
+    if (this.validatorFor(kind.kind))
+      await this.validate(actor, { artifactId: prepared.artifactId });
     return this.view(actor, prepared.artifactId);
   }
 
@@ -284,7 +302,8 @@ export class Declarations {
       requireCondition(row, 'NOT_FOUND', 'Declarația nu există.', 404);
       return row;
     });
-    const result = await this.validator.validate(
+    const validator = this.installedValidator(target.kind);
+    const result = await validator.validate(
       target.kind,
       await this.objects.get(actor.companyId, target.xmlHash),
     );
@@ -293,7 +312,7 @@ export class Declarations {
       if ((await latestStep(tx, actor.companyId, target.id))?.state !== 'prepared') return;
       await appendStep(tx, actor, target.id, {
         state: result.ok ? 'validated_official' : 'validation_failed',
-        actor: this.validator!.id,
+        actor: validator.id,
         ...(result.ok ? {} : { detail: result.messages.join('\n').slice(0, 8000) }),
       });
     });
@@ -323,7 +342,8 @@ export class Declarations {
       );
       return row;
     });
-    const result = await this.validator.pdf(
+    const validator = this.installedValidator(target.kind);
+    const result = await validator.pdf(
       target.kind,
       await this.objects.get(actor.companyId, target.xmlHash),
     );
@@ -356,7 +376,7 @@ export class Declarations {
       if ((await latestStep(tx, actor.companyId, target.id))?.state === 'authorized')
         await appendStep(tx, actor, target.id, {
           state: 'exported_for_signing',
-          actor: this.validator!.id,
+          actor: validator.id,
           evidenceId,
         });
     });

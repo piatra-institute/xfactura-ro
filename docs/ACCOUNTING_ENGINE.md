@@ -167,7 +167,13 @@ The chart is OMFP 1802/2014 as published, plus the accounts later orders added, 
 - **Legal reserve:** on the same day, Dr 129 / Cr 1061 for the amount the company sets aside. Legea 31/1990 art. 183 asks for at least 5% of the profit each year until the reserve reaches a fifth of the share capital (1012), without saying whether before or after income tax: an amount below 5% of the result in 121, while under the cap, asks the reviewer to confirm.
 - **Transfer:** once the shareholders approve the financial statements, the allocations already made (129) are cleared against 121 and the rest of the result goes to retained earnings (1171), from which `dividends.distribute` pays; a loss is carried there too.
 - **Registers** (OMFP 2634/2015 pct. 44–47): `ledger.journal` (Registrul-jurnal) gives every entry in recording order with its justifying document's type, number and date; `ledger.generalLedger` (Cartea mare) gives, for a month, each synthetic account's opening balance, debit and credit turnover by corresponding account (`%` lists several) and closing balance; `ledger.inventoryRegister` (Registrul-inventar) gives, at a date, every asset, liability and equity account with a balance and what makes it up (open items by partner, fixed assets by inventory number), at the books' value until inventory differences are recorded.
-- **Annual statements (microentities, S1005 for 2025):** the core writer produces the balance sheet (F10), the profit and loss account (F20), the informative data (F30) and the fixed-asset statement (F40), and checks the form's controls, ANAF's validator's codes included. The chart maps to F10, F20 and F30 chapter XIX by the formulas of ANAF's form and OMF 2036/2025 anexa 4. Where the form, ANAF's structure and the order differ, the choice is recorded with the formula. Only 2025 is supported; other years are a gap until ANAF publishes their package. Not prepared from the books yet: F30's other chapters and F40 need the engine's registers.
+- **Annual statements (microentities, S1005 for 2025):** the core writer produces the balance sheet (F10), the profit and loss account (F20), the informative data (F30) and the fixed-asset statement (F40), and checks the form's controls, ANAF's validator's codes included. The chart maps to F10, F20 and F30 chapter XIX by the formulas of ANAF's form and OMF 2036/2025 anexa 4. Where the form, ANAF's structure and the order differ, the choice is recorded with the formula. Only 2025 is supported; other years are a gap until ANAF publishes their package.
+  - **From the books** (declaration `S1005`, period `2025`):
+    - F10 is read from the closing balances, kept per partner on the accounts held on open items, so the forms' debit and credit balances are the analytic ones.
+    - F20 and F30 chapter XIX are read from the year's turnover of classes 6 and 7, without the closing journal. Classes 6 and 7 still open, an unmapped balance (VAT accounts left unsettled, for example) or a 121 that differs from the result are problems.
+    - The previous year's column comes from the engine's previous year when it keeps one. Otherwise its balance sheet comes from the opening entries, and the preparer gives its F20 and F30 chapter XIX rows as filed.
+    - From the preparer: the identification the books don't hold, and the row of each account the form spreads over several rows (debts due within a year or later). A balance belonging to several rows is kept on analytic accounts.
+    - Still given rather than read: F20 rd. 01a, F30's other chapters, and F40 (it needs the asset register).
 - Not built yet: the physical inventory and its differences, provisions, and the statements of small and larger entities.
 
 ### `fx.revalue`: month-end revaluation
@@ -227,13 +233,16 @@ Annual leave: a run entry gives the leave days; without the month's amounts, the
 
 Sick leave (OUG 158/2005 as consolidated on 1 July 2026, with OUG 91/2025 art. II as amended by Legea 64/2026; all read on the portal and still pending a stored copy):
 
-- **Input:** a run entry lists the month's medical certificates (series, number, indemnity code, issue date, first and last day, the certificate it continues, hospitalization). A certificate covers days of one month. Only code 01 (ordinary illness) is computed; any other code stops the line.
+- **Input:** a run entry lists the month's medical certificates (series, number, indemnity code, issue date, first and last day, the certificate it continues, hospitalization, where it was prescribed, and the diagnosis code, which is stored sealed like the CNP). A certificate covers days of one month. Only code 01 (ordinary illness) is computed; any other code stops the line.
 - **Base:** the six most recent of the twelve months before the episode, from the posted runs: each month's CAM base capped at 12 minimum wages, over its active days. When the payroll holds fewer than six, the base comes from the employee's stage certificate (`sickBase`). The daily average is truncated to the ban, as the norms' worked example does (the norms, Ordin 15/2018/1.311/2017 as amended in June 2026, were read only in a secondary source).
 - **Amount:** the daily average × the certificate's percentage (55% up to 7 days, 65% for 8–14, 75% over 15), for its working days. For certificates issued from 1 February 2026 to 31 December 2027, the episode's first working day is not paid, unless the patient is hospitalized. The employer pays the next five working days and FNUASS the rest. A continuation keeps the episode's base, loses no further day and carries the employer's days over. Each part is rounded to whole lei.
 - **What stops the line:** a 15-day certificate (the law's tiers skip it); a continuation whose episode reaches another percentage than its own certificate (art. 17 alin. (1^2) recalculates the earlier month from July 2026, not built); a continuation that does not follow on; sick amounts also given by hand.
 - **Contributions:** both parts are salary income for the tax and in the CAS and CASS bases (code 01); the fund's part is not in the CAM base (Codul fiscal art. 76 alin. (1), 139 alin. (1) lit. o), 157 alin. (1) lit. v), 220^5). Sick pay does not count towards the minimum contribution, which is for the active days.
 - **Booking:** the contract is suspended on the certificates' working days. The employer's part is on 641; the fund's part is a claim on FNUASS (Dr 4382), recovered on the employer's request (art. 38), its receipt booked by a journal entry.
-- **D112:** a month with sick leave is refused (D112_SICK_LEAVE) until the certificates are declared in the insured's section E.
+- **D112:**
+  - An employee with certificates is declared in section B (the days worked and those on leave, the indemnities by payer, the bases) together with section D, one record per certificate. ANAF's validator refuses section D next to section A.
+  - The employer's totals are in C1, and the medical leave by percentage and the amount to recover from FNUASS are in C2.
+  - Still refused: sick pay entered by hand, a certificate without its place or diagnosis, an employee on the minimum-wage relief, and a part-time employee owing the minimum contribution in a month with sick leave.
 
 CAM is posted on the employer's total base, rounded once, as D112 declares it.
 
@@ -276,6 +285,36 @@ Services across the border are not in it (D390 and D300 report them); acquisitio
 **D100 (obligations to the state budget)** is written by `xfactura-core/src/ro/declarations/d100.ts` (namespace v2, periods from 01/2026) and prepared for a month from the books: the micro-enterprise tax posted for the quarter (121), in its last month, and the dividend tax withheld in the month, for individuals (604) and companies (150), with, in December, the tax on dividends unpaid at year end. The fourth quarter's micro tax is due by 25 January in ANAF's structure and by 25 June in its validator; the company chooses (`fourthQuarterDue`). A correction of a filed D100 is a separate form (D710), not built yet.
 
 **D205 (tax withheld, by beneficiary)** is written by `xfactura-core/src/ro/declarations/d205.ts` (namespace v3, years 2025–2026) and prepared for a year from the posted dividend withholdings: one record per individual shareholder, with the dividends distributed, paid and unpaid at year end and their tax; companies are not declared in it. An individual's CNP is recorded once (`parties.recordCnp`, kept sealed like employees'). Whether the dividends paid are declared gross or net the instructions do not say: the company chooses (`paidAs`).
+
+**D406 (SAF-T)** is written by `xfactura-core/src/ro/saft/d406.ts` (schema 2.4.9, periods from 07/2025) and prepared for each VAT period (L monthly, T quarterly; it must match `vat.period`).
+- **What it holds:**
+  - accounts with their opening balances and turnover, equal to the trial balance;
+  - customers and suppliers from the open items, one entry per partner and account, equal to their open items;
+  - one journal per journal code, each entry with its justifying document and its currency side;
+  - the invoices from the retained UBL, with the booked account;
+  - products from the invoice lines;
+  - the bank entries settling partners, as payments.
+- **VAT codes** go on the base line, through a mapping table (`saft/tax-codes.ts`) in which each row quotes ANAF's description. A code with no certain SAF-T code (`O`, 9%, 5%, partial deduction) is a problem, never a guess.
+- **Validation:** ANAF's D406 validator runs only in ANAF's SAF-T kit, pinned separately (`anaf-saft`). The engine sends D406 there and every other return to the general DUKIntegrator, and records which kit ran.
+- **The validator doesn't check** that entries balance, the control totals, or currency conversion. Those are the writer's own checks (`checkD406`).
+- **Not produced yet:** payroll TaxTypes (their lines carry 000), the annual assets file, the stock file, invoices with document-level allowances, and invoices without UBL XML.
+
+**Obligations calendar.** `obligations.calendar` lists the returns whose periods end in a range of months, with their deadlines and where each one stands: due, overdue, prepared, authorized, filed, accepted, rejected, or blocked when its deadline isn't sourced.
+- **Which returns apply** is read from the profile and the books:
+  - VAT payers file D300 and D394 for each VAT period, and D390 for the months with services across the EU border.
+  - Every company files D406, for each VAT period, or quarterly outside VAT. The date from which its category reports isn't checked.
+  - Employers file D112 monthly.
+  - Microenterprises file D100 for each quarter; it's also due in the months with dividend tax withheld, and D205 follows for those years.
+  - S1005 is due for each financial year. The size category isn't checked; the engine prepares only the microentities' statements.
+- **The deadlines** are cited parameters (`ro.deadline.*`, `xfactura-core/src/ro/obligations.ts`):
+  - D300 (Codul fiscal art. 323), D112 (art. 147), D100 (art. 56, 43 and 97) and D390 (OPANAF 591/2016): the 25th of the next month;
+  - D406: the last day of the next month (OPANAF 1783/2021 anexa 4);
+  - D205: the end of February (art. 132);
+  - S1005: 150 days after the year (Legea 82/1991 art. 36).
+- **How deadlines move:**
+  - A deadline on a non-working day moves to the next working day: the procedure code's art. 75 refers to the Civil Procedure Code, whose art. 181 is still to be read.
+  - What falls due on 25 December is due on 21 December, or the working day before it (procedure code art. 155(2), read in ANAF's 2019 consolidation; the text in force couldn't be read).
+- **D394 is a gap:** ANAF publishes only the initial OPANAF 3769/2015, whose 25th was later changed.
 
 Steps are recorded in order, and the database allows only the documented transitions; a tax period is locked only in the name of an authorized return of that tax and period. A rectification is a new return that supersedes the earlier one.
 
@@ -353,7 +392,7 @@ A close records closing balances per account and currency and joins a hash chain
 - **Not built yet:**
   - verification of the Ministry's signature; B2C identification;
   - VAT categories other than S/O, TVA la încasare, domestic reverse charge, goods across the border, pro-rata; D394 for TVA la încasare, simplified invoices and receipts; reading the P300 file;
-  - payroll beyond salary in money, vouchers, annual leave and sick leave for ordinary illness (other indemnity codes, benefits in kind, sick leave in D112), and corrections of a posted month;
+  - payroll beyond salary in money, vouchers, annual leave and sick leave for ordinary illness (other indemnity codes, benefits in kind), and corrections of a posted month;
   - asset disposal, revaluation and fiscal depreciation; leasing and loans;
   - stock;
   - profit tax, interim dividends, dividends to non-residents, and the D100 and D205 returns;

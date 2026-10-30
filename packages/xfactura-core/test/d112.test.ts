@@ -11,6 +11,7 @@ import {
   writeD112,
   type D112,
   type D112Insured,
+  type D112SickCertificate,
 } from '../src/ro/declarations/d112';
 
 type Patch = Partial<Omit<D112Insured, 'employment' | 'income'>> & {
@@ -139,6 +140,75 @@ const vouchers = employee({
     paid: 3358,
   },
 });
+
+/** A code 01 certificate from the family doctor, issued on its first day, on a base of 36,000
+ * lei over 127 working days. */
+const certificate = (patch: Partial<D112SickCertificate> = {}): D112SickCertificate => ({
+  series: 'CCMAM',
+  number: '1001',
+  issued: '2026-10-05',
+  from: '2026-10-05',
+  to: '2026-10-09',
+  code: '01',
+  place: 'family_doctor',
+  diagnosis: '101',
+  unpaidDays: 1,
+  employerDays: 4,
+  fundDays: 0,
+  base: { income: 36000, days: 127 },
+  percent: '55',
+  employer: 624,
+  fund: 0,
+  ...patch,
+});
+
+const sickCertificates = [
+  certificate(),
+  certificate({
+    number: '1002',
+    issued: '2026-10-19',
+    from: '2026-10-19',
+    to: '2026-10-28',
+    employerDays: 5,
+    fundDays: 2,
+    percent: '65',
+    employer: 921,
+    fund: 368,
+  }),
+];
+
+/** 6000 lei a month, ill 5–9 October (the employer pays 4 days) and 19–28 October (5 days by the
+ * employer, 2 by FNUASS): 9 days worked for 2455 lei, as the payroll computes them. */
+const sick = (certificates: D112SickCertificate[] = sickCertificates, patch: Patch = {}) =>
+  employee({
+    cnp: '2931204170043',
+    lastName: 'Constantinescu',
+    firstName: 'Ioana',
+    from: '2022-06-01',
+    sickLeave: certificates,
+    ...patch,
+    employment: {
+      baseSalary: 6000,
+      hoursWorked: 72,
+      hoursSuspended: 104,
+      daysWorked: 9,
+      unemploymentBase: 4368,
+      camBase: 4000,
+      cassBase: 4368,
+      cass: 437,
+      casBase: 4368,
+      cas: 1092,
+      ...patch.employment,
+    },
+    income: {
+      cash: 4368,
+      deduction: { basic: 843, young: 0, children: 0 },
+      taxBase: 1996,
+      tax: 200,
+      paid: 2639,
+      ...patch.income,
+    },
+  });
 
 const model = (insured: D112Insured[] = [employee()], extra: Partial<D112> = {}): D112 => ({
   period: { year: 2026, month: 10 },
@@ -806,5 +876,246 @@ describe('D112 checks', () => {
     expect(codes(model([huge('1781105170030'), huge('2960811170089')]))).toContain(
       'error:D112_TOTAL',
     );
+  });
+});
+
+describe('D112 medical leave', () => {
+  test('declares an employee with certificates in sections B and D instead of A', () => {
+    const xml = writeD112(model([sick()]));
+    expect(elements(xml, 'asiguratA')).toEqual([]);
+    expect([
+      ...elements(xml, 'asiguratB1'),
+      ...elements(xml, 'asiguratB2'),
+      ...elements(xml, 'asiguratB3'),
+      ...elements(xml, 'asiguratB4'),
+      ...elements(xml, 'asiguratD'),
+    ]).toEqual([
+      '<asiguratB1 B1_1="1" B1_sal1="6000" B1_sal2="4368" B1_2="0" B1_3="N" B1_4="8" B1_5="4000"' +
+        ' B1_6="72" B1_7="104" B1_8="0" B1_9="0" B1_10="4368" B1_15="9" B1_16="0" B1_17="0"/>',
+      '<asiguratB2 B2_2="9" B2_3="0" B2_4="0" B2_5="2455" B2_6="0" B2_7="0" B2_5P="0" B2_6P="0"' +
+        ' B2_7P="0" B2_5S="0" B2_5C="0" B2_6S="0" B2_6C="0" B2_7S="0" B2_7C="0"/>',
+      '<asiguratB3 B3_1="11" B3_2="0" B3_3="0" B3_4="0" B3_5="0" B3_6="11" B3_7="1913" B3_7D="0"' +
+        ' B3_7S="0" B3_7C="0" B3_8="0" B3_9="0" B3_10="0" B3_11="0" B3_12="1545" B3_13="368"/>',
+      '<asiguratB4 B4_1="9" B4_2="0" B4_3="4368" B4_5="4368" B4_6="437" B4_7="4368" B4_8="1092"' +
+        ' B4_7P="0" B4_8P="0" B4_18="0" B4_20="0" B4_5P="0" B4_6P="0" B4_7S="0" B4_7C="0" B4_8D="0"' +
+        ' B4_6D="0" B4_14="4000"/>',
+      '<asiguratD D_1="CCMAM" D_2="1001" D_5="05.10.2026" D_6="05.10.2026" D_7="09.10.2026"' +
+        ' D_9="01" D_9b="1" D_10="1" D_14a="5" D_14="4" D_15a="0" D_15="0" D_16a="5" D_16="4"' +
+        ' D_17="36000" D_18="127" D_19="283.46" D_20="624" D_21="0" D_23="101" D_28="55"/>',
+      '<asiguratD D_1="CCMAM" D_2="1002" D_5="19.10.2026" D_6="19.10.2026" D_7="28.10.2026"' +
+        ' D_9="01" D_9b="1" D_10="1" D_14a="6" D_14="5" D_15a="2" D_15="2" D_16a="8" D_16="7"' +
+        ' D_17="36000" D_18="127" D_19="283.46" D_20="921" D_21="368" D_23="101" D_28="65"/>',
+    ]);
+    // D follows B4, before E1; E3 names the section.
+    expect(xml.indexOf('<asiguratD ')).toBeGreaterThan(xml.indexOf('<asiguratB4 '));
+    expect(xml.indexOf('<asiguratD ')).toBeLessThan(xml.indexOf('<asiguratE1 '));
+    expect(attribute(xml, 'E3_1', 'asiguratE3')).toBe('B');
+  });
+
+  test('totals the indemnities for the employer by payer and percentage', () => {
+    const calculation = calculateD112(model([sick(), employee()]));
+    expect(calculation.normalIncome).toBe(2455n + 5000n);
+    expect(calculation.sickLeaveBase).toBe(1913n);
+    expect(calculation.cam).toEqual({ base: 9000n, amount: 203n });
+    expect(owed(model([sick(), employee()]))).toEqual({
+      '602': 469n,
+      '412': 2342n,
+      '432': 937n,
+      '480': 203n,
+    });
+    const row = (cases: number, days: number, employerDays: number, fundDays: number) => ({
+      cases,
+      days,
+      employerDays,
+      fundDays,
+    });
+    expect(calculation.medicalLeave).toEqual({
+      incapacity: { ...row(2, 11, 9, 2), employer: 1545n, fund: 368n },
+      byPercent: {
+        '55': { ...row(1, 4, 4, 0), employer: 624n, fund: 0n },
+        '65': { ...row(1, 7, 5, 2), employer: 921n, fund: 368n },
+        '75': { ...row(0, 0, 0, 0), employer: 0n, fund: 0n },
+      },
+      recoverable: 368n,
+    });
+    const xml = writeD112(model([sick(), employee()]));
+    expect(attribute(xml, 'C1_11', 'angajatorC1')).toBe('7455');
+    expect(attribute(xml, 'C1_12', 'angajatorC1')).toBe('1913');
+    expect(attribute(xml, 'C1_T2', 'angajatorC1')).toBe('1913');
+    const [c2] = elements(xml, 'angajatorC2');
+    for (const [name, value] of [
+      ['C2_11', '2'],
+      ['C2_12', '11'],
+      ['C2_13', '9'],
+      ['C2_14', '2'],
+      ['C2_15', '1545'],
+      ['C2_16', '368'],
+      ['C2_111', '0'],
+      ['C2_121', '1'],
+      ['C2_125', '624'],
+      ['C2_133', '5'],
+      ['C2_136', '368'],
+      ['C2_141', '0'],
+      ['C2_155', '0'],
+      ['C2_26', '0'],
+      ['C2_46a', '0'],
+      ['C2_T6', '368'],
+      ['C2_10', '368'],
+      ['C2_140', '368'],
+    ])
+      expect([name, attribute(c2!, name, 'angajatorC2')]).toEqual([name, value]);
+    // The employee without certificates stays in section A; no C2 without certificates.
+    expect(elements(xml, 'asiguratA')).toHaveLength(1);
+    expect(calculateD112(model()).medicalLeave).toBeUndefined();
+    expect(elements(writeD112(model()), 'angajatorC2')).toEqual([]);
+  });
+
+  test('writes a continuation with its initial certificate and no day unpaid', () => {
+    const continued = certificate({
+      number: '1003',
+      continues: { series: 'CCMAM', number: '0998', initialFrom: '2026-09-28' },
+      issued: '2026-10-01',
+      from: '2026-10-01',
+      to: '2026-10-02',
+      unpaidDays: 0,
+      employerDays: 2,
+      employer: 312,
+    });
+    const [d] = elements(writeD112(model([sick([continued])])), 'asiguratD');
+    expect(d).toStartWith(
+      '<asiguratD Data_CMI="28.09.2026" D_1="CCMAM" D_2="1003" D_3="CCMAM" D_4="0998"',
+    );
+    expect(d).toContain('D_9b="0" D_10="1" D_14a="2" D_14="2"');
+    expect(d).toContain('D_20="312" D_20a="0" D_21="0" D_21a="0"');
+  });
+
+  test('rounds the daily average as the validator checks it, D_17 / D_18', () => {
+    const average = (income: number, days: number) =>
+      attribute(
+        writeD112(model([sick([certificate({ base: { income, days } })])])),
+        'D_19',
+        'asiguratD',
+      );
+    // 24300 / 121 = 200.826…: the payroll's truncated 200.82 is not what the validator wants.
+    expect(average(24300, 121)).toBe('200.83');
+    expect(average(36000, 127)).toBe('283.46');
+    expect(average(0, 0)).toBe('0.00');
+  });
+
+  test('refuses certificates it cannot sum', () => {
+    const one = (patch: Partial<D112SickCertificate>) => model([sick([certificate(patch)])]);
+    expect(() => calculateD112(one({ percent: '60' as '55' }))).toThrow('55, 65 sau 75');
+    expect(() => calculateD112(one({ place: 'clinic' as 'cas' }))).toThrow('Nomenclatorul 8');
+    expect(() => calculateD112(one({ employer: -1 }))).toThrow('nenegativă');
+    expect(() => calculateD112(one({ employerDays: 1.5 }))).toThrow('număr natural');
+    expect(() =>
+      calculateD112(model([sick(undefined, { employment: { casBase: 1000, cas: 250 } })])),
+    ).toThrow('nu cuprinde indemnizațiile');
+    expect(checkD112(one({ fund: 0.5 })).map((check) => `${check.code}:${check.path}`)).toEqual([
+      'D112_AMOUNT:insured.0.sickLeave.0.fund',
+    ]);
+  });
+});
+
+describe('D112 medical leave checks', () => {
+  const one = (patch: Partial<D112SickCertificate>, index = 0) =>
+    codes(
+      model([
+        sick(sickCertificates.map((item, at) => (at === index ? { ...item, ...patch } : item))),
+      ]),
+    );
+  const continuation = { series: 'CCMAM', number: '0998', initialFrom: '2026-09-28' };
+
+  test('pass for the payroll’s certificates', () => {
+    expect(checkD112(model([sick(), employee()]))).toEqual([]);
+  });
+
+  test('check the certificate’s identity, code and dates', () => {
+    expect(one({ code: '02' })).toEqual(['error:D112_SICK_CODE']);
+    expect(one({ series: 'CCMAMX' })).toEqual(['error:D112_TEXT']);
+    expect(one({ diagnosis: ' ' })).toEqual(['error:D112_TEXT']);
+    expect(one({ number: '1002' })).toEqual(['error:D112_SICK_CERTIFICATE']);
+    expect(
+      codes(model([sick(), sick([sickCertificates[0]!], { cnp: '1781105170030' })])),
+    ).toContain('error:D112_SICK_CERTIFICATE');
+    expect(one({ to: '2026-10-9' })).toEqual(['error:D112_DATE']);
+    expect(one({ from: '2026-09-30' })).toEqual(['error:D112_SICK_DATES']);
+    expect(one({ to: '2026-10-04' })).toEqual(['error:D112_SICK_DATES']);
+    // An initial certificate is issued on its first day or the next.
+    expect(one({ issued: '2026-10-04' })).toEqual(['error:D112_SICK_DATES']);
+    expect(one({ issued: '2026-10-06' })).toEqual([]);
+    expect(one({ issued: '2026-10-07' })).toEqual(['warning:D112_SICK_DATES']);
+    expect(one({ issued: '2026-10-07', place: 'cas' })).toEqual([]);
+    // The family doctor gives at most 10 calendar days.
+    const eleven = { to: '2026-10-29', fundDays: 3, fund: 553 };
+    expect(one(eleven, 1)).toEqual(['error:D112_SICK_DATES']);
+    expect(one({ ...eleven, place: 'ambulatory' }, 1)).toEqual([]);
+  });
+
+  test('check the days against the certificate and OUG 91/2025', () => {
+    expect(one({ employerDays: 3 })).toEqual(['error:D112_SICK_DAYS']);
+    expect(one({ unpaidDays: 2, employerDays: 3, employer: 468 })).toEqual([
+      'error:D112_SICK_DAYS',
+    ]);
+    expect(one({ employerDays: 6, fundDays: 1, fund: 184 }, 1)).toEqual(['error:D112_SICK_DAYS']);
+    expect(one({ continues: continuation })).toEqual(['error:D112_SICK_DAYS']);
+    expect(one({ continues: continuation, unpaidDays: 0, employerDays: 5, employer: 780 })).toEqual(
+      [],
+    );
+    expect(
+      one({
+        continues: { ...continuation, initialFrom: '2026-10-06' },
+        unpaidDays: 0,
+        employerDays: 5,
+      }),
+    ).toEqual(['error:D112_SICK_DATES']);
+    expect(
+      one({
+        continues: { ...continuation, number: '1001' },
+        unpaidDays: 0,
+        employerDays: 5,
+      }),
+    ).toEqual(['error:D112_SICK_CERTIFICATE']);
+    // The structure exempts what a hospital prescribes; the payroll only hospitalization.
+    expect(one({ place: 'hospital' })).toEqual(['warning:D112_SICK_UNPAID']);
+    expect(one({ place: 'hospital', unpaidDays: 0, employerDays: 5 })).toEqual([]);
+    expect(codes(model([sick(undefined, { employment: { daysWorked: 12 } })]))).toEqual([
+      'error:D112_DAYS',
+    ]);
+  });
+
+  test('check the base, the percentage and the amounts', () => {
+    expect(one({ base: { income: 36000, days: 133 } })).toEqual(['error:D112_SICK_BASE']);
+    expect(one({ base: { income: 0, days: 127 } })).toEqual(['error:D112_SICK_BASE']);
+    expect(one({ base: { income: 311401, days: 127 } })).toEqual(['error:D112_SICK_BASE']);
+    expect(one({ base: { income: 311400, days: 127 } })).toEqual([]);
+    expect(
+      one({
+        base: { income: 311401, days: 127 },
+        continues: continuation,
+        unpaidDays: 0,
+        employerDays: 5,
+      }),
+    ).toEqual([]);
+    expect(one({ percent: '65' })).toEqual(['warning:D112_SICK_PERCENT']);
+    expect(one({ fund: 10 })).toEqual(['error:D112_SICK_AMOUNT']);
+    expect(codes(model([sick(undefined, { employment: { casBase: 1000, cas: 250 } })]))).toEqual([
+      'error:D112_SICK_BASE',
+    ]);
+  });
+
+  test('refuse what is not declared yet', () => {
+    expect(codes(model([sick(undefined, { employment: { type: '51' } })]))).toEqual([
+      'error:D112_SICK_RELIEF',
+    ]);
+    expect(codes(model([sick(undefined, { minimum: { kind: 'due', base: 4500 } })]))).toContain(
+      'error:D112_SICK_MINIMUM',
+    );
+    const days = Array.from({ length: 11 }, (_, index) =>
+      certificate({ number: String(index + 1), employerDays: 0, employer: 0 }),
+    );
+    expect(codes(model([sick(days.map((item) => ({ ...item, to: item.from })))]))).toEqual([
+      'error:D112_SICK_CERTIFICATE',
+    ]);
   });
 });

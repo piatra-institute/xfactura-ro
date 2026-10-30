@@ -21,6 +21,7 @@ import {
   writeD112,
   type D112,
   type D112Insured,
+  type D112SickCertificate,
 } from '../../packages/xfactura-core/src/ro/declarations/d112';
 import { writeD300, type D300 } from '../../packages/xfactura-core/src/ro/declarations/d300';
 import {
@@ -700,6 +701,117 @@ const payrolls: Record<string, D112> = {
   ]),
 };
 
+type Certificate = D112SickCertificate;
+/** A code 01 certificate prescribed by the family doctor on its first day, on a base of 36,000
+ * lei over 127 working days (283.46 lei a day). */
+const certificate = (
+  number: string,
+  from: string,
+  to: string,
+  paid: Pick<Certificate, 'unpaidDays' | 'employerDays' | 'fundDays' | 'percent'> &
+    Pick<Certificate, 'employer' | 'fund'>,
+  extra: Partial<Certificate> = {},
+): Certificate => ({
+  series: 'CCMAM',
+  number,
+  issued: from,
+  from,
+  to,
+  code: '01',
+  place: 'family_doctor',
+  diagnosis: '101',
+  base: { income: 36000, days: 127 },
+  ...paid,
+  ...extra,
+});
+// The payroll engine's October 2026 for 6,000 lei a month and two episodes, each losing its first
+// working day (OUG 91/2025): 5–9 October, 5 working days at 55%, 4 paid by the employer (624 lei);
+// 19–28 October, 8 working days at 65%, 5 paid by the employer (921) and 2 by FNUASS (368). Nine
+// of 22 days worked, 6,000 × 9 / 22 = 2,455 lei; the CAM base leaves out FNUASS's part; the
+// unemployment base is the pay in money, as the engine declares it.
+const sickCertificates = [
+  certificate('1001', '2026-10-05', '2026-10-09', {
+    unpaidDays: 1,
+    employerDays: 4,
+    fundDays: 0,
+    percent: '55',
+    employer: 624,
+    fund: 0,
+  }),
+  certificate('1002', '2026-10-19', '2026-10-28', {
+    unpaidDays: 1,
+    employerDays: 5,
+    fundDays: 2,
+    percent: '65',
+    employer: 921,
+    fund: 368,
+  }),
+];
+const sickEmployee = insured({
+  cnp: '2931204170043',
+  lastName: 'Constantinescu',
+  firstName: 'Ioana',
+  from: '2022-06-01',
+  employment: {
+    baseSalary: 6000,
+    hoursWorked: 72,
+    hoursSuspended: 104,
+    daysWorked: 9,
+    unemploymentBase: 4368,
+    camBase: 4000,
+    cassBase: 4368,
+    cass: 437,
+    casBase: 4368,
+    cas: 1092,
+  },
+  income: {
+    cash: 4368,
+    deduction: { basic: 843, young: 0, children: 0 },
+    taxBase: 1996,
+    tax: 200,
+    paid: 2639,
+  },
+  sickLeave: sickCertificates,
+});
+const sickLeave: Record<string, D112> = {
+  'sick-leave': payroll([sickEmployee, fullTimeEmployee]),
+  // 1–2 October continue a certificate of 28–30 September, whose first day was already unpaid:
+  // two more days by the employer at 55% (312 lei), 20 days worked (5,455 lei).
+  continuation: payroll([
+    insured({
+      ...fullTimeEmployee,
+      employment: {
+        baseSalary: 6000,
+        hoursWorked: 160,
+        hoursSuspended: 16,
+        daysWorked: 20,
+        unemploymentBase: 5767,
+        camBase: 5767,
+        cassBase: 5767,
+        cass: 577,
+        casBase: 5767,
+        cas: 1442,
+      },
+      income: {
+        cash: 5767,
+        deduction: { basic: 238, young: 0, children: 0 },
+        taxBase: 3510,
+        tax: 351,
+        paid: 3397,
+      },
+      sickLeave: [
+        certificate(
+          '1003',
+          '2026-10-01',
+          '2026-10-02',
+          { unpaidDays: 0, employerDays: 2, fundDays: 0, percent: '55', employer: 312, fund: 0 },
+          { continues: { series: 'CCMAM', number: '0998', initialFrom: '2026-09-28' } },
+        ),
+      ],
+    }),
+  ]),
+};
+
 describe('official D112 validation', () => {
   anaf(
     'DUKIntegrator accepts the October 2026 payrolls without errors or warnings',
@@ -797,6 +909,103 @@ describe('official D112 validation', () => {
       expect(results['relief-type-1']).toContain('S1a1');
       expect(results['type-51-part-time']).toContain('A_1 (51) >50 doar pt CIM cu norma intreaga');
       expect(results['under-15']).toContain('S1.2');
+    },
+    120_000,
+  );
+});
+
+describe('official D112 validation of medical leave', () => {
+  anaf(
+    'DUKIntegrator accepts certificates paid by the employer, by FNUASS and continued',
+    async () => {
+      for (const model of Object.values(sickLeave)) expect(checkD112(model)).toEqual([]);
+      const calculation = calculateD112(sickLeave['sick-leave']!);
+      expect(
+        Object.fromEntries(calculation.obligations.map(({ code, owed }) => [code, owed])),
+      ).toEqual({ '602': 469n, '412': 2342n, '432': 937n, '480': 203n });
+      expect(calculation.medicalLeave?.incapacity).toEqual({
+        cases: 2,
+        days: 11,
+        employerDays: 9,
+        fundDays: 2,
+        employer: 1545n,
+        fund: 368n,
+      });
+      expect(calculation.medicalLeave?.recoverable).toBe(368n);
+      const results = await validateAnaf(
+        'D112',
+        Object.fromEntries(
+          Object.entries(sickLeave).map(([name, model]) => [name, writeD112(model)]),
+        ),
+      );
+      expect(results).toEqual(
+        Object.fromEntries(Object.keys(sickLeave).map((name) => [name, 'ok'])),
+      );
+    },
+    120_000,
+  );
+
+  anaf(
+    'DUKIntegrator rejects what checkD112 rejects, wrong totals, and section D beside section A',
+    async () => {
+      const xml = writeD112(sickLeave['sick-leave']!);
+      const mutate = (from: string, to: string) => {
+        expect(xml).toContain(from);
+        return xml.replace(from, to);
+      };
+      const withCertificate = (index: number, patch: Partial<D112SickCertificate>) =>
+        payroll([
+          {
+            ...sickEmployee,
+            sickLeave: sickCertificates.map((item, at) =>
+              at === index ? { ...item, ...patch } : item,
+            ),
+          },
+        ]);
+      const rejected: Record<string, D112> = {
+        // Eleven calendar days from the family doctor, the ninth working day paid by FNUASS.
+        'family-doctor-11-days': withCertificate(1, { to: '2026-10-29', fundDays: 3, fund: 553 }),
+        'six-employer-days': withCertificate(1, { employerDays: 6, fundDays: 1, fund: 184 }),
+        'base-over-ceiling': withCertificate(0, { base: { income: 320000, days: 127 } }),
+      };
+      expect(
+        Object.fromEntries(
+          Object.entries(rejected).map(([name, model]) => [
+            name,
+            checkD112(model).map((check) => `${check.severity}:${check.code}`),
+          ]),
+        ),
+      ).toEqual({
+        'family-doctor-11-days': ['error:D112_SICK_DATES'],
+        'six-employer-days': ['error:D112_SICK_DAYS'],
+        'base-over-ceiling': ['error:D112_SICK_BASE'],
+      });
+      // The same employee in section A: the structure does not allow D beside it.
+      const sectionA = mutate(
+        '<asiguratB1 B1_1="1" B1_sal1="6000" B1_sal2="4368"',
+        '<asiguratA A_1="1" A_sal1="6000" A_sal2="4368" A_2="0" A_3="N" A_4="8" A_5="4000" A_6="72" A_7="104" A_8="9" A_9="4368" A_11="4368" A_12="437" A_13="4368" A_14="1092" A_13P="0" A_14P="0" A_11P="0" A_12P="0" A_14D="0" A_12D="0" A_13S="0" A_13C="0"/>\n    <asiguratX',
+      )
+        .replace(/ *<asiguratX [^>]*\/>\n( *<asiguratB[234] [^>]*\/>\n){3}/, '')
+        .replace('E3_1="B"', 'E3_1="A"');
+      expect(sectionA).not.toContain('asiguratB');
+      const results = await validateAnaf('D112', {
+        recoverable: mutate('C2_16="368"', 'C2_16="367"'),
+        'daily-average': mutate('D_19="283.46"', 'D_19="283.45"'),
+        'indemnity-base': mutate('B3_7="1913"', 'B3_7="1914"'),
+        'section-a': sectionA,
+        ...Object.fromEntries(
+          Object.entries(rejected).map(([name, model]) => [name, writeD112(model)]),
+        ),
+      });
+      expect(results.recoverable).toStartWith('E:');
+      expect(results.recoverable).toContain('A45');
+      expect(results['daily-average']).toContain('S108');
+      expect(results['indemnity-base']).toContain('S60.1');
+      expect(results['section-a']).toStartWith('F:');
+      expect(results['section-a']).toContain("'asiguratD' este gresit pozitionata");
+      expect(results['family-doctor-11-days']).toContain('S96.11');
+      expect(results['six-employer-days']).toContain('S103');
+      expect(results['base-over-ceiling']).toContain('S106');
     },
     120_000,
   );

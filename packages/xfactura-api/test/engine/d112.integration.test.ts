@@ -1,5 +1,7 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import path from 'node:path';
+import { eq } from 'drizzle-orm';
+import { payrollLines } from '../../source/engine/db/schema';
 import { DukIntegrator } from '../../source/engine/adapters/declaration-validator';
 import { scenario, type Scenario } from './scenario';
 
@@ -91,15 +93,91 @@ async function employer(validator?: DukIntegrator) {
 }
 
 describe('D112 from the books', () => {
-  test('refuses a month with sick leave until the certificates are declared', async () => {
-    const { s, hire, payroll, prepare } = await employer();
+  /** Ill 5–9 October and 19–28 October, on a base from the stage certificate. */
+  const sickMonth = async (validator?: DukIntegrator) => {
+    const scene = await employer(validator);
     // Above the minimum wage: a partial month on it leaves the relief to the expert.
-    const { contractId } = await hire(['Popescu', 'Ana'], cnp('290050117002'), {
+    const { contractId } = await scene.hire(['Popescu', 'Ana'], cnp('290050117002'), {
       baseSalary: '5000',
     });
-    await payroll([
+    const certificate = (number: string, from: string, to: string) => ({
+      series: 'CCMAM',
+      number,
+      code: '01',
+      issued: from,
+      from,
+      to,
+      place: 'family_doctor',
+      diagnosis: '101',
+    });
+    await scene.payroll([
       {
         contractId,
+        sickLeave: [
+          certificate('9', '2026-10-05', '2026-10-09'),
+          certificate('10', '2026-10-19', '2026-10-28'),
+        ],
+        sickBase: { income: '24300', days: 121 },
+      },
+    ]);
+    return { ...scene, prepared: await scene.prepare() };
+  };
+
+  test('declares the certificates the payroll paid, in sections B and D', async () => {
+    const { s, prepared } = await sickMonth();
+    expect(prepared.state).toBe('prepared');
+    const xml = (
+      await s.objects.get(s.company.id, (prepared as unknown as { xmlHash: string }).xmlHash)
+    ).toString();
+    // 24,300 / 121 = 200.826 lei a day: the payroll pays on 200.82, D112 states 200.83. 5–9
+    // October: the first day unpaid, 4 by the employer at 55% (442 lei). 19–28 October: 8 working
+    // days, the first unpaid, 5 by the employer (653) and 2 by FNUASS (261) at 65%.
+    expect(xml.match(/<asiguratD [^>]*\/>/g)).toEqual([
+      '<asiguratD D_1="CCMAM" D_2="9" D_5="05.10.2026" D_6="05.10.2026" D_7="09.10.2026"' +
+        ' D_9="01" D_9b="1" D_10="1" D_14a="5" D_14="4" D_15a="0" D_15="0" D_16a="5" D_16="4"' +
+        ' D_17="24300" D_18="121" D_19="200.83" D_20="442" D_21="0" D_23="101" D_28="55"/>',
+      '<asiguratD D_1="CCMAM" D_2="10" D_5="19.10.2026" D_6="19.10.2026" D_7="28.10.2026"' +
+        ' D_9="01" D_9b="1" D_10="1" D_14a="6" D_14="5" D_15a="2" D_15="2" D_16a="8" D_16="7"' +
+        ' D_17="24300" D_18="121" D_19="200.83" D_20="653" D_21="261" D_23="101" D_28="65"/>',
+    ]);
+    expect(xml).toContain('<asiguratB3 B3_1="11"');
+    expect(xml).toContain('B1_6="72" B1_7="104"');
+    expect(xml).toContain('C2_T6="261" C2_10="261" C2_140="261"');
+    expect(xml).not.toContain('<asiguratA ');
+    // The payroll keeps the diagnosis sealed; only the declaration opens it.
+    const inputs = await s.engine.db.read((tx) =>
+      tx
+        .select({ input: payrollLines.input })
+        .from(payrollLines)
+        .where(eq(payrollLines.companyId, s.company.id)),
+    );
+    expect(inputs.map((row) => row.input).join()).toContain('"diagnosisSealed":"v1.');
+    expect(inputs.map((row) => row.input).join()).not.toContain('"diagnosis"');
+  });
+
+  test('refuses sick pay without certificates, and certificates D112 cannot describe', async () => {
+    const manual = await employer();
+    const { contractId } = await manual.hire(['Popescu', 'Ana'], cnp('290050117002'), {
+      baseSalary: '5000',
+    });
+    await manual.payroll([
+      {
+        contractId,
+        items: [
+          { kind: 'salary', amount: '5000', label: 'Salariu de bază' },
+          { kind: 'sick_employer', amount: '100', label: 'Concediu medical' },
+        ],
+      },
+    ]);
+    expect(JSON.stringify(await manual.s.refused(manual.prepare()))).toContain('D112_SICK_ITEMS');
+
+    const unplaced = await employer();
+    const ana = await unplaced.hire(['Popescu', 'Ana'], cnp('290050117002'), {
+      baseSalary: '5000',
+    });
+    await unplaced.payroll([
+      {
+        contractId: ana.contractId,
         sickLeave: [
           {
             series: 'CCMAM',
@@ -113,7 +191,9 @@ describe('D112 from the books', () => {
         sickBase: { income: '24300', days: 121 },
       },
     ]);
-    expect(JSON.stringify(await s.refused(prepare()))).toContain('D112_SICK_LEAVE');
+    expect(JSON.stringify(await unplaced.s.refused(unplaced.prepare()))).toContain(
+      'D112_SICK_CERTIFICATE',
+    );
   });
 
   test('needs the month posted', async () => {
@@ -138,6 +218,18 @@ describe('D112 from the books', () => {
         null,
       ]);
       expect(JSON.parse(prepared.steps[0]!.detail!)).toMatchObject({ insured: 2 });
+    },
+    120_000,
+  );
+
+  official(
+    "declares a month with medical leave and passes ANAF's validator",
+    async () => {
+      const { prepared } = await sickMonth(new DukIntegrator(dist));
+      expect([prepared.state, prepared.steps.at(-1)?.detail ?? null]).toEqual([
+        'validated_official',
+        null,
+      ]);
     },
     120_000,
   );

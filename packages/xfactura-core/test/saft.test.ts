@@ -23,6 +23,7 @@ import {
   type D406Line,
   type D406Transaction,
 } from '../src/ro/saft/d406';
+import { d406VatCodes, d406VatTaxCode } from '../src/ro/saft/tax-codes';
 
 const customer = d406PartyId({ kind: 'ro', cui: '14399840' });
 const supplier = d406PartyId({ kind: 'ro', cui: '31552803' });
@@ -882,5 +883,93 @@ describe('D406 checks', () => {
     expect(
       codes(model({ salesInvoices: [{ ...model().salesInvoices[0]!, type: '386' }] })),
     ).toEqual(['error:D406_INVOICE_TYPE']);
+  });
+});
+
+describe('D406 VAT codes of the engine', () => {
+  test('quote the description and rate of each TaxCode they map to', () => {
+    for (const row of d406VatCodes) {
+      const code = vatTaxCodes[row.taxCode]!;
+      expect(code.description).toBe(row.description);
+      expect(code.kind).toBe(
+        row.direction === 'output'
+          ? 'sales'
+          : row.deduction === 'none'
+            ? 'nondeductible'
+            : 'purchases',
+      );
+      expect(code.percentage).toBe(
+        row.code.startsWith('EXP-') ? '0' : (row.rate ?? row.code.slice(2)),
+      );
+    }
+    expect(
+      new Set(
+        d406VatCodes.map((row) => `${row.direction}|${row.code}|${row.rate}|${row.deduction}`),
+      ).size,
+    ).toBe(d406VatCodes.length);
+  });
+
+  test('map supplies, acquisitions and reverse charges, and leave the rest unmatched', () => {
+    expect(d406VatTaxCode({ direction: 'output', code: 'S-21' })).toBe('310344');
+    expect(d406VatTaxCode({ direction: 'output', code: 'S-11' })).toBe('310351');
+    expect(d406VatTaxCode({ direction: 'output', code: 'S-19' })).toBe('310309');
+    expect(d406VatTaxCode({ direction: 'input', code: 'S-21', deduction: 'full' })).toBe('301104');
+    expect(d406VatTaxCode({ direction: 'input', code: 'S-21', deduction: 'none' })).toBe('351104');
+    expect(d406VatTaxCode({ direction: 'output', code: 'EXP-EU-SERV' })).toBe('310307');
+    expect(d406VatTaxCode({ direction: 'output', code: 'EXP-NONEU-SERV' })).toBe('310305');
+    // A reverse charge is one operation, reported with the acquisition.
+    expect(d406VatTaxCode({ direction: 'output', code: 'RC-EU-SERV' })).toBeNull();
+    expect(
+      d406VatTaxCode({ direction: 'input', code: 'RC-EU-SERV', rate: '21', deduction: 'full' }),
+    ).toBe('300704');
+    expect(
+      d406VatTaxCode({ direction: 'input', code: 'RC-NONEU-SERV', rate: '21', deduction: 'none' }),
+    ).toBe('350504');
+    for (const entry of [
+      { direction: 'output', code: 'O' },
+      { direction: 'input', code: 'O', deduction: 'full' },
+      { direction: 'output', code: 'S-9' },
+      { direction: 'input', code: 'S-21', deduction: 'partial' },
+      { direction: 'input', code: 'RC-EU-SERV', rate: '11', deduction: 'full' },
+      { direction: 'input', code: 'RC-EU-SERV', deduction: 'full' },
+    ] as const)
+      expect(d406VatTaxCode(entry)).toBeUndefined();
+  });
+});
+
+describe('D406 partners on several accounts', () => {
+  test("are listed once per account, each with that account's balance", () => {
+    const advance: D406Transaction = {
+      id: 'NC-1',
+      date: '2026-10-20',
+      description: 'Avans Client Test SRL',
+      lines: [
+        line('30', '5121', 'debit', '300.00'),
+        line('31', '419', 'credit', '300.00', { customer, document: 'AV-1' }),
+      ],
+    };
+    const base = model();
+    const twice = model({
+      accounts: [
+        ...base.accounts.map((account) =>
+          account.code === '5121' ? { ...account, opening: '30100.00' } : account,
+        ),
+        { code: '419', description: 'Clienți creditori', opening: '-100.00' },
+      ],
+      customers: [...base.customers, { ...base.customers[0]!, account: '419', opening: '-100.00' }],
+      journals: [
+        { ...base.journals[0]!, transactions: [...base.journals[0]!.transactions, advance] },
+      ],
+    });
+    expect(codes(twice)).toEqual([]);
+    expect(calculateD406(twice).customers).toEqual([
+      { id: customer, opening: 100000n, debit: 121000n, credit: 100000n, closing: 121000n },
+      { id: customer, opening: -10000n, debit: 0n, credit: 30000n, closing: -40000n },
+    ]);
+    const xml = writeD406(twice);
+    expect(xml.split('<nsSAFT:Customer>').length - 1).toBe(2);
+    expect(xml).toContain('<nsSAFT:ClosingCreditBalance>400.00</nsSAFT:ClosingCreditBalance>');
+    const repeated = model({ customers: [...base.customers, base.customers[0]!] });
+    expect(codes(repeated)).toContain('error:D406_PARTY_DUPLICATE');
   });
 });

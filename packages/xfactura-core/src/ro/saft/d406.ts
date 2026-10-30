@@ -83,7 +83,9 @@ export type D406Account = {
 
 /**
  * A customer or supplier. `id` is CustomerID/SupplierID and RegistrationNumber, formed by
- * d406PartyId; the GL lines, invoices and payments name the partner by it.
+ * d406PartyId; the GL lines, invoices and payments name the partner by it. A partner with
+ * balances on several accounts (4111 and 419) is listed once per account, each entry with that
+ * account's balance; ANAF's validator (J2.2.8) accepts the repeated id.
  */
 export type D406Party = {
   id: string;
@@ -215,7 +217,8 @@ export type D406Invoice = {
   number: string;
   /** CustomerID (sales) or SupplierID (purchases). */
   party: string;
-  /** AccountID: the partner's account the invoice was recorded on; defaults to the partner's. */
+  /** AccountID: the partner's account the invoice was recorded on; defaults to the partner's
+   * (its first, when it is listed on several). */
   account?: string;
   /** InvoiceDate */
   date: string;
@@ -600,8 +603,14 @@ export function calculateD406(model: D406): D406Calculation {
     credit: 0n,
     closing: 0n,
   });
-  const customers = new Map(model.customers.map((party) => [party.id, partyBalance(party)]));
-  const suppliers = new Map(model.suppliers.map((party) => [party.id, partyBalance(party)]));
+  // A partner's balance is kept per account: a line adds to the entry of its partner and account.
+  const key = (id: string, account: string) => `${id}|${account}`;
+  const customers = new Map(
+    model.customers.map((party) => [key(party.id, party.account), partyBalance(party)]),
+  );
+  const suppliers = new Map(
+    model.suppliers.map((party) => [key(party.id, party.account), partyBalance(party)]),
+  );
   const ledger = { lines: 0, transactions: 0, debit: 0n, credit: 0n };
   const vatCodes = new Set<string>();
   const used = (taxes: readonly D406Tax[] | undefined) => {
@@ -622,9 +631,9 @@ export function calculateD406(model: D406): D406Calculation {
           balance.credit += cents;
         }
         const party =
-          (line.customer && customers.get(line.customer)) ||
-          (line.supplier && suppliers.get(line.supplier));
-        if (party && party.account === line.account) {
+          (line.customer && customers.get(key(line.customer, line.account))) ||
+          (line.supplier && suppliers.get(key(line.supplier, line.account)));
+        if (party) {
           if (line.side === 'debit') party.debit += cents;
           else party.credit += cents;
         }
@@ -812,8 +821,11 @@ export function writeD406(model: D406): string {
   ) => {
     if (!entries.length) return undefined;
     const sales = section === 'SalesInvoices';
+    // A partner listed on several accounts is found by its first entry.
     const parties = new Map(
-      (sales ? model.customers : model.suppliers).map((entry) => [entry.id, entry]),
+      (sales ? model.customers : model.suppliers)
+        .map((entry) => [entry.id, entry] as const)
+        .reverse(),
     );
     return element(
       section,
@@ -1358,13 +1370,13 @@ export function checkD406(model: D406): D406Check[] {
       const reason = partyIdError(entry.id, customer);
       if (reason)
         error('D406_PARTY_ID', `${path}.id`, `Codul ${label}ului ${entry.id}: ${reason}.`);
-      if (seen.has(entry.id))
+      if (seen.has(`${entry.id}|${entry.account}`))
         error(
           'D406_PARTY_DUPLICATE',
           `${path}.id`,
-          `Codul ${entry.id} apare de mai multe ori printre ${kind === 'customers' ? 'clienți' : 'furnizori'}.`,
+          `Codul ${entry.id} apare de mai multe ori printre ${kind === 'customers' ? 'clienți' : 'furnizori'} pe contul ${entry.account}.`,
         );
-      seen.add(entry.id);
+      seen.add(`${entry.id}|${entry.account}`);
       textField(`${path}.name`, entry.name, `denumirea ${label}ului`, 256, true);
       addressCheck(`${path}.address`, entry.address);
     });

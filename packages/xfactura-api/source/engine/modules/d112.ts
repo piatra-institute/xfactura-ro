@@ -9,15 +9,19 @@ import {
   type D112,
   type D112HealthFund,
   type D112Insured,
+  type D112PrescriptionPlace,
+  type D112SickCertificate,
+  type D112SickPercent,
 } from 'xfactura-core/ro/declarations/d112';
 import { counties } from 'xfactura-core/ro/geo';
 import type { MinimumExemption } from 'xfactura-core/ro/payroll';
+import { addDays, type LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
 import { companies, employees, employmentTerms, payrollLines } from '../db/schema';
 import { loadState } from '../kernel/state';
 import { sellerDetails } from './d300';
 import type { DeclarationKind, DeclarationProblem } from './declarations';
-import { postedRun, Sealer } from './payroll';
+import { postedRun, Sealer, type StoredSick } from './payroll';
 
 export const d112Options = z
   .object({
@@ -44,7 +48,7 @@ type PayLineInput = {
   dependents: number;
   unionDues: string;
   minimumExemption: MinimumExemption | null;
-  sick?: unknown[];
+  sick?: StoredSick[];
 };
 
 async function inputsOf(tx: Transaction, companyId: string, month: string) {
@@ -63,7 +67,9 @@ async function inputsOf(tx: Transaction, companyId: string, month: string) {
 /**
  * The monthly declaration of social contributions, wage tax and the insured (D112) from the
  * month's posted payroll run: each employee's contract, days, bases, contributions, deductions
- * and tax as the run computed them, their CNP opened from its seal for the declaration only.
+ * and tax as the run computed them, their CNP opened from its seal for the declaration only. The
+ * medical certificates the run paid are declared as they were paid, their diagnosis code opened
+ * from its seal the same way; sick pay entered by hand, without certificates, is refused.
  */
 export function d112Declaration(secret: string): DeclarationKind {
   const sealer = new Sealer(secret);
@@ -106,6 +112,41 @@ export function d112Declaration(secret: string): DeclarationKind {
           });
         return Number(bani / 100n);
       };
+      /** A certificate as the run paid it: the episode's first day for a continuation, the
+       * base and the amounts in whole lei, the diagnosis opened from its seal. */
+      const certificateOf = (
+        stored: StoredSick,
+        place: D112PrescriptionPlace,
+        diagnosis: string,
+        what: string,
+      ): D112SickCertificate => ({
+        series: stored.series,
+        number: stored.number,
+        ...(stored.continues
+          ? {
+              continues: {
+                ...stored.continues,
+                initialFrom: addDays(stored.to as LocalDate, 1 - stored.episode.days),
+              },
+            }
+          : {}),
+        issued: stored.issued,
+        from: stored.from,
+        to: stored.to,
+        code: stored.code,
+        place,
+        diagnosis: sealer.open(companyId, diagnosis),
+        unpaidDays: stored.unpaidDays,
+        employerDays: stored.employerDays,
+        fundDays: stored.fundDays,
+        base: {
+          income: whole(BigInt(stored.episode.base.income), `${what}: baza de calcul`),
+          days: stored.episode.base.days,
+        },
+        percent: stored.percent as D112SickPercent,
+        employer: whole(BigInt(stored.employer), `${what}: indemnizația angajatorului`),
+        fund: whole(BigInt(stored.fund), `${what}: indemnizația din FNUASS`),
+      });
       const rows = await tx
         .select({ line: payrollLines, terms: employmentTerms, employee: employees })
         .from(payrollLines)
@@ -140,17 +181,37 @@ export function d112Declaration(secret: string): DeclarationKind {
             code: 'D112_EMPLOYEE',
             message: `Salariatul ${name}: completați numele, prenumele și casa de asigurări de sănătate.`,
           });
-        // Medical leave is declared per certificate (the insured's section E), not written yet:
-        // a declaration without it would understate the month.
-        if (pay.sick?.length || pay.items.some((item) => item.kind.startsWith('sick_')))
-          problems.push({
-            code: 'D112_SICK_LEAVE',
-            message: `Salariatul ${name} are concediu medical în lună: certificatele nu sunt încă declarate în D112.`,
-          });
         const items = (kind: string) =>
           pay.items
             .filter((item) => item.kind === kind)
             .reduce((sum, item) => sum + BigInt(item.amount), 0n);
+        const sickLeave = (pay.sick ?? []).flatMap((stored) => {
+          const what = `Salariatul ${name}, certificatul ${stored.series} ${stored.number}`;
+          if (!stored.place || !stored.diagnosisSealed) {
+            problems.push({
+              code: 'D112_SICK_CERTIFICATE',
+              message: `${what}: completați în statul de plată locul de prescriere și codul de diagnostic, pe care D112 le cere.`,
+            });
+            return [];
+          }
+          // D112 knows a hospitalization, which keeps the first day paid, by where it was
+          // prescribed (D_10 = 2).
+          if (stored.hospitalized && stored.place !== 'hospital')
+            problems.push({
+              code: 'D112_SICK_CERTIFICATE',
+              message: `${what} acoperă o spitalizare: locul de prescriere este spitalul.`,
+            });
+          return [certificateOf(stored, stored.place, stored.diagnosisSealed, what)];
+        });
+        // Sick pay is declared per certificate: amounts entered by hand have none.
+        const paid = (key: 'employer' | 'fund') =>
+          (pay.sick ?? []).reduce((sum, stored) => sum + BigInt(stored[key]), 0n);
+        if (items('sick_employer') !== paid('employer') || items('sick_fund') !== paid('fund'))
+          problems.push({
+            code: 'D112_SICK_ITEMS',
+            message: `Salariatul ${name} are indemnizații de concediu medical fără certificatele din care statul de plată le-a calculat: D112 declară concediul medical doar pe certificate.`,
+          });
+        const suspended = (pay.sick ?? []).reduce((days, stored) => days + stored.days, 0);
         const pensioner = pay.minimumExemption === 'pensioner';
         const relief = step('relief');
         const borne = line.casEmployer + line.cassEmployer;
@@ -183,7 +244,8 @@ export function d112Declaration(secret: string): DeclarationKind {
             normHours: 8,
             baseSalary: whole(BigInt(pay.baseSalary), `${name}: salariul de bază`),
             hoursWorked: pay.activeDays * pay.dailyHours,
-            hoursSuspended: 0,
+            // The contract is suspended on every working day of the certificates.
+            hoursSuspended: suspended * pay.dailyHours,
             daysWorked: pay.activeDays,
             unemploymentBase: whole(line.cash, `${name}: salariul`),
             camBase: whole(step('cam.base'), `${name}: baza CAM`),
@@ -211,6 +273,7 @@ export function d112Declaration(secret: string): DeclarationKind {
             tax: whole(line.tax, `${name}: impozitul`),
             paid: whole(line.net, `${name}: suma plătită`),
           },
+          ...(sickLeave.length ? { sickLeave } : {}),
         };
       });
       const details = JSON.parse(seller.details) as Party;

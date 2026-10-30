@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { requireCondition } from 'xfactura-core/errors';
 
 const run = promisify(execFile);
 
@@ -15,6 +16,52 @@ export interface DeclarationValidator {
   readonly id: string;
   validate(kind: string, xml: Uint8Array): Promise<ValidationResult>;
   pdf(kind: string, xml: Uint8Array): Promise<ValidationResult & { pdf?: Uint8Array }>;
+  /** The validator that runs a kind, for one that routes kinds to several; undefined when none
+   * is installed for it. Without it, this validator runs every kind. */
+  for?(kind: string): DeclarationValidator | undefined;
+}
+
+/** The declarations only ANAF's SAF-T kit validates: its DUKIntegrator and `dec` library alone
+ * load the D406 validators. */
+export const saftKinds: readonly string[] = ['D406', 'D406T'];
+/** The SAF-T kit pinned as `anaf-saft` in scripts/validators/sources.json. */
+export const saftKitId = 'DUKIntegrator 1.4.18.3.3 SAF-T';
+
+/**
+ * ANAF's two kits: the SAF-T kit for D406 and D406T, the general DUKIntegrator for every other
+ * declaration. Each kind runs on its own kit, whose id is recorded with the result.
+ */
+export class AnafKits implements DeclarationValidator {
+  readonly id: string;
+
+  constructor(
+    private readonly kits: { general?: DeclarationValidator; saft?: DeclarationValidator },
+  ) {
+    this.id = [kits.general?.id, kits.saft?.id].filter(Boolean).join(', ');
+  }
+
+  for(kind: string) {
+    return saftKinds.includes(kind) ? this.kits.saft : this.kits.general;
+  }
+
+  validate(kind: string, xml: Uint8Array) {
+    return this.kit(kind).validate(kind, xml);
+  }
+
+  pdf(kind: string, xml: Uint8Array) {
+    return this.kit(kind).pdf(kind, xml);
+  }
+
+  private kit(kind: string) {
+    const kit = this.for(kind);
+    requireCondition(
+      kit,
+      'VALIDATOR_UNAVAILABLE',
+      `Validatorul ANAF pentru ${kind} nu este instalat.`,
+      503,
+    );
+    return kit;
+  }
 }
 
 /**

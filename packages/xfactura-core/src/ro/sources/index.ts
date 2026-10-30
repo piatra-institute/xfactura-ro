@@ -163,6 +163,107 @@ export const legalSources: readonly LegalSource[] = [
     ],
   },
   {
+    id: 'ANAF/Cod-procedura-fiscala-2019',
+    kind: 'official_document',
+    title:
+      'Codul de procedură fiscală, text actualizat publicat de ANAF (ultima actualizare: Ordonanța Guvernului nr. 19/2019; ediție din 02.08.2019); textul în vigoare se verifică pe portalul legislativ',
+    issuer: 'ANAF',
+    publication: null,
+    urls: [
+      'https://static.anaf.ro/static/10/Anaf/cod_procedura/Cod_Procedura_Fiscala_08022019.htm',
+    ],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/cod_procedura/Cod_Procedura_Fiscala_08022019.htm',
+        sha256: '0306eb2c13047a04e6c1098bd16c5c6b6dc06590c9d220ecf2ca91951f5e052c',
+        retrievedOn: '2026-10-30',
+        mediaType: 'text/html',
+      },
+    ],
+  },
+  {
+    id: 'L134/2010',
+    kind: 'act',
+    title: 'Legea nr. 134/2010 privind Codul de procedură civilă, republicată',
+    issuer: 'Parlamentul României',
+    publication: null,
+    urls: [],
+    fetch: false,
+    snapshots: [],
+  },
+  {
+    id: 'L82/1991',
+    kind: 'act',
+    title: 'Legea contabilității nr. 82/1991, republicată (text publicat de ANAF)',
+    issuer: 'Parlamentul României',
+    publication: null,
+    urls: ['https://static.anaf.ro/static/10/Anaf/legislatie/Legea_82_1991.pdf'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/legislatie/Legea_82_1991.pdf',
+        sha256: '4ba2780cc74bc427d7b5ec66edb0d83bdb92af1bd8d87e21a97955b7b486c591',
+        retrievedOn: '2026-10-30',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
+    id: 'OPANAF591/2016',
+    kind: 'act',
+    title:
+      'Ordinul președintelui ANAF nr. 591/2016 pentru aprobarea modelului și conținutului formularului (390 VIES) "Declarație recapitulativă privind livrările/achizițiile/prestările intracomunitare" (textul inițial)',
+    issuer: 'ANAF',
+    publication: 'Monitorul Oficial nr. 94 din 8 februarie 2016',
+    urls: ['https://static.anaf.ro/static/10/Anaf/legislatie/OPANAF_591_2016.pdf'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/legislatie/OPANAF_591_2016.pdf',
+        sha256: 'a6cea36cae2ff504017b1aa83dd0f719f2587567c64dc10d95895675d84f2e39',
+        retrievedOn: '2026-10-30',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
+    id: 'OPANAF3769/2015',
+    kind: 'act',
+    title:
+      'Ordinul președintelui ANAF nr. 3.769/2015 privind declararea livrărilor/prestărilor și achizițiilor efectuate pe teritoriul național (D394) (textul inițial; modificat ulterior)',
+    issuer: 'ANAF',
+    publication: 'Monitorul Oficial nr. 11 din 7 ianuarie 2016',
+    urls: ['https://static.anaf.ro/static/10/Anaf/legislatie/OPANAF_3769_2015.pdf'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/legislatie/OPANAF_3769_2015.pdf',
+        sha256: '7b489956f8a3846de8c1733291969c9617e924e123d5d7afb3de4cc9aa1c096e',
+        retrievedOn: '2026-10-30',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
+    id: 'OPANAF1783/2021',
+    kind: 'act',
+    title:
+      'Ordinul președintelui ANAF nr. 1.783/2021 privind fișierul standard de control fiscal (D406): natura informațiilor, modelul, procedura și termenele de transmitere (textul inițial)',
+    issuer: 'ANAF',
+    publication: null,
+    urls: ['https://static.anaf.ro/static/10/Anaf/legislatie/OPANAF_1783_2021.pdf'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/legislatie/OPANAF_1783_2021.pdf',
+        sha256: 'c6fd52add135682f57f54c1e2e174553962c1d94f392fc989632597106177a65',
+        retrievedOn: '2026-10-30',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
     id: 'OMFP1243/2018',
     kind: 'act',
     title:
@@ -674,7 +775,7 @@ export const clauses: readonly Clause[] = [
     locator: 'art. 97 alin. (7) și nota privind art. VII din Legea nr. 141/2025',
     status: 'located',
     summary:
-      'Dividendele plătite persoanelor fizice se impozitează cu 16%, impozit final reținut la plată, pentru dividendele distribuite începând cu 1 ianuarie 2026.',
+      'Dividendele plătite persoanelor fizice se impozitează cu 16%, impozit final reținut la plată și virat până la 25 a lunii următoare plății, pentru dividendele distribuite începând cu 1 ianuarie 2026.',
   },
   {
     id: 'ANAF/Cod-fiscal-consolidat:art.28',
@@ -859,6 +960,95 @@ export const clauses: readonly Clause[] = [
     locator: 'art. 290',
     status: 'pending',
     summary: 'Cursul de schimb pentru baza de impozitare a operațiunilor în valută.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.323(1)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 323 alin. (1)',
+    status: 'located',
+    summary:
+      'Decontul de taxă se depune pentru fiecare perioadă fiscală până la data de 25 inclusiv a lunii următoare încheierii ei.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.147(1)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 147 alin. (1)',
+    status: 'located',
+    summary:
+      'Angajatorii depun lunar declarația 112 până la data de 25 inclusiv a lunii următoare celei pentru care se datorează veniturile.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.56(1)-(2)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 56 alin. (1) și (2)',
+    status: 'located',
+    summary:
+      'Impozitul microîntreprinderilor se calculează și se plătește trimestrial, până la data de 25 inclusiv a lunii următoare trimestrului; declarația se depune până la termenul de plată.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.132(2)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 132 alin. (2)',
+    status: 'located',
+    summary:
+      'Plătitorii de venituri cu reținere la sursă depun declarația pe beneficiari până în ultima zi a lunii februarie inclusiv a anului următor.',
+  },
+  {
+    id: 'ANAF/Cod-procedura-fiscala-2019:art.75',
+    source: 'ANAF/Cod-procedura-fiscala-2019',
+    locator: 'art. 75 (citit și pe portalul legislativ, forma din martie 2026)',
+    status: 'located',
+    summary:
+      'Termenele din legislația fiscală se calculează potrivit Codului de procedură civilă, dacă legislația fiscală nu dispune altfel.',
+  },
+  {
+    id: 'ANAF/Cod-procedura-fiscala-2019:art.155(2)',
+    source: 'ANAF/Cod-procedura-fiscala-2019',
+    locator: 'art. 155 alin. (2) (forma din 2019; forma în vigoare nu a putut fi citită)',
+    status: 'located',
+    summary:
+      'Creanțele administrate de organul fiscal central scadente sau de declarat la 25 decembrie se plătesc și se declară până la 21 decembrie; dacă 21 decembrie este zi nelucrătoare, până în ultima zi lucrătoare dinaintea ei.',
+  },
+  {
+    id: 'L134/2010:art.181(2)',
+    source: 'L134/2010',
+    locator: 'art. 181 alin. (2) (de citit)',
+    status: 'pending',
+    summary:
+      'Un termen care se împlinește într-o zi nelucrătoare se prelungește până la sfârșitul primei zile lucrătoare următoare.',
+  },
+  {
+    id: 'L82/1991:art.36(1)(a)',
+    source: 'L82/1991',
+    locator: 'art. 36 alin. (1) lit. a)',
+    status: 'located',
+    summary:
+      'Societățile depun situațiile financiare anuale în termen de 150 de zile de la încheierea exercițiului financiar.',
+  },
+  {
+    id: 'OPANAF591/2016:anexa4.pct.1.1',
+    source: 'OPANAF591/2016',
+    locator: 'anexa nr. 4 pct. 1.1',
+    status: 'located',
+    summary:
+      'Declarația recapitulativă (390) se depune lunar până la data de 25 inclusiv a lunii următoare celei în care a intervenit exigibilitatea.',
+  },
+  {
+    id: 'OPANAF3769/2015:anexa2.pct.2',
+    source: 'OPANAF3769/2015',
+    locator:
+      'anexa nr. 2 pct. 2 (textul inițial: 25 a lunii următoare; termenul în vigoare a fost modificat și nu este sursat)',
+    status: 'pending',
+    summary:
+      'Termenul de depunere al declarației informative 394 față de încheierea perioadei de raportare.',
+  },
+  {
+    id: 'OPANAF1783/2021:anexa4.pct.1-4',
+    source: 'OPANAF1783/2021',
+    locator: 'anexa nr. 4 pct. 1–4',
+    status: 'located',
+    summary:
+      'D406 se transmite lunar sau trimestrial, după perioada fiscală de TVA (trimestrial pentru cei neînregistrați în scopuri de TVA), până în ultima zi calendaristică a lunii următoare perioadei.',
   },
   {
     id: 'L207/2015:rounding',

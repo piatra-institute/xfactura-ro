@@ -1,14 +1,14 @@
 // Runs ANAF's D406 (SAF-T) validator and the published schema over the writer's synthetic files,
-// and over mutations that must be rejected. The validator runs when DUKIntegrator can load it: the
-// D406 validator needs the `dec` library of the SAF-T kit (dec/DECTagStruct), which the general
-// DUKIntegrator kit lacks. Without it, Java or xmllint the tests are skipped, never passed.
+// and over mutations that must be rejected. The validator runs from ANAF's SAF-T kit: it needs the
+// kit's `dec` library (dec/DECTagStruct), which the general DUKIntegrator kit lacks. Without the
+// kit, Java or xmllint the tests are skipped, never passed.
 import { describe, expect, test } from 'bun:test';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { $ } from 'bun';
-import { anaf, duk, validateAnaf } from './anaf';
+import { anafSaft, saftDuk, validateAnaf } from './anaf';
 import {
   checkD406,
   d406PartyId,
@@ -19,12 +19,7 @@ import {
 
 const root = path.join(import.meta.dir, '../..');
 const xsd = path.join(root, '.sources/ANAF_D406/Ro_SAFT_Schema_v249_2025.xsd');
-const dec = path.join(duk, 'lib/DecValidation.jar');
-const loadable =
-  existsSync(dec) &&
-  Bun.which('unzip') !== null &&
-  Bun.spawnSync(['unzip', '-l', dec]).stdout.toString().includes('dec/DECTagStruct.class');
-const validator = loadable ? anaf : test.skip;
+const validator = existsSync(path.join(saftDuk, 'lib/D406Validator.jar')) ? anafSaft : test.skip;
 const schema = existsSync(xsd) && Bun.which('xmllint') !== null ? test : test.skip;
 
 const customer = d406PartyId({ kind: 'ro', cui: '14399840' });
@@ -534,7 +529,8 @@ function mutate(source: string, marker: string, from: string, to: string) {
 }
 
 /** Files the validator rejects, and files it accepts that ANAF's consistency tests (15, 16)
- * reject after filing: the validator only reads balances and totals. */
+ * reject after filing: the validator does not check the entries' balance, the totals or the
+ * currency conversion (a line 500 lei off its EUR amount × rate passes too). */
 function mutations() {
   const xml = writeD406(files['month-2026-10']!);
   const euro = writeD406(files['month-2026-10-eur']!);
@@ -580,6 +576,7 @@ describe('official D406 validation', () => {
       const results = await validateAnaf(
         'D406',
         Object.fromEntries(Object.entries(files).map(([name, model]) => [name, writeD406(model)])),
+        saftDuk,
       );
       expect(results).toEqual(Object.fromEntries(Object.keys(files).map((name) => [name, 'ok'])));
     },
@@ -587,13 +584,16 @@ describe('official D406 validation', () => {
   );
 
   validator(
-    'DUKIntegrator rejects what its rules cover; balances and totals are left to checkD406',
+    'DUKIntegrator rejects what its rules cover; balances, totals and conversions are left to checkD406',
     async () => {
-      const results = await validateAnaf('D406', mutations());
+      const results = await validateAnaf('D406', mutations(), saftDuk);
       expect(results.account).toContain('planul de conturi');
       expect(results.cui).toContain('formatul este invalid');
-      expect(results.conversion).toContain('CurrencyAmount x ExchangeRate');
       expect(results.period).toContain('nu corespunde cu perioada declarata');
+      // Once a file has an error, DUKIntegrator also lists the 21% codes (in its parameters for
+      // periods from 2025-07) as "nu se afla in lista"; the files without errors pass with them.
+      expect(results.account).toContain("valoarea '310344' nu se afla in lista");
+      expect(results.conversion).toBe('ok');
       expect(results['wrong-total']).toBe('ok');
       expect(results.unbalanced).toBe('ok');
     },

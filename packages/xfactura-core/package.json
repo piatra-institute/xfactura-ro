@@ -34,6 +34,7 @@
     "./ro/treatments/vat-settlement": "./src/ro/treatments/vat-settlement.ts",
     "./ro/declarations/d300": "./src/ro/declarations/d300.ts",
     "./ro/procedure": "./src/ro/procedure.ts",
+    "./ro/obligations": "./src/ro/obligations.ts",
     "./ro/treatments/cross-border": "./src/ro/treatments/cross-border.ts",
     "./ro/declarations/d390": "./src/ro/declarations/d390.ts",
     "./ro/payroll": "./src/ro/payroll/index.ts",
@@ -54,7 +55,8 @@
     "./ro/annual/s1005": "./src/ro/annual/s1005.ts",
     "./ro/annual/s1005-accounts": "./src/ro/annual/s1005-accounts.ts",
     "./ro/saft/d406": "./src/ro/saft/d406.ts",
-    "./ro/saft/accounts": "./src/ro/saft/accounts.ts"
+    "./ro/saft/accounts": "./src/ro/saft/accounts.ts",
+    "./ro/saft/tax-codes": "./src/ro/saft/tax-codes.ts"
   },
   "dependencies": {
     "@noble/hashes": "2.4.0",
