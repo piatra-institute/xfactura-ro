@@ -78,8 +78,8 @@ describe('D205 namespace and catalogues', () => {
       expect(() => d205Namespace(year)).toThrow('2025 și 2026');
   });
 
-  test('lists the dividend code and the structure’s rates', () => {
-    expect(d205IncomeTypes.map(([code]) => code)).toEqual(['08']);
+  test('lists the dividend and interest codes and the structure’s rates', () => {
+    expect(d205IncomeTypes.map(([code]) => code)).toEqual(['08', '09']);
     expect(d205IncomeTypes[0][1]).toContain('venituri din dividende');
     expect(d205DividendRates).toEqual({ 2024: 8, 2025: 10, 2026: 16 });
   });
@@ -483,5 +483,71 @@ describe('D205 checks', () => {
       'warning:D205_TAX',
       'error:D205_TOTAL',
     ]);
+  });
+});
+
+describe('D205 interest (tip_venit 09)', () => {
+  /** An associate's loan: 850 lei of interest paid in two parts, 10% withheld at payment. */
+  const lender = individual({
+    payments: [],
+    interest: [
+      { date: '2026-06-30', gross: 400, tax: 40 },
+      { date: '2026-12-15', gross: 450, tax: 45 },
+    ],
+  });
+
+  test('declares an individual’s interest with its base and tax, without dividend fields', () => {
+    const calculation = calculateD205(model([lender]));
+    expect(calculation.records).toEqual([
+      {
+        id: 1,
+        beneficiary: 0,
+        incomeType: '09',
+        distributed: 0n,
+        paid: 0n,
+        base: 850n,
+        tax: 85n,
+      },
+    ]);
+    expect(calculation.summaries).toEqual([
+      { incomeType: '09', beneficiaries: 1, base: 850n, tax: 85n },
+    ]);
+    expect(calculation.controlSum).toBe(1n + 850n + 85n);
+    const xml = writeD205(model([lender]));
+    const [benef] = elements(xml, 'benef');
+    expect(benef).toContain('tip_venit1="09"');
+    expect(benef).toContain('tip_plata="2"');
+    expect(benef).toContain('Rezid="1"');
+    expect(benef).not.toContain('divid_D');
+    expect(benef).not.toContain('divid_P');
+    expect(codes(model([lender]))).toEqual([]);
+  });
+
+  test('gives an individual with dividends and interest a record of each type', () => {
+    const both = individual({ interest: [{ date: '2026-09-30', gross: 1000, tax: 100 }] });
+    const calculation = calculateD205(model([both, instalments]));
+    expect(calculation.records.map((record) => [record.incomeType, record.beneficiary])).toEqual([
+      ['08', 0],
+      ['09', 0],
+      ['08', 1],
+    ]);
+    expect(
+      calculation.summaries.map((summary) => [summary.incomeType, summary.beneficiaries]),
+    ).toEqual([
+      ['08', 2],
+      ['09', 1],
+    ]);
+    expect(elements(writeD205(model([both, instalments])), 'sect_II')).toHaveLength(2);
+  });
+
+  test('warns on a tax other than 10% and refuses one above the interest or out of the year', () => {
+    const odd = individual({
+      payments: [],
+      interest: [
+        { date: '2026-06-30', gross: 400, tax: 30 },
+        { date: '2025-12-31', gross: 100, tax: 101 },
+      ],
+    });
+    expect(codes(model([odd]))).toEqual(['warning:D205_TAX', 'error:D205_DATE', 'error:D205_TAX']);
   });
 });

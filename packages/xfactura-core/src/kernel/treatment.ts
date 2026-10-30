@@ -39,6 +39,9 @@ export interface ReadPlan {
   payrollRuns?: string[];
   /** Debit and credit turnover of the accounts under some prefixes, posted in a date range. */
   turnover?: TurnoverQuery[];
+  /** What the lines tagged with an analytics item booked on the accounts under some prefixes, per
+   * item, account and open item (a loan's interest accrued on 1682, by loan). */
+  itemLines?: { prefixes: string[] };
   /** Every fixed asset in the register, with the depreciation booked for it. */
   assets?: boolean;
   /**
@@ -96,6 +99,21 @@ export interface AssetState {
   depreciated: bigint;
 }
 
+/** The lines tagged with one analytics item on one account and open item: their debit and credit
+ * in lei and in the currency they carry. */
+export interface ItemLines {
+  item: string;
+  account: string;
+  openItem: string | null;
+  debit: bigint;
+  credit: bigint;
+  debitMinor: bigint;
+  creditMinor: bigint;
+}
+
+/** The read key of an item-lines query, as `Loaded.itemLines` holds it. */
+export const itemLinesKey = (query: { prefixes: string[] }) => [...query.prefixes].sort().join(',');
+
 export interface TurnoverQuery {
   prefixes: string[];
   from: LocalDate;
@@ -119,6 +137,8 @@ export interface OpenItemQuery {
   documentId?: string;
   partyId?: string;
   kind?: OpenItemKind;
+  /** Only items held on accounts under these prefixes (a loan on 1621, 167 or 4551). */
+  accounts?: string[];
   /** Only items whose balance is not zero. */
   openOnly?: boolean;
   /** With each item's schedule (its latest version), when it has one. */
@@ -138,6 +158,7 @@ export interface ReadSetEntry {
     | 'document'
     | 'entry'
     | 'openItem'
+    | 'schedule'
     | 'movement'
     | 'party'
     | 'profile'
@@ -147,6 +168,7 @@ export interface ReadSetEntry {
     | 'artifact'
     | 'payrollRun'
     | 'turnover'
+    | 'itemLines'
     | 'assets'
     | 'partyStatus';
   id: string;
@@ -176,9 +198,10 @@ export interface OpenItemState extends OpenItemInfo {
   /** On request (`history`): the posted entries with lines on the item, in posting order. Each
    * adds a line, so the item's version covers the list. */
   history?: readonly string[];
-  /** The item's schedule, loaded on request: its method and rows, in due order. Rows are written
-   * with the entry that creates them and never change, so the item's version covers them. */
-  schedule?: { method: string; rows: readonly ScheduleRow[] };
+  /** The item's schedule, loaded on request: its latest version's method and rows, in due order.
+   * Rows are written with the entry that creates them and never change; a later version (a loan's
+   * revised plan) is a read of its own. */
+  schedule?: { id: string; version: number; method: string; rows: readonly ScheduleRow[] };
 }
 
 export interface EvidenceRecord {
@@ -337,6 +360,8 @@ export interface Loaded {
   payrollRuns: ReadonlyMap<string, PayrollRunState>;
   /** By `turnoverKey(query)`: each account with posted lines in the range. */
   turnover: ReadonlyMap<string, readonly AccountTurnover[]>;
+  /** By `itemLinesKey(query)`: each item, account and open item with tagged lines. */
+  itemLines: ReadonlyMap<string, readonly ItemLines[]>;
   assets: ReadonlyMap<string, AssetState>;
   /** By `partyStatusKey`: only the statuses a snapshot exists for. */
   partyStatus: ReadonlyMap<string, PartyStatus>;

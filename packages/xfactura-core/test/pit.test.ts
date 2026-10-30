@@ -7,6 +7,7 @@ import {
   classify,
   defaultCatalogue,
   deductibleContributions,
+  distributeByQuota,
   incomeTax,
   journalRows,
   monthlyTotals,
@@ -327,6 +328,14 @@ describe('fixtures built from the texts (not expert-reviewed)', () => {
       );
     expect(norm(40000, null).issues.map((issue) => issue.code)).toEqual(['PIT_NORM_FLOOR']);
     expect(norm(73000, 73).adjusted).toBe(lei(13140));
+  });
+
+  test('an association’s net income is distributed by quota to the leu, adding up (art. 125 alin. (5))', () => {
+    // 45.988 × 60% = 27.592,80 and × 40% = 18.395,20: the leftover leu to the larger remainder.
+    expect(distributeByQuota(lei(45_988), [6000, 4000])).toEqual([lei(27_593), lei(18_395)]);
+    expect(distributeByQuota(lei(100), [3333, 3333, 3334])).toEqual([lei(33), lei(33), lei(34)]);
+    expect(distributeByQuota(0n, [5000, 5000])).toEqual([0n, 0n]);
+    expect(() => distributeByQuota(lei(10.5), [5000, 5000])).toThrow(RangeError);
   });
 
   test('rounding to the leu drops up to 50 bani (art. 66)', () => {

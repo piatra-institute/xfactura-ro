@@ -1,5 +1,5 @@
 import type { Issue } from '../../kernel';
-import { divRound, formatMoney, parseScaled } from '../../money';
+import { allocate, divRound, formatMoney, parseScaled } from '../../money';
 import { natureOf, type LimitKey, type NatureCode } from './natures';
 import type { CasRule, CassRule, LossRule, PitLimits } from './parameters';
 
@@ -207,8 +207,9 @@ export interface NormInput {
 
 /**
  * The adjusted norm (art. 69 alin. (5), (10); norme pct. 8 alin. (6)–(10), (14)): increased by the
- * highest increasing coefficient, the result reduced by the highest reducing one, then reduced
- * pro rata to the days of activity out of 365, rounded to the leu.
+ * highest increasing coefficient, the result reduced by the highest reducing one (`yearly`, the
+ * D212's rd. 8), then reduced pro rata to the days of activity out of 365 (`adjusted`, rd. 9),
+ * each rounded to the leu.
  */
 export function adjustedNorm(input: NormInput, rounding: Rounding) {
   const issues: Issue[] = [];
@@ -228,7 +229,13 @@ export function adjustedNorm(input: NormInput, rounding: Rounding) {
     input.activeDays === null
       ? year
       : divRound(year * BigInt(input.activeDays), 365n, 'halfAwayFromZero');
-  return { increase, reduction, adjusted: toLeu(prorated, rounding), issues };
+  return {
+    increase,
+    reduction,
+    yearly: toLeu(year, rounding),
+    adjusted: toLeu(prorated, rounding),
+    issues,
+  };
 }
 
 export interface LossVintage {
@@ -367,3 +374,16 @@ export function deductibleContributions(
 /** The tax on a taxable income at a rate, rounded to the leu (art. 64, 66, 123). */
 export const incomeTax = (taxable: bigint, rate: string, rounding: Rounding) =>
   toLeu(percentOf(max(taxable, 0n), rate), rounding);
+
+/**
+ * An association's net income or loss in whole lei, distributed to its members by their quotas in
+ * hundredths of a percent (Codul fiscal art. 125 alin. (5)): to the leu, the largest remainders
+ * taking the leftover lei, so that the shares add up to the total.
+ */
+export function distributeByQuota(total: bigint, quotasBp: readonly number[]): bigint[] {
+  if (total % 100n !== 0n) throw new RangeError('The total is distributed in whole lei.');
+  return allocate(
+    total / 100n,
+    quotasBp.map((quota) => BigInt(quota)),
+  ).map((part) => part * 100n);
+}

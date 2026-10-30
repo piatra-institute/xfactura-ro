@@ -75,6 +75,25 @@ const declarations: Record<string, D205> = {
       [{ gross: 4000, tax: 640 }],
     ),
   ]),
+  // An associate's loan: interest paid twice, 10% withheld, beside a shareholder's dividends
+  // and a lender with interest only.
+  interest: declaration([
+    {
+      ...shareholder,
+      interest: [
+        { date: '2026-06-30', gross: 400, tax: 40 },
+        { date: '2026-12-15', gross: 450, tax: 45 },
+      ],
+    },
+    {
+      kind: 'individual',
+      cnp: '2850722170021',
+      name: 'Georgescu Elena',
+      payments: [],
+      unpaid: [],
+      interest: [{ date: '2026-09-30', gross: 1200, tax: 120 }],
+    },
+  ]),
 };
 
 describe('official D205 validation', () => {
@@ -89,6 +108,18 @@ describe('official D205 validation', () => {
       ).toEqual(['warning:D205_COMPANY']);
       expect(checkD205(declarations.rectifying!)).toEqual([]);
       expect(checkD205(declarations['year-end']!)).toEqual([]);
+      expect(checkD205(declarations.interest!)).toEqual([]);
+      expect(
+        calculateD205(declarations.interest!).summaries.map((summary) => [
+          summary.incomeType,
+          summary.beneficiaries,
+          summary.base,
+          summary.tax,
+        ]),
+      ).toEqual([
+        ['08', 1, 30_000n, 4800n],
+        ['09', 2, 2050n, 205n],
+      ]);
       const totals = (name: string) => {
         const { summaries, controlSum } = calculateD205(declarations[name]!);
         return { ...summaries[0], controlSum };

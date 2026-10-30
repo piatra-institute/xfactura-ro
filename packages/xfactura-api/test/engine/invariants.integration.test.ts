@@ -20,6 +20,7 @@ import {
   documentLinks,
   documents,
   employees,
+  enterpriseMembers,
   employmentTerms,
   entries,
   evidence,
@@ -431,6 +432,84 @@ async function sourceRecord(world: World, { form = true } = {}) {
   return { version };
 }
 
+/** A family enterprise with two individual members whose CNPs are sealed (and a third person
+ * without one), and a way to record its agreements' rows. */
+async function memberRecord(world: World, { form = true } = {}) {
+  const evidenceId = randomUUID();
+  const [first, second, unsealed] = [randomUUID(), randomUUID(), randomUUID()];
+  await world.db.write(async (tx) => {
+    await tx.insert(evidence).values({
+      id: evidenceId,
+      companyId: world.company,
+      hash: '7'.repeat(64),
+      filename: 'acord-constituire.pdf',
+      mediaType: 'application/pdf',
+      size: 1,
+      createdBy: world.owner,
+    });
+    if (form)
+      await tx.insert(profileFacts).values({
+        id: randomUUID(),
+        companyId: world.company,
+        axis: 'entity.form',
+        value: 'if',
+        effectiveFrom: '2026-02-01',
+        evidenceId,
+        createdBy: world.owner,
+      });
+    for (const [id, name] of [
+      [first, 'Popescu Ion'],
+      [second, 'Popescu Maria'],
+      [unsealed, 'Popescu Ana'],
+    ] as const)
+      await tx.insert(parties).values({
+        id,
+        companyId: world.company,
+        kind: 'ro_individual',
+        country: 'RO',
+        name,
+        createdBy: world.owner,
+      });
+    for (const partyId of [first, second])
+      await tx.insert(partyCnps).values({
+        companyId: world.company,
+        partyId,
+        cnpSealed: 'v1.a.b.c',
+        createdBy: world.owner,
+      });
+  });
+  const positions = new Map<number, number>();
+  const member = (
+    version: number,
+    partyId: string,
+    quotaBp: number,
+    extra: Partial<typeof enterpriseMembers.$inferInsert> = {},
+  ) => {
+    const position = (positions.get(version) ?? 0) + 1;
+    positions.set(version, position);
+    return world.db.write((tx) =>
+      tx.insert(enterpriseMembers).values({
+        companyId: world.company,
+        version,
+        position,
+        partyId,
+        quotaBp,
+        representative: false,
+        effectiveFrom: '2026-02-01',
+        evidenceId,
+        createdBy: world.owner,
+        ...extra,
+      }),
+    );
+  };
+  /** A complete first agreement: 60% to the representative, 40% to the other member. */
+  const agreement = async () => {
+    await member(1, first, 6000, { representative: true });
+    await member(1, second, 4000);
+  };
+  return { member, agreement, first, second, unsealed };
+}
+
 /** A Romanian supplier with ANAF's answer kept, and a way to record its status snapshots. */
 async function statusRecord(world: World) {
   const partyId = randomUUID();
@@ -669,6 +748,84 @@ const attacks: Attack[] = [
       const { version } = await sourceRecord(world);
       await version(1, { realBasis: 'option' });
       await version(2, { effectiveFrom: '2027-01-01', method: 'norma', realBasis: null });
+    },
+  },
+  {
+    trigger: 'inv_enterprise_member_guard',
+    code: 'enterprise_member_version',
+    name: 'a family enterprise agreement that skips a number',
+    run: async (world) => {
+      const { member, first } = await memberRecord(world);
+      await member(2, first, 6000);
+    },
+  },
+  {
+    trigger: 'inv_enterprise_member_guard',
+    code: 'enterprise_member_form',
+    name: 'members of a company not recorded as a family enterprise',
+    run: async (world) => {
+      const { member, first } = await memberRecord(world, { form: false });
+      await member(1, first, 6000);
+    },
+  },
+  {
+    trigger: 'inv_enterprise_member_guard',
+    code: 'enterprise_member_cnp',
+    name: 'a member whose CNP is not recorded',
+    run: async (world) => {
+      const { member, unsealed } = await memberRecord(world);
+      await member(1, unsealed, 6000);
+    },
+  },
+  {
+    trigger: 'inv_enterprise_member_guard',
+    code: 'enterprise_member_quota',
+    name: 'quotas of the net income over 100%',
+    run: async (world) => {
+      const { member, first, second } = await memberRecord(world);
+      await member(1, first, 6000);
+      await member(1, second, 5000);
+    },
+  },
+  {
+    trigger: 'inv_enterprise_member_guard',
+    code: 'enterprise_member_representative',
+    name: 'two representatives in one agreement',
+    run: async (world) => {
+      const { member, first, second } = await memberRecord(world);
+      await member(1, first, 6000, { representative: true });
+      await member(1, second, 4000, { representative: true });
+    },
+  },
+  {
+    trigger: 'inv_enterprise_member_guard',
+    code: 'enterprise_member_terms',
+    name: 'a member of an agreement from another date than the agreement',
+    run: async (world) => {
+      const { member, first, second } = await memberRecord(world);
+      await member(1, first, 6000, { representative: true });
+      await member(1, second, 4000, { effectiveFrom: '2026-03-01' });
+    },
+  },
+  {
+    trigger: 'inv_enterprise_member_guard',
+    code: 'enterprise_member_complete',
+    name: 'an addendum after an agreement whose quotas do not add to 100%',
+    run: async (world) => {
+      const { member, first, second } = await memberRecord(world);
+      await member(1, first, 6000, { representative: true });
+      await member(1, second, 3000);
+      await member(2, first, 10000, { representative: true, effectiveFrom: '2026-07-01' });
+    },
+  },
+  {
+    trigger: 'inv_enterprise_member_guard',
+    code: 'enterprise_member_dates',
+    name: 'an addendum from the same day as the agreement it follows',
+    run: async (world) => {
+      const { member, agreement, first } = await memberRecord(world);
+      await agreement();
+      await member(2, first, 6000, { representative: true });
     },
   },
   {
@@ -1945,6 +2102,7 @@ describe('append-only records', () => {
     await (await assetRecord(world)).dispose(1, '2026-06-30');
     await (await statusRecord(world)).snapshot(1);
     await (await sourceRecord(world)).version(1);
+    await (await memberRecord(world)).agreement();
     const shareholder = randomUUID();
     await world.db.write(async (tx) => {
       await tx.insert(parties).values({

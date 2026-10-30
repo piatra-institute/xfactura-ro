@@ -9,6 +9,7 @@ import {
   type D205,
   type D205Beneficiary,
 } from 'xfactura-core/ro/declarations/d205';
+import { parseMoney } from 'xfactura-core/money';
 import { counties } from 'xfactura-core/ro/geo';
 import type { Transaction } from '../db/database';
 import {
@@ -108,21 +109,77 @@ async function withholdings(tx: Transaction, companyId: string, year: string) {
   );
 }
 
+/** The year's posted interest withholdings: the gross interest paid, to whom, and the tax. */
+async function interestWithholdings(tx: Transaction, companyId: string, year: string) {
+  const rows = await tx
+    .select({ entry: entries, input: proposalVersions.input })
+    .from(entries)
+    .innerJoin(
+      proposals,
+      and(eq(proposals.companyId, entries.companyId), eq(proposals.id, entries.proposalId)),
+    )
+    .innerJoin(
+      proposalVersions,
+      and(
+        eq(proposalVersions.companyId, entries.companyId),
+        eq(proposalVersions.proposalId, entries.proposalId),
+        eq(proposalVersions.version, entries.version),
+      ),
+    )
+    .where(
+      and(
+        eq(entries.companyId, companyId),
+        eq(proposals.treatmentId, 'loans.withhold'),
+        gte(entries.date, `${year}-01-01`),
+        lte(entries.date, `${year}-12-31`),
+      ),
+    );
+  return Promise.all(
+    rows.map(async ({ entry, input }) => {
+      const given = JSON.parse(input) as { openItem: string; gross: string };
+      const [tax] = await tx
+        .select({ bani: lines.bani })
+        .from(lines)
+        .where(
+          and(
+            eq(lines.companyId, companyId),
+            eq(lines.entryId, entry.id),
+            eq(lines.account, '446'),
+          ),
+        );
+      const [item] = await tx
+        .select({ partyId: openItems.partyId })
+        .from(openItems)
+        .where(and(eq(openItems.companyId, companyId), eq(openItems.id, given.openItem)));
+      return {
+        entryId: entry.id,
+        date: entry.date,
+        partyId: item!.partyId,
+        gross: parseMoney(given.gross, 'RON'),
+        tax: tax?.bani ?? 0n,
+      };
+    }),
+  );
+}
+
 async function inputsOf(tx: Transaction, companyId: string, year: string) {
   const found = await withholdings(tx, companyId, year);
-  const { readSet } = await loadState(tx, companyId, { entries: found.map((row) => row.entryId) });
+  const interest = await interestWithholdings(tx, companyId, year);
+  const { readSet } = await loadState(tx, companyId, {
+    entries: [...found, ...interest].map((row) => row.entryId),
+  });
   const seller = await sellerDetails(tx, companyId);
   const inputs: ReadSetEntry[] = [
     ...readSet,
     ...(seller ? [{ kind: 'party' as const, id: seller.partyId, version: seller.hash }] : []),
   ];
-  return { found, seller, inputs };
+  return { found, interest, seller, inputs };
 }
 
 /**
- * The annual informative declaration of tax withheld (D205), for the dividends paid in a year:
- * one record per individual shareholder, their CNP opened from its seal for the declaration only.
- * Companies are not declared in it.
+ * The annual informative declaration of tax withheld (D205), for the dividends and the interest
+ * paid in a year: per individual, a record of each, their CNP opened from its seal for the
+ * declaration only. Companies are not declared in it.
  */
 export function d205Declaration(secret: string): DeclarationKind {
   const sealer = new Sealer(secret);
@@ -144,7 +201,7 @@ export function d205Declaration(secret: string): DeclarationKind {
     async prepare(tx, companyId, year, raw) {
       const options = d205Options.parse(raw);
       const problems: DeclarationProblem[] = [];
-      const { found, seller, inputs } = await inputsOf(tx, companyId, year);
+      const { found, interest, seller, inputs } = await inputsOf(tx, companyId, year);
       if (!seller)
         problems.push({
           code: 'SELLER_DETAILS',
@@ -155,7 +212,7 @@ export function d205Declaration(secret: string): DeclarationKind {
           problems.push({ code: 'D205_BANI', message: `${what} are subdiviziuni de leu.` });
         return Number(bani / 100n);
       };
-      const ids = [...new Set(found.map((row) => row.partyId))];
+      const ids = [...new Set([...found, ...interest].map((row) => row.partyId))];
       const people = ids.length
         ? await tx
             .select()
@@ -188,12 +245,19 @@ export function d205Declaration(secret: string): DeclarationKind {
             gross: lei(row.gross, `Dividendul neplătit al lui ${party.name}`),
             tax: lei(row.tax, `Impozitul reținut lui ${party.name}`),
           }));
+        const paidInterest = interest
+          .filter((row) => row.partyId === party.id)
+          .map((row) => ({
+            date: row.date,
+            gross: lei(row.gross, `Dobânda plătită lui ${party.name}`),
+            tax: lei(row.tax, `Impozitul pe dobânda reținut lui ${party.name}`),
+          }));
         if (party.kind === 'ro_individual') {
           const sealed = cnps.get(party.id);
           if (!sealed)
             problems.push({
               code: 'D205_CNP',
-              message: `Înregistrați CNP-ul asociatului ${party.name} (parties.recordCnp).`,
+              message: `Înregistrați CNP-ul beneficiarului ${party.name} (parties.recordCnp).`,
             });
           return {
             kind: 'individual',
@@ -201,6 +265,7 @@ export function d205Declaration(secret: string): DeclarationKind {
             name: party.name,
             payments,
             unpaid,
+            ...(paidInterest.length ? { interest: paidInterest } : {}),
           };
         }
         return { kind: 'company', cui: party.taxId ?? '', name: party.name, payments, unpaid };

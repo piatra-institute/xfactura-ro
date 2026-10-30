@@ -53,6 +53,7 @@ export const singleEntryExcluded: Readonly<Record<string, string>> = {
   'accruals.settle': 'cheltuielile și veniturile se recunosc la plată și la încasare',
   'deferrals.defer': 'cheltuielile și veniturile se recunosc la plată și la încasare',
   'deferrals.release': 'cheltuielile și veniturile se recunosc la plată și la încasare',
+  'loans.accrue': 'dobânzile se recunosc la plată',
   'fx.revalue': 'disponibilitățile în valută nu se reevaluează la sfârșitul lunii',
   'year.closeResult': 'nu există rezultat contabil de închis în contul 121',
   'year.legalReserve': 'nu există rezervă legală',

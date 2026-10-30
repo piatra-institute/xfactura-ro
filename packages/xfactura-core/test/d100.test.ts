@@ -35,7 +35,7 @@ const dividends = (
 ): D100DividendTax => ({ kind: 'dividends', beneficiary, withheld, ...extra });
 const other = (extra: Partial<D100OtherObligation> = {}): D100OtherObligation => ({
   kind: 'other',
-  code: '605',
+  code: '608',
   budgetCode: '5503',
   dueDate: '2026-10-25',
   due: 100,
@@ -57,6 +57,7 @@ describe('D100 obligations, namespace and payment number', () => {
       ['121', '5503XXXXXX', 'Impozit pe veniturile microîntreprinderilor'],
       ['604', '5503XXXXXX', 'Impozit pe veniturile din dividende distribuite PF'],
       ['150', '5503XXXXXX', 'Impozit pe dividende distribuite PJ'],
+      ['605', '5503XXXXXX', 'Impozit pe veniturile din dobânzi'],
     ]);
   });
 
@@ -172,10 +173,10 @@ describe('D100 calculation', () => {
       model([micro(120_000), other({ due: 300, deductible: 50, payable: 250, minimumTax: true })]),
     );
     expect(lines[1]).toEqual({
-      code: '605',
+      code: '608',
       budgetCode: '5503XXXXXX',
       dueDate: '2026-10-25',
-      paymentNumber: '10605010926251026000046',
+      paymentNumber: '10608010926251026000049',
       due: 300n,
       deductible: 50n,
       payable: 250n,
@@ -298,6 +299,7 @@ describe('D100 XML', () => {
     ).toThrow('25 ianuarie');
     expect(() => writeD100(model([other({ code: '121' })]))).toThrow('kind micro');
     expect(() => writeD100(model([other({ code: '604' })]))).toThrow('kind dividends');
+    expect(() => writeD100(model([other({ code: '605' })]))).toThrow('kind interest');
     expect(() => writeD100(model([other({ code: '701' })]))).toThrow('Data_IC');
     expect(() => writeD100(model([other({ code: '60' })]))).toThrow('trei cifre');
     expect(() => writeD100(model([other({ budgetCode: '20470101XXX' })]))).toThrow('10 caractere');
@@ -412,5 +414,28 @@ describe('D100 checks', () => {
         }),
       ),
     ).toEqual(['error:D100_TOTAL']);
+  });
+});
+
+describe('D100 interest tax (605)', () => {
+  test('declares the tax withheld on interest, due the 25th of the next month', () => {
+    const { lines, controlSum } = calculateD100(
+      model([{ kind: 'interest', withheld: 85 }], { period: { year: 2026, month: 12 } }),
+    );
+    expect(lines).toEqual([
+      {
+        code: '605',
+        budgetCode: '5503XXXXXX',
+        dueDate: '2027-01-25',
+        paymentNumber: d100PaymentNumber('605', { year: 2026, month: 12 }, '2027-01-25'),
+        due: 85n,
+        deductible: 0n,
+        payable: 85n,
+        refund: 0n,
+        minimumTax: false,
+      },
+    ]);
+    expect(controlSum).toBe(170n);
+    expect(codes(model([{ kind: 'interest', withheld: 1.5 }]))).toContain('error:D100_AMOUNT');
   });
 });

@@ -79,7 +79,7 @@ async function posted(
 }
 
 /** The obligations of a month from the books: the quarter's micro tax in its last month, and the
- * dividend tax withheld in the month. */
+ * dividend and interest tax withheld in the month. */
 async function obligationsOf(tx: Transaction, companyId: string, month: string) {
   const [year, number] = [Number(month.slice(0, 4)), Number(month.slice(5, 7))];
   const end = `${month}-31`;
@@ -97,8 +97,13 @@ async function obligationsOf(tx: Transaction, companyId: string, month: string) 
     from: `${month}-01`,
     to: end,
   });
+  const interest = await posted(tx, companyId, {
+    treatmentId: 'loans.withhold',
+    from: `${month}-01`,
+    to: end,
+  });
   const taxes = new Map<string, bigint>();
-  for (const row of dividends) {
+  for (const row of [...dividends, ...interest]) {
     const [line] = await tx
       .select({ bani: lines.bani })
       .from(lines)
@@ -111,14 +116,14 @@ async function obligationsOf(tx: Transaction, companyId: string, month: string) 
       );
     taxes.set(row.entryId, line?.bani ?? 0n);
   }
-  return { micro, dividends, taxes };
+  return { micro, dividends, interest, taxes };
 }
 
 /**
  * The declaration of obligations to the state budget (D100) for a month, from the books: the
- * micro-enterprise tax posted for the quarter, in its last month, and the dividend tax withheld in
+ * micro-enterprise tax posted for the quarter, in its last month, the dividend tax withheld in
  * the month, for individuals (604) and companies (150), with, in December, the tax on dividends
- * left unpaid at year end.
+ * left unpaid at year end, and the tax withheld on interest paid to individuals (605).
  */
 export function d100Declaration(): DeclarationKind {
   return {
@@ -135,9 +140,9 @@ export function d100Declaration(): DeclarationKind {
     },
     options: d100Options,
     async inputs(tx, companyId, month) {
-      const { micro, dividends } = await obligationsOf(tx, companyId, month);
+      const { micro, dividends, interest } = await obligationsOf(tx, companyId, month);
       const { readSet } = await loadState(tx, companyId, {
-        entries: [...micro, ...dividends].map((row) => row.entryId),
+        entries: [...micro, ...dividends, ...interest].map((row) => row.entryId),
       });
       const seller = await sellerDetails(tx, companyId);
       const inputs: ReadSetEntry[] = [
@@ -150,7 +155,7 @@ export function d100Declaration(): DeclarationKind {
       const options = d100Options.parse(raw);
       const problems: DeclarationProblem[] = [];
       const inputs = await this.inputs(tx, companyId, month);
-      const { micro, dividends, taxes } = await obligationsOf(tx, companyId, month);
+      const { micro, dividends, interest, taxes } = await obligationsOf(tx, companyId, month);
       const seller = await sellerDetails(tx, companyId);
       if (!seller)
         problems.push({
@@ -203,6 +208,16 @@ export function d100Declaration(): DeclarationKind {
           withheld: Number(withheld / 100n),
           ...(unpaid ? { unpaidAtYearEnd: Number(unpaid / 100n) } : {}),
         });
+      }
+      // The tax withheld on interest paid to individuals in the month (605).
+      if (interest.length) {
+        const withheld = interest.reduce((total, row) => total + taxes.get(row.entryId)!, 0n);
+        if (withheld % 100n)
+          problems.push({
+            code: 'D100_BANI',
+            message: 'Impozitul pe dobânzi are subdiviziuni de leu.',
+          });
+        obligations.push({ kind: 'interest', withheld: Number(withheld / 100n) });
       }
       if (!obligations.length)
         problems.push({

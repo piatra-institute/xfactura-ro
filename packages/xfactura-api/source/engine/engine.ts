@@ -29,6 +29,14 @@ import {
 } from 'xfactura-core/ro/treatments/cash';
 import { microDefinitions, microVersions } from 'xfactura-core/ro/micro';
 import { dividendDefinitions, dividendVersions } from 'xfactura-core/ro/dividends';
+import { interestDefinitions, interestVersions } from 'xfactura-core/ro/financing';
+import {
+  interestWithholding,
+  loanAccrual,
+  loanPlan,
+  loanReceipt,
+} from 'xfactura-core/ro/treatments/loans';
+import { leaseCommencement } from 'xfactura-core/ro/treatments/leases';
 import { etvaDefinitions, etvaVersions } from 'xfactura-core/ro/etva';
 import { pitDefinitions, pitVersions } from 'xfactura-core/ro/pit';
 import { dividendDistribution, dividendWithholding } from 'xfactura-core/ro/treatments/dividends';
@@ -79,6 +87,7 @@ import { InvoicerImport, invoicerImportInput, invoicerImportView } from './modul
 import { VatRegisters, vatJournalInput, vatJournalView } from './modules/vat';
 import { bnrImportInput, fxChecks, FxRates, rateQuery } from './modules/fx';
 import { deferralChecks } from './modules/deferrals';
+import { Financing, financingChecks, loansInput } from './modules/financing';
 import { cashRegister, cashRegisterInput } from './modules/cash';
 import { Exports } from './modules/exports';
 import { positionQuery, Positions } from './modules/positions';
@@ -103,6 +112,7 @@ import { d406Declaration } from './modules/d406';
 import { d112Declaration } from './modules/d112';
 import { d205Declaration } from './modules/d205';
 import { d212Declaration } from './modules/d212';
+import { d204Declaration } from './modules/d204';
 import { d100Declaration } from './modules/d100';
 import { calendarInput, obligationsCalendar, obligationView } from './modules/obligations';
 import { s1005Declaration } from './modules/s1005';
@@ -126,6 +136,7 @@ import {
   termsInput,
 } from './modules/payroll';
 import { assetInput, Assets, disposalInput } from './modules/assets';
+import { EnterpriseMembers, membersInput } from './modules/enterprise';
 import {
   fiscalRegister,
   fiscalRegisterInput,
@@ -226,6 +237,7 @@ export const defaultRegister = () =>
       ...sickLeaveDefinitions,
       ...microDefinitions,
       ...dividendDefinitions,
+      ...interestDefinitions,
       ...etvaDefinitions,
       ...pitDefinitions,
     ],
@@ -239,6 +251,7 @@ export const defaultRegister = () =>
       ...sickLeaveVersions,
       ...microVersions,
       ...dividendVersions,
+      ...interestVersions,
       ...etvaVersions,
       ...pitVersions,
     ],
@@ -272,10 +285,12 @@ export class Engine {
   /** The engine's time, for what depends on today (overdue returns). */
   private readonly clock: () => number;
   readonly assets: Assets;
+  readonly financing: Financing;
   readonly etva: Etva;
   readonly anaf: AnafConnections | null;
   readonly partyStatuses: PartyStatuses;
   readonly incomeSources: IncomeSources;
+  readonly enterpriseMembers: EnterpriseMembers;
 
   constructor(
     readonly db: Database,
@@ -329,6 +344,11 @@ export class Engine {
       offset,
       cashMovement,
       expenseReport,
+      loanReceipt,
+      loanPlan,
+      loanAccrual,
+      interestWithholding,
+      leaseCommencement,
       ...(options.treatments ?? []),
     );
     this.actions = new Actions(this.commands);
@@ -338,6 +358,7 @@ export class Engine {
         ...fxChecks,
         ...spvChecks,
         ...deferralChecks,
+        ...financingChecks,
         ...partyStatusChecks,
         ...cashVatChecks((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
         ...pitChecks((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
@@ -410,12 +431,15 @@ export class Engine {
       d100Declaration(),
       s1005Declaration(),
       d212Declaration(secret, (tx, companyId) => this.proposals.ruleContext(tx, companyId)),
+      d204Declaration(secret, (tx, companyId) => this.proposals.ruleContext(tx, companyId)),
       ...(options.declarations ?? []),
     );
     this.actions.add(this.declarations.authorizeHandler());
     this.actions.add(this.declarations.reopenHandler());
     this.assets = new Assets(this.commands);
+    this.financing = new Financing(this.commands);
     this.incomeSources = new IncomeSources(this.commands);
+    this.enterpriseMembers = new EnterpriseMembers(this.commands);
     this.etva = new Etva(this.commands, (tx, companyId) =>
       this.proposals.ruleContext(tx, companyId),
     );
@@ -689,6 +713,30 @@ export class Engine {
         input: z.object({}).strict(),
         output: z.array(z.unknown()),
         run: (actor) => this.incomeSources.list(actor),
+      }),
+      define({
+        id: 'if.members.record',
+        description:
+          'Înregistrează membrii unei întreprinderi familiale după acordul de constituire sau un act adițional: fiecare membru (persoană fizică cu CNP înregistrat), cota din venitul net și din pierdere și reprezentantul.',
+        permission: 'review',
+        agent: false,
+        effect: 'authorize',
+        approval: 'human',
+        input: membersInput,
+        output: z.object({ version: z.number() }),
+        run: (actor, key, input) => this.enterpriseMembers.record(actor, key, input),
+      }),
+      define({
+        id: 'if.members.list',
+        description:
+          'Acordurile unei întreprinderi familiale, cu membrii, cotele și reprezentantul fiecăruia.',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: z.object({}).strict(),
+        output: z.array(z.unknown()),
+        run: (actor) => this.enterpriseMembers.list(actor),
       }),
       define({
         id: 'pfa.journal',
@@ -1004,6 +1052,18 @@ export class Engine {
         input: disposalInput,
         output: z.object({ assetId: z.string(), disposedOn: z.string() }),
         run: (actor, key, input) => this.assets.dispose(actor, key, input),
+      }),
+      define({
+        id: 'loans.list',
+        description:
+          'Împrumuturile și leasingurile financiare la o dată: ce datorează, partea scadentă în 12 luni, dobânda de înregistrat și graficul.',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: loansInput,
+        output: z.array(z.unknown()),
+        run: (actor, _key, input) => this.financing.list(actor, input),
       }),
       define({
         id: 'assets.list',

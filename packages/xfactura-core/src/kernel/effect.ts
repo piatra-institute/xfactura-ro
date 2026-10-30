@@ -21,6 +21,10 @@ export const openItemKinds = [
   'tax.receivable',
   'unapplied.receipt',
   'unapplied.payment',
+  /** Money borrowed (credits, loans, a finance lease's liability), per lender and contract. */
+  'loan.payable',
+  /** Interest accrued on a loan and not yet paid. */
+  'loan.interest',
 ] as const;
 export type OpenItemKind = (typeof openItemKinds)[number];
 /** How an account is controlled: by open items of one kind, by tax entries, or not at all. */
@@ -92,6 +96,7 @@ export interface TaxEntrySpec {
 export interface ScheduleRow {
   key: string;
   due: LocalDate;
+  /** In the open item's currency, in minor units: bani for an item in lei. */
   bani: bigint;
   counterAccount: string;
 }

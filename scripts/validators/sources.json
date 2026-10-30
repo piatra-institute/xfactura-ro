@@ -86,6 +86,15 @@
       "into": "dist/lib"
     },
     {
+      "name": "anaf",
+      "description": "ANAF D204 validator and PDF generator (J3.0.14 / P2.0.2, 16.01.2026): annual return of associations without legal personality, structure declaratie:v3 for an >= 2018 (CAEN Rev. 2 to 2024, Rev. 2 and Rev. 3 from 2025). It loads in both kits; installed in the general one",
+      "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/D204_16012026.zip",
+      "sha256": "5679dd855e0142f066a3715101ed803e079f3dba2416d3f43ccf529bdd541aee",
+      "extract": ["D204_16012026/D204Validator.jar", "D204_16012026/D204Pdf.jar"],
+      "into": "dist/lib",
+      "flatten": true
+    },
+    {
       "name": "anaf-saft",
       "description": "ANAF's SAF-T kit (DUKIntegrator 1.4.18.3.3 with the D406 and D406T validators J2.2.8, 16.02.2026), in its own folder: its DUKIntegrator and dec libraries differ from the general kit's, and only they load the D406 validator; the Windows JREs are not extracted",
       "url": "https://static.anaf.ro/static/10/Anaf/Informatii_R/duk_SAFT_an_luna_20260216.zip",

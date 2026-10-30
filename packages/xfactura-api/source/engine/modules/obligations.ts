@@ -11,6 +11,7 @@ import {
   artifacts,
   entries,
   fiscalYears,
+  incomeSources,
   proposals,
   taxEntries,
 } from '../db/schema';
@@ -62,6 +63,18 @@ export const obligationView = z.object({
   /** The parameter versions the deadline was read from, or why it could not be. */
   versions: z.array(z.string()),
   gap: z.string().nullable(),
+  /** Official texts that disagree on the deadline: each reading with its date and clauses. The
+   * due date is the earliest, until an expert contabil settles it. */
+  conflict: z
+    .array(
+      z.object({
+        due: z.string(),
+        nominal: z.string(),
+        clauses: z.array(z.string()),
+        text: z.string(),
+      }),
+    )
+    .nullable(),
 });
 type ObligationView = z.infer<typeof obligationView>;
 
@@ -116,6 +129,23 @@ const statusOf = (state: string): ObligationView['status'] =>
           ? state
           : 'prepared';
 
+/** Whether an income source in the real system was active in a year (its version at the end). */
+async function realSourceIn(tx: Transaction, companyId: string, year: string) {
+  const rows = await tx
+    .select()
+    .from(incomeSources)
+    .where(eq(incomeSources.companyId, companyId))
+    .orderBy(asc(incomeSources.sourceId), asc(incomeSources.seq));
+  return [...Map.groupBy(rows, (row) => row.sourceId).values()].some((versions) => {
+    const current = versions.filter((row) => row.effectiveFrom <= `${year}-12-31`).at(-1);
+    return (
+      current?.method === 'sistem_real' &&
+      current.startedOn <= `${year}-12-31` &&
+      (!current.endedOn || current.endedOn >= `${year}-01-01`)
+    );
+  });
+}
+
 /** Months in which a treatment posted, from its entries. */
 async function postingMonths(
   tx: Transaction,
@@ -156,7 +186,10 @@ async function postingMonths(
  * - S1005 for each financial year kept in double entry (the company's size category is not
  *   checked: the engine prepares only the microentities' statements);
  * - D212 for each income year of a PFA, II or IF (`entity.form` at the year's end), by 25 May of
- *   the next (Codul fiscal art. 122 alin. (3)); for an IF each member files their own.
+ *   the next (Codul fiscal art. 122 alin. (3)); for an IF each member files their own;
+ * - D204 for each income year of an IF with an income source in the real system (art. 125 alin.
+ *   (4); not for norms, alin. (1) lit. c)); the Code and the form's instructions disagree on its
+ *   deadline, and both are shown.
  * A deadline the rule register does not source is `blocked`, never guessed.
  */
 export async function obligationsCalendar(
@@ -222,6 +255,12 @@ export async function obligationsCalendar(
       add('D205', label.slice(0, 4));
     if (label.endsWith('-12') && individualForms.includes(entityFormOf(loaded.profile, end)))
       add('D212', label.slice(0, 4));
+    if (
+      label.endsWith('-12') &&
+      entityFormOf(loaded.profile, end) === 'if' &&
+      (await realSourceIn(tx, companyId, label.slice(0, 4)))
+    )
+      add('D204', label.slice(0, 4));
   }
   const years = await tx
     .select()
@@ -257,6 +296,13 @@ export async function obligationsCalendar(
             artifactId: artifact?.artifactId ?? null,
             versions: deadline.versions,
             gap: null,
+            conflict:
+              deadline.conflict?.map((reading) => ({
+                due: reading.due,
+                nominal: reading.nominal,
+                clauses: reading.clauses,
+                text: reading.text,
+              })) ?? null,
           };
         } catch (error) {
           if (!(error instanceof RuleGapError)) throw error;
@@ -270,6 +316,7 @@ export async function obligationsCalendar(
             artifactId: artifact?.artifactId ?? null,
             versions: [],
             gap: error.message,
+            conflict: null,
           };
         }
       })

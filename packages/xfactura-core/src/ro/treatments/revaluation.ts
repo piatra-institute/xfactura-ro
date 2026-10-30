@@ -2,10 +2,12 @@ import { z } from 'zod';
 import type { Effect, Issue, LineSpec, OpenItemKind, Treatment } from '../../kernel';
 import { convertMinor, LEDGER_CURRENCY } from '../../money';
 import { isLocalDate, monthEnd, monthOf, type LocalDate } from '../../time';
+import { INDEXED_LEASE_METHOD } from '../financing';
 import { selectRate } from '../fx';
 
 /** Monetary items are settled in a fixed amount of currency and are revalued; advances and
- * deferrals are not. */
+ * deferrals are not. Loans and their interest are (OMFP 1802/2014, the functions of accounts 162,
+ * 167, 168 and 519). */
 const monetary = new Set<OpenItemKind>([
   'receivable',
   'payable',
@@ -13,6 +15,8 @@ const monetary = new Set<OpenItemKind>([
   'accrual.receivable',
   'unapplied.receipt',
   'unapplied.payment',
+  'loan.payable',
+  'loan.interest',
 ]);
 
 export const revaluationInput = z
@@ -31,6 +35,8 @@ export type RevaluationInput = z.infer<typeof revaluationInput>;
  * Revalues foreign-currency monetary items and bank or cash balances at the month-end reference
  * rate: each balance is brought to its currency amount at that rate, and the differences are
  * exchange gains (7651) or losses (6651) on monetary items. The currency amounts do not change.
+ * A finance lease settled in lei at a currency's rate is a liability in lei: its differences are
+ * other financial revenue (768) or expense (668), by the functions of account 167.
  */
 export const revaluation: Treatment<RevaluationInput> = {
   id: 'fx.revalue',
@@ -41,7 +47,7 @@ export const revaluation: Treatment<RevaluationInput> = {
   agent: true,
   subject: (input) => `fx.revalue:${input.date}:${input.round}`,
   plan: (input) => ({
-    openItems: [{ foreign: true, openOnly: true }],
+    openItems: [{ foreign: true, openOnly: true, schedules: true }],
     foreignBalances: { at: input.date },
     profile: true,
   }),
@@ -66,11 +72,14 @@ export const revaluation: Treatment<RevaluationInput> = {
     const lines: LineSpec[] = [];
     let gains = 0n;
     let losses = 0n;
+    let indexedGains = 0n;
+    let indexedLosses = 0n;
     const revalue = (
       target: Omit<LineSpec, 'side' | 'bani'>,
       currency: string,
       bani: bigint,
       minor: bigint,
+      indexed = false,
     ) => {
       if (currency === LEDGER_CURRENCY) return;
       const rate = selectRate(loaded, rules, currency, input.date, 'accounting');
@@ -91,7 +100,10 @@ export const revaluation: Treatment<RevaluationInput> = {
         currency: { code: currency, minor: 0n, rateId: rate.id, rate: rate.rate },
       });
       // A higher debit balance or a lower credit balance is a gain.
-      if (increase) gains += amount;
+      if (indexed) {
+        if (increase) indexedGains += amount;
+        else indexedLosses += amount;
+      } else if (increase) gains += amount;
       else losses += amount;
     };
     for (const item of loaded.openItems.values())
@@ -101,6 +113,7 @@ export const revaluation: Treatment<RevaluationInput> = {
           item.currency,
           item.balanceBani,
           item.balanceMinor,
+          item.schedule?.method === INDEXED_LEASE_METHOD,
         );
     for (const balance of loaded.balances)
       revalue({ account: balance.account }, balance.currency, balance.bani, balance.minor);
@@ -129,6 +142,20 @@ export const revaluation: Treatment<RevaluationInput> = {
         side: 'D',
         bani: losses,
         memo: 'Diferențe de curs nerealizate',
+      });
+    if (indexedGains)
+      lines.push({
+        account: '768',
+        side: 'C',
+        bani: indexedGains,
+        memo: 'Diferențe din evaluarea datoriilor în lei decontate la cursul unei valute',
+      });
+    if (indexedLosses)
+      lines.push({
+        account: '668',
+        side: 'D',
+        bani: indexedLosses,
+        memo: 'Diferențe din evaluarea datoriilor în lei decontate la cursul unei valute',
       });
     const effect: Effect = {
       schema: 'effect@1',

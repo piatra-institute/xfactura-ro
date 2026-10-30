@@ -11,6 +11,7 @@ import {
   checkD212,
   writeD212,
   type D212,
+  type D212Norm,
 } from '../../packages/xfactura-core/src/ro/declarations/d212';
 
 const validator = existsSync(path.join(saftDuk, 'lib/D212Validator.jar')) ? anafSaft : test.skip;
@@ -47,7 +48,7 @@ const declaration = (overrides: Partial<D212> = {}): D212 => ({
   ...overrides,
 });
 
-const activity = declaration().activity;
+const activity = declaration().activity!;
 const declarations: Record<string, D212> = {
   'cas-and-cass': declaration(),
   // 100,000 lei: CAS on 24 wages (79,200 lei), CASS 10,000, taxable 70,200.
@@ -92,7 +93,48 @@ const declarations: Record<string, D212> = {
     tax: { deductibleCas: 0, deductibleCass: 4599, due: 4139 },
   }),
   rectifying: declaration({ rectifies: { income: true, option: false } }),
+  // A member of an association (forma_org 2): only the net income distributed, 45,988 lei.
+  member: declaration({
+    activity: {
+      caen: activity.caen,
+      seat: activity.seat,
+      authorization: activity.authorization,
+      association: { number: '45/2020', date: '2020-02-10', net: 45_988, loss: 0 },
+      carriedLosses: 0,
+      offsetLoss: 0,
+    },
+  }),
+  // On a norm, started on 2 December 2024 (the structure's Subsection 2 is for those only):
+  // 40,000 × 1.10 × 0.80 = 35,200 lei, × 30/365 days = 2,893 lei; CASS on 6 × 3,300 lei.
+  norm: normDeclaration(),
+  'norm-member': normDeclaration({ association: true }),
 };
+
+function normDeclaration(overrides: Partial<D212Norm> = {}): D212 {
+  const { activity: _, ...model } = declaration({
+    cas: null,
+    cass: { base: 19_800, due: 1980, minimumDifference: 1691 },
+    tax: { deductibleCas: 0, deductibleCass: 0, due: 0 },
+  });
+  return {
+    ...model,
+    norm: {
+      association: false,
+      caen: '9602',
+      seat: 'Str. Lunga nr. 10, Galati',
+      authorization: { number: '77/2024', date: '2024-11-25' },
+      startedOn: '2024-12-02',
+      activeDays: 30,
+      norm: 40_000,
+      increase: { percent: '10', criterion: '01' },
+      reduction: { percent: '20', criterion: '05' },
+      adjusted: 35_200,
+      net: 2893,
+      tax: 289,
+      ...overrides,
+    },
+  };
+}
 
 describe('official D212 validation', () => {
   validator(
@@ -159,6 +201,49 @@ describe('official D212 validation', () => {
       expect(results['option-total']).toContain('Rcass_estimat');
       expect(results['filing-year']).toContain('namespace');
       expect(results.negative).toContain('nu se incadreaza in intervalul cerut');
+      for (const result of Object.values(results)) expect(result).not.toBe('ok');
+    },
+    180_000,
+  );
+
+  validator(
+    'DUKIntegrator rejects a norm without cap12, a coefficient row, a Rev. 3 CAEN, a member’s form 4',
+    async () => {
+      const norm = writeD212(declarations.norm!);
+      const member = writeD212(declarations.member!);
+      const mutate = (source: string, from: string | RegExp, to: string) => {
+        expect(source).toMatch(from);
+        return source.replace(from, to);
+      };
+      const results = await validateAnaf(
+        'D212',
+        {
+          'no-cap12': mutate(norm, /\s*<cap12[^>]*\/>/, ''),
+          // The web form's coefficient rows are not in this structure.
+          corectie: mutate(
+            norm,
+            /<cap12([^>]*)\/>/,
+            '<cap12$1><corectie criteriu="01" coeficient_majorare="10.00"/></cap12>',
+          ),
+          'norm-caen': mutate(norm, 'norma_caen="9602"', 'norma_caen="6210"'),
+          // A real-system flag without cap11 (R7).
+          'real-flag': mutate(norm, 'bifa111="0"', 'bifa111="1"'),
+          'member-form': mutate(member, 'forma_org="2"', 'forma_org="4"'),
+          // The web form's association contract is not in this structure.
+          'member-contract': mutate(
+            member,
+            ' venit_net_anual=',
+            ' nr_doc_asociere="45/2020" venit_net_anual=',
+          ),
+        },
+        saftDuk,
+      );
+      expect(results['no-cap12']).toContain('R8');
+      expect(results.corectie).toContain("element necunoscut ('corectie')");
+      expect(results['norm-caen']).toContain("norma_caen: valoarea '6210' nu se afla in lista");
+      expect(results['real-flag']).toContain('R7');
+      expect(results['member-form']).toContain('nu se incadreaza in intervalul cerut');
+      expect(results['member-contract']).toContain('atribut necunoscut');
       for (const result of Object.values(results)) expect(result).not.toBe('ok');
     },
     180_000,

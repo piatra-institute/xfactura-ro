@@ -5,12 +5,24 @@ import {
   d212Format,
   writeD212,
   type D212,
+  type D212Activity,
+  type D212Norm,
 } from '../src/ro/declarations/d212';
 import { isValidIban } from '../src/ro/identifiers';
 
 // Synthetic people and amounts. Every expected figure is computed by hand from the structures'
 // formulas, not by the writer.
 const cnp = '1781105170030'; // digits sum to 34
+
+const activity: D212Activity = {
+  caen: '6201',
+  seat: 'Str. Exemplu nr. 1, Cluj-Napoca',
+  authorization: { number: 'F12/345/2023', date: '2023-12-20' },
+  gross: 150_000,
+  deductible: 30_000,
+  carriedLosses: 0,
+  offsetLoss: 0,
+};
 
 const declaration = (overrides: Partial<D212> = {}): D212 => ({
   year: 2025,
@@ -23,15 +35,7 @@ const declaration = (overrides: Partial<D212> = {}): D212 => ({
     email: 'ion.popescu@example.test',
     iban: 'RO49AAAA1B31007593840000',
   },
-  activity: {
-    caen: '6201',
-    seat: 'Str. Exemplu nr. 1, Cluj-Napoca',
-    authorization: { number: 'F12/345/2023', date: '2023-12-20' },
-    gross: 150_000,
-    deductible: 30_000,
-    carriedLosses: 0,
-    offsetLoss: 0,
-  },
+  activity,
   casStatus: 'liable',
   // 120,000 lei is at least 24 minimum wages (97,200): CAS on 97,200 lei.
   cas: { base: 97_200, due: 24_300 },
@@ -216,7 +220,7 @@ describe('D212 for the income of 2025: the web form’s structure', () => {
     // 20,000 lei net: CASS 2,430 on the minimum base, of which 430 only to reach it; the form's
     // rd.5 of 4.2 is 10% of 20,000 = 2,000, and that is what is deducted.
     const model = declaration({
-      activity: { ...declaration().activity, gross: 26_000, deductible: 6000 },
+      activity: { ...activity, gross: 26_000, deductible: 6000 },
       cas: null,
       cass: { base: 24_300, due: 2430, minimumDifference: 430 },
       tax: { deductibleCas: 0, deductibleCass: 2000, due: 1800 },
@@ -243,7 +247,7 @@ describe('D212 for the income of 2025: the web form’s structure', () => {
 
   test('a loss: no contributions, rd.9 not written, and the CASS option for 2026', () => {
     const model = declaration({
-      activity: { ...declaration().activity, gross: 10_000, deductible: 15_000, carriedLosses: 0 },
+      activity: { ...activity, gross: 10_000, deductible: 15_000, carriedLosses: 0 },
       cas: null,
       cass: null,
       tax: { deductibleCas: 0, deductibleCass: 0, due: 0 },
@@ -305,7 +309,7 @@ describe('D212 for the income of 2025: the web form’s structure', () => {
     // 45,000 net, 40,000 carried: at most 31,500 offset, 13,500 recalculated.
     const model = declaration({
       activity: {
-        ...declaration().activity,
+        ...activity,
         gross: 50_000,
         deductible: 5000,
         carriedLosses: 40_000,
@@ -322,7 +326,7 @@ describe('D212 for the income of 2025: the web form’s structure', () => {
       pierdere_compensata: '31500',
       venit_recalculat: '13500',
     });
-    expect(errors({ ...model, activity: { ...model.activity, offsetLoss: 30_000 } })).toContain(
+    expect(errors({ ...model, activity: { ...model.activity!, offsetLoss: 30_000 } })).toContain(
       'D212_LOSS',
     );
   });
@@ -332,7 +336,7 @@ describe('D212 for the income of 2024: D212_A1.0.3', () => {
   // 45,988 lei net: CAS on 12 × 3,300 = 39,600 lei (9,900), CASS 4,599, taxable 31,489, tax 3,149.
   const model = declaration({
     year: 2024,
-    activity: { ...declaration().activity, gross: 50_000, deductible: 4012 },
+    activity: { ...activity, gross: 50_000, deductible: 4012 },
     cas: { base: 39_600, due: 9900 },
     cass: { base: 45_988, due: 4599, minimumDifference: 0 },
     tax: { deductibleCas: 9900, deductibleCass: 4599, due: 3149 },
@@ -407,7 +411,7 @@ describe('D212 for the income of 2024: D212_A1.0.3', () => {
     expect(
       errors({
         ...model,
-        activity: { ...model.activity, gross: 30_000, deductible: 0 },
+        activity: { ...model.activity!, gross: 30_000, deductible: 0 },
         cas: { base: 39_600, due: 9900 },
         cass: { base: 30_000, due: 3000, minimumDifference: 0 },
         tax: { deductibleCas: 9900, deductibleCass: 3000, due: 1710 },
@@ -418,7 +422,7 @@ describe('D212 for the income of 2024: D212_A1.0.3', () => {
   test('a loss writes zero tax in rd.9 and no Section 4', () => {
     const loss = declaration({
       year: 2024,
-      activity: { ...declaration().activity, gross: 3000, deductible: 4958, carriedLosses: 1000 },
+      activity: { ...activity, gross: 3000, deductible: 4958, carriedLosses: 1000 },
       cas: null,
       cass: null,
       tax: { deductibleCas: 0, deductibleCass: 0, due: 0 },
@@ -439,7 +443,7 @@ describe('D212 controls', () => {
   test('the Code drops 50 bani, the form rounds them up: a warning for the expert', () => {
     // 45,045 lei: 10% is 4,504.50 lei. Art. 66 gives 4,504, the form's math.round 4,505.
     const half = declaration({
-      activity: { ...declaration().activity, gross: 50_000, deductible: 4955 },
+      activity: { ...activity, gross: 50_000, deductible: 4955 },
       cas: null,
       cass: { base: 45_045, due: 4504, minimumDifference: 0 },
       tax: { deductibleCas: 0, deductibleCass: 4504, due: 4054 },
@@ -453,7 +457,7 @@ describe('D212 controls', () => {
     expect(
       warnings(
         declaration({
-          activity: { ...declaration().activity, gross: 60_000, deductible: 11_398 },
+          activity: { ...activity, gross: 60_000, deductible: 11_398 },
           cas: { base: 48_602, due: 12_150 },
           cass: { base: 48_602, due: 4860, minimumDifference: 0 },
           tax: { deductibleCas: 12_150, deductibleCass: 4860, due: 3159 },
@@ -491,14 +495,14 @@ describe('D212 controls', () => {
 
   test('the structure’s dates and authorization', () => {
     const base = declaration();
-    expect(errors({ ...base, activity: { ...base.activity, startedOn: '2024-12-01' } })).toEqual([
+    expect(errors({ ...base, activity: { ...base.activity!, startedOn: '2024-12-01' } })).toEqual([
       'D212_DATE',
     ]);
     expect(
       errors({
         ...base,
         activity: {
-          ...base.activity,
+          ...base.activity!,
           authorization: { number: 'F12/345/2023-REG', date: '2023-12-20' },
         },
         year: 2024,
@@ -509,7 +513,7 @@ describe('D212 controls', () => {
     ).toEqual(['D212_AUTHORIZATION']);
     const xml = writeD212({
       ...base,
-      activity: { ...base.activity, startedOn: '2025-03-01', suspendedOn: '2025-10-01' },
+      activity: { ...base.activity!, startedOn: '2025-03-01', suspendedOn: '2025-10-01' },
     });
     expect(values(xml, 'cap11')).toMatchObject({
       data_incep: '01.03.2025',
@@ -527,5 +531,202 @@ describe('D212 controls', () => {
       totals: { tax: 8370, cas: 24_300, cass: 12_000, payable: 44_670 },
       controlSum: 34,
     });
+  });
+});
+
+describe('D212 on a norm (Subsection 2) and for a member of an association', () => {
+  // Income of 2025 on a norm: 50,000 lei, +10% (criterion 01), −20% (criterion 05): 44,000 lei
+  // for the whole year. Under 12 × 4,050 lei: no CAS; CASS 4,400; the norm's tax 4,400.
+  const norm: D212Norm = {
+    association: false,
+    caen: '1413',
+    seat: 'Str. Exemplu nr. 2, Iași',
+    authorization: { number: 'F22/77/2024', date: '2024-12-10' },
+    norm: 50_000,
+    increase: { percent: '10', criterion: '01' },
+    reduction: { percent: '20', criterion: '05' },
+    adjusted: 44_000,
+    net: 44_000,
+    tax: 4400,
+  };
+  const onNorm = (overrides: Partial<D212Norm> = {}, model: Partial<D212> = {}): D212 => {
+    const { activity: _, ...rest } = declaration({
+      cas: null,
+      cass: { base: 44_000, due: 4400, minimumDifference: 0 },
+      tax: { deductibleCas: 0, deductibleCass: 0, due: 0 },
+      ...model,
+    });
+    return { ...rest, norm: { ...norm, ...overrides } };
+  };
+
+  test('the web form’s cap12: the place’s rows and its coefficients; no Section 4', () => {
+    const model = onNorm();
+    expect(errors(model)).toEqual([]);
+    // The place's county, locality and street are nomenclator codes the form loads.
+    expect(warnings(model)).toEqual(['D212_NORMA_PLACE']);
+    const xml = writeD212(model);
+    expect(values(xml, 'd212')).toMatchObject({ bifa111: '0', bifa112: '1', bifa14: '0' });
+    expect(values(xml, 'oblig_realizat')).toMatchObject({
+      cass_total_ven_ai: '44000',
+      baza_cass_datorat_ai: '44000',
+      cass_datorat_ai: '4400',
+      oblimpoz_real_total: '4400',
+      dif_de_plata: '8800',
+    });
+    expect(xml).not.toContain('real_venit_net_recalculat_ai');
+    expect(xml).not.toContain('<cap11');
+    expect(attributes(xml, 'cap12')).toEqual([
+      ['norma_forma_org', '1'],
+      ['norma_nr_doc_autoriz', 'F22/77/2024'],
+      ['norma_data_doc_autoriz', '10.12.2024'],
+      ['norma_venit_impozabil', '44000'],
+      ['norma_impozit', '4400'],
+    ]);
+    expect(attributes(xml, 'norma_loc')).toEqual([
+      ['norma_isPGL', '0'],
+      ['norma_caen', '1413'],
+      ['real_norma_venit', '50000'],
+      ['real_ajustare', '44000'],
+      ['real_venit_net_anual', '44000'],
+      ['real_venit_impozit', '44000'],
+    ]);
+    expect([...xml.matchAll(/<corectie ([^>]*)\/>/g)].map((match) => match[1])).toEqual([
+      'criteriu="01" coeficient_majorare="10.00"',
+      'criteriu="05" coeficient_reducere="20.00"',
+    ]);
+    // Without coefficients the form writes 0 for rd. 8.
+    const plain = writeD212(
+      onNorm(
+        { increase: undefined, reduction: undefined, norm: 44_000 },
+        { cass: { base: 44_000, due: 4400, minimumDifference: 0 } },
+      ),
+    );
+    expect(values(plain, 'norma_loc').real_ajustare).toBe('0');
+    expect(plain).not.toContain('<corectie');
+  });
+
+  test('part of a year: rd. 9 is rd. 8 over 365 days; a December 2024 start in D212_A1.0.3', () => {
+    // From 1 April: 275 days. 44,000 × 275 / 365 = 33,150.68 → 33,151 lei.
+    const april = onNorm(
+      { startedOn: '2025-04-01', activeDays: 275, net: 33_151, tax: 3315 },
+      { cass: { base: 33_151, due: 3315, minimumDifference: 0 } },
+    );
+    expect(errors(april)).toEqual([]);
+    expect(values(writeD212(april), 'norma_loc')).toMatchObject({
+      norma_data_incep: '01.04.2025',
+      real_venit_net_anual: '33151',
+    });
+    // The register drops 50 bani (art. 66), the form rounds them up: one leu, a warning.
+    expect(
+      warnings(
+        onNorm(
+          { startedOn: '2025-04-01', activeDays: 275, net: 33_150, tax: 3315 },
+          { cass: { base: 33_150, due: 3315, minimumDifference: 0 } },
+        ),
+      ),
+    ).toContain('D212_ROUNDING');
+    // D212_A1.0.3's Subsection 2 is for an activity started in December 2024 only.
+    const full = onNorm(
+      {},
+      { year: 2024, cass: { base: 44_000, due: 4400, minimumDifference: 0 } },
+    );
+    expect(errors(full)).toContain('D212_NORMA_START');
+    const december = onNorm(
+      { startedOn: '2024-12-02', activeDays: 30, net: 3616, tax: 362 },
+      { year: 2024, cass: { base: 19_800, due: 1980, minimumDifference: 1618 } },
+    );
+    expect(errors(december)).toEqual([]);
+    expect(attributes(writeD212(december), 'cap12')).toEqual([
+      ['norma_forma_org', '1'],
+      ['norma_caen', '1413'],
+      ['norma_descriere_sediu_bun', 'Str. Exemplu nr. 2, Iași'],
+      ['norma_nr_doc_autoriz', 'F22/77/2024'],
+      ['norma_data_doc_autoriz', '10.12.2024'],
+      ['norma_data_incep', '02.12.2024'],
+      ['real_norma_venit', '50000'],
+      ['real_ajustare', '44000'],
+      ['real_venit_net_anual', '3616'],
+      ['real_venit_impozit', '3616'],
+      ['real_impozit', '362'],
+    ]);
+  });
+
+  test('the norm’s controls: rd. 8 from the coefficients, the tax, one source, no Section 4', () => {
+    expect(
+      errors(
+        onNorm(
+          { adjusted: 45_000, net: 45_000, tax: 4500 },
+          { cass: { base: 45_000, due: 4500, minimumDifference: 0 } },
+        ),
+      ),
+    ).toContain('D212_NORMA');
+    expect(errors(onNorm({ tax: 4000 }))).toEqual(['D212_NORMA']);
+    expect(errors(onNorm({ increase: { percent: '10', criterion: '14' as never } }))).toEqual([
+      'D212_NORMA',
+    ]);
+    expect(
+      errors(onNorm({}, { tax: { deductibleCas: 0, deductibleCass: 0, due: 100 } })),
+    ).toContain('D212_SECTION4');
+    expect(errors({ ...onNorm(), activity })).toEqual(['D212_SOURCE']);
+    // CAS and CASS count the norm: 50,000 lei reach 12 minimum wages.
+    expect(
+      errors(
+        onNorm(
+          { increase: undefined, reduction: undefined, adjusted: 50_000, net: 50_000, tax: 5000 },
+          { cass: { base: 50_000, due: 5000, minimumDifference: 0 } },
+        ),
+      ),
+    ).toEqual(['D212_CAS']);
+  });
+
+  test('a member of an association declares the net income distributed, with the contract', () => {
+    const member = declaration({
+      activity: {
+        caen: '1071',
+        seat: 'Str. Morii nr. 3, Galați',
+        authorization: { number: 'F17/123/2020', date: '2020-01-10' },
+        association: { number: '1234/2020', date: '2020-01-15', net: 120_000, loss: 0 },
+        carriedLosses: 0,
+        offsetLoss: 0,
+      },
+    });
+    expect(errors(member)).toEqual([]);
+    const xml = writeD212(member);
+    inWebOrder(xml, 'cap11');
+    expect(values(xml, 'cap11')).toEqual({
+      categ_venit: '1016',
+      den_venit: 'Activități independente in Sistem Real ',
+      det_ven_net: '1',
+      forma_org: '2',
+      caen: '1071',
+      descriere_sediu_bun: 'Str. Morii nr. 3, Galați',
+      nr_doc_autoriz: 'F17/123/2020',
+      data_doc_autoriz: '10.01.2020',
+      nr_doc_asociere: '1234/2020',
+      data_doc_asociere: '15.01.2020',
+      venit_net_anual: '120000',
+      pierdere_compensata: '0',
+      venit_recalculat: '120000',
+    });
+    // The same figures as the PFA's: Section 4 on the distributed income.
+    expect(values(xml, 'oblig_realizat').real_venit_net_impozabil_ai).toBe('83700');
+    // D212_A1.0.3 has one document field, "autorizare/ contract de asociere": the contract.
+    const old = writeD212({
+      ...member,
+      year: 2024,
+      cas: { base: 79_200, due: 19_800 },
+      tax: { deductibleCas: 19_800, deductibleCass: 12_000, due: 8820 },
+    });
+    expect(values(old, 'cap11')).toMatchObject({
+      forma_org: '2',
+      mod_forma_org: '0',
+      nr_doc_autoriz: '1234/2020',
+      data_doc_autoriz: '15.01.2020',
+    });
+    expect(old).not.toContain('venit_brut');
+    // The association's own gross income and expenses are not the member's to declare.
+    expect(
+      errors({ ...member, activity: { ...member.activity!, gross: 150_000, deductible: 30_000 } }),
+    ).toEqual(['D212_ASSOCIATION']);
   });
 });

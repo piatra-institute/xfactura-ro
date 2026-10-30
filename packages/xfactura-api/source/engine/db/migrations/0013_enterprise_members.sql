@@ -1,0 +1,20 @@
+CREATE TABLE `acc_enterprise_members` (
+	`company_id` text NOT NULL,
+	`version` integer NOT NULL,
+	`position` integer NOT NULL,
+	`party_id` text NOT NULL,
+	`quota_bp` integer NOT NULL,
+	`representative` integer NOT NULL,
+	`effective_from` text NOT NULL,
+	`effective_to` text,
+	`evidence_id` text NOT NULL,
+	`created_by` text NOT NULL,
+	`created_at` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL,
+	PRIMARY KEY(`company_id`, `version`, `party_id`),
+	FOREIGN KEY (`company_id`) REFERENCES `acc_companies`(`id`) ON UPDATE no action ON DELETE no action,
+	FOREIGN KEY (`created_by`) REFERENCES `user`(`id`) ON UPDATE no action ON DELETE no action,
+	FOREIGN KEY (`company_id`,`party_id`) REFERENCES `acc_parties`(`company_id`,`id`) ON UPDATE no action ON DELETE no action,
+	FOREIGN KEY (`company_id`,`evidence_id`) REFERENCES `acc_evidence`(`company_id`,`id`) ON UPDATE no action ON DELETE no action,
+	CONSTRAINT "enterprise_member_quota" CHECK("acc_enterprise_members"."quota_bp" between 1 and 10000),
+	CONSTRAINT "enterprise_member_dates" CHECK("acc_enterprise_members"."effective_to" is null or "acc_enterprise_members"."effective_from" <= "acc_enterprise_members"."effective_to")
+);

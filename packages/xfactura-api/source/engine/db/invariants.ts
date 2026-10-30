@@ -68,6 +68,7 @@ const appendOnly = [
   'acc_party_cnps',
   'acc_party_status',
   'acc_income_sources',
+  'acc_enterprise_members',
   'ref_fx_rates',
 ];
 // Tables with narrowly guarded updates (below) that are never deleted from.
@@ -755,6 +756,75 @@ const incomeSourceChecks: Check[] = [
   },
 ];
 
+/** An aggregate over the rows of a family enterprise's agreement version. */
+const memberRows = (select: string, version: string) => `(
+      SELECT ${select} FROM acc_enterprise_members
+      WHERE company_id = NEW.company_id AND version = ${version})`;
+const lastMemberVersion = `(
+      SELECT max(version) FROM acc_enterprise_members WHERE company_id = NEW.company_id)`;
+const enterpriseMemberChecks: Check[] = [
+  {
+    code: 'enterprise_member_version',
+    rule: "A family enterprise's agreements are numbered from 1 without gaps, and each one's members from 1 in its order; members are added only to the latest agreement.",
+    violation: `NEW.version NOT IN (COALESCE(${lastMemberVersion}, 1), COALESCE(${lastMemberVersion}, 0) + 1)
+        OR NEW.position <> 1 + ${memberRows('count(*)', 'NEW.version')}`,
+  },
+  {
+    code: 'enterprise_member_form',
+    rule: 'Only a family enterprise has members: the entity.form in force on the agreement’s date is if.',
+    violation: `COALESCE((
+          SELECT f.value FROM acc_profile_facts f
+          WHERE f.company_id = NEW.company_id AND f.axis = 'entity.form'
+            AND f.effective_from <= NEW.effective_from
+            AND NOT EXISTS (
+              SELECT 1 FROM acc_profile_facts g
+              WHERE g.company_id = f.company_id AND g.supersedes_id = f.id)
+          ORDER BY f.effective_from DESC, f.created_at DESC, f.id DESC LIMIT 1), '') <> 'if'`,
+  },
+  {
+    code: 'enterprise_member_cnp',
+    rule: 'A member is an individual whose CNP is recorded, sealed (the D212 and the D204 carry it).',
+    violation: `NOT EXISTS (
+          SELECT 1 FROM acc_parties p
+          JOIN acc_party_cnps c ON c.company_id = p.company_id AND c.party_id = p.id
+          WHERE p.company_id = NEW.company_id AND p.id = NEW.party_id AND p.kind = 'ro_individual')`,
+  },
+  {
+    code: 'enterprise_member_quota',
+    rule: "An agreement's quotas of the net income together never exceed 100% (OUG nr. 44/2008 art. 29 alin. (1)).",
+    violation: `${memberRows('COALESCE(sum(quota_bp), 0)', 'NEW.version')} + NEW.quota_bp > 10000`,
+  },
+  {
+    code: 'enterprise_member_representative',
+    rule: 'An agreement designates one representative (art. 29 alin. (1)–(2)).',
+    violation: `NEW.representative AND ${memberRows('count(*)', 'NEW.version AND representative')} > 0`,
+  },
+  {
+    code: 'enterprise_member_terms',
+    rule: "An agreement's members share its dates and its evidence (the agreement itself).",
+    violation: `${memberRows(
+      'count(*)',
+      `NEW.version AND (effective_from <> NEW.effective_from
+          OR effective_to IS NOT NEW.effective_to OR evidence_id <> NEW.evidence_id)`,
+    )} > 0`,
+  },
+  {
+    code: 'enterprise_member_complete',
+    rule: 'A new agreement follows only a complete one: at least 2 members (art. 28 alin. (1)), quotas adding to 100% and a representative.',
+    violation: `NEW.version > 1 AND NEW.version = COALESCE(${lastMemberVersion}, 0) + 1 AND (
+          ${memberRows('count(*)', 'NEW.version - 1')} < 2
+          OR ${memberRows('COALESCE(sum(quota_bp), 0)', 'NEW.version - 1')} <> 10000
+          OR ${memberRows('count(*)', 'NEW.version - 1 AND representative')} <> 1)`,
+  },
+  {
+    code: 'enterprise_member_dates',
+    rule: 'A new agreement applies after the previous one began, and after it ended when it has an end.',
+    violation: `NEW.version > 1 AND NEW.version = COALESCE(${lastMemberVersion}, 0) + 1 AND (
+          NEW.effective_from <= ${memberRows('max(effective_from)', 'NEW.version - 1')}
+          OR NEW.effective_from <= COALESCE(${memberRows('max(effective_to)', 'NEW.version - 1')}, ''))`,
+  },
+];
+
 const payrollChecks = {
   terms: [
     {
@@ -1113,6 +1183,11 @@ const triggers: Trigger[] = [
     name: 'inv_income_source_guard',
     on: 'BEFORE INSERT ON acc_income_sources',
     checks: incomeSourceChecks,
+  },
+  {
+    name: 'inv_enterprise_member_guard',
+    on: 'BEFORE INSERT ON acc_enterprise_members',
+    checks: enterpriseMemberChecks,
   },
   {
     name: 'inv_issued_number_guard',

@@ -26,10 +26,15 @@ import { isValidCnp, isValidIban } from '../identifiers';
  *   when the form generates the PDF. The constants it uses (4.050 lei, 60 wages, 25%, 10%) agree
  *   with the instructions of OPANAF nr. 2.736/2025.
  *
- * Not written, refused by the checks instead of guessed: several sources or categories, norms
- * (cap12), associations and an IF's members, a change of form in the year, non-residents, income
- * withheld at source, CAS or CASS withheld by a payer, the disability exemption, the bonus of
- * Section 8 (it depends on payment by a date the budget law sets) and dependants.
+ * One source is declared: in the real system (`activity`, cap11), individually or as a member of
+ * an association without legal personality (forma_org 2: a family enterprise's member, who
+ * declares only the net income or loss distributed to them, art. 122 alin. (4)); or on a norm
+ * (`norm`, cap12: Subsection 2, individually or as a member on their own norm, art. 69 alin. (3)).
+ *
+ * Not written, refused by the checks instead of guessed: several sources or categories, a change
+ * of form in the year, non-residents, income withheld at source, CAS or CASS withheld by a payer,
+ * the disability exemption (exempt days), a local gastronomic point, the bonus of Section 8 (it
+ * depends on payment by a date the budget law sets) and dependants.
  *
  * The amounts are the fiscal register's, in whole lei (N(15)); the writer derives only the rows
  * the form derives (net income, Section 4's taxable income, the weights, Section 7). The CNP is
@@ -142,13 +147,71 @@ export type D212Activity = {
   endedOn?: string;
   /** data_suspendare (2026 structure): the suspension, when it started in the year. */
   suspendedOn?: string;
-  /** venit_brut, chelt_deduc: the fiscal register's totals. */
-  gross: number;
-  deductible: number;
+  /** venit_brut, chelt_deduc: the fiscal register's totals; absent for a member of an
+   * association, who declares only what was distributed to them. */
+  gross?: number;
+  deductible?: number;
+  /** A member of an association without legal personality (forma_org 2), such as a family
+   * enterprise's: the association contract as registered with the fiscal body (rd. 7), and the
+   * net income or loss distributed to the member (rd. 3 and rd. 4; Codul fiscal art. 122 alin.
+   * (4), art. 125 alin. (5)). */
+  association?: { number: string; date: string; net: number; loss: number };
   /** pierdere_precedenta: losses of earlier years open to offset this year. */
   carriedLosses: number;
   /** pierdere_compensata */
   offsetLoss: number;
+};
+
+/** The criteria of the norms' correction coefficients (norme pct. 8 alin. (7)), as the web form
+ * codes them: 01 vadul comercial … 13 alte criterii. */
+export const normCriteria = [
+  '01',
+  '02',
+  '03',
+  '04',
+  '05',
+  '06',
+  '07',
+  '08',
+  '09',
+  '10',
+  '11',
+  '12',
+  '13',
+] as const;
+export type NormCriterion = (typeof normCriteria)[number];
+
+/** Chapter I, Section 1, Subsection 2: one place of an activity whose net income is a norm
+ * (Codul fiscal art. 69). Dates are YYYY-MM-DD. */
+export type D212Norm = {
+  /** norma_forma_org 2: a member of an association, each on their own norm (art. 69 alin. (3),
+   * art. 125 alin. (10)); 1 individually. */
+  association: boolean;
+  caen: string;
+  /** norma_descriere_sediu_bun (2024 structure); the web form takes the place from ANAF's
+   * nomenclators of counties, localities and streets, whose codes are not public. */
+  seat: string;
+  authorization: { number: string; date: string };
+  startedOn?: string;
+  endedOn?: string;
+  suspendedOn?: string;
+  /** Days of activity in the year when less than all of it (art. 69 alin. (5)). */
+  activeDays?: number;
+  /** norma_zile_intrerupere (web form): days of temporary interruption in the year. */
+  interruptedDays?: number;
+  /** rd. 7 real_norma_venit: the norm the DGRFP published for the activity and place. */
+  norm: number;
+  /** The highest increasing and reducing coefficients, in percent, and the criterion each comes
+   * from (instructions: "coeficientul de majorare și/sau coeficientul de reducere cel mai mare"). */
+  increase?: { percent: string; criterion: NormCriterion };
+  reduction?: { percent: string; criterion: NormCriterion };
+  /** rd. 8 real_ajustare: the norm adjusted by the coefficients (the norm when there is none). */
+  adjusted: number;
+  /** rd. 9 real_venit_net_anual: the adjusted norm reduced to the days of activity; rd. 9.1, the
+   * taxable income, is the same without exempt days. */
+  net: number;
+  /** real_impozit, norma_impozit: 10% of rd. 9.1 (art. 69^2). */
+  tax: number;
 };
 
 export type D212 = {
@@ -157,7 +220,10 @@ export type D212 = {
   /** A rectifying return: the chapters it rectifies, each written in full. */
   rectifies?: { income: boolean; option: boolean };
   taxpayer: D212Taxpayer;
-  activity: D212Activity;
+  /** The source in the real system (cap11), or */
+  activity?: D212Activity;
+  /** the source on a norm (cap12): one of the two. */
+  norm?: D212Norm;
   /** The holder's situation for CAS (art. 150): exempt as a pensioner or in an own system. */
   casStatus: 'liable' | 'pensioner' | 'own_system';
   /** Section 3.1; null when no CAS is due. */
@@ -167,7 +233,8 @@ export type D212 = {
   /** Section 3.2.1; null when no CASS is due (a loss or a zero net income). `minimumDifference`
    * is the part of `due` owed only to reach the minimum base (art. 174 alin. (6)). */
   cass: { base: number; due: number; minimumDifference: number } | null;
-  /** Section 4 as the fiscal register computed it. */
+  /** Section 4 as the fiscal register computed it: the real system's tax (0 on a norm, whose tax
+   * is the norm's own). */
   tax: { deductibleCas: number; deductibleCass: number; due: number };
   /** Chapter II: the option to pay CASS in the filing year, after a loss (B) or a zero net
    * income (C) in the income year. */
@@ -229,7 +296,7 @@ const weighted = (weight: bigint, amount: number) =>
 /** The rows of the declaration the form derives from the register's amounts. */
 export type D212Calculation = {
   structure: D212Structure;
-  /** rd.3, rd.4, rd.7 of the activity. */
+  /** rd.3, rd.4, rd.7 of the activity; on a norm, rd. 9 (net) and no recalculated income. */
   net: number;
   loss: number;
   recalculated: number;
@@ -269,7 +336,20 @@ export type D212Calculation = {
 const yearMessage = (year: number) =>
   `Declarația unică pentru veniturile anului ${year} nu are o structură fixată: sunt fixate cele pentru ${d212IncomeYears.join(' și ')}.`;
 
-/** The inputs calculateD212 cannot use: the year and the amounts. */
+/** The declared source's net income and loss: the register's gross income less its expenses, what
+ * an association distributed to the member, or the norm's rd. 9. */
+function results(model: D212) {
+  const { activity, norm } = model;
+  if (norm) return { net: norm.net, loss: 0 };
+  if (!activity) return { net: 0, loss: 0 };
+  if (activity.association)
+    return { net: activity.association.net, loss: activity.association.loss };
+  const gross = activity.gross ?? 0;
+  const deductible = activity.deductible ?? 0;
+  return { net: Math.max(gross - deductible, 0), loss: Math.max(deductible - gross, 0) };
+}
+
+/** The inputs calculateD212 cannot use: the year, the source and the amounts. */
 function inputProblems(model: D212) {
   const problems: { code: string; path: string; message: string }[] = [];
   if (!d212Format(model.year))
@@ -282,11 +362,44 @@ function inputProblems(model: D212) {
         message: 'Sumele se declară în lei, fără zecimale, nenegative, de cel mult 15 cifre.',
       });
   };
-  const { activity } = model;
-  amount('activity.gross', activity.gross);
-  amount('activity.deductible', activity.deductible);
-  amount('activity.carriedLosses', activity.carriedLosses);
-  amount('activity.offsetLoss', activity.offsetLoss);
+  const { activity, norm } = model;
+  if (Boolean(activity) === Boolean(norm))
+    problems.push({
+      code: 'D212_SOURCE',
+      path: 'activity',
+      message:
+        'Declarația cuprinde o singură sursă: activitatea în sistem real sau activitatea pe bază de normă de venit.',
+    });
+  if (activity) {
+    if (activity.association) {
+      amount('activity.association.net', activity.association.net);
+      amount('activity.association.loss', activity.association.loss);
+      if (activity.gross !== undefined || activity.deductible !== undefined)
+        problems.push({
+          code: 'D212_ASSOCIATION',
+          path: 'activity.gross',
+          message:
+            'Membrul unei asocieri declară venitul net sau pierderea distribuită, nu venitul brut și cheltuielile asocierii (instrucțiuni pct. 3.5.12).',
+        });
+      else if (activity.association.net > 0 && activity.association.loss > 0)
+        problems.push({
+          code: 'D212_ASSOCIATION',
+          path: 'activity.association',
+          message: 'Asocierea distribuie fie un venit net, fie o pierdere.',
+        });
+    } else {
+      amount('activity.gross', activity.gross);
+      amount('activity.deductible', activity.deductible);
+    }
+    amount('activity.carriedLosses', activity.carriedLosses);
+    amount('activity.offsetLoss', activity.offsetLoss);
+  }
+  if (norm) {
+    amount('norm.norm', norm.norm);
+    amount('norm.adjusted', norm.adjusted);
+    amount('norm.net', norm.net);
+    amount('norm.tax', norm.tax);
+  }
   if (model.cas) {
     amount('cas.base', model.cas.base);
     amount('cas.due', model.cas.due);
@@ -315,16 +428,16 @@ export function calculateD212(model: D212): D212Calculation {
   const { controls } = structure;
   const web = structure.validator === null;
   const { activity } = model;
-  const net = Math.max(activity.gross - activity.deductible, 0);
-  const loss = Math.max(activity.deductible - activity.gross, 0);
-  const recalculated = Math.max(net - activity.offsetLoss, 0);
+  const { net, loss } = results(model);
+  // Section 4 and the losses are the real system's: nothing of a norm is recalculated.
+  const recalculated = activity ? Math.max(net - activity.offsetLoss, 0) : 0;
   const wages = (count: number) => controls.minimumWage * count;
   const casBand = net < wages(controls.casWages[0]) ? 0 : net < wages(controls.casWages[1]) ? 1 : 2;
   const casDue = model.cas?.due ?? 0;
   const cassDue = model.cass?.due ?? 0;
 
   let section4: D212Calculation['section4'] = null;
-  if (net > 0) {
+  if (activity && net > 0) {
     const decimals = web ? 4 : 5;
     // 4.1: the CAS total is the CAS's cumulated income: this source's net income, or nothing
     // when the holder is exempt (the web form then writes 0 and no weight).
@@ -369,7 +482,8 @@ export function calculateD212(model: D212): D212Calculation {
       },
     };
   }
-  const tax = section4?.tax ?? 0;
+  // Section 7's tax: Section 4's and the norm's (oblimpoz_real_total sums both).
+  const tax = (section4?.tax ?? 0) + (model.norm?.tax ?? 0);
   return {
     structure,
     net,
@@ -408,7 +522,7 @@ const optionElement = (option: NonNullable<D212['cassOption']>) =>
 
 /** The structure D212_A1.0.3 (an_r 2025), attributes in the XSD's order. */
 function write2025(model: D212, calc: D212Calculation): XmlNode {
-  const { taxpayer, activity, cas, cass } = model;
+  const { taxpayer, activity, norm, cas, cass } = model;
   const { section4 } = calc;
   const rectifies = model.rectifies ?? { income: false, option: false };
   const name = [taxpayer.lastName, taxpayer.initial, taxpayer.firstName].filter(Boolean).join(' ');
@@ -485,8 +599,8 @@ function write2025(model: D212, calc: D212Calculation): XmlNode {
       anulare_litA: '0',
       anulare_litB: '0',
       bifa_conformare: '0',
-      bifa111: '1',
-      bifa112: '0',
+      bifa111: flag(Boolean(activity)),
+      bifa112: flag(Boolean(norm)),
       bifa113: '0',
       bifa121: '0',
       bifa122: '0',
@@ -505,36 +619,54 @@ function write2025(model: D212, calc: D212Calculation): XmlNode {
     },
     obligations,
     model.cassOption && optionElement(model.cassOption),
-    element('cap11', {
-      scutire: '0',
-      reg: '0',
-      categ_venit: '1016',
-      det_ven_net: '1',
-      forma_org: '1',
-      mod_forma_org: '0',
-      caen: activity.caen,
-      descriere_sediu_bun: activity.seat,
-      nr_doc_autoriz: activity.authorization.number,
-      data_doc_autoriz: formDate(activity.authorization.date),
-      data_incep: activity.startedOn && formDate(activity.startedOn),
-      data_sf: activity.endedOn && formDate(activity.endedOn),
-      venit_brut: text(activity.gross),
-      chelt_deduc: text(activity.deductible),
-      venit_net_anual: calc.net > 0 ? text(calc.net) : undefined,
-      pierdere: optional(calc.loss),
-      pierdere_precedenta: optional(activity.carriedLosses),
-      pierdere_compensata: calc.net > 0 ? optional(activity.offsetLoss) : undefined,
-      venit_recalculat: calc.net > 0 ? text(calc.recalculated) : undefined,
-      // Rd.9 holds zero after a loss or a zero net income; otherwise the tax is in Section 4.
-      impozit11: calc.net > 0 ? undefined : '0',
-    }),
+    activity &&
+      element('cap11', {
+        scutire: '0',
+        reg: '0',
+        categ_venit: '1016',
+        det_ven_net: '1',
+        forma_org: activity.association ? '2' : '1',
+        mod_forma_org: '0',
+        caen: activity.caen,
+        descriere_sediu_bun: activity.seat,
+        // "Nr. document autorizare/ Contract de asociere": a member writes the contract.
+        nr_doc_autoriz: activity.association?.number ?? activity.authorization.number,
+        data_doc_autoriz: formDate(activity.association?.date ?? activity.authorization.date),
+        data_incep: activity.startedOn && formDate(activity.startedOn),
+        data_sf: activity.endedOn && formDate(activity.endedOn),
+        venit_brut: activity.gross?.toString(),
+        chelt_deduc: activity.deductible?.toString(),
+        venit_net_anual: calc.net > 0 ? text(calc.net) : undefined,
+        pierdere: optional(calc.loss),
+        pierdere_precedenta: optional(activity.carriedLosses),
+        pierdere_compensata: calc.net > 0 ? optional(activity.offsetLoss) : undefined,
+        venit_recalculat: calc.net > 0 ? text(calc.recalculated) : undefined,
+        // Rd.9 holds zero after a loss or a zero net income; otherwise the tax is in Section 4.
+        impozit11: calc.net > 0 ? undefined : '0',
+      }),
+    norm &&
+      element('cap12', {
+        norma_forma_org: norm.association ? '2' : '1',
+        norma_caen: norm.caen,
+        norma_descriere_sediu_bun: norm.seat,
+        norma_nr_doc_autoriz: norm.authorization.number,
+        norma_data_doc_autoriz: formDate(norm.authorization.date),
+        norma_data_incep: norm.startedOn && formDate(norm.startedOn),
+        norma_data_sf: norm.endedOn && formDate(norm.endedOn),
+        norma_data_susp: norm.suspendedOn && formDate(norm.suspendedOn),
+        real_norma_venit: text(norm.norm),
+        real_ajustare: text(norm.adjusted),
+        real_venit_net_anual: text(norm.net),
+        real_venit_impozit: text(norm.net),
+        real_impozit: text(norm.tax),
+      }),
   );
 }
 
 /** The web form's XML for an_r 2026, attributes in the order its writer emits them, with the
  * zeros it writes. */
 function write2026(model: D212, calc: D212Calculation): XmlNode {
-  const { taxpayer, activity, cas, cass } = model;
+  const { taxpayer, activity, norm, cas, cass } = model;
   const { section4 } = calc;
   const rectifies = model.rectifies ?? { income: false, option: false };
   const casBlock = cas !== null;
@@ -618,9 +750,9 @@ function write2026(model: D212, calc: D212Calculation): XmlNode {
       bifa23: '0',
       anulare_litA: '0',
       anulare_litB: '0',
-      bifa111: '1',
-      bifa112: '0',
-      bifa14: '1',
+      bifa111: flag(Boolean(activity)),
+      bifa112: flag(Boolean(norm)),
+      bifa14: flag(Boolean(activity)),
       bifa113: '0',
       bifa121: '0',
       bifa15: '0',
@@ -644,26 +776,79 @@ function write2026(model: D212, calc: D212Calculation): XmlNode {
     },
     obligations,
     model.cassOption && optionElement(model.cassOption),
-    element('cap11', {
-      categ_venit: '1016',
-      den_venit: webCategoryLabel,
-      det_ven_net: '1',
-      forma_org: '1',
-      caen: activity.caen,
-      descriere_sediu_bun: activity.seat,
-      nr_doc_autoriz: activity.authorization.number,
-      data_doc_autoriz: formDate(activity.authorization.date),
-      data_incep: activity.startedOn && formDate(activity.startedOn),
-      data_sf: activity.endedOn && formDate(activity.endedOn),
-      data_suspendare: activity.suspendedOn && formDate(activity.suspendedOn),
-      venit_brut: text(activity.gross),
-      chelt_deduc: text(activity.deductible),
-      pierdere: optional(calc.loss),
-      venit_net_anual: calc.loss > 0 ? undefined : text(calc.net),
-      pierdere_precedenta: optional(activity.carriedLosses),
-      pierdere_compensata: text(activity.offsetLoss),
-      venit_recalculat: text(calc.recalculated),
-    }),
+    activity &&
+      element('cap11', {
+        categ_venit: '1016',
+        den_venit: webCategoryLabel,
+        det_ven_net: '1',
+        forma_org: activity.association ? '2' : '1',
+        caen: activity.caen,
+        descriere_sediu_bun: activity.seat,
+        nr_doc_autoriz: activity.authorization.number,
+        data_doc_autoriz: formDate(activity.authorization.date),
+        nr_doc_asociere: activity.association?.number,
+        data_doc_asociere: activity.association && formDate(activity.association.date),
+        data_incep: activity.startedOn && formDate(activity.startedOn),
+        data_sf: activity.endedOn && formDate(activity.endedOn),
+        data_suspendare: activity.suspendedOn && formDate(activity.suspendedOn),
+        // The form clears rd. 1 and rd. 2 for a member of an association.
+        venit_brut: activity.gross?.toString(),
+        chelt_deduc: activity.deductible?.toString(),
+        pierdere: optional(calc.loss),
+        venit_net_anual: calc.loss > 0 ? undefined : text(calc.net),
+        pierdere_precedenta: optional(activity.carriedLosses),
+        pierdere_compensata: text(activity.offsetLoss),
+        venit_recalculat: text(calc.recalculated),
+      }),
+    norm && normElement2026(norm),
+  );
+}
+
+/** A coefficient as the web form stores it: two decimals. */
+const coefficient = (percent: string) => Number(percent).toFixed(2);
+
+/**
+ * The web form's cap12 (its writer for income 10161): the totals of Subsection 2's C, one
+ * norma_loc per place with the rows 7–9.1, and one corectie per coefficient applied. The place's
+ * county, locality and street are codes of ANAF's nomenclators, which the form loads from its
+ * server and which are not public: they are not written (checkD212 warns).
+ */
+function normElement2026(norm: D212Norm): XmlNode {
+  const coefficients = Boolean(norm.increase || norm.reduction);
+  return element(
+    'cap12',
+    {
+      norma_forma_org: norm.association ? '2' : '1',
+      norma_nr_doc_autoriz: norm.authorization.number,
+      norma_data_doc_autoriz: formDate(norm.authorization.date),
+      norma_venit_impozabil: text(norm.net),
+      norma_impozit: text(norm.tax),
+    },
+    element(
+      'norma_loc',
+      {
+        norma_isPGL: '0',
+        norma_caen: norm.caen,
+        norma_data_incep: norm.startedOn && formDate(norm.startedOn),
+        norma_data_sf: norm.endedOn && formDate(norm.endedOn),
+        norma_zile_intrerupere: optional(norm.interruptedDays),
+        real_norma_venit: text(norm.norm),
+        // The form writes 0 for rd. 8 when no coefficient applies.
+        real_ajustare: text(coefficients ? norm.adjusted : 0),
+        real_venit_net_anual: text(norm.net),
+        real_venit_impozit: text(norm.net),
+      },
+      norm.increase &&
+        element('corectie', {
+          criteriu: norm.increase.criterion,
+          coeficient_majorare: coefficient(norm.increase.percent),
+        }),
+      norm.reduction &&
+        element('corectie', {
+          criteriu: norm.reduction.criterion,
+          coeficient_reducere: coefficient(norm.reduction.percent),
+        }),
+    ),
   );
 }
 
@@ -748,47 +933,79 @@ export function checkD212(model: D212): D212Check[] {
   const yearStart = `${model.year}-01-01`;
   const yearEnd = `${model.year}-12-31`;
 
-  // The activity.
-  if (!/^\d{4}$/.test(activity.caen))
-    error('D212_CAEN', 'activity.caen', 'Codul CAEN are patru cifre.');
-  if (!activity.seat?.trim()) error('D212_SEAT', 'activity.seat', 'Completați sediul activității.');
-  else if (activity.seat.trim().length > (web ? 200 : 250))
-    error('D212_SEAT', 'activity.seat', `Sediul are cel mult ${web ? 200 : 250} de caractere.`);
-  const authorization = activity.authorization?.number?.trim();
+  // The source: its activity, place, authorization and dates.
+  const source = (activity ?? model.norm)!;
+  const at = activity ? 'activity' : 'norm';
+  if (!/^\d{4}$/.test(source.caen)) error('D212_CAEN', `${at}.caen`, 'Codul CAEN are patru cifre.');
+  if (activity || !web) {
+    if (!source.seat?.trim()) error('D212_SEAT', `${at}.seat`, 'Completați sediul activității.');
+    else if (source.seat.trim().length > (web ? 200 : 250))
+      error('D212_SEAT', `${at}.seat`, `Sediul are cel mult ${web ? 200 : 250} de caractere.`);
+  }
+  const authorization = source.authorization?.number?.trim();
   if (!authorization)
-    error('D212_AUTHORIZATION', 'activity.authorization', 'Completați documentul de autorizare.');
+    error('D212_AUTHORIZATION', `${at}.authorization`, 'Completați documentul de autorizare.');
   else if (authorization.length > (web ? 120 : 15))
     error(
       'D212_AUTHORIZATION',
-      'activity.authorization.number',
+      `${at}.authorization.number`,
       `Numărul documentului de autorizare are cel mult ${web ? 120 : 15} caractere în această structură.`,
     );
-  if (!isDate(activity.authorization?.date) || activity.authorization.date > yearEnd)
+  if (!isDate(source.authorization?.date) || source.authorization.date > yearEnd)
     error(
       'D212_AUTHORIZATION',
-      'activity.authorization.date',
+      `${at}.authorization.date`,
       `Data documentului de autorizare este o dată de până la ${formDate(yearEnd)}.`,
     );
   for (const key of ['startedOn', 'endedOn', 'suspendedOn'] as const) {
-    const value = activity[key];
+    const value = source[key];
     if (value === undefined) continue;
     if (!isDate(value) || value < yearStart || value > yearEnd)
       error(
         'D212_DATE',
-        `activity.${key}`,
+        `${at}.${key}`,
         `Datele începerii, încetării și suspendării se completează numai pentru evenimente din ${model.year}.`,
       );
   }
-  if (activity.startedOn && activity.endedOn && activity.startedOn > activity.endedOn)
-    error('D212_DATE', 'activity.endedOn', 'Activitatea încetează după ce începe.');
-  if (activity.suspendedOn && !web)
+  if (source.startedOn && source.endedOn && source.startedOn > source.endedOn)
+    error('D212_DATE', `${at}.endedOn`, 'Activitatea încetează după ce începe.');
+  if (activity?.suspendedOn && !web)
     warning(
       'D212_SUSPENSION',
       'activity.suspendedOn',
       'Structura D212_A1.0.3 nu are data suspendării activității; ea nu apare în declarație.',
     );
+  if (model.norm?.suspendedOn && web)
+    warning(
+      'D212_SUSPENSION',
+      'norm.suspendedOn',
+      'Formularul web are pentru normă numai zilele de întrerupere (norma_zile_intrerupere), nu data suspendării.',
+    );
 
-  const net = Math.max(activity.gross - activity.deductible, 0);
+  // A member of an association: the contract as registered with the fiscal body (rd. 7).
+  const association = activity?.association;
+  if (association) {
+    if (!association.number?.trim())
+      error(
+        'D212_ASSOCIATION',
+        'activity.association.number',
+        'Completați numărul contractului de asociere înregistrat la organul fiscal.',
+      );
+    else if (association.number.trim().length > (web ? 50 : 15))
+      error(
+        'D212_ASSOCIATION',
+        'activity.association.number',
+        `Numărul contractului de asociere are cel mult ${web ? 50 : 15} caractere în această structură.`,
+      );
+    if (!isDate(association.date) || association.date > yearEnd)
+      error(
+        'D212_ASSOCIATION',
+        'activity.association.date',
+        `Data contractului de asociere este o dată de până la ${formDate(yearEnd)}.`,
+      );
+  }
+
+  const { net, loss } = results(model);
   const wages = (count: number) => controls.minimumWage * count;
   const rounded = (
     code: string,
@@ -808,23 +1025,110 @@ export function checkD212(model: D212): D212Check[] {
   };
 
   // Losses: rd.6 is the smaller of the carried losses and 70% of the net income.
-  if (activity.offsetLoss > activity.carriedLosses)
-    error(
-      'D212_LOSS',
-      'activity.offsetLoss',
-      'Pierderea compensată depășește pierderile reportate.',
-    );
-  else if (net === 0 && activity.offsetLoss > 0)
-    error('D212_LOSS', 'activity.offsetLoss', 'Pierderea se compensează numai cu un venit net.');
-  else if (net > 0 && activity.carriedLosses > 0) {
-    const cap = percentOf(net, controls.lossPercent);
-    if (activity.offsetLoss !== Math.min(activity.carriedLosses, cap.value))
-      rounded(
+  if (activity) {
+    if (activity.offsetLoss > activity.carriedLosses)
+      error(
         'D212_LOSS',
         'activity.offsetLoss',
-        activity.offsetLoss,
-        activity.carriedLosses < cap.value ? { value: activity.carriedLosses, half: false } : cap,
-        `Pierderea compensată (cel mult ${controls.lossPercent}% din venitul net)`,
+        'Pierderea compensată depășește pierderile reportate.',
+      );
+    else if (net === 0 && activity.offsetLoss > 0)
+      error('D212_LOSS', 'activity.offsetLoss', 'Pierderea se compensează numai cu un venit net.');
+    else if (net > 0 && activity.carriedLosses > 0) {
+      const cap = percentOf(net, controls.lossPercent);
+      if (activity.offsetLoss !== Math.min(activity.carriedLosses, cap.value))
+        rounded(
+          'D212_LOSS',
+          'activity.offsetLoss',
+          activity.offsetLoss,
+          activity.carriedLosses < cap.value ? { value: activity.carriedLosses, half: false } : cap,
+          `Pierderea compensată (cel mult ${controls.lossPercent}% din venitul net)`,
+        );
+    }
+  }
+
+  // The norm (Subsection 2): rd. 8 from the coefficients, rd. 9 from the days of activity, the
+  // tax at 10%. An amount one leu off is a rounding for the expert; more is an error.
+  const norm = model.norm;
+  if (norm) {
+    // D212_A1.0.3 has Subsection 2 only for an activity started in December 2024 (its rules on
+    // norma_data_incep); the others' norm tax for 2024 was set in the declaration filed in 2024.
+    if (!web && !(norm.startedOn && norm.startedOn >= `${model.year}-12-01`))
+      error(
+        'D212_NORMA_START',
+        'norm.startedOn',
+        `În structura D212_A1.0.3, subsecțiunea normelor de venit se completează numai pentru activitatea începută în decembrie ${model.year}.`,
+      );
+    if (web)
+      warning(
+        'D212_NORMA_PLACE',
+        'norm.seat',
+        'Locul activității pe bază de normă (județ, localitate, stradă) se alege în formular din nomenclatoarele ANAF, ale căror coduri nu sunt publice: nu este scris în XML.',
+      );
+    const coefficients: [string, typeof norm.increase][] = [
+      ['increase', norm.increase],
+      ['reduction', norm.reduction],
+    ];
+    for (const [key, item] of coefficients) {
+      if (!item) continue;
+      if (!/^(0|[1-9]\d?)(\.\d{1,2})?$/.test(item.percent) || Number(item.percent) === 0)
+        error(
+          'D212_NORMA',
+          `norm.${key}.percent`,
+          'Coeficientul de corecție este un procent între 0,01 și 99,99.',
+        );
+      if (!(normCriteria as readonly string[]).includes(item.criterion))
+        error(
+          'D212_NORMA',
+          `norm.${key}.criterion`,
+          'Criteriul coeficientului este unul din 01–13.',
+        );
+    }
+    const near = (path: string, given: number, expected: number, label: string) => {
+      if (given === expected) return;
+      if (Math.abs(given - expected) === 1)
+        warning(
+          'D212_ROUNDING',
+          path,
+          `${label}: ${given} lei față de ${expected} lei calculați de formular: diferență de rotunjire, de confirmat cu expertul contabil.`,
+        );
+      else error('D212_NORMA', path, `${label}: ${given} lei, iar calculul dă ${expected} lei.`);
+    };
+    if (!checks.some((check) => check.severity === 'error')) {
+      const bp = (percent: string | undefined) => BigInt(Math.round(Number(percent ?? 0) * 100));
+      const product = BigInt(norm.norm) * (10_000n + bp(norm.increase?.percent));
+      const exact = product * (10_000n - bp(norm.reduction?.percent));
+      near(
+        'norm.adjusted',
+        norm.adjusted,
+        Number((exact * 2n + 100_000_000n) / 200_000_000n),
+        'Norma ajustată (rd. 8)',
+      );
+      const days = norm.activeDays ?? 365;
+      if (norm.activeDays !== undefined && (norm.activeDays < 0 || norm.activeDays > 366))
+        error('D212_NORMA', 'norm.activeDays', 'Zilele de activitate sunt între 0 și 366.');
+      else
+        near(
+          'norm.net',
+          norm.net,
+          norm.activeDays === undefined
+            ? norm.adjusted
+            : Number((BigInt(norm.adjusted) * BigInt(days) * 2n + 365n) / 730n),
+          `Venitul net anual (rd. 9, ${days} de zile din 365)`,
+        );
+      rounded(
+        'D212_NORMA',
+        'norm.tax',
+        norm.tax,
+        percentOf(norm.net, controls.taxPercent),
+        `Impozitul pe normă (${controls.taxPercent}% din rd. 9.1)`,
+      );
+    }
+    if (model.tax.due !== 0 || model.tax.deductibleCas !== 0 || model.tax.deductibleCass !== 0)
+      error(
+        'D212_SECTION4',
+        'tax',
+        'Secțiunea 4 (sistemul real) nu se completează pentru venitul pe bază de normă.',
       );
   }
 
@@ -942,7 +1246,6 @@ export function checkD212(model: D212): D212Check[] {
   // Chapter II.
   const option = model.cassOption;
   if (option) {
-    const loss = Math.max(activity.deductible - activity.gross, 0);
     if (option.situation === 'B' ? loss === 0 : net !== 0 || loss !== 0)
       error(
         'D212_CASS_OPTION',

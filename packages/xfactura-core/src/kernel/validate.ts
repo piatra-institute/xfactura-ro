@@ -291,10 +291,15 @@ export function validateEffect(effect: Effect, context: EffectContext): Issue[] 
           block('SCHEDULE_ROW', 'Rândul graficului nu este valid.', `${path}.rows.${rowIndex}`),
         );
     });
+    // A new item's schedule plans its balance, in its currency: the rows on its own account (a
+    // loan's repayments, beside the interest it books elsewhere) or, without such rows, all of
+    // them (a deferral's releases).
     const balance = after.get(schedule.openItem);
     if (created.has(schedule.openItem) && balance) {
-      const remaining = item.normalSide === 'D' ? balance.bani : -balance.bani;
-      const total = schedule.rows.reduce((sum, row) => sum + row.bani, 0n);
+      const amount = item.currency === LEDGER_CURRENCY ? balance.bani : balance.minor;
+      const remaining = item.normalSide === 'D' ? amount : -amount;
+      const own = schedule.rows.filter((row) => row.counterAccount === item.controlAccount);
+      const total = (own.length ? own : schedule.rows).reduce((sum, row) => sum + row.bani, 0n);
       if (total !== remaining)
         issues.push(
           block('SCHEDULE_TOTAL', 'Totalul graficului diferă de soldul poziției.', path, {

@@ -27,6 +27,7 @@ import {
   parseScaled,
 } from '../../money';
 import { selectRate } from '../fx';
+import { carryingRelease, INDEXED_LEASE_METHOD } from '../financing';
 import {
   cashVatClauses,
   creditSplit,
@@ -206,6 +207,19 @@ export const recognitionInput = z
             deduction: z.enum(['full', 'none', 'limited']).default('full'),
             /** The advance (its open item) a negative part on 419, 4091 or 4092 settles. */
             advance: z.uuid().optional(),
+            /** The finance lease (its open item on 167) whose principal a part on 167 repays. */
+            lease: z.uuid().optional(),
+            /** That principal in the lease's currency, when the invoice is in another (a lease
+             * in euro invoiced in lei). */
+            principal: z
+              .string()
+              .regex(/^(0|[1-9]\d{0,15})(\.\d{1,2})?$/)
+              .optional(),
+            /** The expense account the VAT a lease part does not deduct is booked to. */
+            vatExpense: z
+              .string()
+              .regex(/^6\d{2,5}$/)
+              .optional(),
           })
           .strict(),
       )
@@ -337,10 +351,18 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
     const advances = (input.allocations ?? []).flatMap((part) =>
       part.advance ? [part.advance] : [],
     );
+    const leases = (input.allocations ?? []).flatMap((part) => (part.lease ? [part.lease] : []));
     return {
       documents: [input.documentId],
       profile: true,
-      ...(advances.length ? { openItems: [{ ids: advances }] } : {}),
+      ...(advances.length || leases.length
+        ? {
+            openItems: [
+              ...(advances.length ? [{ ids: advances }] : []),
+              ...(leases.length ? [{ ids: leases, schedules: true }] : []),
+            ],
+          }
+        : {}),
     };
   },
   followUp(input, loaded) {
@@ -353,6 +375,24 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
       plan.fx = [
         { currency: body.currency, until: date([body.issueDate, taxPointOf(body)].sort().at(-1)!) },
       ];
+    // A lease in a currency the invoice is not in: its principal at the issue date's rate.
+    const leaseCurrencies = [
+      ...new Set(
+        (input.allocations ?? []).flatMap((part) => {
+          const lease = part.lease ? loaded.openItems.get(part.lease) : undefined;
+          return lease && lease.currency !== LEDGER_CURRENCY && lease.currency !== body.currency
+            ? [lease.currency]
+            : [];
+        }),
+      ),
+    ].sort();
+    if (leaseCurrencies.length) {
+      plan.fx = [
+        ...(plan.fx ?? []),
+        ...leaseCurrencies.map((currency) => ({ currency, until: date(body.issueDate) })),
+      ];
+      plan.profile = true;
+    }
     if (record.kind === invoiceKinds.purchase && record.partyId && body.supplier.country === 'RO')
       plan.partyStatus = [{ partyId: record.partyId, date: taxPointOf(body) }];
     return plan.fx || plan.partyStatus ? plan : null;
@@ -372,6 +412,9 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
       amount: string;
       deduction: 'full' | 'none' | 'limited';
       advance?: string;
+      lease?: string;
+      principal?: string;
+      vatExpense?: string;
     }[] = input.allocations ?? [
       ...vat.categories.map((item) => ({
         account: input.account!,
@@ -386,10 +429,90 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
     const advanceKind = direction === 'sale' ? 'advance.received' : 'advance.paid';
     const isAdvance = parts.map((part) => advanceAccount.test(part.account));
     const negative = parts.map((part) => part.amount.startsWith('-'));
+    // A finance lease's instalment: its principal repays the lease on 167, its interest is on 666,
+    // and the lessor is held on 404 (OMFP 1802/2014, the functions of accounts 167, 404 and 666).
+    const isLease = parts.map((part) => part.account.split('.')[0] === '167');
+    const leases = parts.map((part) => (part.lease ? loaded.openItems.get(part.lease) : undefined));
+    const leaseRates: (FxRate | undefined)[] = parts.map(() => undefined);
+    parts.forEach((part, index) => {
+      const path = input.allocations ? `allocations.${index}` : 'account';
+      if (!isLease[index]) {
+        if (part.lease || part.principal || part.vatExpense)
+          issues.push(
+            block(
+              'LEASE',
+              'Leasingul, principalul și contul TVA nedeductibile se indică doar pe o rată de capital (167).',
+              path,
+            ),
+          );
+        return;
+      }
+      const lease = leases[index];
+      if (
+        direction !== 'purchase' ||
+        !lease ||
+        lease.kind !== 'loan.payable' ||
+        lease.controlAccount !== part.account ||
+        lease.partyId !== invoice.record.partyId
+      ) {
+        issues.push(
+          block(
+            'LEASE',
+            'Indicați leasingul financiar al acestui finanțator (lease), din același cont 167, a cărui rată de capital o facturează.',
+            path,
+          ),
+        );
+        return;
+      }
+      if (parts.some((other, j) => j < index && other.lease === part.lease))
+        issues.push(block('LEASE', 'Rata de capital a unui leasing este o singură parte.', path));
+      if (lease.currency === body.currency) {
+        if (part.principal)
+          issues.push(
+            block(
+              'LEASE_PRINCIPAL',
+              'Rata de capital este chiar suma părții.',
+              `${path}.principal`,
+            ),
+          );
+        leaseRates[index] = amounts.fx?.accounting;
+      } else if (lease.currency === LEDGER_CURRENCY)
+        issues.push(block('LEASE_CURRENCY', 'Un leasing în lei se facturează în lei.', path));
+      else if (!part.principal)
+        issues.push(
+          block(
+            'LEASE_PRINCIPAL',
+            `Indicați rata de capital în ${lease.currency} (principal).`,
+            `${path}.principal`,
+          ),
+        );
+      else {
+        const selected = selectRate(
+          loaded,
+          rules,
+          lease.currency,
+          date(body.issueDate),
+          'accounting',
+        );
+        if ('code' in selected) issues.push(selected);
+        else leaseRates[index] = selected;
+      }
+      if ((part.deduction === 'full') === (part.vatExpense !== undefined))
+        issues.push(
+          block(
+            'LEASE_VAT',
+            part.deduction === 'full'
+              ? 'Contul pentru TVA nedeductibilă se indică doar când rata nu deduce integral TVA.'
+              : 'Indicați contul de cheltuieli în care trece TVA nededusă a ratei de capital (vatExpense, de exemplu 635).',
+            `${path}.vatExpense`,
+          ),
+        );
+    });
     parts.forEach((part, index) => {
       const path = input.allocations ? `allocations.${index}` : 'account';
       if (
         !isAdvance[index] &&
+        !isLease[index] &&
         (direction === 'sale'
           ? !part.account.startsWith('70')
           : !purchaseAccount.test(part.account))
@@ -603,8 +726,10 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
     const item = {
       ref: 'counterparty',
       kind: direction === 'sale' ? ('receivable' as const) : ('payable' as const),
-      // Suppliers of fixed assets are held on 404, other suppliers on 401.
-      controlAccount: direction === 'sale' ? '4111' : assets ? '404' : '401',
+      // Suppliers of fixed assets, and lessors invoicing a finance lease, are held on 404, other
+      // suppliers on 401.
+      controlAccount:
+        direction === 'sale' ? '4111' : assets || isLease.some(Boolean) ? '404' : '401',
       partyId,
       currency: fx?.code ?? LEDGER_CURRENCY,
       normalSide: direction === 'sale' ? ('D' as const) : ('C' as const),
@@ -633,6 +758,55 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
       lines.push(
         line({ account: '4111', side: 'D', bani: gross, openItem: item.ref, partyId }, fx?.gross),
       );
+    // A lease part repays principal in the lease's currency, releasing its carrying amount in
+    // proportion (all of it when the lease is paid off); the difference from the invoice's lei is
+    // an exchange difference, on 668 or 768 for a lease settled in lei at a currency's rate (the
+    // functions of account 167). The VAT it does not deduct goes to an expense account.
+    const leaseLines = (p: number): LineSpec[] => {
+      const part = parts[p]!;
+      const lease = leases[p]!;
+      const rate = leaseRates[p];
+      const foreign = lease.currency !== LEDGER_CURRENCY;
+      const minor =
+        lease.currency === body.currency
+          ? partMinor[p]!
+          : parseMoney(part.principal!, lease.currency);
+      const release = foreign
+        ? carryingRelease(lease.balanceBani, lease.balanceMinor, minor)
+        : partNet[p]!;
+      const result: LineSpec[] = [
+        {
+          account: part.account,
+          side: 'D',
+          bani: release,
+          openItem: lease.id,
+          partyId,
+          ...(foreign && rate
+            ? { currency: { code: lease.currency, minor, rateId: rate.id, rate: rate.rate } }
+            : {}),
+        },
+      ];
+      const kept = partTax[p]! - deducted[p]!;
+      if (kept !== 0n)
+        result.push(
+          line(
+            { account: part.vatExpense!, side: 'D', bani: kept },
+            partTaxMinor[p]! - deductedMinor[p]!,
+          ),
+        );
+      const difference = partNet[p]! - release;
+      if (difference !== 0n) {
+        const indexed = lease.schedule?.method === INDEXED_LEASE_METHOD;
+        const loss = difference > 0n;
+        result.push({
+          account: loss ? (indexed ? '668' : '6651') : indexed ? '768' : '7651',
+          side: loss ? 'D' : 'C',
+          bani: loss ? difference : -difference,
+          memo: 'Diferență de curs la rata de leasing',
+        });
+      }
+      return result;
+    };
     const advanceItems: OpenItemSpec[] = [];
     parts.forEach((part, p) => {
       const kept = direction === 'purchase';
@@ -651,6 +825,10 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
         });
         advance = { openItem: `advance-${p}`, partyId };
       } else if (isAdvance[p]) advance = { openItem: part.advance!, partyId };
+      if (isLease[p]) {
+        lines.push(...leaseLines(p));
+        return;
+      }
       lines.push(
         line(
           {

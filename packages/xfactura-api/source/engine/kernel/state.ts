@@ -23,6 +23,7 @@ import type {
   MovementRecord,
   FiscalYear,
   FxRate,
+  ItemLines,
   LineSpec,
   Loaded,
   OpenItemKind,
@@ -39,7 +40,7 @@ import type {
   TaxEntrySpec,
   TaxPeriodLedger,
 } from 'xfactura-core/kernel';
-import { partyStatusKey, turnoverKey } from 'xfactura-core/kernel';
+import { itemLinesKey, partyStatusKey, turnoverKey } from 'xfactura-core/kernel';
 import type { LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
 import {
@@ -270,6 +271,12 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
     if (query.documentId) where.push(eq(openItems.documentId, query.documentId));
     if (query.partyId) where.push(eq(openItems.partyId, query.partyId));
     if (query.kind) where.push(eq(openItems.kind, query.kind));
+    if (query.accounts)
+      where.push(
+        query.accounts.length
+          ? or(...query.accounts.map((prefix) => like(openItems.controlAccount, `${prefix}%`)))!
+          : sql`0`,
+      );
     if (query.foreign) where.push(ne(openItems.currency, 'RON'));
     const items = (await loadOpenItems(tx, companyId, where)).filter(
       (item) => !query.openOnly || item.balanceBani !== 0n || item.balanceMinor !== 0n,
@@ -292,8 +299,10 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
         const own = rows.filter((row) => row.openItemId === item.id);
         const latest = Math.max(...own.map((row) => row.version));
         const current = own.filter((row) => row.version === latest);
-        if (current.length)
+        if (current.length) {
           item.schedule = {
+            id: current[0]!.scheduleId,
+            version: latest,
             method: current[0]!.method,
             rows: current.map((row) => ({
               key: row.rowKey,
@@ -302,6 +311,11 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
               counterAccount: row.counterAccount,
             })),
           };
+          // A revised schedule adds a version without a line on the item.
+          const id = current[0]!.scheduleId;
+          if (!readSet.some((entry) => entry.kind === 'schedule' && entry.id === id))
+            readSet.push({ kind: 'schedule', id, version: String(latest) });
+        }
       }
     }
     if (query.history && items.length) {
@@ -642,6 +656,50 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
     readSet.push({ kind: 'turnover', id: key, version: `${mark!.count}/${mark!.last}` });
   }
 
+  const itemLineMap = new Map<string, ItemLines[]>();
+  if (plan.itemLines) {
+    const key = itemLinesKey(plan.itemLines);
+    const range = and(
+      eq(lines.companyId, companyId),
+      isNotNull(lines.item),
+      or(...plan.itemLines.prefixes.map((prefix) => like(lines.account, `${prefix}%`))),
+    );
+    const join = and(eq(entries.companyId, lines.companyId), eq(entries.id, lines.entryId));
+    const side = (which: 'D' | 'C', column: typeof lines.bani | typeof lines.currencyMinor) =>
+      sql<bigint>`sum(CASE WHEN ${lines.side} = ${which} THEN COALESCE(${column}, 0) ELSE 0 END)`.mapWith(
+        BigInt,
+      );
+    const rows = await tx
+      .select({
+        item: lines.item,
+        account: lines.account,
+        openItem: lines.openItemId,
+        debit: side('D', lines.bani),
+        credit: side('C', lines.bani),
+        debitMinor: side('D', lines.currencyMinor),
+        creditMinor: side('C', lines.currencyMinor),
+      })
+      .from(lines)
+      .innerJoin(entries, join)
+      .where(range)
+      .groupBy(lines.item, lines.account, lines.openItemId)
+      .orderBy(asc(lines.item), asc(lines.account), asc(lines.openItemId));
+    const [mark] = await tx
+      .select({
+        count: sql<number>`count(*)`.mapWith(Number),
+        last: sql<number>`COALESCE(max(${entries.seq}), 0)`.mapWith(Number),
+      })
+      .from(lines)
+      .innerJoin(entries, join)
+      .where(range);
+    itemLineMap.set(
+      key,
+      rows.map((row) => ({ ...row, item: row.item! })),
+    );
+    // Any tagged line posted on these accounts changes the count or the last sequence.
+    readSet.push({ kind: 'itemLines', id: key, version: `${mark!.count}/${mark!.last}` });
+  }
+
   const assetMap = new Map<string, AssetState>();
   if (plan.assets) {
     const cards = await tx
@@ -757,6 +815,7 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
     taxLedger,
     payrollRuns: payrollRunMap,
     turnover,
+    itemLines: itemLineMap,
     assets: assetMap,
     partyStatus: statusMap,
   };
@@ -800,6 +859,7 @@ export function mergeStates(
     taxLedger: merge(first.loaded.taxLedger, second.loaded.taxLedger),
     payrollRuns: merge(first.loaded.payrollRuns, second.loaded.payrollRuns),
     turnover: merge(first.loaded.turnover, second.loaded.turnover),
+    itemLines: merge(first.loaded.itemLines, second.loaded.itemLines),
     assets: merge(first.loaded.assets, second.loaded.assets),
     partyStatus: merge(first.loaded.partyStatus, second.loaded.partyStatus),
   };

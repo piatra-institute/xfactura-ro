@@ -297,7 +297,7 @@ EUR limits are converted at **BNR's average rate of the year of payment** (norme
 - **Association rules (art. 125):**
   - written contract with quotas and a designated associate (alin. (2)); registered with the tax office within 30 days;
   - relatives up to the 4th degree must prove they contribute property they own (alin. (3));
-  - **annual return D204 by the last day of February** (alin. (4)). OPANAF 97/2019 says 15 February; ANAF's page shows OPANAF 90/2022 as current, which was not read. **[CONFLICT]**
+  - **annual return D204 by the last day of February** (alin. (4)), as OPANAF 470/2021 also says (it replaced OPANAF 97/2019's 15 February from the income of 2020; OPANAF 90/2022 replaced only the form). The norms (pct. 41 alin. (4)) say 15 March. **[CONFLICT]**, see §7.8.
   - net income or loss distributed by quota (alin. (5)); each member declares the distributed amount in their own D212, with "asociere fără personalitate juridică" ticked (art. 122 alin. (4)).
 - **Normă:** each member's norm has the 12-wage floor (art. 69 alin. (3)). No distribution and no D204 (art. 125 alin. (1) lit. c), (10); OPANAF 97/2019 instr. pct. 2).
 - **Open:** whether an IF is an "asociere fără personalitate juridică" under art. 125. The Code does not name IF there. OMFP 170 cap. I pct. 1 a.1 and ANAF's D204 practice suggest so.
@@ -510,7 +510,7 @@ See §1.5: an annual table per source.
 
 1. **Double-entry option:** can a PFA, II or IF opt for double entry, given OUG 44/2008 art. 15 ("vor ține contabilitatea în partidă simplă") and OMFP 170 art. 3's carve-out? Or only through L82/1991 art. 1 alin. (5)?
 2. **Fișa pentru operații diverse:** required, or optional since OMFP 170 repealed OMFP 1040/2004? If used, which model?
-3. **IF under art. 125:** is an IF an association for D204 and distribution, even though the Code does not name it? The D204 deadline is the last day of February (Code) versus 15 February (OPANAF 97/2019). Is OPANAF 90/2022 current?
+3. **IF under art. 125:** is an IF an association for D204 and distribution, even though the Code does not name it? The D204 deadline is the last day of February (Code art. 125 alin. (4), OPANAF 470/2021) versus 15 March (norme pct. 41 alin. (4)).
 4. **VAT-inclusive receipts:** allocating partial receipts and payments of invoices with VAT (pro rata to net and VAT), and rounding.
 5. **Foreign currency:** income in lei at the BNR rate of the previous banking day (OMFP 170 pct. 18). Do exchanges between own currency accounts, or FX differences, create income or expense on a cash basis?
 6. **Withholding at source:** is a PFA "an entity obliged to keep accounting" (art. 72, 84^1), so that it withholds on rent and IP and files D100 and D205?
@@ -669,3 +669,110 @@ Built 30 October 2026. Every value is still `extracted`.
   - 2024 income;
   - `ro.pit.norma` for 2025. The register reads it only for a source on a norm, so a source in the real system is unaffected.
 
+
+### 7.8 P4: normă de venit, the family enterprise's members, D204
+
+Built 30 October 2026. Every value is still `extracted`; nothing is reviewed.
+
+**Sources added** (snapshots in `.sources/`, registered in core `ro/sources`):
+
+| Id | What | SHA-256 |
+|---|---|---|
+| OPANAF470/2021 | Formular 204 and its instructions (anexa 2), income from 2020 | `6e22afaee25f50f3bcf928a39992db3f3cc6a953d907d3f377fc674609393fb9` |
+| OPANAF90/2022 | Replaces the form of anexa 1, income from 2022; the instructions stay 470/2021's | `d6148e2397db765f1106d4609092688a11d7a1bfdb1ae911881003896f7339bf` |
+| ANAF/D204-structura-2025 | XML structure `declaratie:v3` for an >= 2018, 15.01.2026 | `1aa53edc1e1b35c5e52d042d3635b9d152690f373661c3425760a12421a44f3a` |
+| OPANAF97/2019 | The earlier form 204 (income 2018–2019), kept for the deadline history | `d389db58065d6de85c119cca7d1aadc3fd9bf3a659f5caef83d55de76cfecdf0` |
+
+`D204_16012026.zip` (J3.0.14 / P2.0.2) hashes `5679dd855e0142f066a3715101ed803e079f3dba2416d3f43ccf529bdd541aee`, as §0 says. It is pinned in `scripts/validators/sources.json` in the **general kit**: unlike D212's it loads in both kits, with the same verdicts (only the wording of structural errors differs).
+
+**What the validators check, verified by running them:**
+
+- **D204 J3.0.14:**
+  - checks the CNP, CUI and NIF control digits, the lists (counties, CAEN by year: Rev. 2 to 2024, Rev. 2 and Rev. 3 from 2025), the dates (R40–R41.2), the loss rows (R46.1, R46.2), `totalPlata_A = 0` and empty attributes;
+  - does **not** require the quotas to add up to 100%, does not tie `net3` to `venit3 − chelt3`, does not compare the shares' sum with the total or `nr_asoc` with the members, and only **warns** (R57.2, R58.2) about a share more than 1 leu from the quota.
+  - `checkD204` adds those as errors (the structure's own ERR rows), and a sum of shares different from the total as a warning.
+- **D212 J13.0.1 and `cap12`:** `validateCap12` is empty; only R8 (`bifa112` ⇒ `cap12`) touches it. The 2024 structure's Subsection 2 is **only for an activity started in December 2024** (its rules on `norma_data_incep`); the others' 2024 norm tax was set in the declaration filed in 2024. The writer refuses other 2024 norm returns (`D212_NORMA_START`).
+
+**Normă de venit** (`pfa.fiscalRegister`, core `adjustedNorm`):
+
+- The norm is the preparer's, with the DGRFP publication as evidence (`norms[]`), now with the **criterion** (01–13, as the web form codes them) of the highest increasing and reducing coefficients.
+- The register returns rd. 8 (`yearly`: the norm × increase × reduction), the days of activity and of interruption, rd. 9 (`adjusted`, prorated over 365 days) and the tax.
+- The floor of 12 minimum wages blocks (`PIT_NORM_FLOOR`).
+- **The 25,000 EUR threshold, both ways:**
+  - this year's gross income above it is a note: real system from next year (`PIT_NORMA_THRESHOLD`);
+  - last year's gross income above it blocks this year's norm (`PIT_NORMA_REAL_REQUIRED`). It is read from the books, or from `previousGross` when the books do not hold that year (`PIT_NORMA_PREVIOUS_GROSS`), at last year's BNR average (`previousEurAnnualRate`, else `PIT_EUR_RATE`).
+- The 2-year option lock is P0's (module and trigger).
+- **`ro.pit.norma` for the income of 2025 stays a gap:**
+  - OPANAF 2736/2025's instructions state neither a floor nor a threshold;
+  - Legea 239/2025 rewrote art. 69 alin. (3) only from the income of 2026, and the earlier wording is not in the sources;
+  - when alin. (9) (25,000 EUR) took effect cannot be read from the consolidated text.
+  - A 2025 norm source therefore stops at `RULE_GAP`; the engine tests use a marked fixture.
+
+**D212 on a norm** (core `D212Norm`, `cap12`):
+
+- **2024 structure:** the flat `cap12` (norm, rd. 8, rd. 9, rd. 9.1, tax); `bifa111` 0 and `bifa112` 1.
+- **Web form:** `cap12` with one `norma_loc` and a `corectie` per coefficient. It writes `real_ajustare` 0 when there is no coefficient, as the form does. It does **not** write the place's county, locality and street codes: they come from ANAF's nomenclators, which are not public (`D212_NORMA_PLACE` warning).
+- **Both:** CAS and CASS count rd. 9. Section 4 is empty, and the norm's tax goes into Section 7.
+- **Checks:** rd. 8 from the coefficients, rd. 9 from the days, and the tax at 10%. One leu off is a `D212_ROUNDING` warning; more is `D212_NORMA`.
+
+**Family enterprise members** (table `acc_enterprise_members`, migration `0013_enterprise_members`):
+
+- **One version per agreement** (the acord de constituire, then each addendum), recorded whole by `if.members.record` (human approval). `if.members.list` returns no CNP.
+- **Each member row holds:** its position, the party (an individual with a sealed CNP), the quota in hundredths of a percent, the representative flag, from/to and the evidence.
+- **The module checks** (codes `ENTERPRISE_MEMBER_*`): the form `if` on the date; at least 2 members (OUG 44/2008 art. 28); quotas adding to 100% and one representative (art. 29); CNPs sealed; distinct members; an addendum after the previous agreement.
+- **The trigger `inv_enterprise_member_guard` checks again**, with one attack each in `invariants.integration.test.ts`:
+  - `enterprise_member_version`: numbering of agreements and positions;
+  - `enterprise_member_form`;
+  - `enterprise_member_cnp`;
+  - `enterprise_member_quota`: never above 100%;
+  - `enterprise_member_representative`: at most one;
+  - `enterprise_member_terms`: one date and evidence per agreement;
+  - `enterprise_member_complete`: a new agreement only after a complete one (≥ 2 members, exactly 100%, one representative);
+  - `enterprise_member_dates`.
+- **The last agreement's completeness** cannot be checked by a row trigger while it is being written. The operation checks it, and so does the register (`PIT_IF_MEMBERS_INCOMPLETE`).
+- The export includes the table.
+
+**The IF's register and D204:**
+
+- **The register:** for an IF, `pfa.fiscalRegister` returns the source and `enterprise` with each member's share of the net income or loss. Its `contributions` and `tax` are null: they are each member's.
+  - **Shares:** to the leu, largest remainder, so that they add up. This is within the structure's `round(net × cota)` ±1.
+  - **Blocking cases:** no agreement (`PIT_IF_MEMBERS`), a change in the year (`PIT_IF_MEMBERS_CHANGE`; the norms' interim allocation of pct. 41 alin. (6) is not built), or an incomplete agreement.
+  - **On a norm:** nothing is distributed (`PIT_IF_NORMA`).
+- **D204** (core `ro/declarations/d204.ts`, engine kind `D204`, period = income year):
+  - Pinned for the income of 2022–2026.
+  - **Filled from:** the register's totals and shares, the company's name and CUI, and the representative's name and CNP.
+  - **Taken from the options:** the addresses, the contract as registered with the fiscal body (`nr_contr`, `data_contr`), the locality and the Bucharest sector.
+  - It reaches `validated_official` in the general kit.
+  - **Refused:** not an IF (`D204_FORM`), on a norm (`D204_NORMA`), a change of form (`D204_FORM_CHANGE`), several sources (`D204_SOURCE`), and the checks' `D204_*` codes.
+- **D212 of a member (extended):**
+  - `holderPartyId` is the member. `member` gives their CAS status and CASS exception (`D212_MEMBER` if missing). `association` gives the registered contract (`D212_ASSOCIATION`).
+  - **cap11 is `forma_org` 2**, and only the net income or loss distributed is written:
+    - web form: `nr_doc_asociere` and `data_doc_asociere`, no `venit_brut`/`chelt_deduc`;
+    - 2024 structure: the contract in its single document field.
+  - **The member's own figures:** the losses carried are their shares of the books' earlier years plus their declared opening losses; CAS, CASS and tax are on their share.
+  - **Refused:** a non-member (`PIT_IF_MEMBER`), and members of an IF on a norm (`D212_IF_NORMA`: each member's own norm is not modelled).
+  - The integration test checks that the members' D212 add up to the D204's distribution.
+
+**D204 deadline: a conflict shown, not settled.**
+
+| Text | Deadline |
+|---|---|
+| Code art. 125 alin. (4) | last day of February |
+| OPANAF 470/2021 anexa 2 pct. 3.1 (in force; 90/2022 did not touch it) | last day of February |
+| Norme metodologice, titlul IV pct. 41 alin. (4) (not updated) | 15 March |
+| OPANAF 97/2019 pct. 3 lit. a) (income 2018–2019) | 15 February |
+
+- `ro.deadline.D204` is a new deadline kind, `conflict`, with two readings and their clauses:
+  - the last day of February: the Code and OPANAF 470/2021;
+  - 15 March: the norms.
+- `obligations.calendar` lists D204 for each income year of an IF in the real system. Its due date is the earliest reading. The `conflict` field gives every reading with its date and clauses.
+- §1.15's "15 February" was OPANAF 97/2019's, which OPANAF 470/2021 replaced from the income of 2020.
+
+**Choices to confirm (expert contabil):**
+
+- **An IF is an association under art. 125.** The Code, OPANAF 470/2021 and 90/2022 never name it; norme pct. 41 alin. (1) lists "asociații familiale".
+- **Shares** by largest remainder (sum exact), not each `round(net × cota)`.
+- **A member's 2024 `nr_doc_autoriz`** carries the association contract ("autorizare/ contract de asociere").
+- **Norm proration** over 365 days in a leap year too (norme pct. 8 alin. (10)).
+- **The previous year's 25,000 EUR test** uses this year's rule.
+- **Each member of an IF on a norm owes the whole norm** (art. 69 alin. (3), "stabilită pentru fiecare membru asociat"). This is read, not built.

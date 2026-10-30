@@ -1376,6 +1376,51 @@ export const incomeSources = sqliteTable(
   ],
 );
 
+/**
+ * The members of a family enterprise (întreprindere familială, OUG nr. 44/2008 art. 28–31) as
+ * the acord de constituire, or an addendum to it, sets them: each member's quota of the net
+ * income or loss and the representative. One version per agreement, complete, from its date;
+ * the CNP of each member is the party's, sealed (acc_party_cnps).
+ */
+export const enterpriseMembers = sqliteTable(
+  'acc_enterprise_members',
+  {
+    companyId: companyId(),
+    version: counter('version').notNull(),
+    /** The member's number in the agreement, from 1. */
+    position: counter('position').notNull(),
+    partyId: text('party_id').notNull(),
+    /** The member's quota in hundredths of a percent (6000 = 60%). */
+    quotaBp: counter('quota_bp').notNull(),
+    /** The representative (art. 29 alin. (2) lit. c)), who keeps the books (art. 15). */
+    representative: integer('representative', { mode: 'boolean' }).notNull(),
+    /** The version applies from this day until the next version's, or until `effectiveTo`
+     * when the enterprise ends. */
+    effectiveFrom: text('effective_from').notNull(),
+    effectiveTo: text('effective_to'),
+    /** The acord de constituire or its addendum. */
+    evidenceId: text('evidence_id').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.version, t.partyId] }),
+    foreignKey({
+      columns: [t.companyId, t.partyId],
+      foreignColumns: [parties.companyId, parties.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.evidenceId],
+      foreignColumns: [evidence.companyId, evidence.id],
+    }),
+    check('enterprise_member_quota', sql`${t.quotaBp} between 1 and 10000`),
+    check(
+      'enterprise_member_dates',
+      sql`${t.effectiveTo} is null or ${t.effectiveFrom} <= ${t.effectiveTo}`,
+    ),
+  ],
+);
+
 /** What ANAF's register of taxpayers (web service v9) answered about a Romanian party for a
  * date: one snapshot per answer, numbered per party, citing the answer kept as evidence. A later
  * check adds a snapshot; none is ever corrected. */

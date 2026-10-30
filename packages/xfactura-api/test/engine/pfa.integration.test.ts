@@ -708,6 +708,229 @@ describe('PFA registers as projections of the ledger', () => {
   });
 });
 
+/**
+ * A PFA whose source is on a norm (Croitorie, CAEN 1413, Iași), keeping single-entry books from
+ * 1 January of `books` (the income year unless given), not a VAT payer; receipts are booked as cash
+ * income.
+ */
+async function onNorm(
+  options: {
+    year?: number;
+    books?: number;
+    startedOn?: string;
+    register?: ParameterRegister;
+    declarationValidator?: DeclarationValidator;
+  } = {},
+) {
+  const y = options.year ?? 2026;
+  const from = options.books ?? y;
+  const startedOn = options.startedOn ?? `${y}-01-01`;
+  const s = await scenario({
+    year: from,
+    ...(options.register ? { register: options.register } : {}),
+    ...(options.declarationValidator ? { declarationValidator: options.declarationValidator } : {}),
+  });
+  open.push(s);
+  const { id: certificate } = await s.evidence('certificat-inregistrare.pdf');
+  const factFrom = startedOn < `${from}-01-01` ? `${startedOn.slice(0, 4)}-01-01` : `${from}-01-01`;
+  for (const [axis, value] of [
+    ['entity.form', 'pfa'],
+    ['books.system', 'single'],
+    ['cas.status', 'liable'],
+    ['cass.exception', 'none'],
+  ])
+    await s.invoke(s.owner, 'profile.record', {
+      axis,
+      value,
+      effectiveFrom: factFrom,
+      evidenceId: certificate,
+    });
+  const source = await s.invoke<{ sourceId: string }>(s.owner, 'pfa.sources.record', {
+    effectiveFrom: startedOn,
+    name: 'Croitorie',
+    caen: '1413',
+    place: 'Str. Exemplu nr. 2, Iași',
+    county: 'IS',
+    authorization: { number: 'F22/77/2024', date: '2024-11-25' },
+    startedOn,
+    liberal: false,
+    method: 'norma',
+    evidenceId: certificate,
+  });
+  const { id: publication } = await s.evidence('norme-venit-dgrfp-iasi.pdf');
+  const receipt = async (date: string, amount: string) =>
+    s.book(
+      'ledger.general',
+      journal(
+        (await s.evidence(`chitanta-${date}-${amount}.pdf`)).id,
+        [
+          { account: '5311', side: 'D', amount },
+          { account: '704', side: 'C', amount },
+        ],
+        { date },
+      ),
+    );
+  /** The DGRFP's norm with the highest coefficients: +10% (01 vadul comercial), −20% (05). */
+  const norm = (amount = '50000', coefficients = true) => ({
+    sourceId: source.sourceId,
+    norm: amount,
+    ...(coefficients
+      ? {
+          increasePercent: '10',
+          increaseCriterion: '01',
+          reductionPercent: '20',
+          reductionCriterion: '05',
+        }
+      : {}),
+    evidenceId: publication,
+  });
+  return { s, certificate, source, publication, receipt, norm };
+}
+
+type NormRegister = {
+  final: boolean;
+  sources: {
+    method: string;
+    register: { rows: { nr: string; value: string }[] };
+    norm?: { yearly: string; activeDays: number | null; adjusted: string; tax: string };
+  }[];
+  contributions: { cumulated: string; cas: { due: string }; cass: { base: string; due: string } };
+  tax: { recalculated: string; taxable: string; real: string; norma: string; total: string };
+  issues: { code: string; severity: string }[];
+};
+
+describe('PFA on a norm', () => {
+  test('the DGRFP’s norm adjusted and prorated, its floor, the 25,000 euro threshold', async () => {
+    const { s, receipt, norm, publication } = await onNorm({ startedOn: '2026-02-01' });
+    await receipt('2026-03-10', '30000.00');
+    const register = (input: Record<string, unknown> = {}) =>
+      s.invoke<NormRegister>(s.owner, 'pfa.fiscalRegister', { year: 2026, ...input });
+    const codes = (result: NormRegister) => result.issues.map((issue) => issue.code);
+    // The norm is the preparer's, with the DGRFP's publication.
+    expect(codes(await register())).toContain('PIT_NORM_MISSING');
+    // Below 12 × 4,050 = 48,600 lei (art. 69 alin. (3)).
+    const low = await register({ norms: [norm('40000')] });
+    expect(low.final).toBe(false);
+    expect(codes(low)).toContain('PIT_NORM_FLOOR');
+    // 50,000 × 1.10 × 0.80 = 44,000 lei; from 1 February: 334 days of 365, 40,263.01 → 40,263.
+    const result = await register({
+      norms: [norm()],
+      eurAnnualRate: { rate: '5.0000', evidenceId: publication },
+    });
+    expect(result.final).toBe(true);
+    expect(result.issues).toEqual([]);
+    expect(result.sources[0]!.register.rows.map((row) => `${row.nr} ${row.value}`)).toEqual([
+      '1 30000.00',
+    ]);
+    expect(result.sources[0]!.norm).toMatchObject({
+      yearly: '44000.00',
+      activeDays: 334,
+      adjusted: '40263.00',
+      tax: '4026.00',
+    });
+    // Under 12 minimum wages: no CAS; CASS on the norm; no real-system tax.
+    expect(result.contributions).toMatchObject({
+      cumulated: '40263.00',
+      cas: { due: '0.00' },
+      cass: { base: '40263.00', due: '4026.00' },
+    });
+    expect(result.tax).toEqual({
+      recalculated: '0.00',
+      taxable: '0.00',
+      real: '0.00',
+      norma: '4026.00',
+      total: '4026.00',
+    });
+    // Without the year's BNR average the threshold is not checked: a note.
+    expect(codes(await register({ norms: [norm()] }))).toEqual(['PIT_EUR_RATE']);
+    // 130,000 lei received is more than 25,000 × 5.0000: the real system from 2027.
+    await receipt('2026-09-10', '100000.00');
+    const above = await register({
+      norms: [norm()],
+      eurAnnualRate: { rate: '5.0000', evidenceId: publication },
+    });
+    expect(above.final).toBe(true);
+    expect(above.issues.map((issue) => [issue.code, issue.severity])).toEqual([
+      ['PIT_NORMA_THRESHOLD', 'info'],
+    ]);
+  });
+
+  test('gross income above 25,000 euro the year before puts the source in the real system', async () => {
+    const { s, receipt, norm, publication, source, certificate } = await onNorm({
+      year: 2026,
+      books: 2025,
+      startedOn: '2025-01-01',
+    });
+    await receipt('2025-06-10', '130000.00');
+    await s.invoke(s.owner, 'years.create', {
+      kind: 'financial',
+      label: '2026',
+      from: '2026-01-01',
+      to: '2026-12-31',
+    });
+    const register = (input: Record<string, unknown> = {}) =>
+      s.invoke<NormRegister>(s.owner, 'pfa.fiscalRegister', {
+        year: 2026,
+        norms: [norm()],
+        ...input,
+      });
+    const blocking = (result: NormRegister) =>
+      result.issues.filter((issue) => issue.severity === 'block').map((issue) => issue.code);
+    // 2025's BNR average is needed for 2025's gross income.
+    expect(blocking(await register())).toEqual(['PIT_EUR_RATE']);
+    // 130,000 lei > 25,000 × 4.9800 = 124,500 lei.
+    const forced = await register({
+      previousEurAnnualRate: { rate: '4.9800', evidenceId: publication },
+    });
+    expect(forced.final).toBe(false);
+    expect(blocking(forced)).toEqual(['PIT_NORMA_REAL_REQUIRED']);
+    // Under the threshold at a higher rate.
+    expect(
+      blocking(
+        await register({ previousEurAnnualRate: { rate: '5.3000', evidenceId: publication } }),
+      ),
+    ).toEqual([]);
+    // The law's real system from 1 January 2026: no norm any more.
+    await s.invoke(s.owner, 'pfa.sources.record', {
+      sourceId: source.sourceId,
+      effectiveFrom: '2026-01-01',
+      name: 'Croitorie',
+      caen: '1413',
+      place: 'Str. Exemplu nr. 2, Iași',
+      county: 'IS',
+      authorization: { number: 'F22/77/2024', date: '2024-11-25' },
+      startedOn: '2025-01-01',
+      liberal: false,
+      method: 'sistem_real',
+      realBasis: 'required',
+      evidenceId: certificate,
+    });
+    const real = await s.invoke<NormRegister>(s.owner, 'pfa.fiscalRegister', { year: 2026 });
+    expect(real.sources[0]!.method).toBe('sistem_real');
+    expect(real.issues.map((issue) => issue.code)).not.toContain('PIT_NORMA_REAL_REQUIRED');
+
+    // Books that start in 2026: the source's 2025 gross income is the preparer's.
+    const later = await onNorm({ year: 2026, startedOn: '2025-03-01' });
+    const laterRegister = (input: Record<string, unknown> = {}) =>
+      later.s.invoke<NormRegister>(later.s.owner, 'pfa.fiscalRegister', {
+        year: 2026,
+        norms: [later.norm()],
+        previousEurAnnualRate: { rate: '4.9800', evidenceId: later.publication },
+        ...input,
+      });
+    expect(blocking(await laterRegister())).toEqual(['PIT_NORMA_PREVIOUS_GROSS']);
+    expect(
+      blocking(
+        await laterRegister({
+          previousGross: [
+            { sourceId: later.source.sourceId, amount: '90000.00', evidenceId: later.publication },
+          ],
+        }),
+      ),
+    ).toEqual([]);
+  });
+});
+
 describe('PFA foreign currency', () => {
   // Synthetic BNR rates. A PFA books at the rate of the last banking day before the operation
   // (OMFP nr. 170/2015 cap. III pct. 18): the sale of 10 March at 4.9700 (9 March), 1,000.00 EUR
@@ -1144,7 +1367,7 @@ describe('D212 from the books', () => {
     ).toEqual(['NOT_VALIDATED']);
   });
 
-  test('what is refused: a year without a structure or rules, an IF, income outside the books', async () => {
+  test('what is refused: a year without a structure or rules, an IF without a member, income outside the books', async () => {
     // The engine's own register: no PIT values for 2024, no structure for 2026.
     const old = await books(2024);
     expect((await old.s.refused(prepare(old.s, '2024', old.options212)))?.code).toBe('RULE_GAP');
@@ -1167,14 +1390,156 @@ describe('D212 from the books', () => {
     expect((await refused({ holderPartyId: other.id }))?.code).toBe('D212_CNP');
     // The option after a year with income: situation B needs a loss.
     expect((await refused({ cassOption: { situation: 'B' } }))?.code).toBe('D212_CASS_OPTION');
-    // An IF: each member declares the income distributed to them.
+    // An IF: each member declares the income distributed to them, with their own situation for
+    // CAS and CASS (if.integration.test.ts).
     await fixed.s.invoke(fixed.s.owner, 'profile.record', {
       axis: 'entity.form',
       value: 'if',
       effectiveFrom: '2025-01-01',
       evidenceId: fixed.certificate,
     });
-    expect((await refused({}))?.code).toBe('D212_IF');
+    expect((await refused({}))?.code).toBe('D212_MEMBER');
+  });
+
+  official(
+    'income of 2024 on a norm started in December: cap12 to ANAF’s validator',
+    async () => {
+      const holderCnp = '1781105170030';
+      const { s, receipt, norm } = await onNorm({
+        year: 2024,
+        startedOn: '2024-12-02',
+        register: fixtures(2024),
+        declarationValidator: kits(),
+      });
+      const holder = await s.invoke<{ id: string }>(s.owner, 'parties.create', {
+        kind: 'ro_individual',
+        country: 'RO',
+        name: 'Popescu Ion (titular)',
+      });
+      await s.invoke(s.owner, 'parties.recordCnp', { partyId: holder.id, cnp: holderCnp });
+      await receipt('2024-12-20', '2000.00');
+      const prepared = await prepare(s, '2024', {
+        holderPartyId: holder.id,
+        taxpayer: {
+          lastName: 'Popescu',
+          firstName: 'Ion',
+          address: 'Str. Exemplu nr. 2, Iasi, jud. Iasi',
+        },
+        register: { norms: [norm('40000')] },
+      });
+      expect(prepared.steps.map((step) => [step.state, step.actor])).toEqual([
+        ['prepared', null],
+        ['validated_official', saftKitId],
+      ]);
+      // 40,000 × 1.10 × 0.80 = 35,200 lei; 30 days of 365: 2,893 lei, tax 289. CASS on the
+      // minimum of 6 × 3,300 = 19,800 lei (the structure's minimum wage).
+      const xml = await xmlOf(s, prepared);
+      expect(
+        Object.fromEntries(
+          [
+            'bifa111',
+            'bifa112',
+            'norma_forma_org',
+            'norma_data_incep',
+            'real_norma_venit',
+            'real_ajustare',
+            'real_venit_net_anual',
+            'real_impozit',
+            'baza_cass_datorat_ai',
+            'cass_datorat_ai',
+            'oblimpoz_real_total',
+            'dif_de_plata',
+          ].map((name) => [name, attribute(xml, name)]),
+        ),
+      ).toEqual({
+        bifa111: '0',
+        bifa112: '1',
+        norma_forma_org: '1',
+        norma_data_incep: '02.12.2024',
+        real_norma_venit: '40000',
+        real_ajustare: '35200',
+        real_venit_net_anual: '2893',
+        real_impozit: '289',
+        baza_cass_datorat_ai: '19800',
+        cass_datorat_ai: '1980',
+        oblimpoz_real_total: '289',
+        dif_de_plata: '2269',
+      });
+      expect(xml).not.toContain('<cap11');
+    },
+    180_000,
+  );
+
+  test('income of 2025 on a norm: the web form’s cap12; the 2025 norm rule is a gap', async () => {
+    const run = async (register?: ParameterRegister) => {
+      const context = await onNorm({
+        year: 2025,
+        ...(register ? { register } : {}),
+        declarationValidator: unused,
+      });
+      const holder = await context.s.invoke<{ id: string }>(context.s.owner, 'parties.create', {
+        kind: 'ro_individual',
+        country: 'RO',
+        name: 'Popescu Ion (titular)',
+      });
+      await context.s.invoke(context.s.owner, 'parties.recordCnp', {
+        partyId: holder.id,
+        cnp: '1781105170030',
+      });
+      await context.receipt('2025-05-10', '20000.00');
+      const options = {
+        holderPartyId: holder.id,
+        taxpayer: { lastName: 'Popescu', firstName: 'Ion', address: 'Str. Exemplu nr. 2, Iași' },
+        register: { norms: [context.norm()] },
+      };
+      return { ...context, options };
+    };
+    // The engine's register has no norm rule (floor, threshold) for the income of 2025.
+    const gap = await run();
+    expect((await gap.s.refused(prepare(gap.s, '2025', gap.options)))?.code).toBe('RULE_GAP');
+    // With the 2026 rule as a test fixture: 44,000 lei, no CAS, CASS 4,400, tax 4,400.
+    const { s, options } = await run(fixtures(2025));
+    const prepared = await prepare(s, '2025', options);
+    expect(prepared.state).toBe('prepared');
+    const xml = await xmlOf(s, prepared);
+    expect(
+      Object.fromEntries(
+        [
+          'bifa112',
+          'norma_venit_impozabil',
+          'norma_impozit',
+          'real_ajustare',
+          'cass_datorat_ai',
+          'dif_de_plata',
+        ].map((name) => [name, attribute(xml, name)]),
+      ),
+    ).toEqual({
+      bifa112: '1',
+      norma_venit_impozabil: '44000',
+      norma_impozit: '4400',
+      real_ajustare: '44000',
+      cass_datorat_ai: '4400',
+      dif_de_plata: '8800',
+    });
+    expect(xml).toContain('<corectie criteriu="01" coeficient_majorare="10.00"/>');
+    expect(
+      (JSON.parse(prepared.steps[0]!.detail!) as { warnings: { code: string }[] }).warnings.map(
+        (warning) => warning.code,
+      ),
+    ).toEqual(['D212_NORMA_PLACE']);
+    // A coefficient without its criterion is not written.
+    expect(
+      (
+        await s.refused(
+          prepare(s, '2025', {
+            ...options,
+            register: {
+              norms: [{ ...options.register.norms[0]!, increaseCriterion: undefined }],
+            },
+          }),
+        )
+      )?.code,
+    ).toBe('D212_NORMA_CRITERION');
   });
 
   test('the obligations calendar lists D212 by 25 May of the next year', async () => {

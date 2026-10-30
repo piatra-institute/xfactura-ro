@@ -3,6 +3,7 @@ import { citationProblems, clauses, legalSources, unsourced } from '../src/ro/so
 import { fxVersions } from '../src/ro/fx';
 import { dividendVersions } from '../src/ro/dividends';
 import { etvaVersions } from '../src/ro/etva';
+import { interestVersions } from '../src/ro/financing';
 import { microVersions } from '../src/ro/micro';
 import { payrollVersions } from '../src/ro/payroll';
 import { pitVersions } from '../src/ro/pit';
@@ -16,6 +17,7 @@ const versions = [
   ...payrollVersions,
   ...microVersions,
   ...dividendVersions,
+  ...interestVersions,
   ...etvaVersions,
   ...pitVersions,
 ];

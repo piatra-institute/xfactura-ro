@@ -8,6 +8,7 @@ import { booksSystemOf, entityFormOf, individualForms } from 'xfactura-core/ro/e
 import {
   adjustedNorm,
   casDue,
+  distributeByQuota,
   cassDue,
   chargeJournals,
   classify,
@@ -32,6 +33,7 @@ import {
   type RealSource,
   type Rounding,
 } from 'xfactura-core/ro/pit';
+import { normCriteria } from 'xfactura-core/ro/declarations/d212';
 import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
 import { monthEnd, type LocalDate, type Month } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
@@ -44,10 +46,12 @@ import {
   incomeSources,
   lines,
   openItems,
+  parties,
 } from '../db/schema';
 import { appendAudit, type Actor, type Commands } from '../kernel/commands';
 import type { CloseCheck } from '../kernel/periods';
 import { cashJournalOf, itemsOf, loadTreasuryLedger } from '../kernel/reports';
+import { agreements, agreementsIn, quotaText } from './enterprise';
 import { loadState } from '../kernel/state';
 
 const day = z.iso.date();
@@ -294,11 +298,27 @@ export const fiscalRegisterInput = z
             sourceId: z.uuid(),
             norm: money,
             increasePercent: percent.optional(),
+            /** The criterion the coefficient comes from (norme pct. 8 alin. (7)), as the D212 web
+             * form codes them: 01 vadul comercial … 13 alte criterii. */
+            increaseCriterion: z.enum(normCriteria).optional(),
             reductionPercent: percent.optional(),
+            reductionCriterion: z.enum(normCriteria).optional(),
             evidenceId: z.uuid(),
           })
           .strict(),
       )
+      .max(20)
+      .default([]),
+    /** BNR's average EUR rate of the previous year: a source on a norm whose gross income that
+     * year exceeded 25.000 euro is in the real system from this year (art. 69 alin. (9)). */
+    previousEurAnnualRate: z
+      .object({ rate: z.string().regex(/^\d{1,3}\.\d{1,4}$/), evidenceId: z.uuid() })
+      .strict()
+      .optional(),
+    /** The previous year's gross income of a source on a norm, when these books do not hold that
+     * year: from the fiscal register's income part or the declaration filed. */
+    previousGross: z
+      .array(z.object({ sourceId: z.uuid(), amount: money, evidenceId: z.uuid() }).strict())
       .max(20)
       .default([]),
   })
@@ -550,6 +570,91 @@ function registerRows(result: RealSource) {
   return rows;
 }
 
+/** The losses a source's owner declared from before these books, as vintages. */
+const openingVintages = (input: FiscalRegisterInput, sourceId: string): LossVintage[] =>
+  input.openingLosses
+    .filter((item) => item.sourceId === sourceId && item.year < input.year)
+    .map((item) => ({ year: item.year, bani: parseMoney(item.amount, LEDGER_CURRENCY) }));
+
+/** Each earlier year of a real-system source in these books, with its net income or loss, or
+ * why a year could not be computed. */
+async function earlierResults(
+  tx: Transaction,
+  companyId: string,
+  rules: RuleContext,
+  source: IncomeSourceRow,
+  income: number,
+  eurRate: string | null,
+) {
+  const from = Math.max(
+    (await firstBooksYear(tx, companyId)) ?? income,
+    Number(source.startedOn.slice(0, 4)),
+  );
+  const years: YearResult[] = [];
+  const issues: Issue[] = [];
+  for (let earlier = from; earlier < income; earlier++) {
+    let before: YearParams;
+    try {
+      before = yearParams(rules, earlier);
+    } catch (error) {
+      if (!(error instanceof DomainError)) throw error;
+      issues.push(
+        block(
+          'PIT_PRIOR_YEAR',
+          `Pierderea sau venitul net din ${earlier} nu se pot stabili (${error.message}): pierderile reportate din acel an lipsesc din calcul.`,
+        ),
+      );
+      continue;
+    }
+    const { result } = await realSourceYear(tx, companyId, earlier, before, [], eurRate);
+    years.push({ year: earlier, params: before, net: result.totals.net, loss: result.totals.loss });
+  }
+  return { years, issues };
+}
+
+type YearResult = { year: number; params: YearParams; net: bigint; loss: bigint };
+
+/**
+ * The losses carried into a year (art. 118 alin. (4)–(5)): those declared before the books, then
+ * each earlier year's, offset in turn against the next years' net income. `share` is the person's
+ * part of each year's result: all of it for a PFA or an II, a member's distributed share for an
+ * IF (null when the person had none that year).
+ */
+function carriedLosses(
+  opening: LossVintage[],
+  years: readonly YearResult[],
+  share: (item: YearResult) => { net: bigint; loss: bigint } | null = (item) => item,
+) {
+  let vintages = opening;
+  for (const item of years) {
+    const part = share(item);
+    if (!part) continue;
+    vintages = part.loss
+      ? [...vintages, { year: item.year, bani: part.loss }]
+      : offsetLosses(item.year, part.net, vintages, item.params.loss, item.params.rounding)
+          .remaining;
+  }
+  return vintages;
+}
+
+/** The first year these books hold: the first financial year's. */
+async function firstBooksYear(tx: Transaction, companyId: string) {
+  const [first] = await tx
+    .select({ from: fiscalYears.from })
+    .from(fiscalYears)
+    .where(and(eq(fiscalYears.companyId, companyId), eq(fiscalYears.kind, 'financial')))
+    .orderBy(asc(fiscalYears.from))
+    .limit(1);
+  return first ? year(first.from) : null;
+}
+
+/** Gross income of a year's receipts and payments, in bani: the income natures. */
+const grossOf = (rows: Awaited<ReturnType<typeof cashJournalOf>>['rows']) =>
+  rows
+    .flatMap((row) => row.parts)
+    .filter((part) => natureOf(part.nature)?.kind === 'income')
+    .reduce((sum, part) => sum + part.flow, 0n);
+
 /** Days of activity in the year when less than all of it (art. 69 alin. (5); norme pct. 8 alin.
  * (8)–(10)), or null for the whole year. */
 function activeDays(source: IncomeSourceRow, income: number) {
@@ -568,6 +673,16 @@ function activeDays(source: IncomeSourceRow, income: number) {
   return from === start && to === end && active === days(start, end) ? null : active;
 }
 
+/** Days of the year the activity was suspended, or null when it was not. */
+function interruptedDays(source: IncomeSourceRow, income: number) {
+  const whole = activeDays({ ...source, suspendedFrom: null, suspendedTo: null }, income);
+  const active = activeDays(source, income);
+  const days =
+    (whole ?? (income % 4 === 0 && (income % 100 !== 0 || income % 400 === 0) ? 366 : 365)) -
+    (active ?? 0);
+  return active === null || days <= 0 ? null : days;
+}
+
 /**
  * The Registrul de evidență fiscală of a year (OMFP nr. 3.254/2017) and the year's income tax and
  * contributions (Codul fiscal art. 68, 69, 118, 148, 170, 174) of a PFA, II or IF with one
@@ -584,9 +699,9 @@ export async function fiscalRegister(
   const start = `${input.year}-01-01` as LocalDate;
   const end = `${input.year}-12-31` as LocalDate;
   const { loaded } = await loadState(tx, companyId, { profile: true });
+  const form = entityFormOf(loaded.profile, end);
   requireCondition(
-    individualForms.includes(entityFormOf(loaded.profile, end)) &&
-      booksSystemOf(loaded.profile, end) === 'single',
+    individualForms.includes(form) && booksSystemOf(loaded.profile, end) === 'single',
     'SINGLE_ENTRY_ONLY',
     'Registrul de evidență fiscală se întocmește pentru o PFA, II sau IF în partidă simplă.',
   );
@@ -598,6 +713,8 @@ export async function fiscalRegister(
     ...input.openingLosses.map((item) => item.evidenceId),
     ...input.adjustments.map((item) => item.evidenceId),
     ...input.norms.map((item) => item.evidenceId),
+    input.previousEurAnnualRate?.evidenceId,
+    ...input.previousGross.map((item) => item.evidenceId),
   ].filter((id): id is string => Boolean(id));
   if (named.length) {
     const found = await tx
@@ -678,39 +795,13 @@ export async function fiscalRegister(
       });
     const own = await realSourceYear(tx, companyId, input.year, params, extra, eurRate);
     issues.push(...own.issues);
-    // Losses: those declared before the books, then each earlier year of the books in turn.
-    let vintages: LossVintage[] = input.openingLosses
-      .filter((item) => item.sourceId === current.sourceId && item.year < input.year)
-      .map((item) => ({ year: item.year, bani: parseMoney(item.amount, LEDGER_CURRENCY) }));
-    const first = await tx
-      .select({ from: fiscalYears.from })
-      .from(fiscalYears)
-      .where(and(eq(fiscalYears.companyId, companyId), eq(fiscalYears.kind, 'financial')))
-      .orderBy(asc(fiscalYears.from))
-      .limit(1);
-    const booksFrom = Math.max(
-      first[0] ? year(first[0].from) : input.year,
-      Number(current.startedOn.slice(0, 4)),
-    );
-    for (let earlier = booksFrom; earlier < input.year; earlier++) {
-      let before: YearParams;
-      try {
-        before = yearParams(rules, earlier);
-      } catch (error) {
-        if (!(error instanceof DomainError)) throw error;
-        issues.push(
-          block(
-            'PIT_PRIOR_YEAR',
-            `Pierderea sau venitul net din ${earlier} nu se pot stabili (${error.message}): pierderile reportate din acel an lipsesc din calcul.`,
-          ),
-        );
-        continue;
-      }
-      const { result } = await realSourceYear(tx, companyId, earlier, before, [], eurRate);
-      vintages = result.totals.loss
-        ? [...vintages, { year: earlier, bani: result.totals.loss }]
-        : offsetLosses(earlier, result.totals.net, vintages, before.loss, before.rounding)
-            .remaining;
+    // Losses: those declared before the books, then each earlier year of the books in turn. An
+    // IF's losses are its members', each by quota: carried in each member's D212.
+    let vintages: LossVintage[] = [];
+    if (form !== 'if') {
+      const earlier = await earlierResults(tx, companyId, rules, current, input.year, eurRate);
+      issues.push(...earlier.issues);
+      vintages = carriedLosses(openingVintages(input, current.sourceId), earlier.years);
     }
     const losses = offsetLosses(
       input.year,
@@ -760,13 +851,16 @@ export async function fiscalRegister(
         net: lei(own.result.totals.net),
         loss: lei(own.result.totals.loss),
       },
-      losses: {
-        available: lei(losses.available),
-        offset: lei(losses.offset),
-        recalculated: lei(losses.recalculated),
-        carried: carried.map((item) => ({ year: item.year, amount: lei(item.bani) })),
-        expired: losses.expired.map((item) => ({ year: item.year, amount: lei(item.bani) })),
-      },
+      losses:
+        form === 'if'
+          ? null
+          : {
+              available: lei(losses.available),
+              offset: lei(losses.offset),
+              recalculated: lei(losses.recalculated),
+              carried: carried.map((item) => ({ year: item.year, amount: lei(item.bani) })),
+              expired: losses.expired.map((item) => ({ year: item.year, amount: lei(item.bani) })),
+            },
     });
   }
 
@@ -777,10 +871,55 @@ export async function fiscalRegister(
     : null;
   for (const { current } of norma) {
     const given = input.norms.find((item) => item.sourceId === current.sourceId);
-    const gross = journal!.rows
-      .flatMap((row) => row.parts)
-      .filter((part) => natureOf(part.nature)?.kind === 'income')
-      .reduce((sum, part) => sum + part.flow, 0n);
+    const gross = grossOf(journal!.rows);
+    const normaRule = params.norma;
+    // Art. 69 alin. (9): gross income above 25.000 euro in the previous year (at that year's BNR
+    // average rate) puts the source in the real system from this year.
+    if (current.startedOn < start) {
+      if ('gap' in normaRule) requireCondition(false, 'RULE_GAP', normaRule.gap, 422);
+      const previous = input.year - 1;
+      const declared = input.previousGross.find((item) => item.sourceId === current.sourceId);
+      let before: bigint | null = null;
+      if (((await firstBooksYear(tx, companyId)) ?? input.year) <= previous) {
+        let catalogue: NatureCatalogue;
+        try {
+          catalogue = rules.param<NatureCatalogue>(
+            'ro.pit.natures',
+            'fiscal_year_start',
+            `${previous}-01-01` as LocalDate,
+          );
+        } catch (error) {
+          if (!(error instanceof RuleGapError)) throw error;
+          requireCondition(false, 'RULE_GAP', error.message, 422, { ...error.gap });
+        }
+        before = grossOf((await cashJournalOf(tx, companyId, previous, catalogue)).rows);
+      } else if (declared) before = parseMoney(declared.amount, LEDGER_CURRENCY);
+      const rate = input.previousEurAnnualRate?.rate;
+      if (before === null)
+        issues.push(
+          block(
+            'PIT_NORMA_PREVIOUS_GROSS',
+            `${current.name}: registrele nu cuprind anul ${previous}; indicați venitul brut al sursei din ${previous} (previousGross), pentru pragul de ${normaRule.realAboveEur} euro (art. 69 alin. (9)).`,
+          ),
+        );
+      else if (!rate)
+        issues.push(
+          block(
+            'PIT_EUR_RATE',
+            `${current.name}: pragul de ${normaRule.realAboveEur} euro pentru venitul brut din ${previous} (art. 69 alin. (9)) se verifică la cursul mediu BNR al anului ${previous}: indicați-l (previousEurAnnualRate).`,
+          ),
+        );
+      else {
+        const threshold = euroToBani(normaRule.realAboveEur, rate);
+        if (before > threshold)
+          issues.push(
+            block(
+              'PIT_NORMA_REAL_REQUIRED',
+              `${current.name}: venitul brut din ${previous} (${lei(before)} lei) a depășit ${normaRule.realAboveEur} euro (${lei(threshold)} lei): din ${input.year} venitul net se stabilește în sistem real (art. 69 alin. (9)). Înregistrați o versiune a sursei în sistem real (realBasis required) de la 1 ianuarie ${input.year}.`,
+            ),
+          );
+      }
+    }
     if (!given) {
       issues.push(
         block(
@@ -790,7 +929,6 @@ export async function fiscalRegister(
       );
       continue;
     }
-    const normaRule = params.norma;
     if ('gap' in normaRule) requireCondition(false, 'RULE_GAP', normaRule.gap, 422);
     const adjusted = adjustedNorm(
       {
@@ -836,13 +974,65 @@ export async function fiscalRegister(
       },
       norm: {
         norm: lei(parseMoney(given.norm, LEDGER_CURRENCY)),
+        increasePercent: given.increasePercent ?? null,
+        increaseCriterion: given.increaseCriterion ?? null,
+        reductionPercent: given.reductionPercent ?? null,
+        reductionCriterion: given.reductionCriterion ?? null,
         increase: lei(adjusted.increase),
         reduction: lei(adjusted.reduction),
+        yearly: lei(adjusted.yearly),
         activeDays: activeDays(current, input.year),
+        interruptedDays: interruptedDays(current, input.year),
         adjusted: lei(adjusted.adjusted),
         tax: lei(incomeTax(adjusted.adjusted, params.rate, params.rounding)),
       },
     });
+  }
+
+  // An IF: the agreement in force all year, and the net income or loss distributed to the
+  // members by quota (art. 125 alin. (5)). Their contributions and tax are each member's, in their
+  // own declaration (art. 122 alin. (4)); on a norm nothing is distributed (art. 125 alin. (1)
+  // lit. c), (10)).
+  if (form === 'if') {
+    // Members are needed from the day the activity starts in the year.
+    const activityFrom = active
+      .map(({ current }) => (current.startedOn > start ? current.startedOn : start))
+      .sort()[0]!;
+    const enterprise = await enterpriseYear(tx, companyId, activityFrom, end, issues);
+    const [source] = sources;
+    const distribution =
+      enterprise && real.length === 1 && source?.totals && !norma.length
+        ? distribute(enterprise.members, source.totals)
+        : null;
+    if (norma.length)
+      issues.push(
+        info(
+          'PIT_IF_NORMA',
+          'Membrii unei întreprinderi familiale impuse pe bază de normă nu primesc venit distribuit și nu depun D204: norma se stabilește pentru fiecare membru (art. 69 alin. (3), art. 125 alin. (1) lit. c) și alin. (10)).',
+        ),
+      );
+    return {
+      year: input.year,
+      final: !issues.some((issue) => issue.severity === 'block'),
+      sources,
+      enterprise: enterprise && {
+        version: enterprise.version,
+        effectiveFrom: enterprise.effectiveFrom,
+        evidenceId: enterprise.evidenceId,
+        members: enterprise.members.map((member, index) => ({
+          partyId: member.partyId,
+          name: member.name,
+          quota: quotaText(member.quotaBp),
+          representative: member.representative,
+          net: distribution ? lei(distribution.net[index]!) : null,
+          loss: distribution ? lei(distribution.loss[index]!) : null,
+        })),
+      },
+      contributions: null,
+      tax: null,
+      issues,
+      parameters: [...rules.used.keys()].sort(),
+    };
   }
 
   // The owner's contributions and the tax.
@@ -862,15 +1052,50 @@ export async function fiscalRegister(
         'Nu este înregistrată situația titularului față de CASS minimă (cass.exception): calculat fără excepțiile de la art. 174 alin. (7)–(8).',
       ),
     );
-  const other = input.otherIncome ? parseMoney(input.otherIncome.amount, LEDGER_CURRENCY) : 0n;
-  const cumulated = realNet + norms + other;
+  const person = personTax(params, {
+    realNet,
+    recalculated,
+    norms,
+    other: input.otherIncome ? parseMoney(input.otherIncome.amount, LEDGER_CURRENCY) : 0n,
+    status: status ?? 'liable',
+    option: profileAt(loaded, 'cas.option', end) === 'yes',
+    chosen: input.casIncome ? parseMoney(input.casIncome, LEDGER_CURRENCY) : null,
+    exception: Boolean(exception && exception !== 'none'),
+  });
+  issues.push(...person.issues);
+  return {
+    year: input.year,
+    final: !issues.some((issue) => issue.severity === 'block'),
+    sources,
+    enterprise: null,
+    contributions: person.contributions,
+    tax: person.tax,
+    issues,
+    parameters: [...rules.used.keys()].sort(),
+  };
+}
+
+/**
+ * A person's contributions and income tax for the year (art. 118, 148, 170, 174, 69^2): CAS and
+ * CASS on the cumulated net incomes and norms, the share of each deducted from the real system's
+ * recalculated net income, 10% on the taxable income and on the norms.
+ */
+function personTax(
+  params: YearParams,
+  input: {
+    realNet: bigint;
+    recalculated: bigint;
+    norms: bigint;
+    other: bigint;
+    status: CasStatus;
+    option: boolean;
+    chosen: bigint | null;
+    exception: boolean;
+  },
+) {
+  const cumulated = input.realNet + input.norms + input.other;
   const cas = casDue(
-    {
-      cumulated,
-      status: status ?? 'liable',
-      option: profileAt(loaded, 'cas.option', end) === 'yes',
-      chosen: input.casIncome ? parseMoney(input.casIncome, LEDGER_CURRENCY) : null,
-    },
+    { cumulated, status: input.status, option: input.option, chosen: input.chosen },
     {
       minimumWage: params.minimumWage,
       rate: params.casRate,
@@ -879,7 +1104,7 @@ export async function fiscalRegister(
     },
   );
   const cass = cassDue(
-    { cumulated, exception: Boolean(exception && exception !== 'none') },
+    { cumulated, exception: input.exception },
     {
       minimumWage: params.minimumWage,
       rate: params.cassRate,
@@ -887,28 +1112,25 @@ export async function fiscalRegister(
       rounding: params.rounding,
     },
   );
-  issues.push(...cas.issues);
   const deducted = deductibleContributions(
     {
-      realNet,
-      recalculated,
+      realNet: input.realNet,
+      recalculated: input.recalculated,
       cas: { due: cas.due, cumulated },
       cass: { due: cass.due, minimumDifference: cass.minimumDifference, cumulated },
     },
     params.rounding,
   );
-  const taxable = recalculated - deducted.cas - deducted.cass;
+  const taxable = input.recalculated - deducted.cas - deducted.cass;
   const realTax = incomeTax(taxable, params.rate, params.rounding);
-  const normaTax = norma.length ? incomeTax(norms, params.rate, params.rounding) : 0n;
+  const normaTax = input.norms > 0n ? incomeTax(input.norms, params.rate, params.rounding) : 0n;
   return {
-    year: input.year,
-    final: !issues.some((issue) => issue.severity === 'block'),
-    sources,
+    issues: cas.issues,
     contributions: {
       minimumWage: lei(params.minimumWage),
       cumulated: lei(cumulated),
       cas: {
-        status: status ?? 'liable',
+        status: input.status,
         threshold: lei(cas.threshold),
         base: lei(cas.base),
         due: lei(cas.due),
@@ -924,14 +1146,210 @@ export async function fiscalRegister(
       },
     },
     tax: {
-      recalculated: lei(recalculated),
+      recalculated: lei(input.recalculated),
       taxable: lei(taxable > 0n ? taxable : 0n),
       real: lei(realTax),
       norma: lei(normaTax),
       total: lei(realTax + normaTax),
     },
+  };
+}
+
+/**
+ * The family enterprise's members for an income year: the one agreement in force from the day the
+ * activity starts in the year (`start`) to its end, complete (at least 2 members, quotas adding to
+ * 100%, one representative). A change in the year or an incomplete agreement is a blocking issue,
+ * and so null.
+ */
+async function enterpriseYear(
+  tx: Transaction,
+  companyId: string,
+  start: string,
+  end: string,
+  issues: Issue[],
+) {
+  const inYear = agreementsIn(await agreements(tx, companyId), start, end);
+  if (!inYear.length) {
+    issues.push(
+      block(
+        'PIT_IF_MEMBERS',
+        'Înregistrați membrii întreprinderii familiale, cu cotele și reprezentantul din acordul de constituire (if.members.record).',
+      ),
+    );
+    return null;
+  }
+  if (inYear.length > 1 || inYear[0]!.effectiveFrom > start) {
+    issues.push(
+      block(
+        'PIT_IF_MEMBERS_CHANGE',
+        inYear.length > 1
+          ? 'Acordul întreprinderii familiale s-a schimbat în cursul anului: distribuirea venitului pe perioade nu este încă disponibilă.'
+          : `Activitatea începe la ${start}, iar acordul de constituire se aplică din ${inYear[0]!.effectiveFrom}: membrii nu sunt cunoscuți pentru tot anul.`,
+      ),
+    );
+    if (inYear.length > 1) return null;
+  }
+  const [agreement] = inYear;
+  const total = agreement!.members.reduce((sum, member) => sum + member.quotaBp, 0);
+  if (
+    agreement!.members.length < 2 ||
+    total !== 10_000 ||
+    agreement!.members.filter((member) => member.representative).length !== 1
+  ) {
+    issues.push(
+      block(
+        'PIT_IF_MEMBERS_INCOMPLETE',
+        `Acordul în vigoare are ${agreement!.members.length} membri și cote de ${quotaText(total)}%: sunt necesari cel puțin 2 membri, cote de 100% și un reprezentant.`,
+      ),
+    );
+    return null;
+  }
+  const names = new Map(
+    (
+      await tx
+        .select({ id: parties.id, name: parties.name })
+        .from(parties)
+        .where(
+          and(
+            eq(parties.companyId, companyId),
+            inArray(
+              parties.id,
+              agreement!.members.map((member) => member.partyId),
+            ),
+          ),
+        )
+    ).map((row) => [row.id, row.name]),
+  );
+  return {
+    ...agreement!,
+    members: agreement!.members.map((member) => ({
+      ...member,
+      name: names.get(member.partyId) ?? '',
+    })),
+  };
+}
+
+/** The net income or the loss in whole lei, distributed by the members' quotas. */
+function distribute(
+  members: readonly { quotaBp: number }[],
+  totals: { net: string; loss: string },
+) {
+  const quotas = members.map((member) => member.quotaBp);
+  return {
+    net: distributeByQuota(parseMoney(totals.net, LEDGER_CURRENCY), quotas),
+    loss: distributeByQuota(parseMoney(totals.loss, LEDGER_CURRENCY), quotas),
+  };
+}
+
+export const memberStatusInput = z
+  .object({
+    /** The member's situation for CAS at the year's end (art. 148, 150). */
+    casStatus: z.enum(['liable', 'pensioner', 'own_system']),
+    /** The member opted to pay CAS below the threshold (art. 148 alin. (4)). */
+    casOption: z.boolean().default(false),
+    /** The member's exception from the CASS minimum (art. 174 alin. (7)–(8)). */
+    cassException: z.enum(['none', 'salary', 'other_income', 'pension', 'previous_year']),
+    /** The income the member chooses as the CAS base (art. 148 alin. (2)). */
+    casIncome: money.optional(),
+  })
+  .strict();
+
+/**
+ * A family enterprise member's year: the net income or loss distributed to them by quota from
+ * the enterprise's register (art. 125 alin. (5)), their own losses carried (those declared before
+ * the books, then their shares of the books' earlier years: art. 118 alin. (5), losses are
+ * personal), and their contributions and tax on it, from the member's own situation. Only the
+ * enterprise's income counts: a member's other income is declared with it and refused here.
+ */
+export async function memberYear(
+  tx: Transaction,
+  companyId: string,
+  input: FiscalRegisterInput,
+  rules: RuleContext,
+  partyId: string,
+  member: z.infer<typeof memberStatusInput>,
+) {
+  const register = await fiscalRegister(tx, companyId, input, rules);
+  const issues: Issue[] = [...register.issues];
+  const members = register.enterprise?.members ?? [];
+  const index = members.findIndex((item) => item.partyId === partyId);
+  const share = members[index];
+  const [source] = register.sources;
+  if (register.enterprise && index < 0)
+    issues.push(
+      block(
+        'PIT_IF_MEMBER',
+        'Persoana nu este membru al întreprinderii familiale în acordul în vigoare în anul declarat.',
+      ),
+    );
+  if (!share?.net || !share.loss || !source?.totals) return { register, share: null, issues };
+
+  const params = yearParams(rules, input.year);
+  const net = parseMoney(share.net, LEDGER_CURRENCY);
+  const loss = parseMoney(share.loss, LEDGER_CURRENCY);
+  // The member's losses: declared before the books, then their shares of the earlier years.
+  const versions = (await sourceVersions(tx, companyId)).get(source.sourceId)!;
+  const earlier = await earlierResults(
+    tx,
+    companyId,
+    rules,
+    versionAt(versions, `${input.year}-12-31`) ?? versions[0]!,
+    input.year,
+    input.eurAnnualRate?.rate ?? null,
+  );
+  issues.push(...earlier.issues);
+  const all = await agreements(tx, companyId);
+  const vintages = carriedLosses(openingVintages(input, source.sourceId), earlier.years, (item) => {
+    const inYear = agreementsIn(all, `${item.year}-01-01`, `${item.year}-12-31`);
+    const holder = inYear[0]?.members.findIndex((row) => row.partyId === partyId) ?? -1;
+    if (inYear.length !== 1) {
+      issues.push(
+        block(
+          'PIT_PRIOR_YEAR',
+          `${inYear.length ? `Acordul întreprinderii familiale s-a schimbat în ${item.year}` : `Membrii întreprinderii familiale din ${item.year} nu sunt înregistrați`}: partea membrului din pierderea sau venitul net al acelui an nu se poate stabili.`,
+        ),
+      );
+      return null;
+    }
+    if (holder < 0) return null;
+    const quotas = inYear[0]!.members.map((row) => row.quotaBp);
+    return {
+      net: distributeByQuota(item.net, quotas)[holder]!,
+      loss: distributeByQuota(item.loss, quotas)[holder]!,
+    };
+  });
+  const losses = offsetLosses(input.year, net, vintages, params.loss, params.rounding);
+  const person = personTax(params, {
+    realNet: net,
+    recalculated: losses.recalculated,
+    norms: 0n,
+    other: 0n,
+    status: member.casStatus,
+    option: member.casOption,
+    chosen: member.casIncome ? parseMoney(member.casIncome, LEDGER_CURRENCY) : null,
+    exception: member.cassException !== 'none',
+  });
+  issues.push(...person.issues);
+  return {
+    register,
+    share: {
+      partyId,
+      quota: share.quota,
+      net,
+      loss,
+      losses: {
+        available: lei(losses.available),
+        offset: lei(losses.offset),
+        recalculated: lei(losses.recalculated),
+        carried: [...losses.remaining, ...(loss ? [{ year: input.year, bani: loss }] : [])].map(
+          (item) => ({ year: item.year, amount: lei(item.bani) }),
+        ),
+        expired: losses.expired.map((item) => ({ year: item.year, amount: lei(item.bani) })),
+      },
+      contributions: person.contributions,
+      tax: person.tax,
+    },
     issues,
-    parameters: [...rules.used.keys()].sort(),
   };
 }
 

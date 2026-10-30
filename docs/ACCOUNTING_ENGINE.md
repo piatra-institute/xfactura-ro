@@ -261,6 +261,44 @@ The company's regime is the profile axis `vat.cash`. The ceiling is the cited pa
 - **`accruals.settle`** reverses the accrual on the invoice's day, once the invoice is booked. The invoice must be the same partner's, and the open balance is reversed in full. The difference between the invoice and the estimate falls in the invoice's month.
 - **VAT:** it comes from the invoice, at the invoice's tax point. Putting VAT not yet chargeable on 4428 at the accrual is a policy the engine doesn't apply. Whether the reversal method suits the company is for the expert accountant to confirm.
 
+### Loans and leases: `loans.*`, `leases.commence`
+
+- **Accounts, as OMFP 1802/2014 places them:**
+  - bank credits on 1621 (long term) or 5191 (short term);
+  - loans from affiliated or associated companies on 1661/1663;
+  - other lenders and lease liabilities on 167;
+  - associates on 4551.
+
+  The loan accounts are controlled as `loan.payable` and their interest accounts (1682, 1685–1687, 5198, 4558) as `loan.interest`, for companies created from now on.
+- **A loan is an open item of the lender in its own currency, with one schedule:**
+  - principal rows on the loan account, adding up to the amount borrowed;
+  - interest rows on the interest account, or on 666 for a lease.
+- **Treatments:**
+  - **`loans.receive`** explains the bank movement that brings the loan in. The schedule is given as rows or as terms (annuity or linear, 30/360).
+  - **`loans.schedule`** attaches or revises a schedule on an existing loan, for example an associate's 4551 money or an opening balance. Rows already due stay unchanged, and so does the principal.
+  - **`loans.accrue`** books month-end interest (Dr 666 / Cr interest account). Each period's interest is spread over its days. The accrual is cumulative, so it never books twice and catches up a missed month.
+  - **`loans.withhold`** withholds the tax on interest paid to an individual (Codul fiscal art. 97 alin. (2), 10%, parameter `ro.interest.tax_rate`): Dr interest / Cr 446. It is declared in D100 (code 605) and D205 (tip 09).
+  - **Repayments** go through `bank.settle`.
+- **Finance lease (lessee):**
+  - **`leases.commence`** brings a registered asset in against 167 at the rate of the financing date (pct. 321). The contract is either settled in lei at the euro rate, or in its currency.
+  - **Instalments** are the lessor's invoices, recognized with an allocation on 167 (`lease`, `principal`, `vatExpense`).
+    - The lessor is held on 404, and 167 is released at its carrying amount.
+    - The exchange difference goes to 668/768 (lei-indexed) or 6651/7651.
+    - VAT comes from each invoice, a service taxed at each payment date (art. 271 alin. (3) lit. a), art. 281 alin. (8)). The 50% vehicle limit and VAT on collection apply as usual.
+- **Operating lease:** the lessor's invoices on 612, through `invoices.recognize`.
+- **`fx.revalue`** revalues foreign-currency loans and their interest.
+- **`loans.list`** shows each loan with its balance, schedule and the part due within 12 months. The reclassification of pct. 360 is presentation only, so it's not booked.
+- **Month close:**
+  - interest not accrued for an open loan blocks (`LOAN_INTEREST_DUE`; not on single-entry books);
+  - a lease instalment due (`LEASE_INSTALMENT_DUE`) or an overdue loan (`LOAN_OVERDUE`) is a warning.
+- **Not covered yet:**
+  - D406 for lease invoices (`D406_SPLIT`);
+  - D100 and D205 on the calendar for interest-only months and years;
+  - withholding for non-residents (art. 223) and on interest in a currency;
+  - revising a lease's schedule;
+  - revolving credit lines and overdrafts;
+  - the off-balance records of future interest and of operating leases.
+
 ### `fx.revalue`: month-end revaluation
 
 - **Input:** a month-end date and a round number (a later round re-revalues after further entries).
@@ -513,9 +551,20 @@ The specification, sources and open questions are in [PFA_II_IF.md](PFA_II_IF.md
   - The 2025 values come from the instructions of OPANAF 2736/2025: tax 10%, CAS 25% in the 12- and 24-wage bands at the 4,050-lei minimum wage, CASS within 6–60 wages, losses at 70%.
     - The expense limits and natures of art. 68 are the 2026 consolidated text. No 2025–2026 act amending them was found; the expert confirms.
     - Income of 2024 and the 2025 rules for income norms are still gaps.
+- **Normă de venit:**
+  - The preparer gives the norm, with the DGRFP publication as evidence and its coefficients.
+  - The register prorates it over the days active and blocks below the 12-wage floor.
+  - Gross income above 25,000 EUR in the previous year blocks the norm. Above it in the current year, it notes that the real system applies from next year.
+  - D212 writes the norm chapter (`cap12`): for 2024 income only for an activity started in December, as ANAF's 2024 structure allows. The rules for 2025 norms are still a gap.
+- **Family enterprise (IF):**
+  - Its members, with their quotas and a representative, are kept append-only in `acc_enterprise_members` (`if.members.record`, `if.members.list`). Members' CNPs are sealed.
+  - The register distributes the net income or loss by quota, with the largest remainder, so the shares add up exactly.
+  - Each member's D212 carries their share.
+  - **D204** is prepared from the register and members, and passes ANAF's validator (J3.0.14). The validator doesn't check quotas, net income or the shares' sum, so the writer's own checks do.
+  - The D204 deadline is on the calendar with both readings: the end of February (Codul fiscal art. 125 alin. (4), OPANAF 470/2021) and 15 March (norme pct. 41 alin. (4)). It is shown due at the earlier.
+  - An IF on a norm, and a change of agreement within the year, are refused.
 - **Not built yet:**
-  - D212 for income norms, several sources, IF members, and income outside the books;
-  - normă de venit and the IF's members with D204;
+  - D212 for several sources and income outside the books;
   - several sources in one year, and a mid-year change of method;
   - double entry for PFAs.
 
@@ -527,7 +576,7 @@ The specification, sources and open questions are in [PFA_II_IF.md](PFA_II_IF.md
   - verification of the Ministry's signature; B2C identification;
   - VAT categories other than S/O, domestic reverse charge, goods across the border, pro-rata; D394 for simplified invoices and receipts; reading the P300 file;
   - payroll beyond salary in money, vouchers, annual leave and sick leave for ordinary illness (other indemnity codes, benefits in kind), and corrections of a posted month;
-  - asset revaluation and fiscal depreciation; leasing and loans;
+  - asset revaluation; revolving credit lines and overdrafts;
   - VAT deducted from receipts and simplified invoices; cash payments in D406's payments section;
   - stock;
   - profit tax, interim dividends, dividends to non-residents;

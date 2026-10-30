@@ -47,25 +47,24 @@ const declarations: Record<string, D100> = {
     [{ kind: 'dividends', beneficiary: 'individual', withheld: 800, unpaidAtYearEnd: 4000 }],
     { period: { year: 2026, month: 12 } },
   ),
+  // October 2026: the tax withheld on interest paid to an associate, beside dividend tax.
+  interest: declaration(
+    [
+      { kind: 'dividends', beneficiary: 'individual', withheld: 1600 },
+      { kind: 'interest', withheld: 85 },
+    ],
+    { period: { year: 2026, month: 10 } },
+  ),
   // Q4 2026 dated as the validator requires, 25 June of the next year.
   'micro-q4-june': declaration([{ kind: 'micro', base: 90_000, fourthQuarterDue: 'june' }], {
     period: { year: 2026, month: 12 },
   }),
-  // The micro tax with a reduction, an interest tax line as another obligation, the successor,
-  // dissolution and the representative.
+  // The micro tax with a reduction, the tax withheld on interest paid to individuals, the
+  // successor, dissolution and the representative.
   'micro-dissolution': declaration(
     [
       { kind: 'micro', base: 40_000, deductible: 100, reduction: 60 },
-      {
-        kind: 'other',
-        code: '605',
-        budgetCode: '5503',
-        dueDate: '2026-09-25',
-        due: 150,
-        deductible: 0,
-        payable: 150,
-        refund: 0,
-      },
+      { kind: 'interest', withheld: 150 },
     ],
     {
       period: { year: 2026, month: 8 },
@@ -102,6 +101,10 @@ describe('official D100 validation', () => {
         ['150', 1600n, 1600n],
       ]);
       expect(amounts('dividends-year-end')).toEqual([['604', 4800n, 4800n]]);
+      expect(amounts('interest')).toEqual([
+        ['604', 1600n, 1600n],
+        ['605', 85n, 85n],
+      ]);
       expect(calculateD100(declarations['micro-q3']!).controlSum).toBe(2400n);
       expect(calculateD100(declarations.dividends!).controlSum).toBe(12_800n);
       const results = await validateAnaf(

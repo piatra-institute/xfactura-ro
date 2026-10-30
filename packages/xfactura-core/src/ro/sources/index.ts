@@ -690,6 +690,80 @@ export const legalSources: readonly LegalSource[] = [
     ],
   },
   {
+    id: 'OPANAF97/2019',
+    kind: 'act',
+    title:
+      'Ordinul președintelui ANAF nr. 97/2019 pentru aprobarea modelului și conținutului formularului 204 "Declarație anuală de venit pentru asocieri fără personalitate juridică și entități supuse regimului transparenței fiscale"',
+    issuer: 'ANAF',
+    publication: null,
+    urls: ['https://static.anaf.ro/static/10/Anaf/legislatie/OPANAF_97_2019.pdf'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/legislatie/OPANAF_97_2019.pdf',
+        sha256: 'd389db58065d6de85c119cca7d1aadc3fd9bf3a659f5caef83d55de76cfecdf0',
+        retrievedOn: '2026-10-30',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
+    id: 'OPANAF470/2021',
+    kind: 'act',
+    title:
+      'Ordinul președintelui ANAF nr. 470/2021 pentru aprobarea modelului și conținutului formularului 204 "Declarație anuală de venit pentru asocieri fără personalitate juridică și entități supuse regimului transparenței fiscale" (veniturile din 2020)',
+    issuer: 'ANAF',
+    publication: null,
+    urls: ['https://static.anaf.ro/static/10/Anaf/legislatie/OPANAF_470_2021.pdf'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/legislatie/OPANAF_470_2021.pdf',
+        sha256: '6e22afaee25f50f3bcf928a39992db3f3cc6a953d907d3f377fc674609393fb9',
+        retrievedOn: '2026-10-30',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
+    id: 'OPANAF90/2022',
+    kind: 'act',
+    title:
+      'Ordinul președintelui ANAF nr. 90/2022 pentru modificarea anexei nr. 1 (formularul 204) la OPANAF nr. 470/2021 (veniturile din 2022)',
+    issuer: 'ANAF',
+    publication: null,
+    urls: ['https://static.anaf.ro/static/10/Anaf/legislatie/OPANAF_90_2022.pdf'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/legislatie/OPANAF_90_2022.pdf',
+        sha256: 'd6148e2397db765f1106d4609092688a11d7a1bfdb1ae911881003896f7339bf',
+        retrievedOn: '2026-10-30',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
+    id: 'ANAF/D204-structura-2025',
+    kind: 'official_document',
+    title:
+      'Structura fișierului XML al declarației 204 pentru an >= 2018 (declaratie:v3), actualizată la 15.01.2026',
+    issuer: 'ANAF',
+    publication: null,
+    urls: [
+      'https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/structura_D204_2025_150126.pdf',
+    ],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/structura_D204_2025_150126.pdf',
+        sha256: '1aa53edc1e1b35c5e52d042d3635b9d152690f373661c3425760a12421a44f3a',
+        retrievedOn: '2026-10-30',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
     id: 'OUG89/2025',
     kind: 'act',
     title: 'Ordonanța de urgență a Guvernului nr. 89/2025',
@@ -1433,6 +1507,110 @@ export const clauses: readonly Clause[] = [
       'Venitul brut se înregistrează pe natura activității, fără TVA colectată; cheltuielile deductibile și deductibile limitat se înregistrează pe natura lor, fără cele peste limite, cele nedeductibile, contribuțiile sociale proprii și TVA dedusă.',
   },
   {
+    id: 'OUG44/2008:art.28-29',
+    source: 'OUG44/2008',
+    locator: 'art. 28 alin. (1) și art. 29 alin. (1)–(2) (modificat prin Legea nr. 182/2016)',
+    status: 'located',
+    summary:
+      'Întreprinderea familială se constituie din 2 sau mai mulți membri ai unei familii, prin acord de constituire scris care stipulează membrii, reprezentantul desemnat dintre ei și cota procentuală a fiecărui membru la beneficii și la pierderi.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.125(4)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 125 alin. (4)',
+    status: 'located',
+    summary:
+      'Asocierile fără personalitate juridică depun până în ultima zi a lunii februarie inclusiv a anului următor celui de realizare a venitului declarația anuală de venit, cu distribuția venitului net sau a pierderii pe asociați.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.125(1)(c),(5),(10)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 125 alin. (1) lit. c), alin. (5) și (10)',
+    status: 'located',
+    summary:
+      'Venitul sau pierderea asocierii se distribuie asociaților proporțional cu cota de participare din contract; asocierile ai căror membri au venituri din norme de venit nu distribuie venitul și nu intră sub regulile articolului.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.122(4)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 122 alin. (4)',
+    status: 'located',
+    summary:
+      'Declarația unică se completează pentru fiecare sursă din fiecare categorie de venit; pentru veniturile realizate într-o formă de asociere, venitul declarat este venitul net sau pierderea distribuită din asociere.',
+  },
+  {
+    id: 'OPANAF470/2021:anexa2.pct.1-2',
+    source: 'OPANAF470/2021',
+    locator: 'anexa nr. 2 (instrucțiuni), pct. 1 și 2',
+    status: 'located',
+    summary:
+      'Formularul 204 se depune de asocierile fără personalitate juridică între persoane fizice cu venituri din activități independente în sistem real (și din drepturi de proprietate intelectuală, agricultură, piscicultură, silvicultură); nu se depune pentru asocierile cu venituri independente stabilite pe bază de norme de venit, ale căror venituri nu se consideră distribuite.',
+  },
+  {
+    id: 'OPANAF470/2021:anexa2.pct.3.1',
+    source: 'OPANAF470/2021',
+    locator: 'anexa nr. 2 (instrucțiuni), pct. 3.1',
+    status: 'located',
+    summary:
+      'Declarația se depune până în ultima zi a lunii februarie a anului următor celui de raportare, pentru veniturile din activități independente în sistem real.',
+  },
+  {
+    id: 'OPANAF470/2021:anexa2.pct.5.1',
+    source: 'OPANAF470/2021',
+    locator: 'anexa nr. 2 (instrucțiuni), pct. 4.2 și 5.1',
+    status: 'located',
+    summary:
+      'Declarația se completează și se depune de asociatul care răspunde pentru îndeplinirea obligațiilor asocierii față de autoritățile publice, care transmite o copie fiecărui asociat.',
+  },
+  {
+    id: 'OPANAF90/2022:art.II',
+    source: 'OPANAF90/2022',
+    locator: 'art. I pct. 1 și art. II',
+    status: 'located',
+    summary:
+      'Formularul 204 din anexa nr. 1 la OPANAF nr. 470/2021 se înlocuiește și se utilizează pentru veniturile realizate începând cu anul 2022; instrucțiunile de completare (anexa nr. 2) rămân cele din OPANAF nr. 470/2021.',
+  },
+  {
+    id: 'ANAF/D204-structura-2025:asociat',
+    source: 'ANAF/D204-structura-2025',
+    locator: 'secțiunea <asociat>, rândurile 47–55',
+    status: 'located',
+    summary:
+      'Distribuția pe asociați: cota (0–100, două zecimale, suma 100), venitul net distribuit = round(net3 × cota) și pierderea distribuită = round(pierd3 × cota), cu o marjă de ±1 leu.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:norme.art.125.pct.41(4)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'normele metodologice, titlul IV, pct. 41 alin. (4)',
+    status: 'located',
+    summary:
+      'Asociația, prin asociatul desemnat, depune până la data de 15 martie a anului următor declarația anuală cu venitul net sau pierderea asociației și distribuția pe asociați; o copie se transmite fiecărui asociat.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:norme.art.125.pct.41(6)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'normele metodologice, titlul IV, pct. 41 alin. (6)',
+    status: 'located',
+    summary:
+      'Când cotele de participare se modifică în cursul anului, se determină un venit net sau o pierdere intermediară la sfârșitul lunii modificării, alocată după cotele de până atunci; diferența anuală se alocă după cotele noi.',
+  },
+  {
+    id: 'OPANAF97/2019:instr.I.1-2',
+    source: 'OPANAF97/2019',
+    locator: 'anexa nr. 2 (instrucțiuni), cap. I pct. 1 și 2',
+    status: 'located',
+    summary:
+      'Formularul 204 se depune de asocierile fără personalitate juridică între persoane fizice cu venituri din activități independente în sistem real (și alte categorii); nu se depune pentru asocierile cu venituri stabilite pe bază de norme de venit, ale căror venituri nu se consideră distribuite.',
+  },
+  {
+    id: 'OPANAF97/2019:instr.I.3(a)',
+    source: 'OPANAF97/2019',
+    locator: 'anexa nr. 2 (instrucțiuni), cap. I pct. 3 lit. a)',
+    status: 'located',
+    summary:
+      'Declarația se depune până la data de 15 februarie a anului următor celui de raportare, pentru veniturile din activități independente în sistem real.',
+  },
+  {
     id: 'OUG44/2008:art.15',
     source: 'OUG44/2008',
     locator: 'art. 15 (modificat prin Legea nr. 182/2016)',
@@ -1762,6 +1940,94 @@ export const clauses: readonly Clause[] = [
     locator: 'rândul 11 (R11_1, R11_2), valabil de la 01.08.2025',
     status: 'located',
     summary: 'Livrări de bunuri taxabile cu cota 9% conform art. III din Legea nr. 141/2025.',
+  },
+  {
+    id: 'OMFP1802/2014:pct.212-215',
+    source: 'OMFP1802/2014',
+    locator: 'pct. 212–215 și 218 (imobilizări deținute în baza unui contract de leasing)',
+    status: 'located',
+    summary:
+      'Leasingul se clasifică la începutul contractului, după fondul economic; e financiar dacă îndeplinește una dintre condițiile pct. 213 alin. (2). Locatarul înregistrează în leasing financiar imobilizarea și o amortizează; dobânzile de plătit se înregistrează periodic, pe cheltuieli, iar dobânda aferentă perioadelor viitoare în contul în afara bilanțului 8051. În leasing operațional, bunul se ține în afara bilanțului și ratele sunt cheltuieli.',
+  },
+  {
+    id: 'OMFP1802/2014:pct.321',
+    source: 'OMFP1802/2014',
+    locator: 'pct. 321 alin. (1)–(2)',
+    status: 'located',
+    summary:
+      'Datoriile de leasing financiar în valută, ca și cele în lei decontate în funcție de cursul unei valute, se înregistrează la cursul BNR de la data acordării finanțării; într-o zi nebancară, la cursul ultimei zile bancare anterioare.',
+  },
+  {
+    id: 'OMFP1802/2014:pct.360',
+    source: 'OMFP1802/2014',
+    locator: 'pct. 360–363 și 368',
+    status: 'located',
+    summary:
+      'O datorie este curentă când se așteaptă să fie decontată în ciclul normal de exploatare sau este exigibilă în 12 luni de la data bilanțului; celelalte sunt pe termen lung. Datoriile pe termen lung purtătoare de dobândă rămân în această categorie când termenul inițial depășea 12 luni și există un acord de refinanțare sau reeșalonare încheiat înainte de data bilanțului.',
+  },
+  {
+    id: 'OMFP1802/2014:conturi.16',
+    source: 'OMFP1802/2014',
+    locator: 'funcțiunea conturilor 162, 166, 167 și 168',
+    status: 'located',
+    summary:
+      'Creditele bancare pe termen lung (162), datoriile față de entitățile afiliate (166) și alte împrumuturi (167, inclusiv imobilizările primite în leasing financiar, debitat cu ratele facturate de locator prin 404) se creditează la primire și se debitează la rambursare; dobânzile datorate se înregistrează în 168 pe seama contului 666. Diferențele de curs din evaluarea la sfârșitul lunii merg la 665/765, iar pentru datoriile din leasing în lei decontate la cursul unei valute, la 668/768.',
+  },
+  {
+    id: 'OMFP1802/2014:conturi.519',
+    source: 'OMFP1802/2014',
+    locator: 'funcțiunea conturilor 518 și 519',
+    status: 'located',
+    summary:
+      'Creditele bancare pe termen scurt, acordate prin conturi bancare distincte, se înregistrează în 519 inclusiv cu dobânzile datorate (666); dobânzile datorate pentru creditele în conturile curente se înregistrează în 518.',
+  },
+  {
+    id: 'OMFP1802/2014:conturi.455',
+    source: 'OMFP1802/2014',
+    locator: 'funcțiunea contului 455',
+    status: 'located',
+    summary:
+      'Sumele lăsate temporar la dispoziția entității de acționari sau asociați și dobânzile aferente lor (666) se creditează în 455; se debitează cu sumele restituite.',
+  },
+  {
+    id: 'OMFP1802/2014:conturi.666',
+    source: 'OMFP1802/2014',
+    locator: 'funcțiunea conturilor 404, 666, 668 și 768',
+    status: 'located',
+    summary:
+      'Dobânzile datorate se înregistrează în 666 în contul 168 (împrumuturi), 404 (ratele de leasing financiar), 455 (acționari/asociați), 518 sau 519 (credite pe termen scurt). Furnizorii de imobilizări (404) se creditează cu ratele de leasing financiar facturate și dobânda lor (167, 666) și cu TVA. Diferențele din evaluarea datoriilor din leasing financiar în lei decontate la cursul unei valute sunt alte cheltuieli (668) sau venituri (768) financiare.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.97(2)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 97 alin. (2) și (4)',
+    status: 'located',
+    summary:
+      'Dobânzile la depozite la termen, instrumente de economisire și din contracte civile se impun cu 10%, impozit final. Pentru dobânzile la împrumuturile din contracte civile, plătitorul calculează impozitul la plata dobânzii; plata impozitului: lunar, până la 25 inclusiv a lunii următoare înregistrării sau răscumpărării, „respectiv la momentul plății dobânzii” pentru contractele civile.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.29',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 29 alin. (1)–(3) și normele, pct. 32',
+    status: 'located',
+    summary:
+      'În leasingul financiar utilizatorul este tratat fiscal ca proprietar, amortizează bunul și deduce dobânda; în leasingul operațional, locatarul deduce chiria (rata de leasing).',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.271(3)(a)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 270 alin. (3) lit. a), art. 271 alin. (3) lit. a) și normele, pct. 8 alin. (4)',
+    status: 'located',
+    summary:
+      'Transmiterea folosinței bunurilor în cadrul unui contract de leasing este prestare de servicii (contractele de leasing sunt excluse de la livrările cu plata în rate); transferul proprietății la sfârșitul leasingului este o livrare de bunuri pentru valoarea de transfer.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.281(8)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 281 alin. (8) și normele, pct. 24 alin. (7)',
+    status: 'located',
+    summary:
+      'Serviciile de leasing, prestate continuu, se consideră efectuate la fiecare dată prevăzută în contract pentru plată sau, în lipsa ei, la emiterea facturii; avansul perceput în leasing este o rată de leasing, cu același fapt generator.',
   },
   {
     id: 'OMFP1802/2014:pct.315-316',

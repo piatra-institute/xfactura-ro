@@ -82,6 +82,24 @@ describe('filing deadlines', () => {
     expect(due('D212', '2026-01-01', '2026-12-31').due).toBe('2027-05-25');
   });
 
+  test('D204: the Code and the order agree on February, the norms say 15 March; both are shown', () => {
+    // 28 February 2026 is a Saturday; 15 March 2026 a Sunday.
+    const result = due('D204', '2025-01-01', '2025-12-31');
+    expect(result).toMatchObject({
+      nominal: '2026-02-28',
+      due: '2026-03-02',
+      versions: ['ro.deadline.D204/2025-01-01', 'ro.deadline.shift/2016-01-01'],
+    });
+    expect(result.conflict?.map((reading) => [String(reading.due), reading.clauses])).toEqual([
+      ['2026-03-02', ['ANAF/Cod-fiscal-consolidat:art.125(4)', 'OPANAF470/2021:anexa2.pct.3.1']],
+      ['2026-03-16', ['ANAF/Cod-fiscal-consolidat:norme.art.125.pct.41(4)']],
+    ]);
+    // 28 February 2027 is a Sunday.
+    expect(due('D204', '2026-01-01', '2026-12-31').due).toBe('2027-03-01');
+    // A single deadline has no conflict.
+    expect(due('D212', '2025-01-01', '2025-12-31').conflict).toBeUndefined();
+  });
+
   test('a deadline before its source is a gap, never a guess', () => {
     expect(() => due('D394', '2016-01-01', '2016-01-31')).toThrow(RuleGapError);
     expect(() => due('D406', '2021-10-01', '2021-12-31')).toThrow(RuleGapError);
@@ -91,7 +109,11 @@ describe('filing deadlines', () => {
 
   test('every deadline cites registered clauses', () => {
     const known = new Set(clauses.map((clause) => clause.id));
-    for (const version of obligationVersions)
+    for (const version of obligationVersions) {
       for (const clause of version.clauses) expect(known.has(clause)).toBe(true);
+      const value = version.value as { kind: string; readings?: { clauses: string[] }[] };
+      for (const reading of value.readings ?? [])
+        for (const clause of reading.clauses) expect(known.has(clause)).toBe(true);
+    }
   });
 });

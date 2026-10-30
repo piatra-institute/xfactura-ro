@@ -15,10 +15,11 @@ export const obligationKinds = [
   'D406',
   'S1005',
   'D212',
+  'D204',
 ] as const;
 export type ObligationKind = (typeof obligationKinds)[number];
 
-export const deadlineSchema = z.discriminatedUnion('kind', [
+const deadlineKinds = [
   /** A day of the month after the period's last month, or that month's last day when it is
    * shorter (D394's 30th is the 28th or 29th in February). */
   z.object({ kind: z.literal('next_month_day'), day: z.number().int().min(1).max(31) }).strict(),
@@ -36,8 +37,32 @@ export const deadlineSchema = z.discriminatedUnion('kind', [
       day: z.number().int().min(1).max(31),
     })
     .strict(),
+] as const;
+const singleDeadline = z.discriminatedUnion('kind', [...deadlineKinds]);
+export const deadlineSchema = z.discriminatedUnion('kind', [
+  ...deadlineKinds,
+  /** Official texts that disagree on the deadline, each reading with the clauses that give it:
+   * never settled by the engine. The earliest is the date to file by, shown with the conflict
+   * until an expert contabil answers. */
+  z
+    .object({
+      kind: z.literal('conflict'),
+      readings: z
+        .array(
+          z
+            .object({
+              deadline: singleDeadline,
+              clauses: z.array(z.string().min(1)).min(1),
+              text: z.string().min(1),
+            })
+            .strict(),
+        )
+        .min(2),
+    })
+    .strict(),
 ]);
 export type Deadline = z.infer<typeof deadlineSchema>;
+type SingleDeadline = z.infer<typeof singleDeadline>;
 
 export const deadlineShiftSchema = z
   .object({
@@ -137,6 +162,35 @@ export const obligationVersions: ParameterVersion[] = [
     ['ANAF/Cod-fiscal-consolidat:art.122(3)', 'OPANAF2736/2025:instr.I.1'],
     '2025-01-01',
   ),
+  // Income of 2025 and 2026. The Code and the form's instructions in force (OPANAF nr.
+  // 470/2021, whose form OPANAF nr. 90/2022 replaced from the income of 2022 without touching the
+  // deadline) give the last day of February; the methodological norms still give 15 March. The
+  // engine does not settle it: both readings are shown, the earlier to file by. (OPANAF nr.
+  // 97/2019's 15 February applied to the income of 2018–2019, before OPANAF nr. 470/2021.)
+  version(
+    'ro.deadline.D204',
+    {
+      kind: 'conflict',
+      readings: [
+        {
+          deadline: { kind: 'february_last_day' },
+          clauses: ['ANAF/Cod-fiscal-consolidat:art.125(4)', 'OPANAF470/2021:anexa2.pct.3.1'],
+          text: 'Codul fiscal, art. 125 alin. (4), și instrucțiunile formularului 204 (OPANAF nr. 470/2021, anexa nr. 2 pct. 3.1): până în ultima zi a lunii februarie a anului următor celui de realizare a venitului.',
+        },
+        {
+          deadline: { kind: 'next_year_date', month: 3, day: 15 },
+          clauses: ['ANAF/Cod-fiscal-consolidat:norme.art.125.pct.41(4)'],
+          text: 'Normele metodologice ale Codului fiscal, titlul IV pct. 41 alin. (4): până la 15 martie a anului următor (text neactualizat).',
+        },
+      ],
+    },
+    [
+      'ANAF/Cod-fiscal-consolidat:art.125(4)',
+      'OPANAF470/2021:anexa2.pct.3.1',
+      'ANAF/Cod-fiscal-consolidat:norme.art.125.pct.41(4)',
+    ],
+    '2025-01-01',
+  ),
   version(
     'ro.deadline.shift',
     { nonWorking: 'next_working_day', december25: 'december_21_or_previous_working_day' },
@@ -161,14 +215,50 @@ export type DueDate = {
   due: LocalDate;
   /** The parameter versions read: the deadline's and the shift's; their clauses cite the texts. */
   versions: string[];
+  /** Texts that disagree: each reading's date with its clauses. `nominal` and `due` are then the
+   * earliest reading's, for the expert contabil to confirm or correct. */
+  conflict?: { nominal: LocalDate; due: LocalDate; clauses: string[]; text: string }[];
 };
+
+/** A single deadline's day for a period. */
+function nominalOf(deadline: SingleDeadline, period: { start: LocalDate; end: LocalDate }) {
+  const year = Number(period.end.slice(0, 4));
+  const month = Number(period.end.slice(5, 7));
+  const next = month === 12 ? { year: year + 1, month: 1 } : { year, month: month + 1 };
+  return deadline.kind === 'next_month_day'
+    ? ([
+        lastDayOf(next.year, next.month),
+        `${next.year}-${pad(next.month)}-${pad(deadline.day)}`,
+      ].sort()[0]! as LocalDate)
+    : deadline.kind === 'next_month_last_day'
+      ? lastDayOf(next.year, next.month)
+      : deadline.kind === 'february_last_day'
+        ? lastDayOf(year + 1, 2)
+        : deadline.kind === 'next_year_date'
+          ? ([
+              lastDayOf(year + 1, deadline.month),
+              `${year + 1}-${pad(deadline.month)}-${pad(deadline.day)}`,
+            ].sort()[0]! as LocalDate)
+          : addDays(period.end, deadline.days);
+}
+
+/** A deadline moved off a non-working day, or from 25 December to the 21st. */
+function shifted(nominal: LocalDate, shift: DeadlineShift) {
+  let due = nominal;
+  if (nominal.endsWith('-12-25') && shift.december25 === 'december_21_or_previous_working_day') {
+    due = `${nominal.slice(0, 4)}-12-21` as LocalDate;
+    while (!isWorkingDay(due)) due = addDays(due, -1);
+  } else while (!isWorkingDay(due)) due = addDays(due, 1);
+  return due;
+}
 
 /**
  * The last day to file a return for a period (its first and last day: a month, a quarter, a
  * year or, for dividends, the month of payment). Throws RuleGapError where the deadline is not
  * sourced. The move off non-working days applies to every deadline, ANAF's "ultima zi
  * calendaristică" included, as the procedure code's general rule (art. 75) reads; the expert
- * reviews that reading.
+ * reviews that reading. Where the texts disagree (`conflict`), every reading is returned and the
+ * earliest is the one to file by: the engine does not settle it.
  */
 export function obligationDue(
   kind: ObligationKind,
@@ -185,32 +275,23 @@ export function obligationDue(
     'reporting_period_start',
     period.start,
   );
-  const year = Number(period.end.slice(0, 4));
-  const month = Number(period.end.slice(5, 7));
-  const next = month === 12 ? { year: year + 1, month: 1 } : { year, month: month + 1 };
-  const nominal =
-    deadline.kind === 'next_month_day'
-      ? ([
-          lastDayOf(next.year, next.month),
-          `${next.year}-${pad(next.month)}-${pad(deadline.day)}`,
-        ].sort()[0]! as LocalDate)
-      : deadline.kind === 'next_month_last_day'
-        ? lastDayOf(next.year, next.month)
-        : deadline.kind === 'february_last_day'
-          ? lastDayOf(year + 1, 2)
-          : deadline.kind === 'next_year_date'
-            ? ([
-                lastDayOf(year + 1, deadline.month),
-                `${year + 1}-${pad(deadline.month)}-${pad(deadline.day)}`,
-              ].sort()[0]! as LocalDate)
-            : addDays(period.end, deadline.days);
-  let due = nominal;
-  if (nominal.endsWith('-12-25') && shift.december25 === 'december_21_or_previous_working_day') {
-    due = `${nominal.slice(0, 4)}-12-21` as LocalDate;
-    while (!isWorkingDay(due)) due = addDays(due, -1);
-  } else while (!isWorkingDay(due)) due = addDays(due, 1);
   const versions = [...rules.used.keys()].filter(
     (id) => id.startsWith(`ro.deadline.${kind}/`) || id.startsWith('ro.deadline.shift/'),
   );
-  return { nominal, due, versions };
+  if (deadline.kind !== 'conflict') {
+    const nominal = nominalOf(deadline, period);
+    return { nominal, due: shifted(nominal, shift), versions };
+  }
+  const readings = deadline.readings
+    .map((reading) => {
+      const nominal = nominalOf(reading.deadline, period);
+      return {
+        nominal,
+        due: shifted(nominal, shift),
+        clauses: reading.clauses,
+        text: reading.text,
+      };
+    })
+    .sort((a, b) => a.due.localeCompare(b.due));
+  return { nominal: readings[0]!.nominal, due: readings[0]!.due, versions, conflict: readings };
 }

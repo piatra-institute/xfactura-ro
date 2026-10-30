@@ -74,6 +74,22 @@ export const chartAmendments: readonly {
  * defaults subject to the same review as any rule package.
  */
 const controls: Record<string, ControlKind> = {
+  // Loans by lender and contract (OMFP 1802/2014, the functions of accounts 162, 166, 167 and
+  // 519): long-term bank credits, those overdue, debts to affiliated and associated entities,
+  // other loans and a finance lease's liability, short-term bank credits; their interest due and
+  // unpaid (168x, 5198).
+  '1621': 'loan.payable',
+  '1622': 'loan.payable',
+  '1661': 'loan.payable',
+  '1663': 'loan.payable',
+  '167': 'loan.payable',
+  '1682': 'loan.interest',
+  '1685': 'loan.interest',
+  '1686': 'loan.interest',
+  '1687': 'loan.interest',
+  '5191': 'loan.payable',
+  '5192': 'loan.payable',
+  '5198': 'loan.interest',
   '401': 'payable',
   '404': 'payable',
   '408': 'accrual.payable',
