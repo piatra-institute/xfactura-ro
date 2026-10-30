@@ -18,6 +18,7 @@ import {
 } from '../../rules';
 import { isLocalDate, parseLocalDate, type LocalDate } from '../../time';
 import { controlKindOf } from '../chart';
+import { releaseSettled, settledInvoices } from './settlement';
 
 const money = z.string().regex(/^(0|[1-9]\d{0,15})(\.\d{1,2})?$/);
 const limit = money;
@@ -140,7 +141,8 @@ const balanceQuery = (input: CashInput): TurnoverQuery => ({
 /**
  * A cash receipt or payment in lei, by its receipt or slip: it settles open items, starts an
  * advance or an associate's account, or books to plain accounts, and is numbered in the cash
- * register (registrul de casă). The cash desk never goes negative. Legea nr. 70/2015's limits
+ * register (registrul de casă). An invoice under VAT on collection releases the VAT the cash
+ * settles of it, on the receipt's date. The cash desk never goes negative. Legea nr. 70/2015's limits
  * are acknowledged, not refused: a movement above one person's daily limit, or cash above the
  * end-of-day ceiling. A day's several movements with the same person are not added up yet, and
  * the law's exemptions (taxes, salaries, travel) are for the reviewer.
@@ -156,9 +158,14 @@ export const cashMovement: Treatment<CashInput> = {
   plan: (input) => ({
     evidence: [input.evidenceId],
     parties: [input.partyId],
-    openItems: [{ ids: input.allocations.map((allocation) => allocation.openItem) }],
+    openItems: [{ ids: input.allocations.map((allocation) => allocation.openItem), history: true }],
     turnover: [balanceQuery(input)],
   }),
+  followUp: (input, loaded) =>
+    settledInvoices(
+      loaded,
+      input.allocations.map((allocation) => allocation.openItem),
+    ),
   evaluate(input, loaded, rules: RuleContext) {
     const issues: Issue[] = [];
     if (!loaded.evidence.has(input.evidenceId))
@@ -168,6 +175,7 @@ export const cashMovement: Treatment<CashInput> = {
     const receipt = input.direction === 'receipt';
     const side = receipt ? 'C' : 'D';
     const lines: LineSpec[] = [];
+    const settled: { openItem: string; bani: bigint; path: string }[] = [];
     let total = 0n;
     input.allocations.forEach((allocation, index) => {
       const item = loaded.openItems.get(allocation.openItem);
@@ -179,6 +187,12 @@ export const cashMovement: Treatment<CashInput> = {
         );
         return;
       }
+      // A receipt reduces a receivable, a payment a payable.
+      settled.push({
+        openItem: item.id,
+        bani: side === item.normalSide ? -bani : bani,
+        path: `allocations.${index}`,
+      });
       if (item.currency !== LEDGER_CURRENCY)
         issues.push(
           block(
@@ -283,6 +297,10 @@ export const cashMovement: Treatment<CashInput> = {
       bani: total,
       memo: input.number,
     };
+    // The VAT the settled invoices defer under VAT on collection, released on the receipt's date.
+    const booked = [cash, ...lines];
+    const release = releaseSettled(loaded, settled, input.date as LocalDate, booked);
+    if (release.issues.length) return { effect: null, issues: [...issues, ...release.issues] };
     const effect: Effect = {
       schema: 'effect@1',
       date: input.date as LocalDate,
@@ -294,13 +312,17 @@ export const cashMovement: Treatment<CashInput> = {
           0,
           500,
         ),
-      lines: [cash, ...lines],
+      lines: booked,
       openItems,
-      taxEntries: [],
+      taxEntries: release.taxEntries,
       schedules: [],
       explanation: {
         summary: `${receipt ? 'Încasare' : 'Plată'} ${formatMoney(total, LEDGER_CURRENCY)} lei, ${input.number}; sold casierie ${formatMoney(after, LEDGER_CURRENCY)} lei.`,
-        details: { number: input.number, balance: formatMoney(after, LEDGER_CURRENCY) },
+        details: {
+          number: input.number,
+          balance: formatMoney(after, LEDGER_CURRENCY),
+          ...(release.released.length ? { vatOnCollection: release.released } : {}),
+        },
       },
     };
     return { effect, issues };

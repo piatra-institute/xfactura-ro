@@ -378,6 +378,18 @@ const statements: Record<string, D394> = {
   quarterly: { ...domestic, type: 'T', period: { year: 2026, month: 6 } },
   // A period without operations: op_efectuate 0, informatii only.
   nil: statement(),
+  // A company applying VAT on collection: invoices issued and received in full, the VAT it
+  // collected and deducted on the invoices paid in the period.
+  'vat-on-collection': statement({
+    ...invoiced,
+    operations: [
+      sale(registered('14399840', 'Client Unu SRL'), '21', 2, 10000, 2100),
+      sale(registered('16341004', 'Furnizor Unu SRL'), '21', 1, 1000, 210, 'A'),
+      sale(registered('13548146', 'Furnizor Doi SRL'), '21', 1, 500, 105, 'AI'),
+    ],
+    cashVatDeductible: { '21': 42 },
+    vatOnCollection: { collected: { '21': 1050, '11': 0 }, deductible: { '21': 210 } },
+  }),
   individuals: statement({
     ...invoiced,
     operations: [

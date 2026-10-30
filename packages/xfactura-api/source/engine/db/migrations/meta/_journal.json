@@ -85,6 +85,13 @@
       "when": 1793340619953,
       "tag": "0011_party_status",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1793348426826,
+      "tag": "0012_income_sources",
+      "breakpoints": true
     }
   ]
 }

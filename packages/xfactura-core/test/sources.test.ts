@@ -5,6 +5,7 @@ import { dividendVersions } from '../src/ro/dividends';
 import { etvaVersions } from '../src/ro/etva';
 import { microVersions } from '../src/ro/micro';
 import { payrollVersions } from '../src/ro/payroll';
+import { pitVersions } from '../src/ro/pit';
 import { procedureVersions } from '../src/ro/procedure';
 import { vatVersions } from '../src/ro/vat';
 
@@ -16,6 +17,7 @@ const versions = [
   ...microVersions,
   ...dividendVersions,
   ...etvaVersions,
+  ...pitVersions,
 ];
 
 describe('source register', () => {

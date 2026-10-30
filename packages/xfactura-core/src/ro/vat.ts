@@ -3,6 +3,7 @@ import type { ParameterDefinition, ParameterVersion } from '../rules';
 import { parseLocalDate as date } from '../time';
 
 const percent = z.string().regex(/^(0|[1-9]\d{0,2})(\.\d{1,4})?$/);
+const lei = z.string().regex(/^[1-9]\d{0,15}$/);
 
 export const vatDefinitions: ParameterDefinition[] = [
   {
@@ -30,6 +31,15 @@ export const vatDefinitions: ParameterDefinition[] = [
     value: percent,
     description:
       'Partea deductibilă a TVA pentru vehiculele rutiere motorizate care nu sunt utilizate exclusiv în scopul activității economice.',
+  },
+  {
+    key: 'ro.vat.cash.ceiling',
+    axis: 'reporting_period_start',
+    continuity: 'block',
+    scope: [],
+    value: lei,
+    description:
+      'Plafonul cifrei de afaceri pentru aplicarea sistemului TVA la încasare, în lei, pentru anul calendaristic al perioadei.',
   },
 ];
 
@@ -107,5 +117,30 @@ export const vatVersions: ParameterVersion[] = [
     knowledgeDate: null,
     status: 'extracted',
     clauses: ['ANAF/Cod-fiscal-consolidat:art.298'],
+  },
+  // No version before 1 March 2026: the earlier ceilings are not read from a snapshot.
+  {
+    id: 'ro.vat.cash.ceiling/2026-03-01',
+    key: 'ro.vat.cash.ceiling',
+    scope: {},
+    value: '5000000',
+    from: date('2026-03-01'),
+    to: date('2026-12-31'),
+    reviewedThrough: null,
+    knowledgeDate: null,
+    status: 'extracted',
+    clauses: ['ANAF/Cod-fiscal-consolidat:art.282(3)'],
+  },
+  {
+    id: 'ro.vat.cash.ceiling/2027-01-01',
+    key: 'ro.vat.cash.ceiling',
+    scope: {},
+    value: '5500000',
+    from: date('2027-01-01'),
+    to: null,
+    reviewedThrough: date('2027-12-31'),
+    knowledgeDate: null,
+    status: 'extracted',
+    clauses: ['ANAF/Cod-fiscal-consolidat:art.282(3)'],
   },
 ];

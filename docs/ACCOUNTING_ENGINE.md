@@ -209,6 +209,32 @@ The chart is OMFP 1802/2014 as published, plus the accounts later orders added, 
     - Still given rather than read: F20 rd. 01a and F30's other chapters.
 - Not built yet: the physical inventory and its differences, provisions, and the statements of small and larger entities.
 
+### VAT on collection (TVA la încasare)
+
+The company's regime is the profile axis `vat.cash`. The ceiling is the cited parameter `ro.vat.cash.ceiling`: 5,000,000 lei from 1 March to 31 December 2026, 5,500,000 lei from 2027; earlier dates are a rule gap.
+- **Deferral at recognition** (Codul fiscal art. 282 alin. (3)–(7), art. 297 alin. (2)–(3)):
+  - The VAT of an invoice under the system goes on 4428, with tax entries that are not yet chargeable (no exigibility), and are marked `cashVat` (`own`, `supplier`, `own+supplier`).
+  - For the company's own regime, the engine reads `vat.cash` on the earlier of the invoice's issue date and tax point.
+  - **Sales:** a sale to an affiliated buyer (input `affiliated`) stays under the general rules, as alin. (6) says. The invoicer writes the mention "TVA la încasare" (BT-22) on invoices under the system.
+  - **Purchases:** the deduction waits for payment if the company is in the system, the invoice carries the mention, or the supplier's ANAF snapshot shows it in the register. Only the deductible VAT waits.
+  - Foreign currency and advances under the system are refused.
+- **Release at settlement:**
+  - `bank.settle` and `cash.record` read each settled invoice's history.
+  - They release, on the statement or receipt date and in that date's period, the share of VAT now collected (Dr 4428 / Cr 4427) or paid (Dr 4426 / Cr 4428).
+  - The release is rounded cumulatively, so a full settlement releases exactly what is left.
+  - **Credit notes** (alin. (10)) first reduce what is deferred, and the excess reduces chargeable VAT at the note's date.
+  - Settling a deferred invoice through the general journal (compensation, cession) is refused.
+- **Returns:**
+  - **D300:** releases go to rows 9–10 and 24–25. The informative fields A, A1, B and B1 hold what is still deferred.
+  - **D394:** invoices under the system are listed in full in their period (L, A, AI), with the VAT collected and deducted from the releases.
+  - **D406:** codes 310350/310354 for sales, 301305/301306, 341306 and 351305/351306 for purchases, and releases as 380106/380107 on the bank or cash line. All three pass ANAF's validators.
+- **Month close:** warnings for deferred VAT on settled invoices (`CASH_VAT_UNRELEASED`), the ceiling exceeded (`CASH_VAT_CEILING`), and leaving the system (`CASH_VAT_EXIT`).
+- **Not covered:**
+  - eligibility (alin. (4)) is not checked;
+  - compensation, cession and payment in kind are not treatments yet;
+  - one 4428 account holds both sales and purchase deferrals;
+  - e-TVA's comparison will differ for a company in the system.
+
 ### `deferrals.defer` and `deferrals.release`: amounts for later months (471, 472)
 
 - **`deferrals.defer`** moves an expense (6xx) or revenue (70x) already booked, such as a yearly subscription or insurance, to 471 or 472.
@@ -328,9 +354,9 @@ Operations without a row yet (goods across the border, domestic reverse charge, 
 - domestic invoices of the period's VAT ledger, grouped by partner and rate: supplies (L) and acquisitions (A), with the number of invoices, and base and VAT rounded to whole lei; credit notes reduce their group;
 - a partner is registered for VAT when its code on the invoice is RO followed by a valid CUI; other customers are reported with their CUI or CNP, or, without one, by the address of their invoicing details; a supplier charging VAT without a VAT code blocks the statement;
 - the series are those the engine issued in the period (the range allocated and the numbers issued), the issued credit notes are listed as storno invoices, and invoices issued outside them (the previous invoicer) must be declared with their ranges and count;
-- an issued invoice not yet in the VAT ledger, a refund requested by the period's D300 without the nature of the operations (or the reverse), and TVA la încasare block it;
+- an issued invoice not yet in the VAT ledger, and a refund requested by the period's D300 without the nature of the operations (or the reverse), block it;
 - the header takes the company's invoicing details and, as options, the CAEN code, phone, representative, who prepared it, and the consent and affiliated-persons answers.
-Services across the border are not in it (D390 and D300 report them); acquisitions from suppliers applying TVA la încasare (AI), simplified invoices and receipts are not produced yet.
+Services across the border are not in it (D390 and D300 report them); simplified invoices and receipts are not produced yet.
 
 **D112 (contributions, wage tax and the insured)** is written by `xfactura-core/src/ro/declarations/d112.ts` from ANAF's structure for months from 07/2026 (namespace v7). From the books it declares the month's posted payroll run: each employee's insured type (51 with the minimum-wage relief), contract and hours, days, bases, contributions withheld and borne by the employer (obligations 458 and 459), deductions, tax and the amount paid, the CNP opened from its seal for the declaration only; CAM is computed once on the employer's total. Amounts must be whole lei. It locks no tax ledger. The unemployment base (A_9) is declared as the salary paid in money, an interpretation awaiting the expert's review.
 
@@ -450,13 +476,42 @@ A close records closing balances per account and currency and joins a hash chain
 - An export contains every company record and every original file, up to 64 MB of originals. A test fails if a guarded company table is missing from it. Downloads are rechecked on every request.
 - `bun run backup <dir>` takes a consistent SQLite snapshot plus the referenced objects. `bun run restore <backup> <dir>` verifies checksums, integrity and foreign keys before activating.
 
+## PFA, II and IF (single-entry books)
+
+The specification, sources and open questions are in [PFA_II_IF.md](PFA_II_IF.md); §7 records what is built.
+
+- **Profile axes:**
+  - `entity.form` (srl, pfa, ii, if) and `books.system` (double, single). Without a fact, a company is an SRL on double entry. A PFA, II or IF keeps single entry (OUG 44/2008 art. 15); double entry for them is refused until the expert decides.
+  - `cas.status`, `cas.option` and `cass.exception`, as in force on 31 December.
+- **Income sources** (`pfa.sources.record`, `pfa.sources.list`):
+  - Versioned in the append-only `acc_income_sources`, with each source's CAEN code and method (`sistem_real` or `norma`).
+  - The database guards the method's start dates and the 2-year lock of art. 69^1.
+- **One kernel:** a PFA's operations post through the same treatments as an SRL's. Treatments meaningful only for double entry are refused (`SINGLE_ENTRY_EXCLUDED`): accruals, deferrals, FX revaluation, the year-end close, dividends, micro tax, S1005.
+- **The statutory books are projections of the ledger:**
+  - **`pfa.journal`, the Registrul-jurnal de încasări și plăți (OMFP 170/2015):** one row per treasury line.
+    - A receipt or payment takes the nature of what it settles, pro rata to the invoice's composition: net, VAT and non-deducted VAT.
+    - Payments without a document take their control account's nature.
+    - Foreign currency is in lei at the rate of the previous banking day.
+  - **`pfa.inventory`:** the Registrul-inventar.
+  - **`pfa.fiscalRegister`:** the Registrul de evidență fiscală per source and year (OMFP 3254/2017). It holds:
+    - gross income and the deductible expenses, applying art. 68's limits, vehicles at 50% and fiscal depreciation;
+    - net income and losses carried forward (70%, 5 years);
+    - CAS and CASS by the 2026 bands, then income tax at 10%.
+  - Every value is a cited parameter (`ro.pit.*`, `ro.cas.*`, `ro.cass.*`, `ro.min_wage.contributions`).
+- **Month close:** a month with a receipt or payment whose nature isn't known doesn't close (`pfa.natures`).
+- **Not built yet:**
+  - D212 (Declarația unică);
+  - normă de venit and the IF's members with D204;
+  - several sources in one year, and a mid-year change of method;
+  - double entry for PFAs.
+
 ## Not implemented
 
 - **Removed in the kernel switchover, to be rebuilt as treatments:**
   - CSV bank statements.
 - **Not built yet:**
   - verification of the Ministry's signature; B2C identification;
-  - VAT categories other than S/O, TVA la încasare, domestic reverse charge, goods across the border, pro-rata; D394 for TVA la încasare, simplified invoices and receipts; reading the P300 file;
+  - VAT categories other than S/O, domestic reverse charge, goods across the border, pro-rata; D394 for simplified invoices and receipts; reading the P300 file;
   - payroll beyond salary in money, vouchers, annual leave and sick leave for ordinary illness (other indemnity codes, benefits in kind), and corrections of a posted month;
   - asset revaluation and fiscal depreciation; leasing and loans;
   - VAT deducted from receipts and simplified invoices; cash payments in D406's payments section;

@@ -5,6 +5,14 @@ import { requireCondition } from 'xfactura-core/errors';
 import { canonical, hashOf } from 'xfactura-core/hash';
 import { accountCodePattern } from 'xfactura-core/kernel';
 import { chartAmendments, controlKindOf, referenceChart } from 'xfactura-core/ro/chart';
+import {
+  booksSystems,
+  entityFormOf,
+  entityForms,
+  individualForms,
+  type EntityForm,
+} from 'xfactura-core/ro/entity';
+import type { LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
 import {
   commands,
@@ -19,6 +27,7 @@ import {
   user,
 } from '../db/schema';
 import { appendAudit, commandKey, type Actor, type Commands } from '../kernel/commands';
+import { loadState } from '../kernel/state';
 import { sha256 } from '../adapters/object-store';
 
 const day = z.iso.date();
@@ -65,6 +74,15 @@ export const accountQuery = z
 
 /** Dated company facts the engine reads, with their allowed values. */
 export const profileAxes = {
+  // The legal form and its books (docs/PFA_II_IF.md §4.3): without a fact, an SRL keeping double
+  // entry; a PFA, II or IF keeps single entry (OUG nr. 44/2008 art. 15).
+  'entity.form': entityForms,
+  'books.system': booksSystems,
+  // The owner's contributions, per year (Codul fiscal art. 148 alin. (4), art. 150 alin. (1),
+  // art. 174 alin. (7)–(8)): read as in force on 31 December of the income year.
+  'cas.status': ['liable', 'pensioner', 'own_system'],
+  'cas.option': ['no', 'yes'],
+  'cass.exception': ['none', 'salary', 'other_income', 'pension', 'previous_year'],
   'vat.status': ['non_vat', 'normal_vat'],
   'vat.period': ['monthly', 'quarterly'],
   'vat.cash': ['no', 'yes'],
@@ -153,6 +171,62 @@ async function initializeCompany(
   );
   for (let index = 0; index < rows.length; index += 50)
     await tx.insert(ledgerAccounts).values(rows.slice(index, index + 50));
+}
+
+/**
+ * The legal form decides which axes apply. An SRL and a PFA, II or IF are different taxpayers:
+ * the form does not move between them. Single-entry books are a PFA's, II's or IF's; whether
+ * they may opt for double entry is open (OUG nr. 44/2008 art. 15 against OMFP nr. 170/2015 art.
+ * 3), so the option is refused until an expert contabil answers. The owner's contributions
+ * concern a PFA, II or IF; the profit or micro tax regime an SRL.
+ */
+async function checkForm(tx: Transaction, companyId: string, input: z.infer<typeof profileInput>) {
+  const { loaded } = await loadState(tx, companyId, { profile: true });
+  const facts = loaded.profile;
+  const form = entityFormOf(facts, input.effectiveFrom as LocalDate);
+  const individual = (value: EntityForm) => individualForms.includes(value);
+  if (input.axis === 'entity.form') {
+    const recorded = facts.filter((fact) => fact.axis === 'entity.form');
+    requireCondition(
+      recorded.every(
+        (fact) => individual(fact.value as EntityForm) === individual(input.value as EntityForm),
+      ),
+      'ENTITY_FORM_CHANGE',
+      'O societate și o PFA, II sau IF sunt contribuabili diferiți: forma juridică nu trece de la una la alta.',
+    );
+    requireCondition(
+      !individual(input.value as EntityForm) ||
+        !facts.some(
+          (fact) =>
+            fact.axis === 'income_tax' || (fact.axis === 'books.system' && fact.value === 'double'),
+        ),
+      'ENTITY_FORM_CHANGE',
+      'Compania are deja un regim de impozit pe profit sau micro ori partida dublă, ale unei societăți.',
+    );
+    return;
+  }
+  if (input.axis === 'books.system') {
+    requireCondition(
+      input.value === 'double' ? !individual(form) : individual(form),
+      'BOOKS_SYSTEM_FORM',
+      input.value === 'double'
+        ? 'Opțiunea unei PFA, II sau IF pentru partida dublă nu este încă admisă: OUG nr. 44/2008 art. 15 prevede partida simplă, iar OMFP nr. 170/2015 art. 3 exceptează acest caz; se decide de expertul contabil.'
+        : 'Contabilitatea în partidă simplă se ține de PFA, II și IF (entity.form).',
+    );
+    return;
+  }
+  if (input.axis.startsWith('cas.') || input.axis.startsWith('cass.'))
+    requireCondition(
+      individual(form),
+      'PROFILE_FORM',
+      'Contribuțiile titularului se înregistrează pentru o PFA, II sau IF (entity.form).',
+    );
+  if (input.axis === 'income_tax')
+    requireCondition(
+      !individual(form),
+      'PROFILE_FORM',
+      'Impozitul pe profit sau pe veniturile microîntreprinderilor nu se aplică unei PFA, II sau IF.',
+    );
 }
 
 export class Companies {
@@ -485,6 +559,7 @@ export class Configuration {
         .from(evidence)
         .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.id, input.evidenceId)));
       requireCondition(source, 'EVIDENCE', 'Documentul justificativ nu este disponibil.', 404);
+      await checkForm(tx, actor.companyId, input);
       if (input.supersedesId) {
         const [superseded] = await tx
           .select()

@@ -44,8 +44,8 @@ export function vatPeriodEnd(period: string): LocalDate {
 /**
  * Settles a VAT period: clears what its tax entries booked on 4427 (output) and 4426 (deductible
  * input), net of earlier settlement rounds, into 4423 (payable) when output exceeds input, or
- * 4424 (refundable) otherwise, as an open item of the tax authority. Input VAT not yet exigible
- * (4428) is not part of it. Whether a refundable balance is refunded or carried forward is the
+ * 4424 (refundable) otherwise, as an open item of the tax authority. VAT not yet chargeable or
+ * deductible (4428, the entries without exigibility) is not part of it. Whether a refundable balance is refunded or carried forward is the
  * return's choice and a separate entry.
  */
 export const vatSettlement: Treatment<VatSettlementInput> = {
@@ -101,9 +101,10 @@ export const vatSettlement: Treatment<VatSettlementInput> = {
       );
 
     const ledger = loaded.taxLedger.get(`VAT|${input.period}`);
+    // VAT not yet chargeable (deferred on 4428 under VAT on collection) is not the period's.
     const sum = (direction: 'output' | 'input') =>
       (ledger?.entries ?? [])
-        .filter((entry) => entry.direction === direction)
+        .filter((entry) => entry.direction === direction && entry.exigibility !== null)
         .reduce((total, entry) => total + entry.ledgerBani, 0n);
     // Earlier rounds: debits of 4427 and credits of 4426 already cleared part of the period.
     const settled = (account: string, side: 'D' | 'C') =>

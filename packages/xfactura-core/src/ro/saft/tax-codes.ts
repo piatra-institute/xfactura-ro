@@ -13,6 +13,13 @@ import { vatTaxCodes } from './data/tax';
  * acquisition, and the collected side has no code of its own. The engine's codes without a row
  * here (O, S-9, S-5, partial deductions) have no certain TaxCode: the caller reports them as
  * problems for the expert, never as a guess.
+ *
+ * VAT on collection (`cashVat`): the invoices of a supplier applying it have codes of their own,
+ * its sales (Livrari 3103xx, "furnizorii care aplică TVA la încasare", no D300 row: the VAT is
+ * declared when collected) and its customers' acquisitions ("Achizitii pentru care se aplica TVA
+ * la incasare", 3013xx, 3413xx, 3513xx). The release a collection or payment books (4428 to 4427
+ * or 4426) is a general-ledger entry without a source document: sheet TVA_NoteContabile, "TVA
+ * neexigibilă" 3801xx (d406CashVatReleaseCode).
  */
 export type D406VatCodeRow = {
   direction: 'output' | 'input';
@@ -22,6 +29,8 @@ export type D406VatCodeRow = {
   rate?: string;
   /** For acquisitions: the VAT deducted in full, by half or not at all. */
   deduction?: 'full' | 'half' | 'none';
+  /** The supplier applies VAT on collection. */
+  cashVat?: true;
   /** The SAF-T TaxCode. */
   taxCode: string;
   /** Its description in ANAF's nomenclature, as vatTaxCodes has it. */
@@ -224,6 +233,50 @@ export const d406VatCodes: readonly D406VatCodeRow[] = [
       'Achizitii de bunuri (altele decat AIC de bunuri si importuri cu masuri de simplificare ) si achizitii de servicii (altele decat AIC de servicii cf reg B2B), pentru care care beneficiarul din Romania este obligat la plata TVA 19%',
     d300: '7/22',
   },
+  {
+    direction: 'output',
+    code: 'S-21',
+    cashVat: true,
+    taxCode: '310350',
+    description: 'Livrări/ prestări de către furnizorii care aplică TVA la încasare 21%',
+    d300: '',
+  },
+  {
+    direction: 'output',
+    code: 'S-19',
+    cashVat: true,
+    taxCode: '310335',
+    description: 'Livrări/ prestări de către furnizorii care aplică TVA la încasare 19%',
+    d300: '',
+  },
+  {
+    direction: 'output',
+    code: 'S-11',
+    cashVat: true,
+    taxCode: '310354',
+    description: 'Livrări/ prestări de către furnizorii care aplică TVA la încasare 11%',
+    d300: '',
+  },
+  ...(
+    [
+      ['S-21', 'full', '301305'],
+      ['S-19', 'full', '301301'],
+      ['S-11', 'full', '301306'],
+      ['S-21', 'half', '341306'],
+      ['S-19', 'half', '341301'],
+      ['S-21', 'none', '351305'],
+      ['S-19', 'none', '351301'],
+      ['S-11', 'none', '351306'],
+    ] as const
+  ).map(([code, deduction, taxCode]): D406VatCodeRow => ({
+    direction: 'input',
+    code,
+    deduction,
+    cashVat: true,
+    taxCode,
+    description: `Achizitii pentru care se aplica TVA la incasare ${code.slice(2)}%`,
+    d300: '',
+  })),
 ];
 
 /** The engine's codes whose collected side is reported with the acquisition. */
@@ -238,6 +291,8 @@ export function d406VatTaxCode(entry: {
   code: string;
   rate?: string;
   deduction?: 'full' | 'half' | 'none' | 'partial';
+  /** The supplier (the company, for a sale) applies VAT on collection. */
+  cashVat?: boolean;
 }): string | null | undefined {
   if (entry.direction === 'output' && d406ReverseCharges.includes(entry.code)) return null;
   const row = d406VatCodes.find(
@@ -245,7 +300,25 @@ export function d406VatTaxCode(entry: {
       item.direction === entry.direction &&
       item.code === entry.code &&
       (item.rate === undefined || item.rate === entry.rate) &&
-      (item.deduction === undefined || item.deduction === entry.deduction),
+      (item.deduction === undefined || item.deduction === entry.deduction) &&
+      (item.cashVat ?? false) === (entry.cashVat ?? false),
   );
   return row && vatTaxCodes[row.taxCode] ? row.taxCode : undefined;
+}
+
+/** "TVA neexigibilă" of TVA_NoteContabile by rate, for the release of VAT on collection. */
+const releaseCodes: Readonly<Record<string, string>> = {
+  'S-19': '380101',
+  'S-9': '380102',
+  'S-5': '380103',
+  'S-20': '380104',
+  'S-24': '380105',
+  'S-21': '380106',
+  'S-11': '380107',
+};
+
+/** The TaxCode of a release of VAT on collection, by the engine's code; undefined without one. */
+export function d406CashVatReleaseCode(code: string): string | undefined {
+  const taxCode = releaseCodes[code];
+  return taxCode && vatTaxCodes[taxCode] ? taxCode : undefined;
 }

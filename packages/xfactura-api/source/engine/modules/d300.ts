@@ -1,4 +1,4 @@
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, isNotNull, isNull, like, lte, notLike, or } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Party } from 'xfactura-core/einvoice';
 import { profileAt, vatPeriodOf, type ReadSetEntry } from 'xfactura-core/kernel';
@@ -16,7 +16,15 @@ import { vatPeriodEnd } from 'xfactura-core/ro/treatments/vat-settlement';
 import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
 import type { LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
-import { artifactEvents, artifacts, companies, parties, partyVersions } from '../db/schema';
+import {
+  artifactEvents,
+  artifacts,
+  companies,
+  entries,
+  parties,
+  partyVersions,
+  taxEntries,
+} from '../db/schema';
 import { loadState } from '../kernel/state';
 import type { DeclarationKind, DeclarationProblem } from './declarations';
 
@@ -67,6 +75,8 @@ export const d300Options = z
  * Row 31 holds the VAT actually deducted. That purchases enter rows 24–25 with all their VAT
  * while row 31 holds only the deductible part is an interpretation for the expert's review.
  * `null` marks entries the return derives itself (the deductible side of reverse charge).
+ * Under VAT on collection an invoice's entries have no exigibility and stay out of the rows: the
+ * collection or payment that releases them is declared, at the invoice's code, in its period.
  */
 const rowsByCode: Record<'output' | 'input', Record<string, [string, string | null][] | null>> = {
   output: {
@@ -207,6 +217,110 @@ export async function sellerDetails(tx: Transaction, companyId: string) {
   return row;
 }
 
+/**
+ * The VAT still deferred at the end of a period under VAT on collection: every tax entry without
+ * exigibility in the period or an earlier one, monthly or quarterly. The whole set is one read:
+ * an entry landing in any of those periods changes its count or its last sequence.
+ */
+export async function deferredVat(tx: Transaction, companyId: string, period: string) {
+  const end = vatPeriodEnd(period);
+  const year = Number(end.slice(0, 4));
+  const quarter = Math.floor(Number(end.slice(5, 7)) / 3);
+  const lastQuarter = quarter === 0 ? `${year - 1}-Q4` : `${year}-Q${quarter}`;
+  const rows = await tx
+    .select({ tax: taxEntries, seq: entries.seq })
+    .from(taxEntries)
+    .innerJoin(
+      entries,
+      and(eq(entries.companyId, taxEntries.companyId), eq(entries.id, taxEntries.entryId)),
+    )
+    .where(
+      and(
+        eq(taxEntries.companyId, companyId),
+        eq(taxEntries.tax, 'VAT'),
+        isNull(taxEntries.exigibility),
+        isNotNull(taxEntries.taxPeriod),
+        or(
+          and(notLike(taxEntries.taxPeriod, '%Q%'), lte(taxEntries.taxPeriod, end.slice(0, 7))),
+          and(like(taxEntries.taxPeriod, '%Q%'), lte(taxEntries.taxPeriod, lastQuarter)),
+        ),
+      ),
+    )
+    .orderBy(asc(entries.seq), asc(taxEntries.taxNo));
+  const last = Math.max(0, ...rows.map((row) => Number(row.seq)));
+  return {
+    entries: rows.map((row) => ({
+      ...row.tax,
+      attributes: JSON.parse(row.tax.attributes) as Record<string, string>,
+    })),
+    read: {
+      kind: 'taxPeriod' as const,
+      id: `VAT|deferred|${period}`,
+      version: `${rows.length}/${last}`,
+    },
+  };
+}
+
+/**
+ * The informative rows A, A1, B and B1 of the return: what VAT on collection leaves deferred at
+ * the period's end, per invoice, sales (A) and purchases (B), with the base still to collect or
+ * pay and, for purchases, the VAT whose deduction waits. A1 and B1 hold the invoices whose tax
+ * point falls in the last 6 months, or 2 quarters for a quarterly payer, including this period.
+ */
+function deferredRows(
+  deferred: Awaited<ReturnType<typeof deferredVat>>['entries'],
+  period: string,
+  problems: DeclarationProblem[],
+) {
+  const groups = new Map<
+    string,
+    { direction: string; base: bigint; vat: bigint; taxPoint: string | null }
+  >();
+  for (const entry of deferred) {
+    const invoice = entry.attributes.invoice;
+    if (!invoice) {
+      problems.push({
+        code: 'D300_DEFERRED',
+        message: `TVA neexigibilă din nota cu documentul ${entry.documentId ?? '–'} nu provine din sistemul TVA la încasare: rândurile informative A și B nu o pot cuprinde.`,
+      });
+      continue;
+    }
+    const group = groups.get(invoice) ?? {
+      direction: entry.direction,
+      base: 0n,
+      vat: 0n,
+      taxPoint: null,
+    };
+    group.base += entry.baseBani;
+    group.vat += entry.direction === 'output' ? entry.taxBani : entry.deductibleBani;
+    // The invoice's own entry gives the supply's date.
+    if (entry.documentId === invoice && !entry.attributes.release)
+      group.taxPoint =
+        group.taxPoint === null || entry.taxPoint < group.taxPoint
+          ? entry.taxPoint
+          : group.taxPoint;
+    groups.set(invoice, group);
+  }
+  const quarterly = period.includes('Q');
+  const start = periodStart(period);
+  const back = Number(start.slice(0, 4)) * 12 + Number(start.slice(5, 7)) - 1 - (quarterly ? 3 : 5);
+  const since = `${Math.floor(back / 12)}-${String((back % 12) + 1).padStart(2, '0')}-01`;
+  const totals: Partial<Record<D300InputElement, bigint>> = {};
+  const add = (element: D300InputElement, bani: bigint) =>
+    (totals[element] = (totals[element] ?? 0n) + bani);
+  for (const group of groups.values()) {
+    if (group.base === 0n && group.vat === 0n) continue;
+    const row = group.direction === 'output' ? 'a' : 'b';
+    add(`valoare_${row}`, group.base);
+    add(`tva_${row}`, group.vat);
+    if (group.taxPoint !== null && group.taxPoint >= since) {
+      add(`valoare_${row}1`, group.base);
+      add(`tva_${row}1`, group.vat);
+    }
+  }
+  return totals;
+}
+
 async function inputsOf(tx: Transaction, companyId: string, period: string) {
   const { loaded, readSet } = await loadState(tx, companyId, {
     taxPeriods: [{ tax: 'VAT', period }],
@@ -214,15 +328,17 @@ async function inputsOf(tx: Transaction, companyId: string, period: string) {
   });
   const seller = await sellerDetails(tx, companyId);
   const previous = await previousReturn(tx, companyId, period);
+  const deferred = await deferredVat(tx, companyId, period);
   const inputs: ReadSetEntry[] = [
     ...readSet,
+    deferred.read,
     ...(seller ? [{ kind: 'party' as const, id: seller.partyId, version: seller.hash }] : []),
     // The return whose balances this one carries: replacing it makes this one stale.
     ...(previous
       ? [{ kind: 'artifact' as const, id: previous.period, version: previous.artifactId }]
       : []),
   ];
-  return { loaded, seller, inputs };
+  return { loaded, seller, inputs, deferred: deferred.entries };
 }
 
 /** The VAT return (D300) from the VAT ledger of a tax period. */
@@ -246,7 +362,7 @@ export function d300Declaration(
     async prepare(tx, companyId, period, raw) {
       const options = d300Options.parse(raw);
       const problems: DeclarationProblem[] = [];
-      const { loaded, seller, inputs } = await inputsOf(tx, companyId, period);
+      const { loaded, seller, inputs, deferred } = await inputsOf(tx, companyId, period);
       const previous = await previousReturn(tx, companyId, period);
       if (previous && options.previous)
         problems.push({
@@ -276,6 +392,8 @@ export function d300Declaration(
         totals.set(element, (totals.get(element) ?? 0n) + bani);
       let deducted = 0n;
       for (const entry of loaded.taxLedger.get(`VAT|${period}`)?.entries ?? []) {
+        // VAT on collection: the invoice's VAT is declared when collected or paid.
+        if (entry.exigibility === null) continue;
         const rows = rowsByCode[entry.direction][entry.code];
         if (rows === undefined) {
           problems.push({
@@ -291,6 +409,8 @@ export function d300Declaration(
         if (entry.direction === 'input') deducted += entry.deductibleBani;
       }
       if (deducted !== 0n) add('R28_2', deducted);
+      for (const [element, bani] of Object.entries(deferredRows(deferred, period, problems)))
+        add(element, bani);
       if (problems.length || !seller || !roundToLeu)
         return { xml: '', inputs, problems, summary: null };
 

@@ -16,14 +16,15 @@ import { isValidCnp, isValidCui } from '../identifiers';
  * are always required; tvaDedAI21–tvaDedAI5 are required whatever the declarant's VAT system;
  * facturiASI, bazaASI, tvaV, tip_N and serieF do not exist.
  *
- * Covered: the normal VAT system (sistemTVA 0); supplies (L) and acquisitions (A from suppliers
- * applying the normal VAT system, AI from suppliers applying VAT on collection) with partners
- * registered for VAT in Romania; supplies to persons not registered for VAT; simplified invoices
- * and receipts; invoice series; storno, cancelled and self-issued invoices; refund details. The
- * structure lets the sections of other regimes be absent: the VAT-on-collection system's own
- * amounts, special schemes (LS, AS), domestic reverse charge (V, C with op11 and detaliu),
- * acquisitions from unregistered persons (N), non-established partners (tip_partener 3, 4), cash
- * register receipts (op2, lista) and the travel-agency and second-hand margins.
+ * Covered: the normal VAT system (sistemTVA 0) and VAT on collection (sistemTVA 1, with the VAT
+ * collected and deducted on the invoices paid in the period, tvaCol and tvaDed); supplies (L) and
+ * acquisitions (A from suppliers applying the normal VAT system, AI from suppliers applying VAT
+ * on collection) with partners registered for VAT in Romania; supplies to persons not registered
+ * for VAT; simplified invoices and receipts; invoice series; storno, cancelled and self-issued
+ * invoices; refund details. The structure lets the sections of other regimes be absent: special
+ * schemes (LS, AS), domestic reverse charge (V, C with op11 and detaliu), acquisitions from
+ * unregistered persons (N), non-established partners (tip_partener 3, 4), cash register receipts
+ * (op2, lista) and the travel-agency and second-hand margins.
  *
  * Amounts are whole lei, N(15), negative for adjustments; invoice counts are non-negative.
  */
@@ -292,6 +293,14 @@ export type D394 = {
    * suppliers applying VAT on collection. The structure requires every rate but 24; an absent
    * rate is written as 0, and 24 only when given. */
   cashVatDeductible: Partial<Record<D394Rate, number>>;
+  /** sistemTVA 1: the company applies VAT on collection. tvaCol<rate>: the VAT collected on the
+   * invoices it collected in the period, whenever issued; tvaDed<rate>: the deductible VAT of the
+   * invoices it paid in the period, whenever received, to suppliers applying the normal VAT
+   * system. Every rate is written, an absent one as 0. */
+  vatOnCollection?: {
+    collected: Partial<Record<D394Rate, number>>;
+    deductible: Partial<Record<D394Rate, number>>;
+  };
   /** solicit: the period's VAT return requests a refund; then every flag is written (0/1). */
   refund?: Record<D394RefundFlag, boolean>;
 };
@@ -456,16 +465,21 @@ function inputProblems(model: D394): Problem[] {
       amount(`simplified.${rate}.${kind}.vat`, value.vat, 'TVA');
     }
   }
-  for (const [rate, value] of Object.entries(model.cashVatDeductible)) {
-    if (value === undefined) continue;
-    if (!isRate(rate))
-      problems.push({
-        code: 'D394_RATE',
-        path: `cashVatDeductible.${rate}`,
-        message: `Cota ${rate} nu există în D394.`,
-      });
-    else amount(`cashVatDeductible.${rate}`, value, 'TVA deductibilă');
-  }
+  for (const [path, values, label] of [
+    ['cashVatDeductible', model.cashVatDeductible, 'TVA deductibilă'],
+    ['vatOnCollection.collected', model.vatOnCollection?.collected ?? {}, 'TVA colectată'],
+    ['vatOnCollection.deductible', model.vatOnCollection?.deductible ?? {}, 'TVA deductibilă'],
+  ] as const)
+    for (const [rate, value] of Object.entries(values)) {
+      if (value === undefined) continue;
+      if (!isRate(rate))
+        problems.push({
+          code: 'D394_RATE',
+          path: `${path}.${rate}`,
+          message: `Cota ${rate} nu există în D394.`,
+        });
+      else amount(`${path}.${rate}`, value, label);
+    }
   model.invoices.forEach((invoice, index) => {
     if (invoice.type !== 'selfInvoice') return;
     for (const [rate, value] of Object.entries(invoice.amounts)) {
@@ -622,6 +636,14 @@ export function writeD394(model: D394): string {
   const calculation = calculateD394(model);
   const { company, representative, preparer } = model;
   const cashVat = model.cashVatDeductible;
+  // Every rate, an absent one as 0; 24 for tvaDedAI only when given (the validator requires
+  // tvaDed24 and tvaCol24 under VAT on collection, R135.2 and R143.2).
+  const byRate = (prefix: string, values: Partial<Record<D394Rate, number>>, all = false) => ({
+    [`${prefix}24`]: values['24'] === undefined && !all ? undefined : text(values['24'] ?? 0),
+    ...Object.fromEntries(
+      requiredRates.map((rate) => [`${prefix}${rate}`, text(values[rate] ?? 0)]),
+    ),
+  });
   return serializeXml(
     element(
       'declaratie394',
@@ -632,7 +654,7 @@ export function writeD394(model: D394): string {
         luna: String(model.period.month),
         an: String(model.period.year),
         tip_D394: model.type,
-        sistemTVA: '0',
+        sistemTVA: model.vatOnCollection ? '1' : '0',
         op_efectuate: flag(calculation.operationsReported),
         prsAfiliat: flag(model.affiliates),
         cui: company.cui,
@@ -670,10 +692,9 @@ export function writeD394(model: D394): string {
         nrFacturi_terti: text(model.issuedInvoices.byThirdParties),
         nrFacturi_benef: text(model.issuedInvoices.byBeneficiaries),
         nrFacturi: text(model.issuedInvoices.own),
-        tvaDedAI24: cashVat['24'] === undefined ? undefined : text(cashVat['24']),
-        ...Object.fromEntries(
-          requiredRates.map((rate) => [`tvaDedAI${rate}`, text(cashVat[rate] ?? 0)]),
-        ),
+        ...(model.vatOnCollection && byRate('tvaDed', model.vatOnCollection.deductible, true)),
+        ...byRate('tvaDedAI', cashVat),
+        ...(model.vatOnCollection && byRate('tvaCol', model.vatOnCollection.collected, true)),
         solicit: flag(model.refund !== undefined),
         ...(model.refund &&
           Object.fromEntries(d394RefundFlags.map(([name]) => [name, flag(model.refund![name])]))),

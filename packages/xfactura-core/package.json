@@ -14,6 +14,7 @@
     "./kernel": "./src/kernel/index.ts",
     "./rules": "./src/rules/index.ts",
     "./ro/vat": "./src/ro/vat.ts",
+    "./ro/cash-vat": "./src/ro/cash-vat.ts",
     "./ro/chart": "./src/ro/chart.ts",
     "./ro/treatments/ledger": "./src/ro/treatments/ledger.ts",
     "./values": "./src/values.ts",
@@ -60,7 +61,9 @@
     "./ro/annual/s1005-assets": "./src/ro/annual/s1005-assets.ts",
     "./ro/saft/d406": "./src/ro/saft/d406.ts",
     "./ro/saft/accounts": "./src/ro/saft/accounts.ts",
-    "./ro/saft/tax-codes": "./src/ro/saft/tax-codes.ts"
+    "./ro/saft/tax-codes": "./src/ro/saft/tax-codes.ts",
+    "./ro/entity": "./src/ro/entity.ts",
+    "./ro/pit": "./src/ro/pit/index.ts"
   },
   "dependencies": {
     "@noble/hashes": "2.4.0",

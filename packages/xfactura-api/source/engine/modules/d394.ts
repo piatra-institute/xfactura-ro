@@ -15,6 +15,7 @@ import {
   type D394Partner,
   type D394Rate,
 } from 'xfactura-core/ro/declarations/d394';
+import { supplierAppliesCashVat } from 'xfactura-core/ro/cash-vat';
 import { counties } from 'xfactura-core/ro/geo';
 import { isValidCnp, isValidCui } from 'xfactura-core/ro/identifiers';
 import { invoiceKinds } from 'xfactura-core/ro/treatments/invoices';
@@ -154,9 +155,13 @@ async function inputsOf(tx: Transaction, companyId: string, period: string) {
     taxPeriods: [{ tax: 'VAT', period }],
     profile: true,
   });
-  const entries = (ledger.loaded.taxLedger.get(`VAT|${period}`)?.entries ?? []).filter(
+  const all = (ledger.loaded.taxLedger.get(`VAT|${period}`)?.entries ?? []).filter(
     (entry) => !crossBorder.test(entry.code),
   );
+  // Under VAT on collection, a collection or payment releases an invoice's VAT: the period's
+  // releases are the VAT collected and deducted on payment, not operations of their own.
+  const entries = all.filter((entry) => !entry.attributes.release);
+  const releases = all.filter((entry) => entry.attributes.release && entry.exigibility !== null);
   const start = periodStart(period);
   const end = vatPeriodEnd(period);
   const issued = await tx
@@ -196,6 +201,7 @@ async function inputsOf(tx: Transaction, companyId: string, period: string) {
   return {
     loaded: ledger.loaded,
     entries,
+    releases,
     documents: read.loaded.documents,
     details,
     issued,
@@ -207,7 +213,9 @@ async function inputsOf(tx: Transaction, companyId: string, period: string) {
 /**
  * The informative statement of domestic supplies and acquisitions (D394) from the VAT ledger of
  * a tax period: each partner's invoices by type and rate, the invoice series the engine issued
- * and the storno invoices among them, and the company's identification.
+ * and the storno invoices among them, and the company's identification. Under VAT on collection
+ * the invoices are listed with their full amounts in the period they were issued or received,
+ * and the VAT collected or deducted on payment goes to tvaCol, tvaDed and tvaDedAI.
  */
 export function d394Declaration(
   rules: (tx: Transaction, companyId: string) => Promise<RuleContext>,
@@ -230,11 +238,8 @@ export function d394Declaration(
     async prepare(tx, companyId, period, raw) {
       const options = d394Options.parse(raw);
       const problems: DeclarationProblem[] = [];
-      const { loaded, entries, documents, details, issued, seller, inputs } = await inputsOf(
-        tx,
-        companyId,
-        period,
-      );
+      const { loaded, entries, releases, documents, details, issued, seller, inputs } =
+        await inputsOf(tx, companyId, period);
       const end = vatPeriodEnd(period);
       if (vatPeriodOf(loaded, end) !== period)
         problems.push({
@@ -246,11 +251,7 @@ export function d394Declaration(
           code: 'NOT_VAT_PAYER',
           message: 'Declarația D394 o depun persoanele înregistrate în scopuri de TVA.',
         });
-      if (profileAt(loaded, 'vat.cash', end) === 'yes')
-        problems.push({
-          code: 'D394_CASH_VAT',
-          message: 'Declarația pentru sistemul de TVA la încasare nu este încă produsă.',
-        });
+      const cashSystem = profileAt(loaded, 'vat.cash', end) === 'yes';
       if (!seller)
         problems.push({
           code: 'SELLER_DETAILS',
@@ -335,7 +336,8 @@ export function d394Declaration(
           };
           key = `2|party:${entry.partyId}`;
         }
-        const type = sale ? 'L' : 'A';
+        // Acquisitions from a supplier applying VAT on collection are AI.
+        const type = sale ? 'L' : supplierAppliesCashVat(entry.attributes.cashVat) ? 'AI' : 'A';
         const groupKey = `${type}|${rate}|${key}`;
         const group = groups.get(groupKey) ?? {
           type,
@@ -415,8 +417,41 @@ export function d394Declaration(
           ...options.outsideSeries.storno.map((item) => ({ type: 'storno' as const, ...item })),
         );
       }
+      // The VAT collected (tvaCol) and deducted (tvaDed, tvaDedAI) on the invoices collected or
+      // paid in the period, by rate, from the releases of VAT on collection.
+      const paid = { collected: new Map(), deductible: new Map(), supplier: new Map() } as Record<
+        'collected' | 'deductible' | 'supplier',
+        Map<D394Rate, bigint>
+      >;
+      for (const entry of releases) {
+        const rate = rateOf(entry.code);
+        if (!rate) {
+          problems.push({
+            code: 'D394_OPERATION',
+            message: `TVA la încasare cu codul ${entry.code} nu are încă un loc în declarație.`,
+          });
+          continue;
+        }
+        const [target, bani] =
+          entry.direction === 'output'
+            ? [paid.collected, entry.taxBani]
+            : supplierAppliesCashVat(entry.attributes.cashVat)
+              ? [paid.supplier, entry.deductibleBani]
+              : [paid.deductible, entry.deductibleBani];
+        target.set(rate, (target.get(rate) ?? 0n) + bani);
+      }
+      if (!cashSystem && (paid.collected.size || paid.deductible.size))
+        problems.push({
+          code: 'D394_CASH_VAT_EXIT',
+          message:
+            'Compania nu aplică TVA la încasare la sfârșitul perioadei, dar încasează sau plătește facturi din perioada în care l-a aplicat (art. 282 alin. (7) lit. b) din Codul fiscal): cum se declară această TVA în D394 nu este încă stabilit.',
+        });
       if (problems.length || !seller || !roundToLeu)
         return { xml: '', inputs, problems, summary: null };
+      const byRate = (values: Map<D394Rate, bigint>) =>
+        Object.fromEntries(
+          [...values].map(([rate, bani]) => [rate, Number(roundToLeu(bani))]),
+        ) as Partial<Record<D394Rate, number>>;
 
       const company = JSON.parse(seller.details) as Party;
       const [row] = await tx.select().from(companies).where(eq(companies.id, companyId));
@@ -461,7 +496,15 @@ export function d394Declaration(
           byThirdParties: 0,
         },
         invoices,
-        cashVatDeductible: {},
+        cashVatDeductible: byRate(paid.supplier),
+        ...(cashSystem
+          ? {
+              vatOnCollection: {
+                collected: byRate(paid.collected),
+                deductible: byRate(paid.deductible),
+              },
+            }
+          : {}),
         ...(options.refund ? { refund: options.refund as D394['refund'] } : {}),
       };
       problems.push(
@@ -488,6 +531,10 @@ export function d394Declaration(
             vat: operation.vat,
           })),
           issuedInvoices: model.issuedInvoices.own,
+          ...(model.vatOnCollection ? { vatOnCollection: model.vatOnCollection } : {}),
+          ...(Object.keys(model.cashVatDeductible).length
+            ? { cashVatDeductible: model.cashVatDeductible }
+            : {}),
         },
       };
     },

@@ -11,6 +11,7 @@ import {
   type LineSpec,
   type Loaded,
   type OpenItemSpec,
+  type PartyStatus,
   type ReadPlan,
   type TaxEntrySpec,
   type Treatment,
@@ -26,6 +27,14 @@ import {
   parseScaled,
 } from '../../money';
 import { selectRate } from '../fx';
+import {
+  cashVatClauses,
+  creditSplit,
+  deferredInvoice,
+  isZeroAmounts,
+  type CashVatAmounts,
+  type CashVatParty,
+} from '../cash-vat';
 import { RuleGapError, type RuleContext } from '../../rules';
 import { isLocalDate, type LocalDate } from '../../time';
 import { invoiceDocumentSchema, type InvoiceDocument } from '../../ubl/invoice-document';
@@ -212,6 +221,9 @@ export const recognitionInput = z
      * alin. (7)) unless it is one of the article's exceptions: goods bought in a forced
      * execution, or a purchase from a supplier in bankruptcy (Legea nr. 85/2014). */
     inactiveException: z.enum(['forced_execution', 'bankruptcy']).optional(),
+    /** A sale to a customer affiliated with the company (Codul fiscal art. 7 pct. 26) when the
+     * invoice is issued: VAT on collection does not apply to it (art. 282 alin. (6) lit. d)). */
+    affiliated: z.boolean().optional(),
   })
   .strict()
   .refine((input) => (input.account === undefined) !== (input.allocations === undefined), {
@@ -310,7 +322,8 @@ const share = (total: bigint, weights: readonly bigint[]) =>
  * goes on one account, or its VAT categories are split over accounts (`allocations`), each part
  * with its own deduction: one tax entry per category, one line per part. A purchase reads ANAF's
  * status of a Romanian supplier on the tax point, when one was checked: from a supplier then
- * inactive, no part deducts VAT.
+ * inactive, no part deducts VAT. Under VAT on collection (cashVatOf) the VAT, or the deduction,
+ * waits on 4428 with no exigibility until the collection or payment releases it.
  */
 export const invoiceRecognition: Treatment<RecognitionInput> = {
   id: 'invoices.recognize',
@@ -520,6 +533,8 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
             },
       );
     }
+    const cash = cashVatOf(input, invoice, loaded, vat.status, supplier, isAdvance);
+    issues.push(...cash.issues);
     if (input.serviceDate && input.serviceDate.slice(0, 7) !== taxPoint.slice(0, 7))
       issues.push(
         warn(
@@ -654,11 +669,14 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
       const deductedTax = members.reduce((sum, p) => sum + deducted[p]!, 0n);
       const deductedTaxMinor = members.reduce((sum, p) => sum + deductedMinor[p]!, 0n);
       const ledger = direction === 'sale' ? categoryTax[c]! : deductedTax;
+      // Under VAT on collection the VAT waits on 4428; a purchase defers only what it would
+      // deduct (norme pct. 67 alin. (8)).
+      const deferred = cash.party !== undefined && ledger !== 0n;
       if (ledger !== 0n)
         lines.push(
           line(
             {
-              account: direction === 'sale' ? '4427' : '4426',
+              account: deferred ? '4428' : direction === 'sale' ? '4427' : '4426',
               side: direction === 'sale' ? 'C' : 'D',
               bani: ledger,
             },
@@ -666,32 +684,43 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
             fx?.vat,
           ),
         );
+      const entry = vatEntry(
+        invoice,
+        {
+          baseBani: categoryBase[c]!,
+          taxBani: categoryTax[c]!,
+          deductibleBani: direction === 'sale' ? 0n : deductedTax,
+          ledgerBani: ledger,
+          ...(ledger !== 0n ? { line: lines.length - 1 } : {}),
+          taxPoint,
+          ...(deferred ? { exigibility: null } : {}),
+          taxPeriod,
+          ...(fx
+            ? {
+                currency: {
+                  code: fx.code,
+                  baseMinor: category.minorBase,
+                  taxMinor: category.minorTax,
+                  rateId: fx.vat.id,
+                  rate: fx.vat.rate,
+                },
+              }
+            : {}),
+        },
+        category.category === 'S' ? `S-${category.rate}` : 'O',
+      );
       taxEntries.push({
-        ...vatEntry(
-          invoice,
-          {
-            baseBani: categoryBase[c]!,
-            taxBani: categoryTax[c]!,
-            deductibleBani: direction === 'sale' ? 0n : deductedTax,
-            ledgerBani: ledger,
-            ...(ledger !== 0n ? { line: lines.length - 1 } : {}),
-            taxPoint,
-            taxPeriod,
-            ...(fx
-              ? {
-                  currency: {
-                    code: fx.code,
-                    baseMinor: category.minorBase,
-                    taxMinor: category.minorTax,
-                    rateId: fx.vat.id,
-                    rate: fx.vat.rate,
-                  },
-                }
-              : {}),
-          },
-          category.category === 'S' ? `S-${category.rate}` : 'O',
-        ),
+        ...entry,
         key: categories.length === 1 ? 'vat' : `vat:${category.key}`,
+        ...(cash.party
+          ? {
+              attributes: {
+                ...entry.attributes,
+                cashVat: cash.party,
+                invoice: invoice.record.id,
+              },
+            }
+          : {}),
       });
     });
     if (direction === 'purchase')
@@ -737,15 +766,132 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
                   evidenceId: supplier.evidenceId,
                   ...(supplier.inactive ? { clause: INACTIVE_CLAUSE } : {}),
                   ...(input.inactiveException ? { exception: input.inactiveException } : {}),
+                  ...(supplier.cashVat ? { cashVat: true } : {}),
                 },
               }
             : {}),
+          ...(cash.party
+            ? {
+                vatOnCollection: {
+                  party: cash.party,
+                  clauses: [
+                    cashVatClauses.chargeability,
+                    ...(cash.party !== 'own' ? [cashVatClauses.supplier] : []),
+                    ...(direction === 'purchase' && cash.party !== 'supplier'
+                      ? [cashVatClauses.own]
+                      : []),
+                  ],
+                },
+              }
+            : input.affiliated
+              ? { vatOnCollection: { excluded: 'affiliated', clauses: [cashVatClauses.scope] } }
+              : {}),
         },
       },
     };
     return { effect, issues };
   },
 };
+
+/**
+ * Whether an invoice falls under VAT on collection, and what to tell the reviewer about it. The
+ * company's own system is read on the earlier of the issue date and the tax point: an invoice
+ * issued before the supply stays in the system it was issued in (art. 282 alin. (7)). A sale
+ * under the system defers its VAT unless the customer is affiliated (alin. (6) lit. d)); the
+ * other exclusions of alin. (6) (reverse charge, exempt supplies, special regimes) are categories
+ * this treatment refuses anyway. A purchase defers its deduction when the company applies the
+ * system (art. 297 alin. (3)) or the supplier does (alin. (2)): by the invoice's mention or by
+ * ANAF's register on the tax point, which governs even without the mention (norme pct. 67
+ * alin. (6)).
+ */
+function cashVatOf(
+  input: RecognitionInput,
+  invoice: Invoice,
+  loaded: Loaded,
+  status: string | null,
+  supplier: PartyStatus | undefined,
+  advances: boolean[],
+): { party: CashVatParty | undefined; issues: Issue[] } {
+  const issues: Issue[] = [];
+  const { body, direction } = invoice;
+  const systemDate = date([body.issueDate, taxPointOf(body)].sort()[0]!);
+  const own = profileAt(loaded, 'vat.cash', systemDate) === 'yes';
+  if (own && status !== 'normal_vat')
+    issues.push(
+      block(
+        'CASH_VAT_STATUS',
+        'Profilul companiei indică TVA la încasare, dar nu și înregistrarea în scopuri de TVA: sistemul îl aplică doar persoanele înregistrate (art. 282 alin. (3^1) din Codul fiscal).',
+      ),
+    );
+  const mention = body.vatOnCollection === true;
+  let party: CashVatParty | undefined;
+  if (direction === 'sale') {
+    if (input.affiliated && !own)
+      issues.push(
+        block(
+          'AFFILIATED',
+          `Compania nu aplică TVA la încasare la ${systemDate}: beneficiarul afiliat nu schimbă exigibilitatea.`,
+          'affiliated',
+        ),
+      );
+    party = own && !input.affiliated ? 'own' : undefined;
+    if (party && !mention)
+      issues.push(
+        warn(
+          'CASH_VAT_MENTION',
+          'Compania aplică TVA la încasare, iar factura nu are mențiunea „TVA la încasare” (art. 319 alin. (20) lit. p) din Codul fiscal, în comentariul BT-22): corectați factura.',
+        ),
+      );
+    if (input.affiliated && own && mention)
+      issues.push(
+        warn(
+          'CASH_VAT_MENTION',
+          'Vânzarea către un beneficiar afiliat urmează regulile generale de exigibilitate (art. 282 alin. (6) lit. d) din Codul fiscal), dar factura are mențiunea „TVA la încasare”: corectați factura.',
+        ),
+      );
+  } else {
+    if (input.affiliated)
+      issues.push(
+        block(
+          'AFFILIATED',
+          'Beneficiarul afiliat (art. 282 alin. (6) lit. d) din Codul fiscal) se indică doar pentru o vânzare.',
+          'affiliated',
+        ),
+      );
+    const registered = supplier?.cashVat === true;
+    if (mention && supplier && !registered)
+      issues.push(
+        warn(
+          'CASH_VAT_SUPPLIER',
+          `Factura are mențiunea „TVA la încasare”, dar furnizorul ${supplier.name} (CUI ${supplier.cui}) nu era în Registrul persoanelor care aplică sistemul TVA la încasare la ${supplier.date}: deducerea se amână după mențiune (art. 297 alin. (2) din Codul fiscal). Verificați registrul.`,
+        ),
+      );
+    const supplierApplies = mention || registered;
+    party = own
+      ? supplierApplies
+        ? 'own+supplier'
+        : 'own'
+      : supplierApplies
+        ? 'supplier'
+        : undefined;
+  }
+  if (party && body.currency !== LEDGER_CURRENCY)
+    issues.push(
+      block(
+        'CASH_VAT_CURRENCY',
+        'Facturile în valută în sistemul TVA la încasare nu sunt încă tratate.',
+      ),
+    );
+  if (party && advances.some(Boolean))
+    issues.push(
+      block(
+        'CASH_VAT_ADVANCE',
+        'Avansurile facturate sau deduse în sistemul TVA la încasare nu sunt încă tratate.',
+        input.allocations ? 'allocations' : 'account',
+      ),
+    );
+  return { party, issues };
+}
 
 export const creditInput = z
   .object({
@@ -782,7 +928,9 @@ export type CreditInput = z.infer<typeof creditInput>;
  * accounts and VAT rates are reversed for the credited amounts in the credit note's own period,
  * and the original receivable or payable is reduced. Each VAT category of the credit note must be
  * one of the original's; a credit note on several categories splits them over accounts as the
- * original did. Crediting more than remains open is refused.
+ * original did. Crediting more than remains open is refused. An original under VAT on collection
+ * has its deferral reduced first; what exceeds it adjusts the chargeable VAT on the credit note's
+ * date, for the reviewer to confirm (art. 282 alin. (10), norme pct. 32 alin. (2) and (5)).
  */
 export const creditRecognition: Treatment<CreditInput> = {
   id: 'invoices.credit',
@@ -794,9 +942,16 @@ export const creditRecognition: Treatment<CreditInput> = {
   subject: (input) => `document:${input.documentId}`,
   plan: (input) => ({
     documents: [input.documentId, input.originalDocumentId],
-    openItems: [{ documentId: input.originalDocumentId }],
+    openItems: [{ documentId: input.originalDocumentId, history: true }],
     profile: true,
   }),
+  // The original's entries, for the VAT it still defers under VAT on collection.
+  followUp(input, loaded) {
+    const entries = [...loaded.openItems.values()]
+      .filter((item) => item.documentId === input.originalDocumentId)
+      .flatMap((item) => item.history ?? []);
+    return entries.length ? { entries: [...new Set(entries)] } : null;
+  },
   evaluate(input, loaded, rules) {
     const credit = invoiceOf(loaded, input.documentId, true);
     const original = invoiceOf(loaded, input.originalDocumentId, false);
@@ -888,7 +1043,11 @@ export const creditRecognition: Treatment<CreditInput> = {
           'originalDocumentId',
         ),
       );
+    // An original under VAT on collection: what it still defers (art. 282 alin. (10)).
+    const deferral = item ? deferredInvoice(item, loaded) : null;
+    if (deferral && 'code' in deferral) issues.push(deferral);
     if (issues.some((issue) => issue.severity === 'block')) return { effect: null, issues };
+    const deferring = deferral && !('code' in deferral) ? deferral : null;
 
     const purchase = credit.direction === 'purchase';
     const gross = ron(credit.body.totals.gross);
@@ -939,35 +1098,104 @@ export const creditRecognition: Treatment<CreditInput> = {
         bani: -(partNet[p]! + (purchase ? partTax[p]! - deducted[p]! : 0n)),
       }),
     );
+    const cashVat: { code: string; deferred: string; chargeable: string }[] = [];
     for (const category of categories) {
       if (category.tax === 0n) continue;
       const members = parts.flatMap((part, p) => (part.vat === category.key ? [p] : []));
       const deductedTax = members.reduce((sum, p) => sum + deducted[p]!, 0n);
       const ledger = purchase ? deductedTax : category.tax;
-      if (ledger !== 0n)
-        lines.push({
-          account: purchase ? '4426' : '4427',
-          side: purchase ? 'D' : 'C',
-          bani: -ledger,
-        });
       const originKey = originalKeys.length === 1 ? 'vat' : `vat:${category.key}`;
+      const code = category.category === 'S' ? `S-${category.rate}` : 'O';
+      const key = categories.length === 1 ? 'vat' : `vat:${category.key}`;
+      // Booked on `account` with the reduction `amounts` (positive), as a red storno.
+      const book = (
+        account: string,
+        amounts: CashVatAmounts,
+        extra: Partial<TaxEntrySpec> = {},
+      ): TaxEntrySpec => {
+        if (amounts.ledger !== 0n)
+          lines.push({ account, side: purchase ? 'D' : 'C', bani: -amounts.ledger });
+        return {
+          ...vatEntry(
+            credit,
+            {
+              baseBani: -amounts.base,
+              taxBani: -amounts.tax,
+              deductibleBani: -amounts.deductible,
+              ledgerBani: -amounts.ledger,
+              taxPoint,
+              taxPeriod,
+              ...(amounts.ledger !== 0n ? { line: lines.length - 1 } : {}),
+              originTaxEntry: `${original.record.id}:${originKey}`,
+              ...extra,
+            },
+            code,
+          ),
+          key,
+        };
+      };
+      const reduction = {
+        base: category.base,
+        tax: category.tax,
+        deductible: deductedTax,
+        ledger,
+      };
+      const deferredCategory = deferring?.categories.find((item) => item.origin.code === code);
+      if (!deferredCategory) {
+        const entry = book(purchase ? '4426' : '4427', reduction);
+        // A category of a deferred invoice that was not deferred still belongs to the invoice:
+        // the credit note is a correction of it, not a settlement.
+        taxEntries.push(
+          deferring
+            ? {
+                ...entry,
+                attributes: {
+                  ...entry.attributes,
+                  cashVat: deferring.categories[0]!.origin.attributes.cashVat!,
+                  invoice: original.record.id,
+                },
+              }
+            : entry,
+        );
+        continue;
+      }
+      // Under VAT on collection the credit note takes its VAT off the original's deferral
+      // first; what exceeds it adjusts the VAT already chargeable (art. 282 alin. (10)).
+      const split = creditSplit(deferredCategory, reduction, gross === deferring!.balance);
+      const attributes = {
+        cashVat: deferredCategory.origin.attributes.cashVat!,
+        invoice: original.record.id,
+      };
+      const deferredEntry = book('4428', split.deferred, { exigibility: null });
       taxEntries.push({
-        ...vatEntry(
-          credit,
-          {
-            baseBani: -category.base,
-            taxBani: -category.tax,
-            deductibleBani: -deductedTax,
-            ledgerBani: -ledger,
-            taxPoint,
-            taxPeriod,
-            ...(ledger !== 0n ? { line: lines.length - 1 } : {}),
-            originTaxEntry: `${original.record.id}:${originKey}`,
-          },
-          category.category === 'S' ? `S-${category.rate}` : 'O',
-        ),
-        key: categories.length === 1 ? 'vat' : `vat:${category.key}`,
+        ...deferredEntry,
+        attributes: { ...deferredEntry.attributes, ...attributes },
       });
+      if (!isZeroAmounts(split.chargeable)) {
+        const chargeable = book(purchase ? '4426' : '4427', split.chargeable);
+        taxEntries.push({
+          ...chargeable,
+          key: `${key}:chargeable`,
+          attributes: { ...chargeable.attributes, ...attributes },
+        });
+      }
+      cashVat.push({
+        code,
+        deferred: formatMoney(split.deferred.tax, LEDGER_CURRENCY),
+        chargeable: formatMoney(split.chargeable.tax, LEDGER_CURRENCY),
+      });
+      if (split.chargeable.tax !== 0n)
+        issues.push(
+          split.chargeable.tax > 0n
+            ? warn(
+                'CASH_VAT_CREDIT',
+                `TVA a notei de credit pe cota ${code} depășește cu ${formatMoney(split.chargeable.tax, LEDGER_CURRENCY)} lei TVA neexigibilă rămasă a facturii ${original.body.number}: diferența reduce TVA ${purchase ? 'dedusă' : 'colectată'} la data notei (art. 282 alin. (10) lit. a) pct. 2 din Codul fiscal). Dacă ajustarea este pentru falimentul beneficiarului (art. 287 lit. d)), se anulează doar TVA neexigibilă: confirmați.`,
+              )
+            : warn(
+                'CASH_VAT_CREDIT',
+                `Nota de credit stinge factura ${original.body.number}, iar ${formatMoney(-split.chargeable.tax, LEDGER_CURRENCY)} lei din TVA neexigibilă pe cota ${code} nu sunt acoperiți de ea: devin ${purchase ? 'deductibili' : 'exigibili'} la data notei. Confirmați.`,
+              ),
+        );
     }
     if (purchase) lines.push(partner);
     const effect: Effect = {
@@ -982,7 +1210,13 @@ export const creditRecognition: Treatment<CreditInput> = {
       schedules: [],
       explanation: {
         summary: `${credit.body.number} reduce ${original.body.number} cu ${credit.body.totals.gross} lei, la cota inițială.`,
-        details: { originalDocumentId: original.record.id, taxPoint },
+        details: {
+          originalDocumentId: original.record.id,
+          taxPoint,
+          ...(cashVat.length
+            ? { vatOnCollection: { categories: cashVat, clause: cashVatClauses.corrections } }
+            : {}),
+        },
       },
     };
     return { effect, issues };

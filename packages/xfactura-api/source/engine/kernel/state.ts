@@ -167,6 +167,7 @@ export async function loadOpenItems(tx: Transaction, companyId: string, where: S
     balanceMinor: minor,
     documentId: item.documentId,
     dueDate: item.dueDate ? date(item.dueDate) : null,
+    originEntryId: item.originEntryId,
     movements,
   }));
 }
@@ -303,8 +304,36 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
           };
       }
     }
-    for (const item of items)
-      if (!itemMap.has(item.id) || item.schedule) itemMap.set(item.id, item);
+    if (query.history && items.length) {
+      const rows = await tx
+        .selectDistinct({ itemId: lines.openItemId, entryId: lines.entryId, seq: entries.seq })
+        .from(lines)
+        .innerJoin(
+          entries,
+          and(eq(entries.companyId, lines.companyId), eq(entries.id, lines.entryId)),
+        )
+        .where(
+          and(
+            eq(lines.companyId, companyId),
+            inArray(
+              lines.openItemId,
+              items.map((item) => item.id),
+            ),
+          ),
+        )
+        .orderBy(asc(entries.seq));
+      for (const item of items)
+        item.history = rows.filter((row) => row.itemId === item.id).map((row) => row.entryId);
+    }
+    for (const item of items) {
+      const known = itemMap.get(item.id);
+      if (!known || item.schedule || item.history)
+        itemMap.set(item.id, {
+          ...item,
+          ...(known?.schedule && !item.schedule ? { schedule: known.schedule } : {}),
+          ...(known?.history && !item.history ? { history: known.history } : {}),
+        });
+    }
   }
   for (const item of [...itemMap.values()].sort((a, b) => (a.id < b.id ? -1 : 1)))
     readSet.push({ kind: 'openItem', id: item.id, version: String(item.movements) });
@@ -490,6 +519,7 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
         entryId: tax.entryId,
         seq: Number(seq),
         taxNo: Number(tax.taxNo),
+        key: tax.key,
         direction: tax.direction,
         code: tax.code,
         baseBani: tax.baseBani,
@@ -497,8 +527,11 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
         deductibleBani: tax.deductibleBani,
         ledgerBani: tax.ledgerBani,
         taxPoint: date(tax.taxPoint),
+        exigibility: tax.exigibility ? date(tax.exigibility) : null,
         documentId: tax.documentId,
         partyId: tax.partyId,
+        originTaxEntry: tax.originTaxEntry,
+        attributes: JSON.parse(tax.attributes) as Record<string, string>,
       })),
       settlements: settlementRows.map(({ line }) => ({
         entryId: line.entryId,

@@ -25,6 +25,7 @@ import {
   evidence,
   fiscalYears,
   fxRates,
+  incomeSources,
   invitations,
   issuedNumbers,
   ledgerAccounts,
@@ -382,6 +383,54 @@ async function assetRecord(world: World, extra: Partial<typeof assets.$inferInse
   return { id, dispose };
 }
 
+/** A PFA's income source (its form recorded unless `form` is false), with a way to add versions. */
+async function sourceRecord(world: World, { form = true } = {}) {
+  const evidenceId = randomUUID();
+  const sourceId = randomUUID();
+  await world.db.write(async (tx) => {
+    await tx.insert(evidence).values({
+      id: evidenceId,
+      companyId: world.company,
+      hash: 'e'.repeat(64),
+      filename: 'certificat.pdf',
+      mediaType: 'application/pdf',
+      size: 1,
+      createdBy: world.owner,
+    });
+    if (form)
+      await tx.insert(profileFacts).values({
+        id: randomUUID(),
+        companyId: world.company,
+        axis: 'entity.form',
+        value: 'pfa',
+        effectiveFrom: '2026-01-01',
+        evidenceId,
+        createdBy: world.owner,
+      });
+  });
+  const version = (seq: number, extra: Partial<typeof incomeSources.$inferInsert> = {}) =>
+    world.db.write((tx) =>
+      tx.insert(incomeSources).values({
+        companyId: world.company,
+        sourceId,
+        seq,
+        effectiveFrom: '2026-01-01',
+        name: 'Servicii de programare',
+        caen: '6210',
+        place: 'Str. Exemplu 1, Cluj-Napoca',
+        county: 'CJ',
+        startedOn: '2026-01-01',
+        liberal: false,
+        method: 'sistem_real',
+        realBasis: 'required',
+        evidenceId,
+        createdBy: world.owner,
+        ...extra,
+      }),
+    );
+  return { version };
+}
+
 /** A Romanian supplier with ANAF's answer kept, and a way to record its status snapshots. */
 async function statusRecord(world: World) {
   const partyId = randomUUID();
@@ -589,6 +638,38 @@ const attacks: Attack[] = [
           createdBy: world.owner,
         }),
       ),
+  },
+  {
+    trigger: 'inv_income_source_guard',
+    code: 'income_source_sequence',
+    name: 'an income source version that skips a number',
+    run: async (world) => (await sourceRecord(world)).version(2),
+  },
+  {
+    trigger: 'inv_income_source_guard',
+    code: 'income_source_form',
+    name: 'an income source of a company not recorded as a PFA, II or IF',
+    run: async (world) => (await sourceRecord(world, { form: false })).version(1),
+  },
+  {
+    trigger: 'inv_income_source_guard',
+    code: 'income_source_method_date',
+    name: 'opting for the real system in the course of a year',
+    run: async (world) => {
+      const { version } = await sourceRecord(world);
+      await version(1, { method: 'norma', realBasis: null });
+      await version(2, { effectiveFrom: '2026-06-01', realBasis: 'option' });
+    },
+  },
+  {
+    trigger: 'inv_income_source_guard',
+    code: 'income_source_option_lock',
+    name: 'returning to a norm in the second year of the option for the real system',
+    run: async (world) => {
+      const { version } = await sourceRecord(world);
+      await version(1, { realBasis: 'option' });
+      await version(2, { effectiveFrom: '2027-01-01', method: 'norma', realBasis: null });
+    },
   },
   {
     trigger: 'inv_party_status_guard',
@@ -1863,6 +1944,7 @@ describe('append-only records', () => {
     await (await payrollRecords(world)).line();
     await (await assetRecord(world)).dispose(1, '2026-06-30');
     await (await statusRecord(world)).snapshot(1);
+    await (await sourceRecord(world)).version(1);
     const shareholder = randomUUID();
     await world.db.write(async (tx) => {
       await tx.insert(parties).values({

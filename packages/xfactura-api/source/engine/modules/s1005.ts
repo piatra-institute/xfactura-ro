@@ -26,6 +26,7 @@ import {
   type S1005LedgerEntry,
   type S1005LedgerRows,
 } from 'xfactura-core/ro/annual/s1005-accounts';
+import { booksSystemOf } from 'xfactura-core/ro/entity';
 import { counties } from 'xfactura-core/ro/geo';
 import type { LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
@@ -380,6 +381,16 @@ export function s1005Declaration(): DeclarationKind {
       const problems: DeclarationProblem[] = [];
       const { seller, inputs } = await inputsOf(tx, companyId, year);
       const fail = () => ({ xml: '', inputs, problems, summary: null });
+      // Single-entry books draw up no annual statements (OMFP nr. 170/2015 cap. II pct. 11).
+      const { loaded } = await loadState(tx, companyId, { profile: true });
+      if (booksSystemOf(loaded.profile, `${year}-12-31` as LocalDate) === 'single') {
+        problems.push({
+          code: 'SINGLE_ENTRY_EXCLUDED',
+          message:
+            'Persoanele care țin contabilitatea în partidă simplă nu întocmesc situații financiare anuale (OMFP nr. 170/2015 cap. II pct. 11).',
+        });
+        return fail();
+      }
       if (!seller)
         problems.push({
           code: 'SELLER_DETAILS',

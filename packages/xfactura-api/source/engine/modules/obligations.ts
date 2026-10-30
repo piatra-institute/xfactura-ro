@@ -1,6 +1,7 @@
 import { and, asc, eq, gte, inArray, lte } from 'drizzle-orm';
 import { z } from 'zod';
 import { profileAt, vatPeriodOf } from 'xfactura-core/kernel';
+import { booksSystemOf } from 'xfactura-core/ro/entity';
 import { obligationDue, type ObligationKind } from 'xfactura-core/ro/obligations';
 import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
 import type { LocalDate } from 'xfactura-core/time';
@@ -152,8 +153,8 @@ async function postingMonths(
  *   covered);
  * - D100 in each quarter's last month for microenterprises (`income_tax`) and in the months
  *   dividend tax was withheld; D205 for the years with dividend tax withheld;
- * - S1005 for each financial year (the company's size category is not checked: the engine
- *   prepares only the microentities' statements).
+ * - S1005 for each financial year kept in double entry (the company's size category is not
+ *   checked: the engine prepares only the microentities' statements).
  * A deadline the rule register does not source is `blocked`, never guessed.
  */
 export async function obligationsCalendar(
@@ -229,7 +230,10 @@ export async function obligationsCalendar(
         lte(fiscalYears.to, to),
       ),
     );
-  for (const year of years) add('S1005', year.to.slice(0, 4));
+  // Single-entry books draw up no annual statements (OMFP nr. 170/2015 cap. II pct. 11).
+  for (const year of years)
+    if (booksSystemOf(loaded.profile, year.to as LocalDate) !== 'single')
+      add('S1005', year.to.slice(0, 4));
 
   const filed = await standing(tx, companyId, [...new Set(due.map((item) => item.kind))]);
   return (

@@ -600,6 +600,96 @@ export const legalSources: readonly LegalSource[] = [
     ],
   },
   {
+    id: 'OMFP170/2015',
+    kind: 'act',
+    title:
+      'Ordinul ministrului finanțelor publice nr. 170/2015 pentru aprobarea Reglementărilor contabile privind contabilitatea în partidă simplă (textul inițial)',
+    issuer: 'Ministerul Finanțelor Publice',
+    publication: 'Monitorul Oficial nr. 139 din 24 februarie 2015',
+    urls: ['https://static.anaf.ro/static/10/Anaf/legislatie/OMFP_170_2015.pdf'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/legislatie/OMFP_170_2015.pdf',
+        sha256: '158d5ad1647f0fc613c0315bc09fd3a99494e189d717444f01b2d95f5eedfd37',
+        retrievedOn: '2026-10-30',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
+    id: 'OMFP3254/2017',
+    kind: 'act',
+    title:
+      'Ordinul ministrului finanțelor publice nr. 3.254/2017 privind Registrul de evidență fiscală pentru persoanele fizice, contribuabili potrivit titlului IV din Legea nr. 227/2015 privind Codul fiscal',
+    issuer: 'Ministerul Finanțelor Publice',
+    publication: 'Monitorul Oficial nr. 10 din 5 ianuarie 2018',
+    urls: ['https://static.anaf.ro/static/10/Anaf/legislatie/OMFP_3254_2017.pdf'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/legislatie/OMFP_3254_2017.pdf',
+        sha256: '4b241a874d513dce4559dfa326afc72ff355fa91306969463d78f937d3c3b0d2',
+        retrievedOn: '2026-10-30',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
+    id: 'L239/2025',
+    kind: 'act',
+    title:
+      'Legea nr. 239/2025 privind stabilirea unor măsuri de redresare și eficientizare a resurselor publice, precum și pentru modificarea și completarea unor acte normative',
+    issuer: 'Parlamentul României',
+    publication: null,
+    urls: ['https://static.anaf.ro/static/10/Anaf/legislatie/L_239_2025.pdf'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/legislatie/L_239_2025.pdf',
+        sha256: '376bcec34439ffc37f2e74a83d12f828eab1ba6471e772ec6ce12dc2981ccd08',
+        retrievedOn: '2026-10-30',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
+    id: 'OPANAF2736/2025',
+    kind: 'act',
+    title:
+      'Ordinul președintelui ANAF nr. 2.736/2025 pentru aprobarea modelului, conținutului, modalității de depunere și de gestionare a formularului 212 "Declarație unică privind impozitul pe venit și contribuțiile sociale datorate de persoanele fizice" (veniturile anului 2025)',
+    issuer: 'ANAF',
+    publication: 'Monitorul Oficial nr. 1207 bis din 29 decembrie 2025',
+    urls: ['https://static.anaf.ro/static/10/Anaf/legislatie/OPANAF_2736_2025.pdf'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/legislatie/OPANAF_2736_2025.pdf',
+        sha256: '6d1afc4fdd317662d8982421e5df745abaf7796300cf144670f424a68ccae3f0',
+        retrievedOn: '2026-10-30',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
+    id: 'OUG44/2008',
+    kind: 'act',
+    title:
+      'Ordonanța de urgență a Guvernului nr. 44/2008 privind desfășurarea activităților economice de către persoanele fizice autorizate, întreprinderile individuale și întreprinderile familiale (forma consolidată ONRC la 17.01.2017; modificările ulterioare nu sunt verificate)',
+    issuer: 'Guvernul României',
+    publication: 'Monitorul Oficial nr. 328 din 25 aprilie 2008',
+    urls: ['https://www.onrc.ro/documente/legislatie/15.11.2017/OUG%20NR.%2044%20-%202008.docx'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://www.onrc.ro/documente/legislatie/15.11.2017/OUG%20NR.%2044%20-%202008.docx',
+        sha256: '2ff04cbad6fd4aede526d8ee706398a4ec3257ad10dc9daa46c1fbae4af496e8',
+        retrievedOn: '2026-10-30',
+        mediaType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      },
+    ],
+  },
+  {
     id: 'OUG89/2025',
     kind: 'act',
     title: 'Ordonanța de urgență a Guvernului nr. 89/2025',
@@ -1013,6 +1103,287 @@ export const clauses: readonly Clause[] = [
       'Pentru salariații cu normă întreagă, la funcția de bază, cu salariul de bază egal cu salariul minim (și nediminuat de la intrarea în vigoare a ordonanței) și venitul brut fără tichete și indemnizația de hrană de cel mult 4.300 lei (01–06/2026), respectiv 4.600 lei (07–12/2026), nu se datorează impozit și contribuții pentru 300 lei, respectiv 200 lei pe lună, diminuați în funcție de perioada lucrată; salariul minim pentru contribuția minimă se diminuează cu aceeași sumă.',
   },
   {
+    id: 'ANAF/Cod-fiscal-consolidat:art.64(1)(a)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 64 alin. (1) lit. a)',
+    status: 'located',
+    summary:
+      'Cota impozitului pe venit este 10% pentru venitul impozabil din activități independente, pe fiecare sursă.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.66',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 66',
+    status: 'located',
+    summary:
+      'Sumele se rotunjesc la un leu: fracțiunile de până la 50 de bani inclusiv se neglijează, cele peste 50 de bani se majorează la leu.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.68(2)-(3)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 68 alin. (2) și (3)',
+    status: 'located',
+    summary:
+      'Venitul brut cuprinde sumele încasate și echivalentul în lei al veniturilor în natură, dobânzile din creanțe comerciale, câștigurile din transferul activelor afacerii, veniturile din anularea datoriilor; nu sunt venit brut aporturile, creditele și împrumuturile, despăgubirile, sponsorizările, mecenatul și donațiile primite.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.68(4)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 68 alin. (4)',
+    status: 'located',
+    summary:
+      'Cheltuielile se deduc dacă sunt efectuate în cadrul activității, justificate prin documente, plătite în anul fiscal, cheltuieli cu salariile potrivit cap. III, cu respectarea regulilor de amortizare din titlul II.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.68(5)-(6)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 68 alin. (5) și (6)',
+    status: 'located',
+    summary:
+      'Cheltuieli deductibile limitat: burse private 5% și protocol 2% din baza de calcul (venitul brut minus cheltuielile deductibile, altele decât acestea), cheltuieli sociale 5% din cheltuielile cu salariile, pensii facultative, ocupaționale și PEPP, asigurări de sănătate și ETF câte 400 euro anual pe persoană, cotizații la asociații profesionale 4.000 euro anual, contribuții profesionale obligatorii 5% din venitul brut, abonamente sportive 100 euro anual pe persoană; contribuțiile datorate ca angajator, fără o limită numerică.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.68(7)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 68 alin. (7)',
+    status: 'located',
+    summary:
+      'Nu sunt deductibile: uzul personal, impozitul pe venit, donațiile, amenzile și majorările datorate autorităților, ratele creditelor, achizițiile de bunuri amortizabile din Registrul-inventar, sponsorizările și 50% din cheltuielile cu vehiculele de cel mult 3.500 kg și 9 scaune neutilizate exclusiv în activitate (fără amortizare; excepțiile 1–5 integral).',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.69(3),(9)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 69 alin. (3) și (9)',
+    status: 'located',
+    summary:
+      'Norma de venit nu poate fi mai mică decât 12 salarii minime brute pe țară în vigoare la 1 ianuarie a anului de realizare a venitului; venitul brut de peste 25.000 euro (cursul mediu anual BNR) în anul anterior obligă la sistemul real din anul următor.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.69^1',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 69^1',
+    status: 'located',
+    summary:
+      'Opțiunea pentru sistemul real se exercită prin declarația unică până la termenul de la art. 122 alin. (3), este obligatorie 2 ani fiscali consecutivi (anul declarației de opțiune și cel următor) și se reînnoiește tacit dacă nu se solicită revenirea.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.69^2',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 69^2 alin. (1)',
+    status: 'located',
+    summary:
+      'Impozitul anual pentru venitul din norme de venit este 10% din norma anuală de venit ajustată.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.118(2)-(2^4)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 118 alin. (2), (2^2), (2^3) și (2^4)',
+    status: 'located',
+    summary:
+      'Venitul net anual impozabil: suma veniturilor nete recalculate (după pierderile reportate), minus CAS și CASS deductibile, fiecare proporțional cu ponderea venitului net din sistemul real în totalul cumulat potrivit art. 148 alin. (3), respectiv art. 170 alin. (1), fără diferența de CASS de la art. 174 alin. (6), cel mult venitul net anual recalculat.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.118(4)-(5)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 118 alin. (4) și (5)',
+    status: 'located',
+    summary:
+      'Pierderea fiscală pe fiecare sursă se reportează și se compensează în limita a 70% din veniturile nete anuale ale aceleiași surse în următorii 5 ani fiscali consecutivi, cronologic; dreptul este personal, iar pierderea necompensată după 5 ani este definitivă.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.135^1(3)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 135^1 alin. (3)',
+    status: 'located',
+    summary:
+      'Pentru plafoanele și bazele anuale ale CAS și CASS (art. 148, 151, 170, 174) se ia salariul minim brut pe țară în vigoare la 1 ianuarie a anului de realizare a venitului, chiar dacă în cursul anului se modifică.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.148(1)-(4)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 148 alin. (1)–(4)',
+    status: 'located',
+    summary:
+      'CAS se datorează când venitul cumulat din activități independente și drepturi de proprietate intelectuală este cel puțin 12 salarii minime, la un venit ales de cel puțin 12 salarii minime (venituri între 12 și 24 de salarii) sau 24 de salarii minime (venituri de cel puțin 24); sub plafon se poate opta pentru plată.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.150(1)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 150 alin. (1)',
+    status: 'located',
+    summary:
+      'Persoanele asigurate în sisteme proprii de asigurări sociale și pensionarii nu datorează CAS pentru veniturile din activități independente.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.170(1)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 170 alin. (1)',
+    status: 'located',
+    summary:
+      'CASS pentru veniturile din activități independente se datorează la o bază anuală egală cu suma veniturilor nete sau a normelor de venit, de cel mult 72 de salarii minime brute pe țară; pierderile fiscale nu se iau în considerare.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.174(1)-(8)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 174 alin. (1), (2), (6), (7) și (8)',
+    status: 'located',
+    summary:
+      'CASS este 10% din baza art. 170 alin. (1); nu se datorează pentru pierdere sau venit net zero; sub 6 salarii minime se datorează până la 6 salarii, cu excepția celor cu salarii de cel puțin 6 salarii minime, alte venituri pentru care datorează CASS la cel puțin 6 salarii, pensii sau care în anul precedent au fost exceptați ori au optat.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:norme.art.68.pct.7(1)-(2)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'normele metodologice, titlul IV, pct. 7 alin. (1)–(2)',
+    status: 'located',
+    summary:
+      'Venitul brut include încasările în avans pentru alte exerciții, dobânzile bancare pentru disponibilitățile afacerii, facturile încasate după încetare și bunurile trecute în patrimoniul personal, la prețul pieței.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:norme.art.68.pct.7(4)-(5)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'normele metodologice, titlul IV, pct. 7 alin. (4) și (5)',
+    status: 'located',
+    summary:
+      'Se deduc cheltuielile din evidența contabilă cu respectarea art. 68 alin. (4)–(7): materii prime, mărfuri, servicii, chirii, dobânzi și comisioane bancare, asigurări, utilități, salarii, impozite și taxe altele decât impozitul pe venit, amortizarea, valoarea neamortizată a bunurilor înstrăinate în limita venitului, plățile în avans pentru perioade următoare.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:norme.art.68.pct.7(6)-(7)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'normele metodologice, titlul IV, pct. 7 alin. (6) și (7)',
+    status: 'located',
+    summary:
+      'Limitele în euro se transformă la cursul mediu BNR al anului plății; vehiculele se consideră utilizate exclusiv în activitate după regulile pct. 68 din normele art. 298, dovedit prin foaia de parcurs; limitarea la 50% cuprinde impozitele locale, RCA, ITP, rovinieta, nu și amortizarea.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:norme.art.69.pct.8(6)-(14)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'normele metodologice, titlul IV, pct. 8 alin. (6), (7), (10) și (14)',
+    status: 'located',
+    summary:
+      'Norma de venit se ajustează cu coeficienții de corecție publicați, luându-se coeficientul cel mai mare de majorare și cel mai mare de reducere; pentru o parte de an se raportează la 365 de zile și se înmulțește cu zilele de activitate. Exemplu: normă 23.000 lei, majorare 25%, reducere 60% din norma majorată: venit net 11.500 lei, impozit 1.150 lei.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:norme.art.118.pct.35(9)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'normele metodologice, titlul IV, pct. 35 alin. (9), exemplul 1',
+    status: 'located',
+    summary:
+      'Exemplu (2018): pierdere reportată 45.000 lei compensată integral cu venitul net de 60.000 lei al aceleiași surse, plus 30.000 lei din altă sursă, minus CAS de 6.250 lei: venit net impozabil 38.750 lei, impozit 3.875 lei; exemplul precedă limita de 70% și deducerea proporțională a CAS.',
+  },
+  {
+    id: 'L239/2025:art.XII.pct.6',
+    source: 'L239/2025',
+    locator: 'art. XII pct. 6 (art. 69 alin. (3) din Codul fiscal)',
+    status: 'located',
+    summary:
+      'Norma de venit nu poate fi mai mică decât 12 salarii minime brute în vigoare la 1 ianuarie a anului de realizare a venitului.',
+  },
+  {
+    id: 'L239/2025:art.XII.pct.18',
+    source: 'L239/2025',
+    locator: 'art. XII pct. 18 (art. 148 alin. (3) din Codul fiscal)',
+    status: 'located',
+    summary:
+      'Încadrarea în plafoanele CAS de 12 și 24 de salarii minime cumulează veniturile nete și normele din activități independente (art. 68, 68^3, 69), veniturile din contracte de activitate sportivă și cele din drepturi de proprietate intelectuală.',
+  },
+  {
+    id: 'L239/2025:art.XII.pct.19',
+    source: 'L239/2025',
+    locator: 'art. XII pct. 19 (art. 170 alin. (1) din Codul fiscal)',
+    status: 'located',
+    summary:
+      'Baza anuală a CASS pentru veniturile din activități independente nu poate depăși 72 de salarii minime brute pe țară; pierderile fiscale nu se iau în considerare.',
+  },
+  {
+    id: 'L239/2025:art.XIII',
+    source: 'L239/2025',
+    locator: 'art. XIII alin. (1) și (2) lit. b)',
+    status: 'located',
+    summary:
+      'Prevederile art. XII pct. 3–11, 16 și 18–20 se aplică începând cu veniturile anului 2026.',
+  },
+  {
+    id: 'OPANAF2736/2025:instr.pct.47.1',
+    source: 'OPANAF2736/2025',
+    locator: 'anexa nr. 2 (instrucțiuni), cap. I, secțiunea a 3-a, subsecțiunea a 2-a, pct. 47.1',
+    status: 'located',
+    summary:
+      'Pentru veniturile anului 2025, baza anuală a CASS pentru veniturile din activități independente nu poate depăși 60 de salarii minime brute pe țară.',
+  },
+  {
+    id: 'OPANAF2736/2025:instr.cap.I.rd.6',
+    source: 'OPANAF2736/2025',
+    locator:
+      'anexa nr. 2 (instrucțiuni), cap. I, secțiunea 1, rd. 6 „Pierdere fiscală compensată în anul de raportare”',
+    status: 'located',
+    summary:
+      'Pierderea compensată în an este cel mult 70% din venitul net anual al sursei; pierderile anilor dinaintea lui 2024 rămase la 31.12.2023 se compensează pe perioada rămasă din cei 7 ani, tot în limita a 70%, cumulate cu cele de după 2024.',
+  },
+  {
+    id: 'OMFP170/2015:art.2-5',
+    source: 'OMFP170/2015',
+    locator: 'art. 2–5',
+    status: 'located',
+    summary:
+      'Persoanele fizice impuse în sistem real țin contabilitatea în partidă simplă sau, la opțiune, în partidă dublă, dacă actul de înființare sau legi speciale nu prevăd expres partida simplă; trecerea la partida dublă se face de la începutul exercițiului următor deciziei (sau de la înființare), cu soldurile inițiale preluate prin contul 455.',
+  },
+  {
+    id: 'OMFP170/2015:cap.II.pct.8-11',
+    source: 'OMFP170/2015',
+    locator: 'anexa, cap. II pct. 8–11',
+    status: 'located',
+    summary:
+      'Inventarierea se face la începutul activității, cel puțin o dată pe an și la încetarea activității; elementele patrimoniale sunt imobilizările, stocurile și imobilizările necorporale; persoanele care țin partida simplă nu întocmesc situații financiare anuale.',
+  },
+  {
+    id: 'OMFP170/2015:cap.III.pct.18',
+    source: 'OMFP170/2015',
+    locator: 'anexa, cap. III pct. 18',
+    status: 'located',
+    summary:
+      'Operațiunile în valută se înregistrează în lei la cursul BNR din ultima zi bancară anterioară operațiunii (încasare, plată, emitere de documente); în Registrul-jurnal de încasări și plăți, în lei, cu valoarea în valută în coloana de explicații.',
+  },
+  {
+    id: 'OMFP170/2015:cap.V.14-1-1',
+    source: 'OMFP170/2015',
+    locator: 'anexa, cap. V secțiunea a 2-a, Registrul-jurnal de încasări și plăți (cod 14-1-1/b)',
+    status: 'located',
+    summary:
+      'Un rând pentru fiecare încasare sau plată, pe document justificativ, în numerar și prin bancă, la valoarea din document inclusiv TVA, cu data, documentul, explicații privind natura operațiunii; totalizare lunară; ordine cronologică; încasările și plățile cuprind și aporturile, creditele, despăgubirile, donațiile, restituirile.',
+  },
+  {
+    id: 'OMFP170/2015:cap.V.14-1-2',
+    source: 'OMFP170/2015',
+    locator: 'anexa, cap. V secțiunea a 2-a, Registrul-inventar (cod 14-1-2/b)',
+    status: 'located',
+    summary:
+      'Se completează la începutul activității, la sfârșitul exercițiului și la încetare, element cu element sau pe grupe, la valoarea de intrare a elementelor patrimoniale și la valoarea rămasă de încasat sau de plată a creanțelor și datoriilor; la încetare, la valoarea inventariată faptic.',
+  },
+  {
+    id: 'OMFP3254/2017:art.1,3,8',
+    source: 'OMFP3254/2017',
+    locator: 'art. 1, 3 și 8',
+    status: 'located',
+    summary:
+      'Registrul de evidență fiscală îl completează cei impuși în sistem real (cei cu norme de venit numai partea de venituri), anual, cu totalurile, pe fiecare sursă din fiecare categorie de venit, înainte de depunerea declarației.',
+  },
+  {
+    id: 'OMFP3254/2017:art.4-5',
+    source: 'OMFP3254/2017',
+    locator: 'art. 4 și 5',
+    status: 'located',
+    summary:
+      'Venitul brut se înregistrează pe natura activității, fără TVA colectată; cheltuielile deductibile și deductibile limitat se înregistrează pe natura lor, fără cele peste limite, cele nedeductibile, contribuțiile sociale proprii și TVA dedusă.',
+  },
+  {
+    id: 'OUG44/2008:art.15',
+    source: 'OUG44/2008',
+    locator: 'art. 15 (modificat prin Legea nr. 182/2016)',
+    status: 'located',
+    summary:
+      'Persoana fizică autorizată, titularul întreprinderii individuale și reprezentantul întreprinderii familiale țin contabilitatea în partidă simplă.',
+  },
+  {
     id: 'L227/2015:art.291(1)(a)',
     source: 'L227/2015',
     locator: 'art. 291 alin. (1) lit. a)',
@@ -1048,6 +1419,127 @@ export const clauses: readonly Clause[] = [
     status: 'located',
     summary:
       'Cine cumpără bunuri sau servicii de la o persoană impozabilă stabilită în România după înscrierea ei ca inactivă în Registrul contribuabililor inactivi/reactivați nu deduce cheltuielile și TVA aferente; excepții: bunurile achiziționate în procedura de executare silită și achizițiile de la persoane impozabile aflate în procedura falimentului (Legea nr. 85/2014).',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.282(3)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 282 alin. (3) lit. a) și b)',
+    status: 'located',
+    summary:
+      'Pentru persoanele impozabile care optează pentru sistemul TVA la încasare, exigibilitatea intervine la data încasării contravalorii integrale sau parțiale a livrării ori prestării. Plafonul sistemului este de 5.000.000 lei în perioada 1 martie – 31 decembrie 2026 și de 5.500.000 lei începând cu 1 ianuarie 2027.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.282(4)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 282 alin. (4) lit. a)–d)',
+    status: 'located',
+    summary:
+      'Nu sunt eligibile pentru sistemul TVA la încasare: membrii unui grup fiscal unic, persoanele nestabilite în România, cele care au depășit plafonul în anul precedent și cele înregistrate în cursul anului care au depășit plafonul în anul precedent sau în anul curent.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.282(5)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 282 alin. (5)',
+    status: 'located',
+    summary:
+      'Cine optează pentru sistemul TVA la încasare îl aplică cel puțin până la sfârșitul anului calendaristic; dacă cifra de afaceri depășește plafonul în cursul anului, îl aplică până la sfârșitul perioadei fiscale următoare celei în care plafonul a fost depășit. Renunțarea se notifică între 1 și 20 ale lunii, nu în primul an.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.282(6)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 282 alin. (6) lit. a)–d)',
+    status: 'located',
+    summary:
+      'Sistemul TVA la încasare se aplică doar operațiunilor cu locul livrării sau prestării în România și nu se aplică: taxării inverse (art. 307 alin. (2)–(6), art. 331), operațiunilor scutite, regimurilor speciale de la art. 311–313 și livrărilor ori prestărilor către un beneficiar afiliat (art. 7 pct. 26); acestea urmează regulile generale de exigibilitate.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.282(7)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 282 alin. (7) lit. a) și b)',
+    status: 'located',
+    summary:
+      'Facturile pentru contravaloarea totală emise înainte de intrarea în sistem, cu faptul generator după intrare, nu intră în sistem; cele emise înainte de ieșirea din sistem, cu faptul generator după ieșire, rămân în sistem. Pentru facturile parțiale se aplică sistemul diferențelor facturate după intrare, respectiv taxei facturate înainte de ieșire.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.282(8)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 282 alin. (8)',
+    status: 'located',
+    summary:
+      'Pentru taxa devenită exigibilă la încasare, fiecare încasare totală sau parțială se consideră că include și taxa aferentă.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.282(10)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 282 alin. (10) lit. a)–e)',
+    status: 'located',
+    summary:
+      'La evenimentele de la art. 287 pentru operațiuni în sistemul TVA la încasare, regimul, cotele și cursul sunt ale operațiunii de bază. La anulare totală, exigibilitatea intervine la data anulării pentru contravaloarea a cărei taxă devenise exigibilă, iar taxa neexigibilă se anulează; la anulare parțială se reduce întâi taxa neexigibilă, iar diferența care o depășește devine exigibilă la data anulării. Refuzurile (lit. b) și ambalajele returnate (lit. e) urmează lit. a), reducerile de preț (lit. c) urmează lit. a) pct. 2, iar la faliment (lit. d) se anulează taxa neexigibilă.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.297(2)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 297 alin. (2)',
+    status: 'located',
+    summary:
+      'Dreptul de deducere a TVA pentru achizițiile de la o persoană impozabilă care aplică sistemul TVA la încasare este amânat până la data la care taxa a fost plătită furnizorului.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.297(3)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 297 alin. (3)',
+    status: 'located',
+    summary:
+      'Persoana impozabilă care aplică sistemul TVA la încasare își amână dreptul de deducere pentru achizițiile ei până la plata taxei către furnizor, chiar dacă o parte din operațiunile ei sunt excluse din sistem; nu și pentru achizițiile intracomunitare, importuri și achizițiile cu taxare inversă (art. 307 alin. (2)–(6), art. 331).',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.319(20)(p)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 319 alin. (20) lit. p)',
+    status: 'located',
+    summary:
+      'Când exigibilitatea TVA intervine la data încasării contravalorii integrale sau parțiale, factura cuprinde mențiunea „TVA la încasare”.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.324(14)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 324 alin. (14)',
+    status: 'located',
+    summary:
+      'Persoana care aplică sistemul TVA la încasare și depășește plafonul în cursul anului notifică organul fiscal până la data de 20 a lunii următoare perioadei fiscale în care l-a depășit; altfel este radiată din oficiu din registru.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:norme.art.282.pct.26',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator:
+      'normele metodologice, titlul VII, pct. 26 alin. (2), (3), (7), (14) și (16) (aplicarea art. 282 alin. (3)–(8))',
+    status: 'located',
+    summary:
+      'Sistemul se aplică tuturor operațiunilor, cu excepțiile de la art. 282 alin. (6), iar mențiunea „TVA la încasare” lipsește doar pe facturile acestora; încasarea înseamnă orice contrapartidă (plată, compensare, cesiune de creanțe, instrumente de plată); beneficiarul afiliat se apreciază la data emiterii facturii; la încasarea parțială a unei facturi cu mai multe cote, persoana impozabilă poate alege bunurile ori serviciile considerate încasate.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:norme.art.287.pct.32',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'normele metodologice, titlul VII, pct. 32 alin. (2), (5) și (6)',
+    status: 'located',
+    summary:
+      'Facturile de corecție ale celor care aplică sistemul TVA la încasare se emit cu minus, indiferent dacă taxa este sau nu exigibilă, după art. 282 alin. (10); beneficiarul aplică aceleași reguli: la o reducere de preț diminuează TVA neexigibilă (exemplul: 667 lei rămași, reduși cu 100 lei).',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:norme.art.297.pct.67',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'normele metodologice, titlul VII, pct. 67 alin. (6), (8) și (9)',
+    status: 'located',
+    summary:
+      'Beneficiarul amână deducerea dacă furnizorul este înscris în registrul TVA la încasare la data facturii, chiar fără mențiune; se amână doar taxa care ar fi deductibilă, cea nedeductibilă nu se reflectă ca neexigibilă; taxa deductibilă aferentă unei plăți parțiale se determină prin procedeul sutei mărite (1.300 x 20 / 120).',
+  },
+  {
+    id: 'ANAF/ghid-coduri-facturi-2.9:BT-22',
+    source: 'ANAF/ghid-coduri-facturi-2.9',
+    locator: 'capitolul 5, „Recomandări”, BT-22 – Comentariu în factură',
+    status: 'located',
+    summary:
+      'Conform RO_CIUS, mențiunile obligatorii fără alt loc în factură, ca „TVA la încasare”, se înscriu în comentariul facturii (BT-22), separate prin „#”.',
   },
   {
     id: 'ANAF/Cod-fiscal-consolidat:art.323(1)',

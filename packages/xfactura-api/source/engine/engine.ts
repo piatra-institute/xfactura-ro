@@ -29,6 +29,7 @@ import {
 import { microDefinitions, microVersions } from 'xfactura-core/ro/micro';
 import { dividendDefinitions, dividendVersions } from 'xfactura-core/ro/dividends';
 import { etvaDefinitions, etvaVersions } from 'xfactura-core/ro/etva';
+import { pitDefinitions, pitVersions } from 'xfactura-core/ro/pit';
 import { dividendDistribution, dividendWithholding } from 'xfactura-core/ro/treatments/dividends';
 import { ParameterRegister } from 'xfactura-core/rules';
 import { clause, sourceOf } from 'xfactura-core/ro/sources';
@@ -50,10 +51,12 @@ import {
 import { PostingPolicies, policyInput, policyView } from './kernel/policies';
 import { Proposals } from './kernel/proposals';
 import {
+  cashJournalInput,
   generalLedgerInput,
   inventoryInput,
   journalInput,
   Reports,
+  singleInventoryInput,
   trialBalanceInput,
   trialBalanceView,
 } from './kernel/reports';
@@ -91,6 +94,7 @@ import {
 } from './modules/spv';
 import type { EFacturaPort } from './adapters/efactura';
 import type { DeclarationValidator } from './adapters/declaration-validator';
+import { cashVatChecks } from './modules/cash-vat';
 import { d300Declaration } from './modules/d300';
 import { d390Declaration } from './modules/d390';
 import { d394Declaration } from './modules/d394';
@@ -120,6 +124,13 @@ import {
   termsInput,
 } from './modules/payroll';
 import { assetInput, Assets, disposalInput } from './modules/assets';
+import {
+  fiscalRegister,
+  fiscalRegisterInput,
+  IncomeSources,
+  incomeSourceInput,
+  pitChecks,
+} from './modules/pit';
 import { Etva, etvaInput } from './modules/etva';
 import { AnafConnections, connectFinishInput } from './modules/anaf-connection';
 import { AnafEFactura, type AnafClient, type AnafEnvironment } from './adapters/anaf-efactura';
@@ -214,6 +225,7 @@ export const defaultRegister = () =>
       ...microDefinitions,
       ...dividendDefinitions,
       ...etvaDefinitions,
+      ...pitDefinitions,
     ],
     [
       ...vatVersions,
@@ -226,6 +238,7 @@ export const defaultRegister = () =>
       ...microVersions,
       ...dividendVersions,
       ...etvaVersions,
+      ...pitVersions,
     ],
   );
 
@@ -260,6 +273,7 @@ export class Engine {
   readonly etva: Etva;
   readonly anaf: AnafConnections | null;
   readonly partyStatuses: PartyStatuses;
+  readonly incomeSources: IncomeSources;
 
   constructor(
     readonly db: Database,
@@ -322,11 +336,15 @@ export class Engine {
         ...spvChecks,
         ...deferralChecks,
         ...partyStatusChecks,
+        ...cashVatChecks((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
+        ...pitChecks((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
         ...(options.closeChecks ?? []),
       ]),
     );
     this.actions.add(reopenHandler);
-    this.reports = new Reports(this.commands);
+    this.reports = new Reports(this.commands, (tx, companyId) =>
+      this.proposals.ruleContext(tx, companyId),
+    );
     this.companies = new Companies(this.commands, secret);
     this.configuration = new Configuration(this.commands);
     this.agents = new Agents(this.commands, secret, () =>
@@ -393,6 +411,7 @@ export class Engine {
     this.actions.add(this.declarations.authorizeHandler());
     this.actions.add(this.declarations.reopenHandler());
     this.assets = new Assets(this.commands);
+    this.incomeSources = new IncomeSources(this.commands);
     this.etva = new Etva(this.commands, (tx, companyId) =>
       this.proposals.ruleContext(tx, companyId),
     );
@@ -643,6 +662,73 @@ export class Engine {
         input: inventoryInput,
         output: z.array(z.unknown()),
         run: (actor, _, input) => this.reports.inventoryRegister(actor, input),
+      }),
+      define({
+        id: 'pfa.sources.record',
+        description:
+          'Înregistrează o sursă de venit a unei PFA, II sau IF, ori o versiune nouă a ei: activitatea (CAEN), locul, datele și modul de stabilire a venitului net (sistem real sau normă), cu documentul justificativ.',
+        permission: 'review',
+        agent: false,
+        effect: 'authorize',
+        approval: 'human',
+        input: incomeSourceInput,
+        output: z.object({ sourceId: z.string(), seq: z.number() }),
+        run: (actor, key, input) => this.incomeSources.record(actor, key, input),
+      }),
+      define({
+        id: 'pfa.sources.list',
+        description: 'Sursele de venit ale unei PFA, II sau IF, cu toate versiunile lor.',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: z.object({}).strict(),
+        output: z.array(z.unknown()),
+        run: (actor) => this.incomeSources.list(actor),
+      }),
+      define({
+        id: 'pfa.journal',
+        description:
+          'Registrul-jurnal de încasări și plăți (14-1-1/b) al contabilității în partidă simplă: încasările și plățile anului, în numerar și prin bancă, cu documentul, natura și sumele cu TVA, totalurile lunare și soldurile conturilor de trezorerie.',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: cashJournalInput,
+        output: z.unknown(),
+        run: (actor, _, input) => this.reports.cashJournal(actor, input),
+      }),
+      define({
+        id: 'pfa.inventory',
+        description:
+          'Registrul-inventar (14-1-2/b) al contabilității în partidă simplă, la începutul activității, la sfârșitul anului sau la încetare: imobilizările la valoarea de intrare, stocurile, creanțele și datoriile pe parteneri, disponibilitățile.',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: singleInventoryInput,
+        output: z.unknown(),
+        run: (actor, _, input) => this.reports.singleEntryInventory(actor, input),
+      }),
+      define({
+        id: 'pfa.fiscalRegister',
+        description:
+          'Registrul de evidență fiscală al anului (OMFP nr. 3.254/2017) și calculul impozitului pe venit, CAS și CASS ale titularului: venitul brut, cheltuielile deductibile în limitele art. 68, venitul net, pierderile reportate, venitul impozabil.',
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: fiscalRegisterInput,
+        output: z.unknown(),
+        run: (actor, _, input) =>
+          this.commands.read(actor, 'pfa.fiscalRegister', async (tx) =>
+            fiscalRegister(
+              tx,
+              actor.companyId,
+              input,
+              await this.proposals.ruleContext(tx, actor.companyId),
+            ),
+          ),
       }),
       define({
         id: 'policies.create',

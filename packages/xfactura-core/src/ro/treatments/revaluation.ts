@@ -43,6 +43,7 @@ export const revaluation: Treatment<RevaluationInput> = {
   plan: (input) => ({
     openItems: [{ foreign: true, openOnly: true }],
     foreignBalances: { at: input.date },
+    profile: true,
   }),
   followUp(input, loaded) {
     const currencies = new Set([

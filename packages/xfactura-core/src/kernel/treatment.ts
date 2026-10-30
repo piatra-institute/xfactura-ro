@@ -125,6 +125,9 @@ export interface OpenItemQuery {
   schedules?: boolean;
   /** Only items held in a currency other than RON. */
   foreign?: boolean;
+  /** With the ids of the posted entries whose lines touch each item (`history`), to read them
+   * with `entries` in a follow-up. */
+  history?: boolean;
 }
 
 /** One recorded read. `version` identifies the state read: for an open item, its number of
@@ -166,8 +169,13 @@ export interface DocumentRecord {
 export interface OpenItemState extends OpenItemInfo {
   documentId: string | null;
   dueDate: LocalDate | null;
+  /** The posted entry that created the item. */
+  originEntryId: string;
   /** Number of posted lines; the item's version in the read-set. */
   movements: number;
+  /** On request (`history`): the posted entries with lines on the item, in posting order. Each
+   * adds a line, so the item's version covers the list. */
+  history?: readonly string[];
   /** The item's schedule, loaded on request: its method and rows, in due order. Rows are written
    * with the entry that creates them and never change, so the item's version covers them. */
   schedule?: { method: string; rows: readonly ScheduleRow[] };
@@ -241,6 +249,7 @@ export interface TaxLedgerEntry {
   entryId: string;
   seq: number;
   taxNo: number;
+  key: string;
   direction: 'output' | 'input';
   code: string;
   baseBani: bigint;
@@ -248,8 +257,13 @@ export interface TaxLedgerEntry {
   deductibleBani: bigint;
   ledgerBani: bigint;
   taxPoint: LocalDate;
+  /** Null while the tax is not chargeable (deductible): the period lists it, but its amounts
+   * are not yet the period's to declare or settle (VAT on collection). */
+  exigibility: LocalDate | null;
   documentId: string | null;
   partyId: string | null;
+  originTaxEntry: string | null;
+  attributes: Readonly<Record<string, string>>;
 }
 
 /** A posted line that settled (cleared) a tax period, signed as booked. */

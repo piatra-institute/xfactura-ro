@@ -23,7 +23,7 @@ import {
   type D406Line,
   type D406Transaction,
 } from '../src/ro/saft/d406';
-import { d406VatCodes, d406VatTaxCode } from '../src/ro/saft/tax-codes';
+import { d406CashVatReleaseCode, d406VatCodes, d406VatTaxCode } from '../src/ro/saft/tax-codes';
 
 const customer = d406PartyId({ kind: 'ro', cui: '14399840' });
 const supplier = d406PartyId({ kind: 'ro', cui: '31552803' });
@@ -906,9 +906,35 @@ describe('D406 VAT codes of the engine', () => {
     }
     expect(
       new Set(
-        d406VatCodes.map((row) => `${row.direction}|${row.code}|${row.rate}|${row.deduction}`),
+        d406VatCodes.map(
+          (row) => `${row.direction}|${row.code}|${row.rate}|${row.deduction}|${row.cashVat}`,
+        ),
       ).size,
     ).toBe(d406VatCodes.length);
+  });
+
+  test('map VAT on collection: the supplier applying it, and the release of 4428', () => {
+    expect(d406VatTaxCode({ direction: 'output', code: 'S-21', cashVat: true })).toBe('310350');
+    expect(d406VatTaxCode({ direction: 'output', code: 'S-11', cashVat: true })).toBe('310354');
+    expect(
+      d406VatTaxCode({ direction: 'input', code: 'S-21', deduction: 'full', cashVat: true }),
+    ).toBe('301305');
+    expect(
+      d406VatTaxCode({ direction: 'input', code: 'S-21', deduction: 'half', cashVat: true }),
+    ).toBe('341306');
+    expect(
+      d406VatTaxCode({ direction: 'input', code: 'S-11', deduction: 'none', cashVat: true }),
+    ).toBe('351306');
+    // 11% deducted by half has no active code for VAT on collection (341305 is inactive).
+    expect(
+      d406VatTaxCode({ direction: 'input', code: 'S-11', deduction: 'half', cashVat: true }),
+    ).toBeUndefined();
+    expect(d406CashVatReleaseCode('S-21')).toBe('380106');
+    expect(d406CashVatReleaseCode('S-11')).toBe('380107');
+    expect(vatTaxCodes[d406CashVatReleaseCode('S-21')!]!.description).toBe(
+      'TVA neexigibilă 21%(*)',
+    );
+    expect(d406CashVatReleaseCode('O')).toBeUndefined();
   });
 
   test('map supplies, acquisitions and reverse charges, and leave the rest unmatched', () => {

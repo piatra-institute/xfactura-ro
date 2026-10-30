@@ -373,6 +373,30 @@ describe('D394 XML', () => {
     expect(attribute(legacy, 'tvaDedAI24', 'informatii')).toBe('5');
   });
 
+  test('writes VAT on collection: sistemTVA 1, tvaCol and tvaDed at every rate', () => {
+    const xml = writeD394(
+      model({
+        cashVatDeductible: { '21': 42 },
+        vatOnCollection: { collected: { '21': 87, '11': 5 }, deductible: { '21': 21 } },
+      }),
+    );
+    expect(attribute(xml, 'sistemTVA')).toBe('1');
+    expect(attribute(xml, 'tvaCol21', 'informatii')).toBe('87');
+    expect(attribute(xml, 'tvaCol11', 'informatii')).toBe('5');
+    expect(attribute(xml, 'tvaCol24', 'informatii')).toBe('0');
+    expect(attribute(xml, 'tvaDed21', 'informatii')).toBe('21');
+    expect(attribute(xml, 'tvaDed24', 'informatii')).toBe('0');
+    expect(attribute(xml, 'tvaDedAI21', 'informatii')).toBe('42');
+    expect(attribute(xml, 'tvaDedAI24', 'informatii')).toBeUndefined();
+    const normal = writeD394(model());
+    expect(attribute(normal, 'sistemTVA')).toBe('0');
+    expect(attribute(normal, 'tvaCol21', 'informatii')).toBeUndefined();
+    expect(attribute(normal, 'tvaDed21', 'informatii')).toBeUndefined();
+    expect(() =>
+      calculateD394(model({ vatOnCollection: { collected: { '21': 0.5 }, deductible: {} } })),
+    ).toThrow('TVA colectată');
+  });
+
   test('writes listed invoices, with amounts only for self-invoices', () => {
     const xml = writeD394(
       model({

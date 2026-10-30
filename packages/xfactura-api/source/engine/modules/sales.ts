@@ -14,6 +14,7 @@ import {
   type Party,
 } from 'xfactura-core/einvoice';
 import { accountCodePattern, profileAt } from 'xfactura-core/kernel';
+import { cashVatMention, mentionsCashVat } from 'xfactura-core/ro/cash-vat';
 import { invoiceKinds } from 'xfactura-core/ro/treatments/invoices';
 import { RuleGapError } from 'xfactura-core/rules';
 import type { LocalDate } from 'xfactura-core/time';
@@ -85,6 +86,9 @@ export const issueInput = invoiceFieldsSchema
     /** Why lines at the reduced rate qualify for it: the supply of Codul fiscal art. 291 alin. (2)
      * they are, kept with the issue. */
     reducedRateBasis: z.string().trim().min(10).max(300).optional(),
+    /** The buyer is affiliated with the company (Codul fiscal art. 7 pct. 26): a company applying
+     * VAT on collection invoices it under the general rules (art. 282 alin. (6) lit. d)). */
+    affiliated: z.boolean().optional(),
   })
   .strict();
 export type IssueInput = z.infer<typeof issueInput>;
@@ -396,7 +400,11 @@ export class Sales {
               originalDocumentId: input.precedingDocumentIds[0],
               account: issued.account,
             }
-          : { documentId: issued.documentId, account: issued.account },
+          : {
+              documentId: issued.documentId,
+              account: issued.account,
+              ...(input.affiliated ? { affiliated: true } : {}),
+            },
       );
       return { proposalId: proposal.id, error: null };
     } catch (error) {
@@ -502,6 +510,24 @@ export class Sales {
         'Compania nu este plătitoare de TVA, dar datele ei de facturare au cod de TVA.',
       );
     problems.push(...(await this.rates(tx, companyId, input, taxPoint, status)));
+    // A company applying VAT on collection writes the mention on its invoices (Codul fiscal art.
+    // 319 alin. (20) lit. p)), in BT-22 as RO_CIUS asks, except to an affiliated buyer.
+    const cashVat =
+      status === 'normal_vat' &&
+      profileAt(loaded, 'vat.cash', [input.issueDate, taxPoint].sort()[0]! as LocalDate) === 'yes';
+    const mentioned = input.notes.some(mentionsCashVat);
+    if (input.affiliated && !cashVat)
+      problem(
+        'AFFILIATED',
+        'Compania nu aplică TVA la încasare: beneficiarul afiliat nu schimbă facturarea.',
+      );
+    if (input.affiliated && mentioned)
+      problem(
+        'CASH_VAT_MENTION',
+        'Factura către un beneficiar afiliat urmează regulile generale de exigibilitate (art. 282 alin. (6) lit. d) din Codul fiscal) și nu are mențiunea „TVA la încasare”.',
+      );
+    const notes =
+      cashVat && !input.affiliated && !mentioned ? [...input.notes, cashVatMention] : input.notes;
 
     const preceding = input.precedingDocumentIds.length
       ? await tx
@@ -533,10 +559,12 @@ export class Sales {
           precedingDocumentIds,
           revenueAccount: _r,
           reducedRateBasis: _basis,
+          affiliated: _affiliated,
           ...fields
         } = input;
         invoice = calculateInvoice({
           ...fields,
+          notes,
           number,
           seller: seller.details,
           buyer: buyer.details,

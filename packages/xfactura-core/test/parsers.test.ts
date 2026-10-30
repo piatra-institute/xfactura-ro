@@ -26,6 +26,21 @@ describe('UBL invoices', () => {
     });
   });
 
+  test('marks an invoice whose note (BT-22) carries the mention «TVA la încasare»', () => {
+    const noted = (note: string) =>
+      parseInvoiceXml(
+        bytes(
+          invoiceXml().replace(
+            '<cbc:DocumentCurrencyCode>',
+            `<cbc:Note>${note}</cbc:Note><cbc:DocumentCurrencyCode>`,
+          ),
+        ),
+      );
+    expect(noted('Plata la 30 de zile # TVA la încasare').vatOnCollection).toBe(true);
+    expect(noted('Plata la 30 de zile')).not.toHaveProperty('vatOnCollection');
+    expect(parseInvoiceXml(bytes(invoiceXml()))).not.toHaveProperty('vatOnCollection');
+  });
+
   test('reads credit notes, negative invoices and document allowances', () => {
     expect(
       parseInvoiceXml(bytes(invoiceXml({ credit: true, originalNumber: 'F-1' }))),

@@ -67,6 +67,7 @@ const appendOnly = [
   'acc_anaf_connections',
   'acc_party_cnps',
   'acc_party_status',
+  'acc_income_sources',
   'ref_fx_rates',
 ];
 // Tables with narrowly guarded updates (below) that are never deleted from.
@@ -701,6 +702,59 @@ const artifactEventChecks: Check[] = [
   },
 ];
 
+/** A column of the latest version of the income source being versioned. */
+const previousSource = (column: string) => `(
+      SELECT ${column} FROM acc_income_sources
+      WHERE company_id = NEW.company_id AND source_id = NEW.source_id ORDER BY seq DESC LIMIT 1)`;
+/** When the source's current run of the real system by option began. */
+const optionStart = `(
+      SELECT min(v.effective_from) FROM acc_income_sources v
+      WHERE v.company_id = NEW.company_id AND v.source_id = NEW.source_id
+        AND v.method = 'sistem_real' AND v.real_basis = 'option'
+        AND v.seq > COALESCE((
+          SELECT max(w.seq) FROM acc_income_sources w
+          WHERE w.company_id = NEW.company_id AND w.source_id = NEW.source_id
+            AND NOT (w.method = 'sistem_real' AND COALESCE(w.real_basis, '') = 'option')), 0))`;
+const yearsSince = (date: string) =>
+  `(CAST(substr(NEW.effective_from, 1, 4) AS INTEGER) - CAST(substr(${date}, 1, 4) AS INTEGER))`;
+const incomeSourceChecks: Check[] = [
+  {
+    code: 'income_source_sequence',
+    rule: "An income source's versions are numbered from 1 without gaps, the first from the day the activity starts, each from no earlier than the previous one.",
+    violation: `NEW.seq <> 1 + COALESCE((
+          SELECT max(seq) FROM acc_income_sources
+          WHERE company_id = NEW.company_id AND source_id = NEW.source_id), 0)
+        OR (NEW.seq = 1 AND NEW.effective_from <> NEW.started_on)
+        OR NEW.effective_from < COALESCE(${previousSource('effective_from')}, NEW.effective_from)`,
+  },
+  {
+    code: 'income_source_form',
+    rule: 'Only a PFA, an II or an IF has income sources: the company recorded that form (entity.form) by the version’s date.',
+    violation: `NOT EXISTS (
+          SELECT 1 FROM acc_profile_facts f
+          WHERE f.company_id = NEW.company_id AND f.axis = 'entity.form'
+            AND f.value IN ('pfa', 'ii', 'if') AND f.effective_from <= NEW.effective_from
+            AND NOT EXISTS (
+              SELECT 1 FROM acc_profile_facts g
+              WHERE g.company_id = f.company_id AND g.supersedes_id = f.id))`,
+  },
+  {
+    code: 'income_source_method_date',
+    rule: 'A source moves to a norm, or to the real system by option, only from 1 January (Codul fiscal art. 69^1); only the real system the law requires may begin in the course of a year (norme pct. 8 alin. (13)).',
+    violation: `NEW.seq > 1
+        AND (NEW.method, COALESCE(NEW.real_basis, '')) IS NOT (${previousSource('method')}, ${previousSource("COALESCE(real_basis, '')")})
+        AND COALESCE(NEW.real_basis, '') <> 'required'
+        AND substr(NEW.effective_from, 6) <> '01-01'`,
+  },
+  {
+    code: 'income_source_option_lock',
+    rule: 'The option for the real system binds for 2 fiscal years and renews tacitly for 2 more (art. 69^1 alin. (2)–(3)): a source returns to a norm only at the start of a new 2-year period.',
+    violation: `NEW.method = 'norma'
+        AND ${previousSource('method')} = 'sistem_real' AND ${previousSource('real_basis')} = 'option'
+        AND (${yearsSince(optionStart)} < 2 OR ${yearsSince(optionStart)} % 2 <> 0)`,
+  },
+];
+
 const payrollChecks = {
   terms: [
     {
@@ -1054,6 +1108,11 @@ const triggers: Trigger[] = [
             AND p.country = 'RO' AND p.tax_id = NEW.cui)`,
       },
     ],
+  },
+  {
+    name: 'inv_income_source_guard',
+    on: 'BEFORE INSERT ON acc_income_sources',
+    checks: incomeSourceChecks,
   },
   {
     name: 'inv_issued_number_guard',

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { requireCondition } from '../errors';
+import { mentionsCashVat } from '../ro/cash-vat';
 import { sourceXml, type XmlElement as Element } from '../xml/source-xml';
 import { Amount, dateSchema, moneySchema, signedMoneySchema, toBani } from '../values';
 
@@ -78,6 +79,9 @@ export const invoiceDocumentSchema = z
       .max(100)
       .optional(),
     documentType: z.enum(['invoice', 'credit_note']),
+    /** A note (BT-22) carries the mention «TVA la încasare» (Codul fiscal art. 319 alin. (20)
+     * lit. p); RO_CIUS places it there). Absent otherwise. */
+    vatOnCollection: z.literal(true).optional(),
     number: z.string().min(1).max(100),
     issueDate: dateSchema,
     taxPointDate: dateSchema.nullable(),
@@ -416,6 +420,9 @@ export function invoiceDocumentFromXml(root: Element): InvoiceDocument {
       ? { invoiceTypeCode: typeCode, invoiceReferences: references }
       : {}),
     documentType: credit || negative ? 'credit_note' : 'invoice',
+    ...(children(root, 'Note', cbc).some((node) => mentionsCashVat(node.text))
+      ? { vatOnCollection: true as const }
+      : {}),
     number: value(root, 'ID'),
     issueDate: value(root, 'IssueDate'),
     taxPointDate: value(root, 'TaxPointDate', true),

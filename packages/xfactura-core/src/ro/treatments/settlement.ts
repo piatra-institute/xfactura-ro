@@ -1,13 +1,20 @@
 import { z } from 'zod';
 import {
   accountCodePattern,
+  vatPeriodOf,
   type Effect,
   type FxRate,
   type Issue,
   type LineSpec,
+  type Loaded,
+  type OpenItemState,
+  type ReadPlan,
+  type TaxEntrySpec,
   type Treatment,
 } from '../../kernel';
 import { convertMinor, divRound, formatMoney, LEDGER_CURRENCY, parseMoney } from '../../money';
+import type { LocalDate } from '../../time';
+import { bookRelease, cashVatClauses, deferredInvoice } from '../cash-vat';
 import { selectRate } from '../fx';
 import { controlKindOf } from '../chart';
 
@@ -65,10 +72,82 @@ export const settlementInput = z
   );
 export type SettlementInput = z.infer<typeof settlementInput>;
 
+const invoiceItem = (item: OpenItemState) =>
+  item.documentId !== null && (item.kind === 'receivable' || item.kind === 'payable');
+
+/** The read of the invoices an allocation settles: their history, for the VAT they defer, and the
+ * profile, for the tax period a release falls in. */
+export function settledInvoices(loaded: Loaded, ids: readonly string[]): ReadPlan | null {
+  const entries = ids.flatMap((id) => {
+    const item = loaded.openItems.get(id);
+    return item && invoiceItem(item) ? (item.history ?? []) : [];
+  });
+  return entries.length ? { entries: [...new Set(entries)], profile: true } : null;
+}
+
+/**
+ * Releases the VAT that invoices under VAT on collection defer, for what an explanation settles
+ * of them on `date` (art. 282 alin. (3) and (8), art. 297 alin. (2) and (3)): a collection makes
+ * a sale's VAT chargeable, a payment a purchase's VAT deductible, each in the period of the date.
+ * Allocations to the same invoice add up. Lines are appended to `lines`.
+ */
+export function releaseSettled(
+  loaded: Loaded,
+  settled: { openItem: string; bani: bigint; path: string }[],
+  date: LocalDate,
+  lines: LineSpec[],
+): { taxEntries: TaxEntrySpec[]; issues: Issue[]; released: Record<string, string>[] } {
+  const issues: Issue[] = [];
+  const taxEntries: TaxEntrySpec[] = [];
+  const released: Record<string, string>[] = [];
+  const totals = new Map<string, { bani: bigint; path: string }>();
+  for (const part of settled) {
+    const total = totals.get(part.openItem) ?? { bani: 0n, path: part.path };
+    total.bani += part.bani;
+    totals.set(part.openItem, total);
+  }
+  for (const [id, { bani, path }] of totals) {
+    const item = loaded.openItems.get(id);
+    if (!item || !invoiceItem(item)) continue;
+    const invoice = deferredInvoice(item, loaded);
+    if (!invoice) continue;
+    if ('code' in invoice) {
+      issues.push({ ...invoice, path });
+      continue;
+    }
+    if (bani <= 0n) {
+      issues.push({
+        code: 'CASH_VAT_DIRECTION',
+        severity: 'block',
+        message:
+          'Factura are TVA la încasare: o sumă care îi mărește soldul (o restituire) nu este încă tratată.',
+        path,
+      });
+      continue;
+    }
+    const entries = bookRelease(invoice, bani, date, vatPeriodOf(loaded, date), lines);
+    taxEntries.push(...entries);
+    const sale = invoice.direction === 'output';
+    const chargeable = entries.filter((entry) => entry.exigibility !== null);
+    released.push({
+      invoice: invoice.origin.description,
+      settled: formatMoney(bani, LEDGER_CURRENCY),
+      vat: formatMoney(
+        chargeable.reduce((sum, entry) => sum + (sale ? entry.taxBani : entry.deductibleBani), 0n),
+        LEDGER_CURRENCY,
+      ),
+      clause: sale ? cashVatClauses.chargeability : cashVatClauses.own,
+    });
+  }
+  return { taxEntries, issues, released };
+}
+
 /**
  * Explains one reported bank movement in full: money received settles receivables (and money
  * paid settles payables) item by item, partially or grouped, and any remainder goes to named
- * accounts without partners. Nothing is left unexplained and no item is settled past zero.
+ * accounts without partners. Nothing is left unexplained and no item is settled past zero. An
+ * invoice under VAT on collection also releases the VAT the movement settles of it, on the date
+ * of the statement (norme pct. 26 alin. (10), pct. 67 alin. (11)).
  */
 export const settlement: Treatment<SettlementInput> = {
   id: 'bank.settle',
@@ -80,14 +159,21 @@ export const settlement: Treatment<SettlementInput> = {
   subject: (input) => `movement:${input.movementId}`,
   plan: (input) => ({
     movements: [input.movementId],
-    openItems: [{ ids: input.allocations.map((allocation) => allocation.openItem) }],
+    openItems: [{ ids: input.allocations.map((allocation) => allocation.openItem), history: true }],
     ...(input.opens.length ? { parties: input.opens.map((open) => open.partyId) } : {}),
   }),
   followUp(input, loaded) {
     const movement = loaded.movements.get(input.movementId);
-    return movement && movement.currency !== LEDGER_CURRENCY
-      ? { fx: [{ currency: movement.currency, until: movement.bookingDate }] }
-      : null;
+    const invoices = settledInvoices(
+      loaded,
+      input.allocations.map((allocation) => allocation.openItem),
+    );
+    // The accounting rate depends on the books system, which the profile holds.
+    const fx =
+      movement && movement.currency !== LEDGER_CURRENCY
+        ? { fx: [{ currency: movement.currency, until: movement.bookingDate }], profile: true }
+        : null;
+    return fx || invoices ? { ...fx, ...invoices } : null;
   },
   evaluate(input, loaded, rules) {
     const movement = loaded.movements.get(input.movementId);
@@ -126,6 +212,7 @@ export const settlement: Treatment<SettlementInput> = {
     ];
     let explained = 0n;
     let settledBani = 0n;
+    const settled: { openItem: string; bani: bigint; path: string }[] = [];
     input.allocations.forEach((allocation, index) => {
       const item = loaded.openItems.get(allocation.openItem);
       const minor = parseMoney(allocation.amount, currency);
@@ -158,6 +245,12 @@ export const settlement: Treatment<SettlementInput> = {
             ? toRon(minor)
             : divRound(balanceBani * minor, balanceMinor, 'halfAwayFromZero');
       settledBani += bani;
+      // A receipt reduces a receivable, a payment a payable.
+      settled.push({
+        openItem: item.id,
+        bani: side === item.normalSide ? -bani : bani,
+        path: `allocations.${index}`,
+      });
       lines.push(
         withCurrency(
           { account: item.controlAccount, side, bani, openItem: item.id, partyId: item.partyId },
@@ -242,6 +335,10 @@ export const settlement: Treatment<SettlementInput> = {
         memo: 'Diferență de curs realizată',
       });
     }
+    // The VAT the settled invoices defer under VAT on collection, released on the booking date.
+    const booked = lines.filter((line) => line.bani !== 0n);
+    const release = releaseSettled(loaded, settled, movement.bookingDate, booked);
+    if (release.issues.length) return { effect: null, issues: [...issues, ...release.issues] };
     const effect: Effect = {
       schema: 'effect@1',
       date: movement.bookingDate,
@@ -250,9 +347,9 @@ export const settlement: Treatment<SettlementInput> = {
       description:
         input.description ??
         `${received ? 'Încasare' : 'Plată'} ${movement.reference}`.slice(0, 500),
-      lines: lines.filter((line) => line.bani !== 0n),
+      lines: booked,
       openItems,
-      taxEntries: [],
+      taxEntries: release.taxEntries,
       schedules: [],
       explanation: {
         summary: `${received ? 'Încasare' : 'Plată'} de ${formatMoney(total, currency)} ${currency} din ${movement.bookingDate}${rate ? ` la cursul ${rate.rate}` : ''}.`,
@@ -260,6 +357,7 @@ export const settlement: Treatment<SettlementInput> = {
           movementId: movement.id,
           reference: movement.reference,
           counterparty: movement.counterparty,
+          ...(release.released.length ? { vatOnCollection: release.released } : {}),
         },
       },
     };

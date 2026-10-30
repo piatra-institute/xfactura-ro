@@ -11,12 +11,14 @@ import {
   type ReadSetEntry,
   type Treatment,
 } from 'xfactura-core/kernel';
+import { booksSystemOf, singleEntryExcluded } from 'xfactura-core/ro/entity';
 import {
   RuleContext,
   RuleGapError,
   type ParameterRegister,
   type UseMode,
 } from 'xfactura-core/rules';
+import type { LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
 import {
   approvals,
@@ -186,6 +188,21 @@ export class Proposals {
     } catch (error) {
       if (!(error instanceof RuleGapError)) throw error;
       issues.push(block('RULE_GAP', error.message, { ...error.gap }));
+    }
+    // Treatments of a company's double-entry books are refused on single-entry books (a PFA, II
+    // or IF): at the entry's date, or under the latest regime when nothing would be posted.
+    const excluded = singleEntryExcluded[treatment.id];
+    if (excluded) {
+      const facts = (await loadState(tx, companyId, { profile: true })).loaded.profile;
+      const at = (effect?.date ?? '9999-12-31') as LocalDate;
+      if (booksSystemOf(facts, at) === 'single')
+        issues.push(
+          block(
+            'SINGLE_ENTRY_EXCLUDED',
+            `Tratamentul ${treatment.id} nu se aplică în contabilitatea în partidă simplă: ${excluded}.`,
+            { treatment: treatment.id },
+          ),
+        );
     }
     if (effect) {
       const accounts = await loadAccounts(tx, companyId, accountCodes(effect));

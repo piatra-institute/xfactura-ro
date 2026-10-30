@@ -93,6 +93,8 @@ Reviewed actions (month close and reopen) follow the same pattern: request, appr
 | `assets.dispose` | write | no | — | Record that an asset left use, before derecognizing it. |
 | `ledger.generalLedger`, `ledger.inventoryRegister` | read | yes | — | Cartea mare for a month; Registrul-inventar at a date. |
 | `cash.register` | read | yes | — | Registrul de casă for a cash account and a date range. |
+| `pfa.sources.record`, `pfa.sources.list` | write / read | yes | — | A PFA's, II's or IF's income sources, versioned, with their method (sistem real or normă). |
+| `pfa.journal`, `pfa.inventory`, `pfa.fiscalRegister` | read | yes | — | The single-entry books: Registrul-jurnal de încasări și plăți, Registrul-inventar, Registrul de evidență fiscală with CAS, CASS and income tax. |
 | `vat.etva.check` | read | yes | — | The VAT return against the pre-filled RO e-TVA return, and the invoices behind the differences. |
 | `parties.recordCnp` | write | no | — | An individual partner's CNP, kept sealed, for D205. |
 | `spv.connect.start`, `spv.connect.finish` | manage | no | human | Connect the company to ANAF over OAuth; the tokens are kept sealed. |

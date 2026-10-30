@@ -1324,6 +1324,58 @@ export const partyCnps = sqliteTable(
   ],
 );
 
+/**
+ * A source of independent income of a PFA, II or IF (Codul fiscal art. 67–69; D212 cap. I sec. 1):
+ * its activity, place and dates, and how its net income is set. One version per change, each from
+ * its date; a change of method to a norm or to the real system by option takes effect on 1
+ * January, and the option binds for 2 years, renewed tacitly (art. 69^1).
+ */
+export const incomeSources = sqliteTable(
+  'acc_income_sources',
+  {
+    companyId: companyId(),
+    sourceId: text('source_id').notNull(),
+    seq: counter('seq').notNull(),
+    effectiveFrom: text('effective_from').notNull(),
+    name: text('name').notNull(),
+    /** The activity's CAEN code (four digits). */
+    caen: text('caen').notNull(),
+    /** Where the activity is carried on, and its county (ISO 3166-2:RO). */
+    place: text('place').notNull(),
+    county: text('county').notNull(),
+    /** The registration or authorization document. */
+    authorizationNumber: text('authorization_number'),
+    authorizationDate: text('authorization_date'),
+    startedOn: text('started_on').notNull(),
+    suspendedFrom: text('suspended_from'),
+    suspendedTo: text('suspended_to'),
+    endedOn: text('ended_on'),
+    /** A liberal profession (art. 67 alin. (2)): its net income is never set by a norm. */
+    liberal: integer('liberal', { mode: 'boolean' }).notNull(),
+    method: text('method', { enum: ['sistem_real', 'norma'] }).notNull(),
+    /** Why the real system applies: by law (a liberal profession, an activity outside the
+     * nomenclator, income above the threshold) or by the option of art. 69^1. */
+    realBasis: text('real_basis', { enum: ['required', 'option'] }),
+    evidenceId: text('evidence_id').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.sourceId, t.seq] }),
+    foreignKey({
+      columns: [t.companyId, t.evidenceId],
+      foreignColumns: [evidence.companyId, evidence.id],
+    }),
+    check('income_source_caen', sql`${t.caen} glob '[0-9][0-9][0-9][0-9]'`),
+    check('income_source_basis', sql`(${t.method} = 'norma') = (${t.realBasis} is null)`),
+    check('income_source_liberal', sql`not (${t.liberal} and ${t.method} = 'norma')`),
+    check(
+      'income_source_dates',
+      sql`${t.startedOn} <= ${t.effectiveFrom} and (${t.endedOn} is null or ${t.startedOn} <= ${t.endedOn}) and (${t.suspendedTo} is null or (${t.suspendedFrom} is not null and ${t.suspendedFrom} <= ${t.suspendedTo}))`,
+    ),
+  ],
+);
+
 /** What ANAF's register of taxpayers (web service v9) answered about a Romanian party for a
  * date: one snapshot per answer, numbered per party, citing the answer kept as evidence. A later
  * check adds a snapshot; none is ever corrected. */

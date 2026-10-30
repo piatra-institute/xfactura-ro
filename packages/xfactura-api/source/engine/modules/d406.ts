@@ -33,7 +33,12 @@ import {
   type D406Product,
   type D406Tax,
 } from 'xfactura-core/ro/saft/d406';
-import { d406ReverseCharges, d406VatTaxCode } from 'xfactura-core/ro/saft/tax-codes';
+import { supplierAppliesCashVat } from 'xfactura-core/ro/cash-vat';
+import {
+  d406CashVatReleaseCode,
+  d406ReverseCharges,
+  d406VatTaxCode,
+} from 'xfactura-core/ro/saft/tax-codes';
 import { invoiceKinds } from 'xfactura-core/ro/treatments/invoices';
 import { vatPeriodEnd } from 'xfactura-core/ro/treatments/vat-settlement';
 import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
@@ -731,6 +736,20 @@ export function d406Declaration(
         const taxes = taxesOf.get(entryId) ?? [];
         const found: { tax: (typeof taxes)[number]; code: string }[] = [];
         for (const tax of taxes) {
+          const attributes = JSON.parse(tax.attributes) as Record<string, string>;
+          // VAT on collection released by a collection or payment (4428 to 4427, or 4426 to
+          // 4428): one note without a source document, reported once, by its chargeable side.
+          if (attributes.release) {
+            if (tax.exigibility === null) continue;
+            const code = d406CashVatReleaseCode(tax.code);
+            if (code) found.push({ tax, code });
+            else
+              problem(
+                'D406_TAX_CODE',
+                `TVA la încasare cu codul ${tax.code} din nota ${number} nu are un cod de taxă SAF-T stabilit.`,
+              );
+            continue;
+          }
           const deduction =
             tax.direction === 'output'
               ? undefined
@@ -751,6 +770,11 @@ export function d406Declaration(
             code: tax.code,
             ...(rate ? { rate } : {}),
             ...(deduction ? { deduction } : {}),
+            // A sale of the company under VAT on collection, or a purchase from a supplier in it.
+            cashVat:
+              tax.direction === 'output'
+                ? attributes.cashVat !== undefined
+                : supplierAppliesCashVat(attributes.cashVat),
           });
           if (code === null) {
             // The collected side of a reverse charge: its acquisition carries the code.

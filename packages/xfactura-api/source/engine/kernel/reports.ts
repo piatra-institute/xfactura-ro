@@ -1,14 +1,30 @@
-import { and, asc, eq, gt, gte, inArray, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, gte, inArray, like, lt, lte, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireCondition } from 'xfactura-core/errors';
 import { formatMoney } from 'xfactura-core/money';
+import { booksSystemOf } from 'xfactura-core/ro/entity';
+import {
+  isTreasury,
+  journalRows,
+  monthlyTotals,
+  natureOf,
+  treasuryAccounts,
+  type JournalRow,
+  type LedgerEntry,
+  type LedgerItem,
+  type NatureCatalogue,
+} from 'xfactura-core/ro/pit';
+import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
+import type { LocalDate } from 'xfactura-core/time';
 import { invoiceDocumentSchema } from 'xfactura-core/ubl/invoice-document';
 import {
+  assetEvents,
   assets,
   bankMovements,
   documents,
   entries,
   fiscalYears,
+  incomeSources,
   ledgerAccounts,
   lines,
   openItems,
@@ -18,7 +34,7 @@ import {
 } from '../db/schema';
 import type { Transaction } from '../db/database';
 import type { Actor, Commands } from './commands';
-import { lineSpec } from './state';
+import { lineSpec, loadState } from './state';
 
 const ron = (bani: bigint) => formatMoney(bani, 'RON');
 const day = z.iso.date();
@@ -58,6 +74,31 @@ export const generalLedgerInput = z
   .object({ month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/), account: z.string().optional() })
   .strict();
 export const inventoryInput = z.object({ date: day }).strict();
+export const cashJournalInput = z
+  .object({
+    year: z.number().int().min(2000).max(2100),
+    /** Only this month's rows; numbering and balances stay the year's. */
+    month: z
+      .string()
+      .regex(/^\d{4}-(0[1-9]|1[0-2])$/)
+      .optional(),
+  })
+  .strict()
+  .refine((input) => !input.month || input.month.startsWith(String(input.year)), {
+    message: 'Luna trebuie să fie în anul cerut.',
+    path: ['month'],
+  });
+export const singleInventoryInput = z
+  .object({
+    /** At the start of activity, at a year's end, or at cessation (OMFP nr. 170/2015 cap. V). */
+    occasion: z.enum(['start', 'year_end', 'cessation']),
+    year: z.number().int().min(2000).max(2100).optional(),
+  })
+  .strict()
+  .refine((input) => input.occasion !== 'year_end' || input.year !== undefined, {
+    message: 'Indicați anul încheiat.',
+    path: ['year'],
+  });
 
 /** The justifying document a register shows for an entry, by what the entry recognized. */
 const documentTypes: Record<string, string> = {
@@ -190,8 +231,597 @@ export async function justifyingDocuments(
   return found;
 }
 
+const treasuryLine = or(
+  ...treasuryAccounts.flatMap((account) => [
+    eq(lines.account, account),
+    like(lines.account, `${account}.%`),
+  ]),
+)!;
+const chunks = <T>(values: readonly T[], size = 500) =>
+  Array.from({ length: Math.ceil(values.length / size) }, (_, index) =>
+    values.slice(index * size, (index + 1) * size),
+  );
+
+/** Posted entries with their lines, as the single-entry projections read them. */
+async function ledgerEntries(tx: Transaction, companyId: string, ids: readonly string[]) {
+  const found: LedgerEntry[] = [];
+  for (const part of chunks([...new Set(ids)])) {
+    if (!part.length) continue;
+    const headers = await tx
+      .select()
+      .from(entries)
+      .where(and(eq(entries.companyId, companyId), inArray(entries.id, part)));
+    const rows = await tx
+      .select()
+      .from(lines)
+      .where(and(eq(lines.companyId, companyId), inArray(lines.entryId, part)))
+      .orderBy(asc(lines.entryId), asc(lines.lineNo));
+    const byEntry = Map.groupBy(rows, (row) => row.entryId);
+    for (const header of headers)
+      found.push({
+        id: header.id,
+        seq: header.seq,
+        date: header.date as LocalDate,
+        journalCode: header.journalCode,
+        description: header.description,
+        lines: (byEntry.get(header.id) ?? []).map((row) => ({
+          lineNo: row.lineNo,
+          account: row.account,
+          side: row.side,
+          bani: row.bani,
+          openItem: row.openItemId,
+          memo: row.memo,
+          currency: row.currency
+            ? { code: row.currency, minor: row.currencyMinor ?? 0n, rate: row.fxRate ?? '' }
+            : null,
+        })),
+      });
+  }
+  return found.sort((a, b) => a.seq - b.seq);
+}
+
+/**
+ * What the single-entry projections read for a period: the entries with a treasury line, the open
+ * items their lines name with their partners, and, for each invoice item, every entry that touched
+ * it (its composition, credit notes included).
+ */
+export async function loadTreasuryLedger(
+  tx: Transaction,
+  companyId: string,
+  from: string,
+  to: string,
+) {
+  const treasuryIds = await tx
+    .selectDistinct({ id: lines.entryId })
+    .from(lines)
+    .innerJoin(entries, and(eq(entries.companyId, lines.companyId), eq(entries.id, lines.entryId)))
+    .where(
+      and(
+        eq(lines.companyId, companyId),
+        treasuryLine,
+        gte(entries.date, from),
+        lte(entries.date, to),
+      ),
+    );
+  const ledger = await ledgerEntries(
+    tx,
+    companyId,
+    treasuryIds.map((row) => row.id),
+  );
+  const itemIds = [
+    ...new Set(ledger.flatMap((entry) => entry.lines.flatMap((line) => line.openItem ?? []))),
+  ];
+  const { items, partyNames } = await itemsOf(tx, companyId, itemIds);
+  const itemEntries = await entriesOfItems(tx, companyId, items);
+  return { entries: ledger, items, partyNames, itemEntries };
+}
+
+/** Open items by id, with their partners' names. */
+export async function itemsOf(tx: Transaction, companyId: string, ids: readonly string[]) {
+  const items = new Map<string, LedgerItem & { partyId: string }>();
+  const partyNames = new Map<string, string>();
+  for (const part of chunks(ids)) {
+    if (!part.length) continue;
+    for (const row of await tx
+      .select({ item: openItems, name: parties.name })
+      .from(openItems)
+      .innerJoin(
+        parties,
+        and(eq(parties.companyId, openItems.companyId), eq(parties.id, openItems.partyId)),
+      )
+      .where(and(eq(openItems.companyId, companyId), inArray(openItems.id, part)))) {
+      items.set(row.item.id, {
+        id: row.item.id,
+        controlAccount: row.item.controlAccount,
+        documentId: row.item.documentId,
+        partyId: row.item.partyId,
+      });
+      partyNames.set(row.item.id, row.name);
+    }
+  }
+  return { items, partyNames };
+}
+
+/** For each invoice item, every posted entry with a line on it, in posting order. */
+export async function entriesOfItems(
+  tx: Transaction,
+  companyId: string,
+  items: ReadonlyMap<string, LedgerItem>,
+) {
+  const documentItems = [...items.values()]
+    .filter((item) => item.documentId)
+    .map((item) => item.id);
+  const touching: { entryId: string; itemId: string | null }[] = [];
+  for (const part of chunks(documentItems))
+    if (part.length)
+      touching.push(
+        ...(await tx
+          .selectDistinct({ entryId: lines.entryId, itemId: lines.openItemId })
+          .from(lines)
+          .where(and(eq(lines.companyId, companyId), inArray(lines.openItemId, part)))),
+      );
+  const loaded = new Map(
+    (
+      await ledgerEntries(
+        tx,
+        companyId,
+        touching.map((row) => row.entryId),
+      )
+    ).map((entry) => [entry.id, entry]),
+  );
+  const itemEntries = new Map<string, LedgerEntry[]>();
+  for (const row of touching) {
+    const list = itemEntries.get(row.itemId!) ?? [];
+    list.push(loaded.get(row.entryId)!);
+    itemEntries.set(row.itemId!, list);
+  }
+  for (const list of itemEntries.values()) list.sort((a, b) => a.seq - b.seq);
+  return itemEntries;
+}
+
+/** The nature catalogue in force for an income year, or the rule gap that prevents it. */
+export function catalogueFor(rules: RuleContext, year: number): NatureCatalogue {
+  try {
+    return rules.param<NatureCatalogue>(
+      'ro.pit.natures',
+      'fiscal_year_start',
+      `${year}-01-01` as LocalDate,
+    );
+  } catch (error) {
+    if (!(error instanceof RuleGapError)) throw error;
+    requireCondition(false, 'RULE_GAP', error.message, 422, { ...error.gap });
+  }
+}
+
+/** Whether the company keeps single-entry books at any time in the year. */
+async function singleEntryIn(tx: Transaction, companyId: string, year: number) {
+  const { loaded } = await loadState(tx, companyId, { profile: true });
+  const dates = [
+    `${year}-01-01`,
+    ...loaded.profile
+      .map((fact) => fact.effectiveFrom)
+      .filter((date) => date.startsWith(String(year))),
+    `${year}-12-31`,
+  ] as LocalDate[];
+  return dates.some((date) => booksSystemOf(loaded.profile, date) === 'single');
+}
+
+/** The Registrul-jurnal de încasări și plăți of a year, with its monthly totals and balances. */
+export async function cashJournalOf(
+  tx: Transaction,
+  companyId: string,
+  year: number,
+  catalogue: NatureCatalogue,
+) {
+  const from = `${year}-01-01`;
+  const to = `${year}-12-31`;
+  const ledger = await loadTreasuryLedger(tx, companyId, from, to);
+  const rows = journalRows({
+    entries: ledger.entries,
+    items: ledger.items,
+    itemEntries: ledger.itemEntries,
+    catalogue,
+  });
+  // Each treasury account's balance before the year, opening entries included.
+  const opening = new Map<string, bigint>();
+  for (const row of await tx
+    .select({
+      account: lines.account,
+      bani: sql<bigint>`coalesce(sum(case ${lines.side} when 'D' then ${lines.bani} else -${lines.bani} end), 0)`.mapWith(
+        BigInt,
+      ),
+    })
+    .from(lines)
+    .innerJoin(entries, and(eq(entries.companyId, lines.companyId), eq(entries.id, lines.entryId)))
+    .where(
+      and(
+        eq(lines.companyId, companyId),
+        treasuryLine,
+        or(
+          lt(entries.date, from),
+          and(eq(entries.journalCode, 'DESCHIDERE'), lte(entries.date, to)),
+        ),
+      ),
+    )
+    .groupBy(lines.account))
+    opening.set(row.account, row.bani);
+  return { rows, opening, ledger };
+}
+
+const signed = (row: JournalRow) => (row.direction === 'receipt' ? row.bani : -row.bani);
+
 export class Reports {
-  constructor(private readonly commands: Commands) {}
+  constructor(
+    private readonly commands: Commands,
+    private readonly rules?: (tx: Transaction, companyId: string) => Promise<RuleContext>,
+  ) {}
+
+  /**
+   * Registrul-jurnal de încasări și plăți (OMFP nr. 170/2015, cod 14-1-1/b) for single-entry
+   * books: each receipt and payment in cash or by bank, in date order, with its document, the
+   * nature of what it settles and the amounts including VAT; monthly totals; and each treasury
+   * account's opening balance, receipts, payments and closing balance per month. Amounts in a
+   * foreign currency are the lei the ledger booked at the rate of the last banking day before the
+   * operation, with the currency amount in the explanation.
+   */
+  cashJournal(actor: Actor, input: z.infer<typeof cashJournalInput>) {
+    return this.commands.read(actor, 'pfa.journal', async (tx) => {
+      requireCondition(
+        await singleEntryIn(tx, actor.companyId, input.year),
+        'SINGLE_ENTRY_ONLY',
+        'Registrul-jurnal de încasări și plăți se ține în contabilitatea în partidă simplă (PFA, II, IF).',
+      );
+      const catalogue = catalogueFor(await this.rules!(tx, actor.companyId), input.year);
+      const { rows, opening, ledger } = await cashJournalOf(
+        tx,
+        actor.companyId,
+        input.year,
+        catalogue,
+      );
+      const headers = ledger.entries.length
+        ? await tx
+            .select()
+            .from(entries)
+            .where(
+              and(
+                eq(entries.companyId, actor.companyId),
+                inArray(
+                  entries.id,
+                  ledger.entries.map((entry) => entry.id),
+                ),
+              ),
+            )
+        : [];
+      const justifying = await justifyingDocuments(tx, actor.companyId, headers);
+      const byId = new Map(ledger.entries.map((entry) => [entry.id, entry]));
+      const issues: { code: string; message: string; entryId: string }[] = [];
+      const view = rows.map((row, index) => {
+        const entry = byId.get(row.entryId)!;
+        const line = entry.lines.find((item) => item.lineNo === row.lineNo)!;
+        const cash = row.channel === 'cash' && line.memo;
+        const document = cash
+          ? {
+              type: row.direction === 'receipt' ? 'Chitanță' : 'Dispoziție de plată',
+              number: line.memo,
+            }
+          : (justifying.get(row.entryId) ?? null);
+        const partners = [
+          ...new Set(
+            entry.lines.flatMap((item) =>
+              item.openItem ? (ledger.partyNames.get(item.openItem) ?? []) : [],
+            ),
+          ),
+        ];
+        const natures = row.parts.map((part) => {
+          const known = natureOf(part.nature);
+          if (!known)
+            issues.push({
+              code:
+                part.nature === 'unattributed' ? 'PFA_NATURE_UNATTRIBUTED' : 'PFA_NATURE_MISSING',
+              message:
+                part.nature === 'unattributed'
+                  ? `${entry.description}: factura decontată nu are o compoziție din care să se citească natura.`
+                  : `${entry.description}: contul ${part.account} nu are o natură în catalog (ro.pit.natures).`,
+              entryId: row.entryId,
+            });
+          return {
+            nature: part.nature,
+            label: known?.label ?? 'Natură necunoscută',
+            kind: known?.kind ?? null,
+            account: part.account,
+            amount: ron(part.flow),
+          };
+        });
+        const foreign = row.currency
+          ? ` (${formatMoney(row.currency.minor < 0n ? -row.currency.minor : row.currency.minor, row.currency.code)} ${row.currency.code} la cursul ${row.currency.rate})`
+          : '';
+        return {
+          nr: index + 1,
+          date: row.date,
+          month: row.date.slice(0, 7),
+          account: row.account,
+          document,
+          // In the explanation, amounts as the row's column shows them: what was paid is positive.
+          explanation: `${entry.description}${partners.length ? ` – ${partners.join(', ')}` : ''}: ${row.parts
+            .map(
+              (part, p) =>
+                `${natures[p]!.label.toLowerCase()} ${ron(row.direction === 'receipt' ? part.flow : -part.flow)}`,
+            )
+            .join('; ')}${foreign}`,
+          receipts: {
+            cash: row.direction === 'receipt' && row.channel === 'cash' ? ron(row.bani) : null,
+            bank: row.direction === 'receipt' && row.channel === 'bank' ? ron(row.bani) : null,
+          },
+          payments: {
+            cash: row.direction === 'payment' && row.channel === 'cash' ? ron(row.bani) : null,
+            bank: row.direction === 'payment' && row.channel === 'bank' ? ron(row.bani) : null,
+          },
+          ...(row.currency
+            ? {
+                currency: {
+                  code: row.currency.code,
+                  amount: formatMoney(row.currency.minor, row.currency.code),
+                  rate: row.currency.rate,
+                },
+              }
+            : {}),
+          natures,
+          entryId: row.entryId,
+        };
+      });
+      const months = monthlyTotals(rows).map((totals) => ({
+        month: totals.month,
+        receipts: { cash: ron(totals.receipts.cash), bank: ron(totals.receipts.bank) },
+        payments: { cash: ron(totals.payments.cash), bank: ron(totals.payments.bank) },
+      }));
+      const accountCodes = [
+        ...new Set([...opening.keys(), ...rows.map((row) => row.account)]),
+      ].sort();
+      const accounts = accountCodes.map((account) => {
+        let balance = opening.get(account) ?? 0n;
+        const opened = balance;
+        const perMonth = [
+          ...Map.groupBy(
+            rows.filter((row) => row.account === account),
+            (row) => row.date.slice(0, 7),
+          ),
+        ]
+          .sort(([a], [b]) => (a < b ? -1 : 1))
+          .map(([month, items]) => {
+            const start = balance;
+            const receipts = items
+              .filter((row) => row.direction === 'receipt')
+              .reduce((total, row) => total + row.bani, 0n);
+            const payments = items
+              .filter((row) => row.direction === 'payment')
+              .reduce((total, row) => total + row.bani, 0n);
+            balance += items.reduce((total, row) => total + signed(row), 0n);
+            return {
+              month,
+              opening: ron(start),
+              receipts: ron(receipts),
+              payments: ron(payments),
+              closing: ron(balance),
+            };
+          });
+        return { account, opening: ron(opened), months: perMonth, closing: ron(balance) };
+      });
+      return {
+        year: input.year,
+        rows: input.month ? view.filter((row) => row.month === input.month) : view,
+        months: input.month ? months.filter((totals) => totals.month === input.month) : months,
+        accounts,
+        issues,
+        clauses: ['OMFP170/2015:cap.V.14-1-1', 'OMFP170/2015:cap.III.pct.18'],
+      };
+    });
+  }
+
+  /**
+   * Registrul-inventar (OMFP nr. 170/2015, cod 14-1-2/b) for single-entry books, at the start of
+   * activity (the earliest income source's start), at a year's end, or at cessation (the last
+   * source's end, all sources ended): fixed assets one by one at their entry value, stocks by
+   * account, receivables and payables by partner at what is left to collect or pay, cash and bank.
+   * The owner's account (4551), equity and depreciation are not inventory items. Values are the
+   * books' until a count's differences are recorded.
+   */
+  singleEntryInventory(actor: Actor, input: z.infer<typeof singleInventoryInput>) {
+    return this.commands.read(actor, 'pfa.inventory', async (tx) => {
+      const sources = await tx
+        .select({
+          sourceId: incomeSources.sourceId,
+          startedOn: incomeSources.startedOn,
+          endedOn: incomeSources.endedOn,
+          seq: incomeSources.seq,
+        })
+        .from(incomeSources)
+        .where(eq(incomeSources.companyId, actor.companyId))
+        .orderBy(asc(incomeSources.sourceId), asc(incomeSources.seq));
+      const latest = [...Map.groupBy(sources, (row) => row.sourceId).values()].map((rows) =>
+        rows.at(-1)!,
+      );
+      let date: string;
+      if (input.occasion === 'year_end') date = `${input.year}-12-31`;
+      else if (input.occasion === 'start') {
+        requireCondition(
+          latest.length,
+          'INCOME_SOURCE',
+          'Înregistrați sursa de venit (pfa.sources.record).',
+        );
+        date = latest.map((row) => row.startedOn).sort()[0]!;
+      } else {
+        requireCondition(
+          latest.length && latest.every((row) => row.endedOn),
+          'CESSATION',
+          'Registrul-inventar la încetare se întocmește după încetarea tuturor surselor de venit.',
+        );
+        date = latest
+          .map((row) => row.endedOn!)
+          .sort()
+          .at(-1)!;
+      }
+      requireCondition(
+        await singleEntryIn(tx, actor.companyId, Number(date.slice(0, 4))),
+        'SINGLE_ENTRY_ONLY',
+        'Registrul-inventar 14-1-2/b se întocmește în contabilitatea în partidă simplă (PFA, II, IF).',
+      );
+      const net =
+        sql<bigint>`sum(case ${lines.side} when 'D' then ${lines.bani} else -${lines.bani} end)`.mapWith(
+          BigInt,
+        );
+      const join = and(eq(entries.companyId, lines.companyId), eq(entries.id, lines.entryId));
+      const balances = await tx
+        .select({ account: lines.account, name: ledgerAccounts.name, bani: net })
+        .from(lines)
+        .innerJoin(entries, join)
+        .innerJoin(
+          ledgerAccounts,
+          and(
+            eq(ledgerAccounts.companyId, lines.companyId),
+            eq(ledgerAccounts.code, lines.account),
+          ),
+        )
+        .where(and(eq(lines.companyId, actor.companyId), lte(entries.date, date)))
+        .groupBy(lines.account)
+        .orderBy(asc(lines.account));
+      const items = await tx
+        .select({ account: openItems.controlAccount, party: parties.name, bani: net })
+        .from(lines)
+        .innerJoin(entries, join)
+        .innerJoin(
+          openItems,
+          and(eq(openItems.companyId, lines.companyId), eq(openItems.id, lines.openItemId)),
+        )
+        .innerJoin(
+          parties,
+          and(eq(parties.companyId, openItems.companyId), eq(parties.id, openItems.partyId)),
+        )
+        .where(and(eq(lines.companyId, actor.companyId), lte(entries.date, date)))
+        .groupBy(openItems.id)
+        .orderBy(asc(openItems.controlAccount), asc(parties.name));
+      const disposals = new Map(
+        (
+          await tx
+            .select({ assetId: assetEvents.assetId, date: assetEvents.date })
+            .from(assetEvents)
+            .where(eq(assetEvents.companyId, actor.companyId))
+        ).map((row) => [row.assetId, row.date]),
+      );
+      const cards = (
+        await tx
+          .select()
+          .from(assets)
+          .where(and(eq(assets.companyId, actor.companyId), lte(assets.commissionedOn, date)))
+          .orderBy(asc(assets.number))
+      ).filter((card) => !disposals.has(card.id) || disposals.get(card.id)! > date);
+      const synthetic = (account: string) => account.split('.')[0]!;
+      const owner = (account: string) => synthetic(account) === '4551';
+      const section = (title: string, rows: { description: string; bani: bigint }[]) => ({
+        title,
+        rows: rows.filter((row) => row.bani !== 0n),
+      });
+      const sections = [
+        section(
+          'Imobilizări',
+          cards.map((card) => ({
+            description: `${card.number} ${card.name}`,
+            bani: card.valueBani,
+          })),
+        ),
+        section(
+          'Stocuri',
+          balances
+            .filter((row) => /^3[0-8]/.test(row.account))
+            .map((row) => ({ description: `${row.account} ${row.name}`, bani: row.bani })),
+        ),
+        section('Creanțe', [
+          ...items
+            .filter((row) => row.bani > 0n && !owner(row.account))
+            .map((row) => ({ description: `${row.account} ${row.party}`, bani: row.bani })),
+          ...balances
+            .filter(
+              (row) =>
+                /^4/.test(row.account) &&
+                row.bani > 0n &&
+                !items.some(
+                  (item) => item.account === synthetic(row.account) || item.account === row.account,
+                ) &&
+                !owner(row.account),
+            )
+            .map((row) => ({ description: `${row.account} ${row.name}`, bani: row.bani })),
+        ]),
+        section(
+          'Disponibilități',
+          balances
+            .filter((row) => isTreasury(row.account))
+            .map((row) => ({ description: `${row.account} ${row.name}`, bani: row.bani })),
+        ),
+        section('Datorii', [
+          ...items
+            .filter((row) => row.bani < 0n && !owner(row.account))
+            .map((row) => ({ description: `${row.account} ${row.party}`, bani: -row.bani })),
+          ...balances
+            .filter(
+              (row) =>
+                (/^4/.test(row.account) || /^(16|519)/.test(row.account)) &&
+                row.bani < 0n &&
+                !items.some(
+                  (item) => item.account === synthetic(row.account) || item.account === row.account,
+                ) &&
+                !owner(row.account),
+            )
+            .map((row) => ({ description: `${row.account} ${row.name}`, bani: -row.bani })),
+        ]),
+      ];
+      // Fixed assets are inventoried from the register: one booked without a card would be missed.
+      const booked = balances
+        .filter((row) => /^2[0-7]/.test(row.account))
+        .reduce((sum, row) => sum + row.bani, 0n);
+      const carded = cards.reduce((sum, card) => sum + card.valueBani, 0n);
+      const issues =
+        booked === carded
+          ? []
+          : [
+              {
+                code: 'INVENTORY_ASSETS',
+                message: `Imobilizările din registre (${ron(booked)} lei) diferă de cele din registrul mijloacelor fixe (${ron(carded)} lei): înregistrați fișele lipsă (assets.register).`,
+              },
+            ];
+      let nr = 0;
+      const total = (title: string) =>
+        sections
+          .filter((item) => item.title === title)
+          .flatMap((item) => item.rows)
+          .reduce((sum, row) => sum + row.bani, 0n);
+      return {
+        occasion: input.occasion,
+        date,
+        sections: sections.map((item) => ({
+          title: item.title,
+          rows: item.rows.map((row) => ({
+            nr: ++nr,
+            description: row.description,
+            value: ron(row.bani),
+          })),
+          total: ron(item.rows.reduce((sum, row) => sum + row.bani, 0n)),
+        })),
+        totals: {
+          assets: ron(
+            total('Imobilizări') + total('Stocuri') + total('Creanțe') + total('Disponibilități'),
+          ),
+          liabilities: ron(total('Datorii')),
+        },
+        issues,
+        notes:
+          input.occasion === 'cessation'
+            ? [
+                'La încetare se înscrie valoarea inventariată faptic: înregistrați diferențele constatate la inventariere.',
+              ]
+            : [],
+        clauses: ['OMFP170/2015:cap.V.14-1-2', 'OMFP170/2015:cap.II.pct.8-11'],
+      };
+    });
+  }
 
   /**
    * Balanța de verificare: opening balance at the start of the financial year, turnover before

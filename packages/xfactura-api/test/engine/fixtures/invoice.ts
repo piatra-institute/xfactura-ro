@@ -21,6 +21,8 @@ export type XmlInput = {
   taxes?: { rate: string; net: string; tax: string }[];
   /** The lines, when they are not one per category (a final invoice's negative advance line). */
   lines?: { rate: string; net: string; name?: string }[];
+  /** An invoice note (BT-22), e.g. the mention «TVA la încasare». */
+  note?: string;
 };
 // Synthetic document bytes and all amounts are independent of the production calculator.
 export function invoiceXml(input: XmlInput = {}) {
@@ -44,7 +46,7 @@ export function invoiceXml(input: XmlInput = {}) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <${root} xmlns="urn:oasis:names:specification:ubl:schema:xsd:${root}-2" xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2" xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
 <cbc:CustomizationID>urn:cen.eu:en16931:2017#compliant#urn:efactura.mfinante.ro:CIUS-RO:1.0.1</cbc:CustomizationID>
-<cbc:ID>${input.number ?? 'INV-1'}</cbc:ID><cbc:IssueDate>${date}</cbc:IssueDate><cbc:${input.credit ? 'CreditNoteTypeCode' : 'InvoiceTypeCode'}>${input.credit ? '381' : '380'}</cbc:${input.credit ? 'CreditNoteTypeCode' : 'InvoiceTypeCode'}><cbc:DocumentCurrencyCode>${currency}</cbc:DocumentCurrencyCode>
+<cbc:ID>${input.number ?? 'INV-1'}</cbc:ID><cbc:IssueDate>${date}</cbc:IssueDate><cbc:${input.credit ? 'CreditNoteTypeCode' : 'InvoiceTypeCode'}>${input.credit ? '381' : '380'}</cbc:${input.credit ? 'CreditNoteTypeCode' : 'InvoiceTypeCode'}>${input.note ? `<cbc:Note>${input.note}</cbc:Note>` : ''}<cbc:DocumentCurrencyCode>${currency}</cbc:DocumentCurrencyCode>
 ${input.taxPointDate ? `<cbc:TaxPointDate>${input.taxPointDate}</cbc:TaxPointDate>` : ''}
 ${input.credit ? `<cac:BillingReference><cac:InvoiceDocumentReference><cbc:ID>${input.originalNumber ?? 'INV-ORIGINAL'}</cbc:ID></cac:InvoiceDocumentReference></cac:BillingReference>` : ''}
 ${party('AccountingSupplierParty', supplierId, sale ? 'RO' : input.country)}${party('AccountingCustomerParty', customerId, sale ? input.country : 'RO')}
