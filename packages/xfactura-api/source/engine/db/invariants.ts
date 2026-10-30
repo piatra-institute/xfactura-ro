@@ -66,6 +66,7 @@ const appendOnly = [
   'acc_asset_events',
   'acc_anaf_connections',
   'acc_party_cnps',
+  'acc_party_status',
   'ref_fx_rates',
 ];
 // Tables with narrowly guarded updates (below) that are never deleted from.
@@ -164,6 +165,12 @@ const payrollRunVersion = (id: string) => `(
           SELECT state FROM acc_payroll_run_events e
           WHERE e.company_id = r.company_id AND e.run_id = r.id ORDER BY e.seq DESC LIMIT 1)
         FROM acc_payroll_runs r WHERE r.company_id = NEW.company_id AND r.id = ${id})`;
+/** A party's status read for a date, as the state loader records it for `${partyId}|${date}`:
+ * the number of the latest snapshot taken for exactly that date, 0 when there is none. */
+const partyStatusVersion = (id: string) => `CAST(COALESCE((
+        SELECT max(s.seq) FROM acc_party_status s
+        WHERE s.company_id = NEW.company_id AND s.party_id = substr(${id}, 1, instr(${id}, '|') - 1)
+          AND s.as_of = substr(${id}, instr(${id}, '|') + 1)), 0) AS TEXT)`;
 const latest = (table: string, scope: string) =>
   `(SELECT kind FROM ${table} WHERE company_id = NEW.company_id AND ${scope} ORDER BY seq DESC LIMIT 1)`;
 const nowMs = `CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)`;
@@ -473,11 +480,13 @@ const entryChecks: Check[] = [
   },
   {
     code: 'stale_read',
-    rule: "The open items, schedules, tax periods and payroll runs the proposal read have not changed since: an open item's version is its number of lines, a schedule's its latest version, a tax period's its tax entries, settlement lines and last entry sequence, a payroll run's its result and state.",
+    rule: "The open items, schedules, tax periods, payroll runs and party statuses the proposal read have not changed since: an open item's version is its number of lines, a schedule's its latest version, a tax period's its tax entries, settlement lines and last entry sequence, a payroll run's its result and state, a party's status for a date its latest snapshot for that date.",
     violation: `EXISTS (
       SELECT 1 FROM json_each(${version('read_set_json')}) r
       WHERE (json_extract(r.value, '$.kind') = 'taxPeriod'
           AND json_extract(r.value, '$.version') <> ${taxPeriodVersion("json_extract(r.value, '$.id')")})
+        OR (json_extract(r.value, '$.kind') = 'partyStatus'
+          AND json_extract(r.value, '$.version') <> ${partyStatusVersion("json_extract(r.value, '$.id')")})
         OR (json_extract(r.value, '$.kind') = 'payrollRun'
           AND json_extract(r.value, '$.version') IS NOT ${payrollRunVersion("json_extract(r.value, '$.id')")})
         OR (json_extract(r.value, '$.kind') = 'openItem'
@@ -1022,6 +1031,27 @@ const triggers: Trigger[] = [
         violation: `NEW.version <> 1 + COALESCE((
           SELECT max(version) FROM acc_party_versions
           WHERE company_id = NEW.company_id AND party_id = NEW.party_id), 0)`,
+      },
+    ],
+  },
+  {
+    name: 'inv_party_status_guard',
+    on: 'BEFORE INSERT ON acc_party_status',
+    checks: [
+      {
+        code: 'party_status_sequence',
+        rule: "A party's status snapshots are numbered from 1 without gaps.",
+        violation: `NEW.seq <> 1 + COALESCE((
+          SELECT max(seq) FROM acc_party_status
+          WHERE company_id = NEW.company_id AND party_id = NEW.party_id), 0)`,
+      },
+      {
+        code: 'party_status_party',
+        rule: "A status snapshot is about one of the company's Romanian parties, under the CUI that party holds.",
+        violation: `NOT EXISTS (
+          SELECT 1 FROM acc_parties p
+          WHERE p.company_id = NEW.company_id AND p.id = NEW.party_id
+            AND p.country = 'RO' AND p.tax_id = NEW.cui)`,
       },
     ],
   },

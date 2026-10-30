@@ -896,7 +896,9 @@ describe('D406 VAT codes of the engine', () => {
           ? 'sales'
           : row.deduction === 'none'
             ? 'nondeductible'
-            : 'purchases',
+            : row.deduction === 'half'
+              ? 'purchases50'
+              : 'purchases',
       );
       expect(code.percentage).toBe(
         row.code.startsWith('EXP-') ? '0' : (row.rate ?? row.code.slice(2)),

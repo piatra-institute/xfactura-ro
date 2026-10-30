@@ -528,29 +528,84 @@ describe('D406 from the books', () => {
     ).toContain('STALE');
   });
 
-  test('refuses an invoice split over accounts or rates rather than misattribute its lines', async () => {
+  test('reports a purchase with half its VAT deducted (vehicles) under the 50% code', async () => {
     const { s, document, prepare } = await september();
-    const split = await document({
-      number: 'F-MIX',
+    const fuel = await document({
+      number: 'F-FUEL',
       counterparty: '26000039',
-      date: '2026-09-12',
-      net: '1200.00',
-      tax: '232.00',
-      gross: '1432.00',
-      taxes: [
-        { rate: '21', net: '1000.00', tax: '210.00' },
-        { rate: '11', net: '200.00', tax: '22.00' },
-      ],
+      date: '2026-09-14',
+      net: '200.00',
+      tax: '42.00',
+      gross: '242.00',
+      lines: [{ rate: '21', net: '200.00', name: 'Motorină' }],
     });
-    const proposal = await s.propose('invoices.recognize', {
-      documentId: split.id,
-      allocations: [
-        { account: '628', vat: 'S-21', amount: '1000.00' },
-        { account: '6022', vat: 'S-11', amount: '200.00' },
-      ],
+    await s.book('invoices.recognize', {
+      documentId: fuel.id,
+      account: '6022',
+      deduction: 'limited',
     });
-    await s.post(await s.approve(proposal, s.reviewer, ['REDUCED_RATE']));
-    const refused = await s.refused(prepare('2026-09', { contact, accounts: { '623': '6231' } }));
+    const file = await fileOf(
+      s,
+      await prepare('2026-09', { contact, accounts: { '623': '6231' } }),
+    );
+    expect(
+      children(children(file, 'TaxTable')[0]!, 'TaxCodeDetails').map((code) =>
+        value(code, 'TaxCode'),
+      ),
+    ).toContain('341104');
+  });
+
+  test('reports an invoice split over rates on each rate’s account, and refuses a rate split over accounts', async () => {
+    const { s, document, prepare } = await september();
+    const split = (number: string) =>
+      document({
+        number,
+        counterparty: '26000039',
+        date: '2026-09-12',
+        net: '1200.00',
+        tax: '232.00',
+        gross: '1432.00',
+        taxes: [
+          { rate: '21', net: '1000.00', tax: '210.00' },
+          { rate: '11', net: '200.00', tax: '22.00' },
+        ],
+        lines: [
+          { rate: '21', net: '1000.00', name: 'Găzduire anuală' },
+          { rate: '11', net: '200.00', name: 'Cafea pentru protocol' },
+        ],
+      });
+    const recognize = async (number: string, allocations: unknown[]) => {
+      const proposal = await s.propose('invoices.recognize', {
+        documentId: (await split(number)).id,
+        allocations,
+      });
+      await s.post(await s.approve(proposal, s.reviewer, ['REDUCED_RATE']));
+    };
+    await recognize('F-MIX', [
+      { account: '628', vat: 'S-21', amount: '1000.00' },
+      { account: '623', vat: 'S-11', amount: '200.00', deduction: 'none' },
+    ]);
+    const options = { contact, accounts: { '623': '6231' } };
+    const file = await fileOf(s, await prepare('2026-09', options));
+    const invoice = children(file, 'Invoice').find((node) => value(node, 'InvoiceNo') === 'F-MIX')!;
+    expect(
+      children(invoice, 'InvoiceLine').map((line) => [
+        value(line, 'AccountID'),
+        value(children(line, 'TaxInformation')[0]!, 'TaxCode'),
+      ]),
+    ).toEqual([
+      ['628', '301104'],
+      // The engine's account; its standard account (6231) is in the master data.
+      ['623', '351105'],
+    ]);
+
+    // One rate's line booked on two accounts cannot be attributed.
+    await recognize('F-MIX-2', [
+      { account: '628', vat: 'S-21', amount: '600.00' },
+      { account: '6022', vat: 'S-21', amount: '400.00' },
+      { account: '623', vat: 'S-11', amount: '200.00' },
+    ]);
+    const refused = await s.refused(prepare('2026-09', options));
     expect(
       (refused?.details as { problems: { code: string }[] }).problems.map((item) => item.code),
     ).toEqual(['D406_SPLIT']);
@@ -612,6 +667,57 @@ describe('D406 from the books', () => {
     const quarterly = await company('quarterly');
     expect((await quarterly.s.refused(quarterly.prepare('2026-08')))?.code).toBe('VAT_PERIOD');
   });
+
+  official(
+    "a month with an invoice split over rates and a half-deducted one passes ANAF's SAF-T validator",
+    async () => {
+      const { s, document, prepare } = await september(kits());
+      const mixed = await document({
+        number: 'F-MIX',
+        counterparty: '26000039',
+        date: '2026-09-12',
+        net: '1200.00',
+        tax: '232.00',
+        gross: '1432.00',
+        taxes: [
+          { rate: '21', net: '1000.00', tax: '210.00' },
+          { rate: '11', net: '200.00', tax: '22.00' },
+        ],
+        lines: [
+          { rate: '21', net: '1000.00', name: 'Găzduire anuală' },
+          { rate: '11', net: '200.00', name: 'Cafea pentru protocol' },
+        ],
+      });
+      const split = await s.propose('invoices.recognize', {
+        documentId: mixed.id,
+        allocations: [
+          { account: '628', vat: 'S-21', amount: '1000.00' },
+          { account: '623', vat: 'S-11', amount: '200.00', deduction: 'none' },
+        ],
+      });
+      await s.post(await s.approve(split, s.reviewer, ['REDUCED_RATE']));
+      const fuel = await document({
+        number: 'F-FUEL',
+        counterparty: '26000039',
+        date: '2026-09-14',
+        net: '200.00',
+        tax: '42.00',
+        gross: '242.00',
+        lines: [{ rate: '21', net: '200.00', name: 'Motorină' }],
+      });
+      await s.book('invoices.recognize', {
+        documentId: fuel.id,
+        account: '6022',
+        deduction: 'limited',
+      });
+      const prepared = await prepare('2026-09', { contact, accounts: { '623': '6231' } });
+      expect([prepared.state, prepared.steps.at(-1)?.detail ?? null]).toEqual([
+        'validated_official',
+        null,
+      ]);
+    },
+    120_000,
+  );
 
   official(
     "a month passes ANAF's SAF-T validator",

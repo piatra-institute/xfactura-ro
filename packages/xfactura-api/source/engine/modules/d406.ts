@@ -101,6 +101,9 @@ const partnerAccounts: Readonly<Record<string, 'customer' | 'supplier'>> = {
   '4092': 'supplier',
 };
 const partnerOf = (account: string) => partnerAccounts[syntheticOf(account)];
+/** The VAT category of a tax entry as invoice allocations name it: S-21, S-11, O. */
+const categoryOf = (tax: { key: string; code: string }) =>
+  tax.key.startsWith('vat:') ? tax.key.slice(4) : tax.code;
 
 /** The engine's journals, as the file describes and groups them (Type, up to nine characters). */
 const journals: Readonly<Record<string, { description: string; type: string }>> = {
@@ -306,6 +309,17 @@ async function booksOf(tx: Transaction, companyId: string, period: string) {
       return id ? [[row.entryId, id] as const] : [];
     }),
   );
+  // Invoices split over accounts: each part's VAT category and amount, in the lines' order.
+  const allocations = new Map(
+    treatments.flatMap((row) => {
+      const parts = input.get(row.entryId)!.allocations as
+        { vat: string; amount: string }[] | undefined;
+      return (row.treatmentId === 'invoices.recognize' || row.treatmentId === 'invoices.credit') &&
+        parts
+        ? [[row.entryId, parts] as const]
+        : [];
+    }),
+  );
   const movementOf = new Map(
     treatments.flatMap((row) =>
       row.treatmentId === 'bank.settle'
@@ -427,6 +441,7 @@ async function booksOf(tx: Transaction, companyId: string, period: string) {
     periodLines,
     periodTaxes,
     recognized,
+    allocations,
     movementOf,
     items,
     loaded: state.loaded,
@@ -697,7 +712,11 @@ export function d406Declaration(
                 ? 'full'
                 : tax.deductibleBani === 0n
                   ? 'none'
-                  : 'partial';
+                  : // Half of it deducted (art. 298), within a ban of rounding.
+                    2n * tax.deductibleBani - tax.taxBani <= 1n &&
+                      tax.taxBani - 2n * tax.deductibleBani <= 1n
+                    ? 'half'
+                    : 'partial';
           const rate = d406ReverseCharges.includes(tax.code)
             ? await standardRate(tax.taxPoint)
             : undefined;
@@ -762,16 +781,51 @@ export function d406Declaration(
             'D406_TAX_LINE',
             `Nota ${header.number} are TVA, dar nicio linie pe care să se raporteze baza.`,
           );
-        // An invoice split over accounts or rates has several base lines; which part of its VAT
-        // and of its UBL lines each one carries is not attributed yet.
-        if (
-          vat.length &&
-          own.filter((line) => !line.openItemId && !/^442/.test(line.account)).length > 1
-        )
-          problem(
-            'D406_SPLIT',
-            `Nota ${header.number} este repartizată pe mai multe conturi sau cote: liniile ei nu se raportează încă în D406.`,
-          );
+        // An invoice split over accounts or rates has a base line per part, in the parts' order:
+        // each VAT goes to the lines of its category, shared by their amounts.
+        const bases = own.flatMap((line, index) =>
+          !line.openItemId && !/^442/.test(line.account) ? [index] : [],
+        );
+        const taxFor = new Map<number, D406Tax[]>();
+        if (vat.length && bases.length > 1) {
+          const parts = books.allocations.get(header.id);
+          const keys = parts?.map((part) => part.vat) ?? vat.map(({ tax }) => categoryOf(tax));
+          if (keys.length !== bases.length)
+            problem(
+              'D406_SPLIT',
+              `Nota ${header.number} are ${bases.length} linii de bază pentru ${keys.length} părți: TVA nu se poate atribui.`,
+            );
+          else
+            for (const { tax, code } of vat) {
+              const members = bases.flatMap((index, j) =>
+                keys[j] === categoryOf(tax) ? [{ index, j }] : [],
+              );
+              if (!members.length) {
+                problem(
+                  'D406_SPLIT',
+                  `Nota ${header.number}: TVA ${categoryOf(tax)} nu are o linie de bază.`,
+                );
+                continue;
+              }
+              const weights = members.map(({ index, j }) => {
+                const amount = parts
+                  ? parseMoney(parts[j]!.amount.replace(/^-/, ''), 'RON')
+                  : own[index]!.bani;
+                return amount < 0n ? -amount : amount;
+              });
+              const even = weights.every((weight) => weight === 0n)
+                ? weights.map(() => 1n)
+                : weights;
+              const shares = allocate(tax.baseBani, even);
+              const amounts = allocate(tax.taxBani, even);
+              members.forEach(({ index }, k) =>
+                taxFor.set(index, [
+                  ...(taxFor.get(index) ?? []),
+                  { type: '300', code, base: lei(shares[k]!), amount: lei(amounts[k]!) },
+                ]),
+              );
+            }
+        }
         // Advance invoices and the final invoices deducting them: their lines on 419 or 409x are
         // not attributed yet.
         if (vat.length && own.some((line) => /^(419|409[12])/.test(line.account)))
@@ -791,17 +845,19 @@ export function d406Declaration(
           const named = partner(line);
           const item = line.openItemId ? books.items.get(line.openItemId) : undefined;
           const tax: D406Tax[] =
-            index === base
-              ? vat.map(({ tax, code }) => ({
-                  type: '300',
-                  code,
-                  base: lei(tax.baseBani),
-                  amount: lei(tax.taxBani),
-                  ...(currency && tax.currency
-                    ? { currencyAmount: formatMoney(tax.taxMinor ?? 0n, tax.currency) }
-                    : {}),
-                }))
-              : [];
+            bases.length > 1
+              ? (taxFor.get(index) ?? [])
+              : index === base
+                ? vat.map(({ tax, code }) => ({
+                    type: '300',
+                    code,
+                    base: lei(tax.baseBani),
+                    amount: lei(tax.taxBani),
+                    ...(currency && tax.currency
+                      ? { currencyAmount: formatMoney(tax.taxMinor ?? 0n, tax.currency) }
+                      : {}),
+                  }))
+                : [];
           return {
             id: `${header.number}.${line.lineNo}`,
             account: line.account,
@@ -881,11 +937,45 @@ export function d406Declaration(
           );
           continue;
         }
-        const kind = productKinds.find(([pattern]) => pattern.test(baseLine.account))?.[1];
-        if (!kind) {
+        // Each UBL line goes to the account its VAT category was booked on: the category's only
+        // part, or, for a split invoice, the part of its category and sign (a negative line is an
+        // advance deducted) when they all share one account.
+        const norm = (key: string) =>
+          key.replace(/^S-(.+)$/, (_, rate: string) => `S-${Number(rate)}`);
+        const bases = own.filter((line) => !line.openItemId && !/^442/.test(line.account));
+        const parts = books.allocations.get(header.id);
+        const keys = (parts?.map((part) => part.vat) ?? vat.map(({ tax }) => categoryOf(tax))).map(
+          norm,
+        );
+        const lineKey = (line: (typeof invoice.lines)[number]) =>
+          norm(line.vat.category === 'S' ? `S-${line.vat.rate}` : line.vat.category);
+        const lineAccounts = invoice.lines.map((line) => {
+          if (bases.length === 1) return baseLine.account;
+          if (keys.length !== bases.length) return undefined;
+          let members = bases.flatMap((base, j) => (keys[j] === lineKey(line) ? [j] : []));
+          const negative = line.netAmount.startsWith('-') !== (invoice.typeCode === '381');
+          const signed = parts
+            ? members.filter((j) => parts[j]!.amount.startsWith('-') === negative)
+            : members;
+          if (signed.length) members = signed;
+          const accounts = [...new Set(members.map((j) => bases[j]!.account))];
+          return accounts.length === 1 ? accounts[0] : undefined;
+        });
+        if (lineAccounts.some((account) => account === undefined)) {
+          problem(
+            'D406_SPLIT',
+            `Factura ${number}: liniile unei cote TVA sunt înregistrate în mai multe conturi și nu se pot atribui.`,
+          );
+          continue;
+        }
+        const kinds = lineAccounts.map(
+          (account) => productKinds.find(([pattern]) => pattern.test(account!))?.[1],
+        );
+        const unknown = lineAccounts.find((_, index) => !kinds[index]);
+        if (unknown) {
           problem(
             'D406_PRODUCT_KIND',
-            `Liniile facturilor înregistrate în contul ${baseLine.account} nu se pot încadra ca bunuri sau servicii.`,
+            `Liniile facturilor înregistrate în contul ${unknown} nu se pot încadra ca bunuri sau servicii.`,
           );
           continue;
         }
@@ -926,13 +1016,22 @@ export function d406Declaration(
           const absolute = values.map((value) => (value < 0n ? -value : value));
           return absolute.some((value) => value > 0n) ? absolute : absolute.map(() => 1n);
         };
-        // Each VAT is shared among the lines in proportion to their amounts.
+        // Each VAT is shared among the lines of its category in proportion to their amounts.
         const shares = vat.map(({ tax, code }) => {
+          const members = invoice.lines.flatMap((line, index) =>
+            bases.length === 1 || lineKey(line) === norm(categoryOf(tax)) ? [index] : [],
+          );
+          const spread = (total: bigint, values: bigint[]) => {
+            const parts = allocate(total, weights(members.map((index) => values[index]!)));
+            return invoice.lines.map((_, index) =>
+              members.includes(index) ? parts[members.indexOf(index)]! : 0n,
+            );
+          };
           if (withCurrency && foreign) {
-            const minor = allocate(tax.taxMinor ?? 0n, weights(amounts));
-            return { code, tax, minor, bani: minor.map(converted) };
+            const minor = spread(tax.taxMinor ?? 0n, amounts);
+            return { code, tax, members, minor, bani: minor.map(converted) };
           }
-          return { code, tax, minor: undefined, bani: allocate(tax.taxBani, weights(lineLei)) };
+          return { code, tax, members, minor: undefined, bani: spread(tax.taxBani, lineLei) };
         });
         const target = sale ? salesInvoices : purchaseInvoices;
         target.push({
@@ -948,6 +1047,7 @@ export function d406Declaration(
                 ? line.name
                 : `${line.name.slice(0, 61)}-${hashOf(line.name).slice(0, 8)}`;
             const known = products.get(code);
+            const kind = kinds[index]!;
             if (known && known.kind !== kind)
               problem(
                 'D406_PRODUCT_KIND',
@@ -976,7 +1076,7 @@ export function d406Declaration(
                   }
                 : undefined;
             return {
-              account: baseLine.account,
+              account: lineAccounts[index]!,
               product: code,
               description: clip(line.name, 256),
               quantity: sign < 0n ? negated(line.quantity) : line.quantity,
@@ -994,15 +1094,17 @@ export function d406Declaration(
               amount: lei(lineLei[index]!),
               ...(currency ? { currency } : {}),
               taxPointDate: shares[0]!.tax.taxPoint,
-              tax: shares.map((share) => ({
-                type: '300',
-                code: share.code,
-                base: lei(lineLei[index]!),
-                amount: lei(share.bani[index]!),
-                ...(share.minor
-                  ? { currencyAmount: formatMoney(share.minor[index]!, invoice.currency) }
-                  : {}),
-              })),
+              tax: shares
+                .filter((share) => share.members.includes(index))
+                .map((share) => ({
+                  type: '300',
+                  code: share.code,
+                  base: lei(lineLei[index]!),
+                  amount: lei(share.bani[index]!),
+                  ...(share.minor
+                    ? { currencyAmount: formatMoney(share.minor[index]!, invoice.currency) }
+                    : {}),
+                })),
             };
           }),
         });

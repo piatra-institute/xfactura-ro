@@ -211,7 +211,12 @@ describe('month close with bank', () => {
   test('every movement must be explained and the ledger must equal the statement', async () => {
     const { s, payable, receivable, payment, fee, receipt } = await books();
     await s.closeApproved('2026-01');
-    expect(findings(await s.close('2026-10'))).toEqual(['UNEXPLAINED_MOVEMENTS', 'BANK_BALANCE']);
+    // The supplier's status at ANAF was never checked: a warning, not a block.
+    expect(findings(await s.close('2026-10'))).toEqual([
+      'UNEXPLAINED_MOVEMENTS',
+      'BANK_BALANCE',
+      'SUPPLIER_STATUS_UNCHECKED',
+    ]);
     await s.book('bank.settle', {
       movementId: payment.id,
       allocations: [{ openItem: payable, amount: '100.00' }],
@@ -243,6 +248,9 @@ describe('month close with bank', () => {
       movementId: receipt.id,
       allocations: [{ openItem: receivable, amount: '50.00' }],
     });
-    expect(findings(await s.close('2026-10'))).toEqual(['BANK_BALANCE']);
+    expect(findings(await s.close('2026-10'))).toEqual([
+      'BANK_BALANCE',
+      'SUPPLIER_STATUS_UNCHECKED',
+    ]);
   });
 });

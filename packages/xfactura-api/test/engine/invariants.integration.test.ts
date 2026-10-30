@@ -32,6 +32,7 @@ import {
   memberships,
   parties,
   partyCnps,
+  partyStatuses,
   partyVersions,
   payrollLines,
   payrollRunEvents,
@@ -381,6 +382,52 @@ async function assetRecord(world: World, extra: Partial<typeof assets.$inferInse
   return { id, dispose };
 }
 
+/** A Romanian supplier with ANAF's answer kept, and a way to record its status snapshots. */
+async function statusRecord(world: World) {
+  const partyId = randomUUID();
+  const evidenceId = randomUUID();
+  await world.db.write(async (tx) => {
+    await tx.insert(parties).values({
+      id: partyId,
+      companyId: world.company,
+      kind: 'ro_legal_entity',
+      country: 'RO',
+      taxId: '18547290',
+      name: 'Furnizor SRL',
+      createdBy: world.owner,
+    });
+    await tx.insert(evidence).values({
+      id: evidenceId,
+      companyId: world.company,
+      hash: 'd'.repeat(64),
+      filename: 'anaf-registre.json',
+      mediaType: 'application/json',
+      size: 1,
+      createdBy: world.owner,
+    });
+  });
+  const snapshot = (seq: number, extra: Partial<typeof partyStatuses.$inferInsert> = {}) =>
+    world.db.write((tx) =>
+      tx.insert(partyStatuses).values({
+        companyId: world.company,
+        partyId,
+        seq,
+        cui: '18547290',
+        asOf: '2026-03-10',
+        name: 'FURNIZOR SRL',
+        vatPayer: true,
+        cashVat: false,
+        inactive: false,
+        splitVat: false,
+        eInvoice: true,
+        evidenceId,
+        createdBy: world.owner,
+        ...extra,
+      }),
+    );
+  return { partyId, snapshot };
+}
+
 /** An employee with one contract and a prepared payroll run, written directly. */
 async function payrollRecords(world: World) {
   const partyId = randomUUID();
@@ -542,6 +589,31 @@ const attacks: Attack[] = [
           createdBy: world.owner,
         }),
       ),
+  },
+  {
+    trigger: 'inv_party_status_guard',
+    code: 'party_status_sequence',
+    name: 'a status snapshot that skips a number',
+    run: async (world) => (await statusRecord(world)).snapshot(2),
+  },
+  {
+    trigger: 'inv_party_status_guard',
+    code: 'party_status_party',
+    name: 'a status snapshot under a CUI the party does not hold',
+    run: async (world) => (await statusRecord(world)).snapshot(1, { cui: '14399840' }),
+  },
+  {
+    trigger: entry,
+    code: 'stale_read',
+    name: 'posting after a snapshot of the party status the proposal read',
+    run: async (world) => {
+      const { partyId, snapshot } = await statusRecord(world);
+      const { proposed, approvalId } = await approved(world, sale(world), {
+        readSet: [{ kind: 'partyStatus', id: `${partyId}|2026-03-10`, version: '0' }],
+      });
+      await snapshot(1, { inactive: true, inactiveSince: '2026-03-01' });
+      return post(world, proposed, { approvalId });
+    },
   },
   {
     trigger: 'inv_party_version_guard',
@@ -1790,6 +1862,7 @@ describe('append-only records', () => {
     await spv.step(await spv.submit(), 1, 'authorized');
     await (await payrollRecords(world)).line();
     await (await assetRecord(world)).dispose(1, '2026-06-30');
+    await (await statusRecord(world)).snapshot(1);
     const shareholder = randomUUID();
     await world.db.write(async (tx) => {
       await tx.insert(parties).values({

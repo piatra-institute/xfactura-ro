@@ -41,7 +41,43 @@ export interface ReadPlan {
   turnover?: TurnoverQuery[];
   /** Every fixed asset in the register, with the depreciation booked for it. */
   assets?: boolean;
+  /**
+   * ANAF's status of a Romanian party on a date (`parties.checkStatus`): the latest snapshot
+   * taken for exactly that date. A snapshot for an earlier date does not count: ANAF answers for
+   * the date asked, and an earlier answer cannot show an entry in the register of inactive
+   * taxpayers made since. A missing snapshot is a read too, so a snapshot taken for the date
+   * after the proposal, or a newer one, makes it stale.
+   */
+  partyStatus?: { partyId: string; date: LocalDate }[];
 }
+
+/** What ANAF's register held about a Romanian party on a date, as one snapshot recorded it. */
+export interface PartyStatus {
+  partyId: string;
+  /** The date the status is for (the service's `data`). */
+  date: LocalDate;
+  /** Its number among the party's snapshots; the read-set version. */
+  seq: number;
+  cui: string;
+  name: string;
+  vatPayer: boolean;
+  /** VAT on a cash basis (registrul TVA la încasare). */
+  cashVat: boolean;
+  /** In the register of inactive taxpayers on `date`. */
+  inactive: boolean;
+  inactiveSince: LocalDate | null;
+  reactivatedOn: LocalDate | null;
+  splitVat: boolean;
+  /** In the RO e-Factura register. */
+  eInvoice: boolean;
+  struckOffOn: LocalDate | null;
+  /** ANAF's answer, kept as evidence. */
+  evidenceId: string;
+  checkedAt: string;
+}
+
+/** The key of a party's status on a date in `Loaded.partyStatus` and in the read-set. */
+export const partyStatusKey = (partyId: string, date: LocalDate) => `${partyId}|${date}`;
 
 /** A fixed asset as registered, with what the ledger holds for it; amounts in bani. */
 export interface AssetState {
@@ -108,7 +144,8 @@ export interface ReadSetEntry {
     | 'artifact'
     | 'payrollRun'
     | 'turnover'
-    | 'assets';
+    | 'assets'
+    | 'partyStatus';
   id: string;
   version: string;
 }
@@ -287,6 +324,8 @@ export interface Loaded {
   /** By `turnoverKey(query)`: each account with posted lines in the range. */
   turnover: ReadonlyMap<string, readonly AccountTurnover[]>;
   assets: ReadonlyMap<string, AssetState>;
+  /** By `partyStatusKey`: only the statuses a snapshot exists for. */
+  partyStatus: ReadonlyMap<string, PartyStatus>;
 }
 
 /** The company profile value on an axis at a date, or null when nothing is recorded. */

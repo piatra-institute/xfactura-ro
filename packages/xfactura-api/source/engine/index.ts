@@ -5,6 +5,7 @@ import { Database } from './db/database';
 import { LocalObjectStore } from './adapters/object-store';
 import { Engine } from './engine';
 import { AnafKits, DukIntegrator, saftKitId } from './adapters/declaration-validator';
+import { AnafTaxpayers } from './adapters/anaf-taxpayers';
 import { createApp } from './http/app';
 
 /** Mounts the accounting engine's HTTP interface in the existing Express server. */
@@ -25,6 +26,8 @@ export async function mountAccounting(server: Express) {
     new Engine(db, new LocalObjectStore(options.objectDir), options.authSecret, {
       ...(kits.general || kits.saft ? { declarationValidator: new AnafKits(kits) } : {}),
       ...(options.anaf ? { anaf: options.anaf } : {}),
+      // ANAF's public registers of taxpayers need no credentials.
+      taxpayers: new AnafTaxpayers(),
     }),
     options,
   );

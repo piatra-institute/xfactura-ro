@@ -22,6 +22,15 @@ export const vatDefinitions: ParameterDefinition[] = [
     description:
       'Cota redusă de TVA. Operațiunile cărora li se aplică sunt o clasificare separată, pe linie.',
   },
+  {
+    key: 'ro.vat.deduction.limited',
+    axis: 'vat_chargeability_date',
+    continuity: 'block',
+    scope: [],
+    value: percent,
+    description:
+      'Partea deductibilă a TVA pentru vehiculele rutiere motorizate care nu sunt utilizate exclusiv în scopul activității economice.',
+  },
 ];
 
 // Every version is `extracted`: its clauses (src/ro/sources) say where the value comes from, and
@@ -86,5 +95,17 @@ export const vatVersions: ParameterVersion[] = [
       'ANAF/D300-12.0.0:rd.10',
       'ANAF/Ploiesti-modificari-tva:cote',
     ],
+  },
+  {
+    id: 'ro.vat.deduction.limited/2016-01-01',
+    key: 'ro.vat.deduction.limited',
+    scope: {},
+    value: '50',
+    from: date('2016-01-01'),
+    to: null,
+    reviewedThrough: date('2026-12-31'),
+    knowledgeDate: null,
+    status: 'extracted',
+    clauses: ['ANAF/Cod-fiscal-consolidat:art.298'],
   },
 ];

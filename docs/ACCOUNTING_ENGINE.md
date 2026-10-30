@@ -69,6 +69,10 @@ The chart is OMFP 1802/2014 as published, plus the accounts later orders added, 
 - **Input:**
   - **One account** for every line: a revenue (70x) or expense (6xx) account, or for a purchase a fixed-asset account (20x, 21x), whose supplier is then held on 404. For purchases, the deduction is `full` or `none`.
   - **Or `allocations`:** each VAT category's taxable amount (`S-21`, `S-11`, `O`) split over accounts in the document's currency, each part with its own deduction. A category's parts must add up to its amount; allowances and charges are inside it.
+  - **Deduction:** `full`, `none`, or `limited`.
+    - `limited` deducts the register's share (`ro.vat.deduction.limited`, 50%) of a part's VAT. This applies to vehicles not used exclusively for the business and their expenses (Codul fiscal art. 298); trucks above 3.5 t or 9 seats, couriers, sales agents, taxis, rentals and the other exceptions of alin. (2)–(3) deduct in full.
+    - The share is rounded half up to the ban. The rest of the VAT stays in the expense, and D300 rd. 31 holds only what was deducted.
+    - Which invoices concern such vehicles is the company's choice; the engine doesn't guess.
   - **Advances:**
     - An advance invoice puts its part on 419 (received from a customer) or 4091/4092 (paid to a supplier), opening an advance of the partner.
     - The final invoice's negative line deducting the advance goes to the same account and names the advance it settles (`advance`). The negative line is in the advance's VAT category, as e-Factura writes it, so the VAT follows.
@@ -77,6 +81,13 @@ The chart is OMFP 1802/2014 as published, plus the accounts later orders added, 
     - Purchase advances are deductible in full.
     - Advances in foreign currency are not settled yet.
   - Optionally the service date.
+  - **Supplier status:**
+    - For a purchase from a Romanian supplier, the treatment reads the supplier's ANAF status snapshot for the invoice's tax point.
+    - If the snapshot shows the supplier inactive, no part may deduct VAT (`SUPPLIER_INACTIVE`, Codul fiscal art. 11 alin. (7)). The input `inactiveException` (`forced_execution`, `bankruptcy`) allows deduction behind an acknowledgement.
+    - Without a snapshot, nothing is refused, but the month's close warns (`SUPPLIER_STATUS_UNCHECKED`).
+    - Snapshots come from `parties.checkStatus`. It calls ANAF's public taxpayer-status service (`PlatitorTvaRest` v9: at most 100 CUIs per request, 1 request per second), keeps the raw answer as evidence, and records one snapshot per party and date in the append-only `acc_party_status`.
+    - The snapshot read is for exactly the date asked. A newer snapshot for that date makes a pending proposal stale.
+    - Not covered yet: purchases already posted when a later snapshot shows the supplier inactive, advance invoices from an inactive supplier, and purchases through cash expense reports or the general journal.
 - **Supported:** the categories of the document's VAT breakdown, each S at the register's standard rate for the tax point (`taxPointDate`, else issue date) or at its reduced rate, or O. The reduced rate applies only to the supplies of Codul fiscal art. 291 alin. (2), so it is an `ack` warning (`REDUCED_RATE`): the reviewer confirms the operation qualifies.
   - The company's `vat.status` on the tax-point date must be recorded.
   - A VAT payer's sale must use S; a non-payer's sale must use O.
@@ -103,9 +114,10 @@ The chart is OMFP 1802/2014 as published, plus the accounts later orders added, 
 ### `invoices.credit`: credit note against the original
 
 - **Document:** an imported credit note (381, or a negative 380 normalized by the parser).
-- **Input:** the original document, the account it used and the deduction.
+- **Input:** the original document, and the account it used with the deduction, or `allocations` splitting each VAT category over the original's accounts (positive amounts in lei, each part with its deduction).
 - **Rules:**
-  - The credit note must reference the original's number and keep its VAT category and rate.
+  - The credit note must reference the original's number. Each of its VAT categories must be one of the original's, at the rates in force on the original's tax point.
+  - Each category's tax entry points to the original's entry of the same category.
   - Amounts reverse the original accounts by red storno, in the credit note's own tax period, and reduce the original open item.
   - Crediting more than remains open is refused.
 - **Not supported:** foreign-currency credit notes.
@@ -330,10 +342,10 @@ Services across the border are not in it (D390 and D300 report them); acquisitio
   - the invoices from the retained UBL, with the booked account;
   - products from the invoice lines;
   - the bank entries settling partners, as payments.
-- **VAT codes** go on the base line, through a mapping table (`saft/tax-codes.ts`) in which each row quotes ANAF's description. A code with no certain SAF-T code (`O`, 9%, 5%, partial deduction) is a problem, never a guess.
+- **VAT codes** go on the base line, through a mapping table (`saft/tax-codes.ts`) in which each row quotes ANAF's description. A purchase with half its VAT deducted (vehicles) takes ANAF's 50% codes (34xxxx). A code with no certain SAF-T code (`O`, 9%, 5%, other partial deductions) is a problem, never a guess.
 - **Validation:** ANAF's D406 validator runs only in ANAF's SAF-T kit, pinned separately (`anaf-saft`). The engine sends D406 there and every other return to the general DUKIntegrator, and records which kit ran.
 - **The validator doesn't check** that entries balance, the control totals, or currency conversion. Those are the writer's own checks (`checkD406`).
-- **Not produced yet:** payroll TaxTypes (their lines carry 000), the annual assets file, the stock file, invoices with document-level allowances, invoices split over accounts or rates (`D406_SPLIT`), advance invoices and their deduction (`D406_ADVANCE`), and invoices without UBL XML.
+- **Not produced yet:** payroll TaxTypes (their lines carry 000), the annual assets file, the stock file, invoices with document-level allowances, a VAT rate's lines booked on several accounts (`D406_SPLIT`; an invoice split by rate is reported, each line on its rate's account and with its rate's VAT), advance invoices and their deduction (`D406_ADVANCE`), and invoices without UBL XML.
 
 **Obligations calendar.** `obligations.calendar` lists the returns whose periods end in a range of months, with their deadlines and where each one stands: due, overdue, prepared, authorized, filed, accepted, rejected, or blocked when its deadline isn't sourced for the period.
 - **Which returns apply** is read from the profile and the books:
@@ -416,6 +428,7 @@ Closing is a reviewed action: `periods.close.request`, then `actions.approve` on
 | Ledger balance different from a statement's closing balance, or a statement that does not continue the previous one | block |
 | Foreign-currency monetary balances not revalued at month end | warn |
 | Amounts deferred to 471 or 472 with a release due by month end (`DEFERRAL_DUE`) | block |
+| Purchase invoices whose Romanian supplier has no ANAF status snapshot for the tax point (`SUPPLIER_STATUS_UNCHECKED`) | warn |
 
 A close records closing balances per account and currency and joins a hash chain of period events. Reopening is reviewed the same way and requires later months to be reopened first.
 
@@ -438,7 +451,7 @@ A close records closing balances per account and currency and joins a hash chain
   - CSV bank statements.
 - **Not built yet:**
   - verification of the Ministry's signature; B2C identification;
-  - VAT categories other than S/O, TVA la încasare, domestic reverse charge, goods across the border, pro-rata, partial deduction (for example 50% for cars); credit notes on several rates; D394 for TVA la încasare, simplified invoices and receipts; reading the P300 file;
+  - VAT categories other than S/O, TVA la încasare, domestic reverse charge, goods across the border, pro-rata; D394 for TVA la încasare, simplified invoices and receipts; reading the P300 file;
   - payroll beyond salary in money, vouchers, annual leave and sick leave for ordinary illness (other indemnity codes, benefits in kind), and corrections of a posted month;
   - asset revaluation and fiscal depreciation; leasing and loans;
   - VAT deducted from receipts and simplified invoices; cash payments in D406's payments section;

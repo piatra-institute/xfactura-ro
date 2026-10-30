@@ -107,6 +107,7 @@ Reviewed actions (month close and reopen) follow the same pattern: request, appr
 | `treasury.accounts` | read | yes | — | Bank and cash accounts. |
 | `fx.importBnr`, `fx.rates` | write / read | yes | — | BNR reference rates. |
 | `openItems.list` | read | yes | — | Open receivables, payables and other items. |
+| `parties.checkStatus` | write | yes | — | Asks ANAF's public service for the partners' status (VAT, inactive, cash-accounting VAT, split VAT, e-Factura) on a date, or for a month's suppliers on their invoices' tax points, and records the snapshots. |
 | `ledger.trialBalance`, `ledger.journal`, `vat.journal` | read | yes | — | Trial balance, Registrul-jurnal, VAT journals. |
 | `periods.close.request` | write | yes | — | Prepare a month close with all checks. |
 | `periods.reopen.request` | review | no | — | Prepare a reasoned reopening. |

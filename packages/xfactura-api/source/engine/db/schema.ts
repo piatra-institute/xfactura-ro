@@ -1324,6 +1324,47 @@ export const partyCnps = sqliteTable(
   ],
 );
 
+/** What ANAF's register of taxpayers (web service v9) answered about a Romanian party for a
+ * date: one snapshot per answer, numbered per party, citing the answer kept as evidence. A later
+ * check adds a snapshot; none is ever corrected. */
+export const partyStatuses = sqliteTable(
+  'acc_party_status',
+  {
+    companyId: companyId(),
+    partyId: text('party_id').notNull(),
+    seq: counter('seq').notNull(),
+    /** The CUI asked about: the party's own. */
+    cui: text('cui').notNull(),
+    /** The date the status is for (the service's `data`). */
+    asOf: text('as_of').notNull(),
+    name: text('name').notNull(),
+    vatPayer: integer('vat_payer', { mode: 'boolean' }).notNull(),
+    cashVat: integer('cash_vat', { mode: 'boolean' }).notNull(),
+    inactive: integer('inactive', { mode: 'boolean' }).notNull(),
+    inactiveSince: text('inactive_since'),
+    reactivatedOn: text('reactivated_on'),
+    splitVat: integer('split_vat', { mode: 'boolean' }).notNull(),
+    eInvoice: integer('e_invoice', { mode: 'boolean' }).notNull(),
+    struckOffOn: text('struck_off_on'),
+    evidenceId: text('evidence_id').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.partyId, t.seq] }),
+    index('party_status_date').on(t.companyId, t.partyId, t.asOf),
+    check('party_status_cui', sql`${t.cui} glob '[0-9]*' and length(${t.cui}) between 2 and 10`),
+    foreignKey({
+      columns: [t.companyId, t.partyId],
+      foreignColumns: [parties.companyId, parties.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.evidenceId],
+      foreignColumns: [evidence.companyId, evidence.id],
+    }),
+  ],
+);
+
 /** A company's connection to ANAF's APIs: OAuth tokens, sealed, one version per grant or
  * refresh. The certificate that obtained them never reaches the engine. */
 export const anafConnections = sqliteTable(

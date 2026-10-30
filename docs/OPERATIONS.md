@@ -52,6 +52,8 @@ Default hosted recovery targets remain RPO at most five minutes and RTO at most 
 
 Restore books, tax positions, evidence/artifacts, permissions and pending jobs coherently. Reconcile external submissions after recovery instead of repeating uncertain actions. Test upgrades with retained older exports/packages and compatible migration/fix-forward paths.
 
+Outgoing calls: besides the e-Factura API, `parties.checkStatus` calls ANAF's public taxpayer service (webservicesp.anaf.ro, `PlatitorTvaRest` v9), throttled to 1 request per second per process; several workers would each send their own.
+
 Alert on failed/stuck jobs, stale imports, expiring ANAF authorization, pending/rejected receipts, unreconciled sources/tax positions, dependency/storage pressure and backup/restore failures. AI-provider exhaustion is a separate failure and must leave accounting usable.
 
 Monitor human minutes per company/period, repeated entry, exception types, traceability, validator outcomes, storage/compute/support consumption and migration effort. Show input freshness and uncertainty in the UI, not only operational dashboards.

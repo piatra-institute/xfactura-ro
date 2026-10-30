@@ -144,6 +144,7 @@ describe('register consistency', () => {
       'ro.vat.rate/S/2025-08-01',
       'ro.vat.rate/O/2024-01-01',
       'ro.vat.rate.reduced/2025-08-01',
+      'ro.vat.deduction.limited/2016-01-01',
     ]);
   });
 });

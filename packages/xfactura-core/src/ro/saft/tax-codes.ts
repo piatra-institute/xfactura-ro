@@ -4,7 +4,8 @@ import { vatTaxCodes } from './data/tax';
  * How the engine's VAT codes (the `code` of its tax entries) are reported as SAF-T TaxCodes of
  * TaxType 300 (data/tax `vatTaxCodes`, from RO_SAFT_SchemaDefCod_05.02.2026.xlsx): supplies from
  * sheet Livrari (31xxxx), acquisitions with the VAT deducted in full from Achizitii ded 100%
- * (30xxxx) and without deduction from Achizitii neded (35xxxx). Each row quotes the code's
+ * (30xxxx), with half of it deducted (vehicles, Codul fiscal art. 298) from Achizitii ded 50%
+ * (34xxxx) and without deduction from Achizitii neded (35xxxx). Each row quotes the code's
  * description and, as ANAF's sheets give it, its row of the D300 from 01.08.2025.
  *
  * A reverse charge (RC-*) is one operation: the code ANAF lists for it corresponds to both the
@@ -19,8 +20,8 @@ export type D406VatCodeRow = {
   code: string;
   /** The VAT rate, for the reverse charges taxed at the standard rate of their tax point. */
   rate?: string;
-  /** For acquisitions: the VAT deducted in full or not at all. */
-  deduction?: 'full' | 'none';
+  /** For acquisitions: the VAT deducted in full, by half or not at all. */
+  deduction?: 'full' | 'half' | 'none';
   /** The SAF-T TaxCode. */
   taxCode: string;
   /** Its description in ANAF's nomenclature, as vatTaxCodes has it. */
@@ -134,6 +135,33 @@ export const d406VatCodes: readonly D406VatCodeRow[] = [
   {
     direction: 'input',
     code: 'S-21',
+    deduction: 'half',
+    taxCode: '341104',
+    description:
+      'Achiziţii de bunuri şi servicii taxabile cu cota de 21%, altele decât importurile si cele supuse masurilor de simplificare',
+    d300: '24',
+  },
+  {
+    direction: 'input',
+    code: 'S-19',
+    deduction: 'half',
+    taxCode: '341101',
+    description:
+      'Achiziţii de bunuri şi servicii taxabile cu cota de 19%, altele decât importurile si cele supuse masurilor de simplificare',
+    d300: '24.1',
+  },
+  {
+    direction: 'input',
+    code: 'S-11',
+    deduction: 'half',
+    taxCode: '341105',
+    description:
+      'Achiziţii de bunuri şi servicii taxabile cu cota de 11% altele decât importurile si cele supuse masurilor de simplificare',
+    d300: '25',
+  },
+  {
+    direction: 'input',
+    code: 'S-21',
     deduction: 'none',
     taxCode: '351104',
     description:
@@ -209,7 +237,7 @@ export function d406VatTaxCode(entry: {
   direction: 'output' | 'input';
   code: string;
   rate?: string;
-  deduction?: 'full' | 'none' | 'partial';
+  deduction?: 'full' | 'half' | 'none' | 'partial';
 }): string | null | undefined {
   if (entry.direction === 'output' && d406ReverseCharges.includes(entry.code)) return null;
   const row = d406VatCodes.find(

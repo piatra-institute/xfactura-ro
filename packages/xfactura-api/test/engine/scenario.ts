@@ -13,6 +13,7 @@ import { user } from '../../source/engine/db/schema';
 import { LocalObjectStore } from '../../source/engine/adapters/object-store';
 import { Engine } from '../../source/engine/engine';
 import type { EFacturaPort } from '../../source/engine/adapters/efactura';
+import type { TaxpayerRegistryPort } from '../../source/engine/adapters/anaf-taxpayers';
 import type { DeclarationValidator } from '../../source/engine/adapters/declaration-validator';
 import type { DeclarationKind } from '../../source/engine/modules/declarations';
 
@@ -25,6 +26,7 @@ export async function scenario(
     /** The company's CUI; 12345678 unless a test needs a valid checksum. */
     cui?: string;
     efactura?: EFacturaPort;
+    taxpayers?: TaxpayerRegistryPort;
     clock?: () => number;
     declarations?: DeclarationKind[];
     declarationValidator?: DeclarationValidator;
@@ -41,6 +43,7 @@ export async function scenario(
   const objects = new LocalObjectStore(join(directory, 'objects'));
   const engine = new Engine(db, objects, secret, {
     ...(options.efactura ? { efactura: options.efactura } : {}),
+    ...(options.taxpayers ? { taxpayers: options.taxpayers } : {}),
     ...(options.clock ? { clock: options.clock } : {}),
     ...(options.declarations ? { declarations: options.declarations } : {}),
     ...(options.declarationValidator ? { declarationValidator: options.declarationValidator } : {}),

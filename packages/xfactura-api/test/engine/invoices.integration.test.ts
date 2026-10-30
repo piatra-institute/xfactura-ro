@@ -257,6 +257,51 @@ describe('invoices on several accounts and rates', () => {
     expect(await balance(s, '401')).toEqual({ debit: '0.00', credit: '1432.00' });
   });
 
+  test('a credit note on both rates reverses each part with its deduction', async () => {
+    const s = await company();
+    const document = await importInvoice(s, mixed);
+    const original = await s.propose('invoices.recognize', {
+      documentId: document.id,
+      allocations: [
+        { account: '628', vat: 'S-21', amount: '1000.00' },
+        { account: '623', vat: 'S-11', amount: '200.00', deduction: 'none' },
+      ],
+    });
+    await s.post(await s.approve(original, s.reviewer, ['REDUCED_RATE']));
+    const note = await importInvoice(s, {
+      number: 'CN-MIX',
+      credit: true,
+      originalNumber: 'F-MIX',
+      net: '150.00',
+      tax: '26.50',
+      gross: '176.50',
+      taxes: [
+        { rate: '21', net: '100.00', tax: '21.00' },
+        { rate: '11', net: '50.00', tax: '5.50' },
+      ],
+    });
+    const credited = await s.propose('invoices.credit', {
+      documentId: note.id,
+      originalDocumentId: document.id,
+      allocations: [
+        { account: '628', vat: 'S-21', amount: '100.00' },
+        { account: '623', vat: 'S-11', amount: '50.00', deduction: 'none' },
+      ],
+    });
+    expect(lines(credited)).toEqual([
+      'D 628 -100.00',
+      'D 623 -55.50',
+      'D 4426 -21.00',
+      'C 401 -176.50',
+    ]);
+    expect(vat(credited)).toEqual([
+      'vat:S-21 S-21 -100.00/-21.00 deducted -21.00 line 2',
+      'vat:S-11 S-11 -50.00/-5.50 deducted 0.00 line -',
+    ]);
+    await s.post(await s.approve(credited, s.reviewer, ['REDUCED_RATE']));
+    expect(await balance(s, '401')).toEqual({ debit: '0.00', credit: '1255.50' });
+  });
+
   test('one account takes every category; a sale collects VAT by rate', async () => {
     const s = await company();
     const purchase = await importInvoice(s, mixed);
@@ -287,6 +332,40 @@ describe('invoices on several accounts and rates', () => {
       'vat:S-21 S-21 1000.00/210.00 deducted 0.00 line 3',
       'vat:S-11 S-11 200.00/22.00 deducted 0.00 line 4',
     ]);
+  });
+
+  test('a car not used only for the business: half of its VAT deducted (Codul fiscal art. 298)', async () => {
+    const s = await company();
+    const fuel = await importInvoice(s, {
+      number: 'F-FUEL',
+      net: '200.00',
+      tax: '42.00',
+      gross: '242.00',
+    });
+    const proposal = await s.propose('invoices.recognize', {
+      documentId: fuel.id,
+      account: '6022',
+      deduction: 'limited',
+    });
+    expect(lines(proposal)).toEqual(['D 6022 221.00', 'D 4426 21.00', 'C 401 242.00']);
+    expect(vat(proposal)).toEqual(['vat S-21 200.00/42.00 deducted 21.00 line 1']);
+    // A company outside VAT deducts nothing, limited or not.
+    const outside = await company('non_vat');
+    const other = await importInvoice(outside, {
+      number: 'F-FUEL',
+      net: '200.00',
+      tax: '42.00',
+      gross: '242.00',
+    });
+    expect(
+      codes(
+        await outside.propose('invoices.recognize', {
+          documentId: other.id,
+          account: '6022',
+          deduction: 'limited',
+        }),
+      ),
+    ).toEqual(['DEDUCTION']);
   });
 
   test('allocations must cover each category exactly, and keep assets apart from expenses', async () => {

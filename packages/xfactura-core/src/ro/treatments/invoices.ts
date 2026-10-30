@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   accountCodePattern,
+  partyStatusKey,
   profileAt,
   vatPeriodOf,
   type DocumentRecord,
@@ -10,16 +11,19 @@ import {
   type LineSpec,
   type Loaded,
   type OpenItemSpec,
+  type ReadPlan,
   type TaxEntrySpec,
   type Treatment,
 } from '../../kernel';
 import {
   allocate,
   convertMinor,
+  divRound,
   formatMoney,
   isSupportedCurrency,
   LEDGER_CURRENCY,
   parseMoney,
+  parseScaled,
 } from '../../money';
 import { selectRate } from '../fx';
 import { RuleGapError, type RuleContext } from '../../rules';
@@ -47,6 +51,18 @@ const warn = (code: string, message: string): Issue => ({ code, severity: 'ack',
 const ron = (value: string) => parseMoney(value, LEDGER_CURRENCY);
 const date = (value: string) => value as LocalDate;
 
+/** A document's tax point: its issue date unless it states another (BT-7). It is also the date
+ * a purchase's supplier status is checked on. */
+export const taxPointOf = (body: Pick<InvoiceDocument, 'issueDate' | 'taxPointDate'>) =>
+  date(body.taxPointDate ?? body.issueDate);
+
+/** No deduction from a supplier entered in the register of inactive taxpayers. */
+const INACTIVE_CLAUSE = 'ANAF/Cod-fiscal-consolidat:art.11(7)';
+const inactiveExceptions = {
+  forced_execution: 'bunuri cumpărate în procedura de executare silită',
+  bankruptcy: 'achiziție de la un furnizor aflat în procedura falimentului (Legea nr. 85/2014)',
+} as const;
+
 type Invoice = { record: DocumentRecord; body: InvoiceDocument; direction: 'sale' | 'purchase' };
 
 function invoiceOf(loaded: Loaded, id: string, credit: boolean): Invoice | Issue {
@@ -66,64 +82,6 @@ function invoiceOf(loaded: Loaded, id: string, credit: boolean): Invoice | Issue
       ? 'sale'
       : 'purchase';
   return { record, body: invoiceDocumentSchema.parse(record.body), direction };
-}
-
-/**
- * The VAT the engine can determine for a document: one tax category on every line, in RON,
- * with the company's registration on the tax-point date. Returns the issues that prevent it.
- */
-function vatFor(invoice: Invoice, loaded: Loaded, rules: RuleContext, taxPoint: LocalDate) {
-  const issues: Issue[] = [];
-  const body = invoice.body;
-  const status = profileAt(loaded, 'vat.status', taxPoint);
-  const categories = new Set([
-    ...body.taxes.map((tax) => `${tax.category}/${tax.rate}`),
-    ...body.lines.map((line) => `${line.vatCategory}/${line.vatRate}`),
-  ]);
-  if (body.taxes.length !== 1 || categories.size !== 1)
-    issues.push(
-      block('TAX_MIX', 'Documentele cu mai multe cote sau categorii TVA cer un tratament separat.'),
-    );
-  if (!status)
-    issues.push(
-      block('DETERMINATION_MISSING', 'Înregistrați regimul TVA al companiei pentru această dată.'),
-    );
-  const tax = body.taxes[0]!;
-  if (tax.category === 'S') {
-    const rate = rules.param<string>('ro.vat.rate', 'vat_chargeability_date', taxPoint, {
-      category: 'S',
-    });
-    if (tax.rate !== rate) {
-      let reduced: string | null = null;
-      try {
-        reduced = rules.param<string>('ro.vat.rate.reduced', 'vat_chargeability_date', taxPoint);
-      } catch (error) {
-        if (!(error instanceof RuleGapError)) throw error;
-      }
-      // The reduced rate applies only to the supplies of art. 291 alin. (2): the reviewer confirms.
-      issues.push(
-        tax.rate === reduced
-          ? warn(
-              'REDUCED_RATE',
-              `Cota redusă de ${reduced}% se aplică doar livrărilor și prestărilor de la art. 291 alin. (2) din Codul fiscal: confirmați că operațiunea se încadrează.`,
-            )
-          : block(
-              'VAT_RATE',
-              `Cota din document (${tax.rate}%) diferă de cotele în vigoare (${rate}%${reduced ? `, ${reduced}%` : ''}).`,
-            ),
-      );
-    }
-  } else if (tax.category !== 'O' || ron(tax.tax) !== 0n)
-    issues.push(block('TAX_CATEGORY', `Categoria TVA ${tax.category} cere un tratament separat.`));
-  if (invoice.direction === 'sale') {
-    if (status === 'normal_vat' && tax.category !== 'S')
-      issues.push(
-        block('TAX_CATEGORY', 'Un plătitor de TVA facturează această operațiune cu TVA.'),
-      );
-    if (status === 'non_vat' && tax.category !== 'O')
-      issues.push(block('TAX_CATEGORY', 'Un neplătitor de TVA nu colectează TVA.'));
-  }
-  return { issues, status, category: tax.category, rate: tax.rate };
 }
 
 const vatEntry = (
@@ -218,8 +176,9 @@ export const recognitionInput = z
     /** Every line on one account: revenue (70x) for a sale; expense (6xx) or fixed asset (20x,
      * 21x) for a purchase. */
     account: z.string().regex(accountCodePattern).optional(),
-    /** Input VAT deduction for a purchase booked on one account; ignored for a sale. */
-    deduction: z.enum(['full', 'none']).default('full'),
+    /** Input VAT deduction for a purchase booked on one account; ignored for a sale. `limited`
+     * deducts the register's share for vehicles not used only for the business (art. 298). */
+    deduction: z.enum(['full', 'none', 'limited']).default('full'),
     /**
      * Instead of `account`: each VAT category's taxable amount (BT-116) split over accounts, in
      * the document's currency. A category is `S-<rate>` or `O`, and its parts add up to its
@@ -235,7 +194,7 @@ export const recognitionInput = z
             vat: z.string().regex(/^(S-\d{1,2}(\.\d{1,2})?|O)$/),
             amount: z.string().regex(amountPattern),
             /** Input VAT deduction of this part, for a purchase. */
-            deduction: z.enum(['full', 'none']).default('full'),
+            deduction: z.enum(['full', 'none', 'limited']).default('full'),
             /** The advance (its open item) a negative part on 419, 4091 or 4092 settles. */
             advance: z.uuid().optional(),
           })
@@ -249,6 +208,10 @@ export const recognitionInput = z
       .string()
       .refine((value): boolean => isLocalDate(value))
       .optional(),
+    /** A purchase from a supplier inactive on its tax point deducts no VAT (Codul fiscal art. 11
+     * alin. (7)) unless it is one of the article's exceptions: goods bought in a forced
+     * execution, or a purchase from a supplier in bankruptcy (Legea nr. 85/2014). */
+    inactiveException: z.enum(['forced_execution', 'bankruptcy']).optional(),
   })
   .strict()
   .refine((input) => (input.account === undefined) !== (input.allocations === undefined), {
@@ -345,7 +308,9 @@ const share = (total: bigint, weights: readonly bigint[]) =>
  * deductible (or non-deductible) VAT for a purchase, with the receivable or payable as an open
  * item of the counterparty. VAT comes from the rule register at the tax-point date. An invoice
  * goes on one account, or its VAT categories are split over accounts (`allocations`), each part
- * with its own deduction: one tax entry per category, one line per part.
+ * with its own deduction: one tax entry per category, one line per part. A purchase reads ANAF's
+ * status of a Romanian supplier on the tax point, when one was checked: from a supplier then
+ * inactive, no part deducts VAT.
  */
 export const invoiceRecognition: Treatment<RecognitionInput> = {
   id: 'invoices.recognize',
@@ -366,18 +331,24 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
     };
   },
   followUp(input, loaded) {
-    const parsed = invoiceDocumentSchema.safeParse(loaded.documents.get(input.documentId)?.body);
-    if (!parsed.success || parsed.data.currency === LEDGER_CURRENCY) return null;
-    const until = [parsed.data.issueDate, parsed.data.taxPointDate ?? parsed.data.issueDate]
-      .sort()
-      .at(-1)!;
-    return { fx: [{ currency: parsed.data.currency, until: date(until) }] };
+    const record = loaded.documents.get(input.documentId);
+    const parsed = invoiceDocumentSchema.safeParse(record?.body);
+    if (!record || !parsed.success) return null;
+    const body = parsed.data;
+    const plan: ReadPlan = {};
+    if (body.currency !== LEDGER_CURRENCY)
+      plan.fx = [
+        { currency: body.currency, until: date([body.issueDate, taxPointOf(body)].sort().at(-1)!) },
+      ];
+    if (record.kind === invoiceKinds.purchase && record.partyId && body.supplier.country === 'RO')
+      plan.partyStatus = [{ partyId: record.partyId, date: taxPointOf(body) }];
+    return plan.fx || plan.partyStatus ? plan : null;
   },
   evaluate(input, loaded, rules) {
     const invoice = invoiceOf(loaded, input.documentId, false);
     if ('code' in invoice) return { effect: null, issues: [invoice] };
     const { body, direction } = invoice;
-    const taxPoint = date(body.taxPointDate ?? body.issueDate);
+    const taxPoint = taxPointOf(body);
     const taxPeriod = vatPeriodOf(loaded, taxPoint);
     const vat = vatCategories(invoice, loaded, rules, taxPoint);
     const amounts = amountsFor(invoice, loaded, rules, taxPoint);
@@ -386,7 +357,7 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
       account: string;
       vat: string;
       amount: string;
-      deduction: 'full' | 'none';
+      deduction: 'full' | 'none' | 'limited';
       advance?: string;
     }[] = input.allocations ?? [
       ...vat.categories.map((item) => ({
@@ -452,7 +423,7 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
     for (const item of vat.categories)
       if (
         parts.some((part, p) => part.vat === item.key && negative[p]) &&
-        parts.some((part) => part.vat === item.key && part.deduction === 'none')
+        parts.some((part) => part.vat === item.key && part.deduction !== 'full')
       )
         issues.push(
           block(
@@ -495,15 +466,14 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
       issues.push(block('PREPAID', 'Facturile cu avans dedus cer tratamentul de avansuri.'));
     if (body.totals.rounding !== '0.00')
       issues.push(block('ROUNDING', 'Rotunjirea sumei de plată cere un tratament separat.'));
-    if (
+    const deducts =
       direction === 'purchase' &&
-      vat.status === 'non_vat' &&
       parts.some(
         (part) =>
-          part.deduction === 'full' &&
+          part.deduction !== 'none' &&
           vat.categories.find((item) => item.key === part.vat)?.category === 'S',
-      )
-    )
+      );
+    if (deducts && vat.status === 'non_vat')
       issues.push(
         block(
           'DEDUCTION',
@@ -511,6 +481,45 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
           input.allocations ? 'allocations' : 'deduction',
         ),
       );
+    // A supplier entered as inactive in the register on the tax point: the purchase's VAT is not
+    // deducted (nor, for profit tax, its expense), except in the article's two cases.
+    const supplier =
+      direction === 'purchase' && invoice.record.partyId
+        ? loaded.partyStatus.get(partyStatusKey(invoice.record.partyId, taxPoint))
+        : undefined;
+    if (input.inactiveException && !supplier?.inactive)
+      issues.push(
+        block(
+          'INACTIVE_EXCEPTION',
+          'Excepția se indică doar pentru o achiziție de la un furnizor inactiv la data facturii, cu starea verificată la ANAF (parties.checkStatus).',
+          'inactiveException',
+        ),
+      );
+    else if (supplier?.inactive && (input.inactiveException || deducts)) {
+      const cited = {
+        clause: INACTIVE_CLAUSE,
+        date: supplier.date,
+        evidenceId: supplier.evidenceId,
+      };
+      issues.push(
+        input.inactiveException
+          ? {
+              ...warn(
+                'SUPPLIER_INACTIVE_EXCEPTION',
+                `Furnizorul ${supplier.name} (CUI ${supplier.cui}) era inactiv la ${taxPoint}: TVA se deduce doar ca excepție de la art. 11 alin. (7) din Codul fiscal (${inactiveExceptions[input.inactiveException]}). Confirmați că achiziția se încadrează și păstrați documentul care o dovedește.`,
+              ),
+              details: { ...cited, exception: input.inactiveException },
+            }
+          : {
+              ...block(
+                'SUPPLIER_INACTIVE',
+                `Furnizorul ${supplier.name} (CUI ${supplier.cui}) era înscris ca inactiv în Registrul contribuabililor inactivi/reactivați la ${taxPoint}${supplier.inactiveSince ? ` (inactiv din ${supplier.inactiveSince})` : ''}. Potrivit art. 11 alin. (7) din Codul fiscal, cheltuiala și TVA aferente achizițiilor de la un contribuabil inactiv nu se deduc: înregistrați factura fără deducere (deduction: none). Excepții: bunurile cumpărate în procedura de executare silită și achizițiile de la un furnizor aflat în procedura falimentului (Legea nr. 85/2014), indicate prin inactiveException.`,
+                input.allocations ? 'allocations' : 'deduction',
+              ),
+              details: cited,
+            },
+      );
+    }
     if (input.serviceDate && input.serviceDate.slice(0, 7) !== taxPoint.slice(0, 7))
       issues.push(
         warn(
@@ -587,14 +596,31 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
       mayReverse: false,
       documentId: invoice.record.id,
     };
-    const deductible = parts.map((part) => direction === 'purchase' && part.deduction === 'full');
+    // What each part deducts of its VAT: all, none, or the register's share for vehicles not
+    // used only for the business (Codul fiscal art. 298), half up to the ban; the rest stays in
+    // the expense.
+    const limited =
+      direction === 'purchase' && parts.some((part) => part.deduction === 'limited')
+        ? parseScaled(
+            rules.param<string>('ro.vat.deduction.limited', 'vat_chargeability_date', taxPoint),
+            4,
+          )
+        : 0n;
+    const portion = (amount: bigint, part: (typeof parts)[number]) =>
+      direction !== 'purchase' || part.deduction === 'none'
+        ? 0n
+        : part.deduction === 'full'
+          ? amount
+          : divRound(amount * limited, 1_000_000n, 'halfAwayFromZero');
+    const deducted = parts.map((part, p) => portion(partTax[p]!, part));
+    const deductedMinor = parts.map((part, p) => portion(partTaxMinor[p]!, part));
     if (direction === 'sale')
       lines.push(
         line({ account: '4111', side: 'D', bani: gross, openItem: item.ref, partyId }, fx?.gross),
       );
     const advanceItems: OpenItemSpec[] = [];
     parts.forEach((part, p) => {
-      const kept = direction === 'purchase' && !deductible[p];
+      const kept = direction === 'purchase';
       // An advance invoiced opens the partner's advance; a negative part settles one.
       let advance: Pick<LineSpec, 'openItem' | 'partyId'> = {};
       if (isAdvance[p] && !negative[p]) {
@@ -615,22 +641,19 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
           {
             account: part.account,
             side: direction === 'sale' ? 'C' : 'D',
-            bani: partNet[p]! + (kept ? partTax[p]! : 0n),
+            bani: partNet[p]! + (kept ? partTax[p]! - deducted[p]! : 0n),
             ...advance,
           },
-          partMinor[p]! + (kept ? partTaxMinor[p]! : 0n),
+          partMinor[p]! + (kept ? partTaxMinor[p]! - deductedMinor[p]! : 0n),
         ),
       );
     });
     categories.forEach((category, c) => {
       if (categoryTax[c] === 0n) return;
       const members = parts.flatMap((part, p) => (part.vat === category.key ? [p] : []));
-      const deducted = members.reduce((sum, p) => sum + (deductible[p] ? partTax[p]! : 0n), 0n);
-      const deductedMinor = members.reduce(
-        (sum, p) => sum + (deductible[p] ? partTaxMinor[p]! : 0n),
-        0n,
-      );
-      const ledger = direction === 'sale' ? categoryTax[c]! : deducted;
+      const deductedTax = members.reduce((sum, p) => sum + deducted[p]!, 0n);
+      const deductedTaxMinor = members.reduce((sum, p) => sum + deductedMinor[p]!, 0n);
+      const ledger = direction === 'sale' ? categoryTax[c]! : deductedTax;
       if (ledger !== 0n)
         lines.push(
           line(
@@ -639,7 +662,7 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
               side: direction === 'sale' ? 'C' : 'D',
               bani: ledger,
             },
-            direction === 'sale' ? category.minorTax : deductedMinor,
+            direction === 'sale' ? category.minorTax : deductedTaxMinor,
             fx?.vat,
           ),
         );
@@ -649,7 +672,7 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
           {
             baseBani: categoryBase[c]!,
             taxBani: categoryTax[c]!,
-            deductibleBani: direction === 'sale' ? 0n : deducted,
+            deductibleBani: direction === 'sale' ? 0n : deductedTax,
             ledgerBani: ledger,
             ...(ledger !== 0n ? { line: lines.length - 1 } : {}),
             taxPoint,
@@ -706,6 +729,17 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
                 ),
               }
             : {}),
+          ...(supplier
+            ? {
+                supplierStatus: {
+                  date: supplier.date,
+                  inactive: supplier.inactive,
+                  evidenceId: supplier.evidenceId,
+                  ...(supplier.inactive ? { clause: INACTIVE_CLAUSE } : {}),
+                  ...(input.inactiveException ? { exception: input.inactiveException } : {}),
+                },
+              }
+            : {}),
         },
       },
     };
@@ -717,23 +751,44 @@ export const creditInput = z
   .object({
     documentId: z.uuid(),
     originalDocumentId: z.uuid(),
-    /** The revenue or expense account the original invoice used. */
-    account: z.string().regex(accountCodePattern),
-    deduction: z.enum(['full', 'none']).default('full'),
+    /** The revenue or expense account the original invoice used, for every line. */
+    account: z.string().regex(accountCodePattern).optional(),
+    deduction: z.enum(['full', 'none', 'limited']).default('full'),
+    /** Instead of `account`: each VAT category of the credit note split over the accounts the
+     * original used, as positive amounts in lei, each part with the original's deduction. */
+    allocations: z
+      .array(
+        z
+          .object({
+            account: z.string().regex(accountCodePattern),
+            vat: z.string().regex(/^(S-\d{1,2}(\.\d{1,2})?|O)$/),
+            amount: z.string().regex(/^(0|[1-9]\d{0,15})(\.\d{1,2})?$/),
+            deduction: z.enum(['full', 'none', 'limited']).default('full'),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(50)
+      .optional(),
   })
-  .strict();
+  .strict()
+  .refine((input) => (input.account === undefined) !== (input.allocations === undefined), {
+    message: 'Indicați fie contul, fie repartizarea pe conturi (allocations).',
+  });
 export type CreditInput = z.infer<typeof creditInput>;
 
 /**
  * Recognizes a credit note (381, or a negative 380) against its original invoice: the original
- * accounts and VAT rate are reversed for the credited amount in the credit note's own period,
- * and the original receivable or payable is reduced. Crediting more than remains open is refused.
+ * accounts and VAT rates are reversed for the credited amounts in the credit note's own period,
+ * and the original receivable or payable is reduced. Each VAT category of the credit note must be
+ * one of the original's; a credit note on several categories splits them over accounts as the
+ * original did. Crediting more than remains open is refused.
  */
 export const creditRecognition: Treatment<CreditInput> = {
   id: 'invoices.credit',
   version: 1,
   description:
-    'Notă de credit sau factură storno legată de factura inițială, cu cota TVA a acesteia.',
+    'Notă de credit sau factură storno legată de factura inițială, cu cotele TVA ale acesteia.',
   input: creditInput,
   agent: true,
   subject: (input) => `document:${input.documentId}`,
@@ -777,17 +832,51 @@ export const creditRecognition: Treatment<CreditInput> = {
     const taxPoint = date(credit.body.taxPointDate ?? credit.body.issueDate);
     const taxPeriod = vatPeriodOf(loaded, taxPoint);
     const originalTaxPoint = date(original.body.taxPointDate ?? original.body.issueDate);
-    const vat = vatFor(original, loaded, rules, originalTaxPoint);
-    issues.push(...vat.issues);
-    const creditTax = credit.body.taxes[0];
+    const originalVat = vatCategories(original, loaded, rules, originalTaxPoint);
+    issues.push(...originalVat.issues);
+    const originalKeys = originalVat.categories.map((item) => item.key);
+    const categories = credit.body.taxes.map((tax) => ({
+      key: categoryKey(tax.category, tax.rate),
+      category: tax.category,
+      rate: tax.rate,
+      base: ron(tax.base),
+      tax: ron(tax.tax),
+    }));
     if (
-      credit.body.taxes.length !== 1 ||
-      creditTax?.category !== vat.category ||
-      creditTax?.rate !== vat.rate
+      categories.some((item) => !originalKeys.includes(item.key)) ||
+      new Set(categories.map((item) => item.key)).size !== categories.length
     )
       issues.push(
-        block('VAT_RATE', 'Nota de credit păstrează categoria și cota TVA a facturii inițiale.'),
+        block(
+          'VAT_RATE',
+          'Nota de credit păstrează categoriile și cotele TVA ale facturii inițiale.',
+        ),
       );
+    const parts = input.allocations ?? [
+      ...categories.map((item) => ({
+        account: input.account!,
+        vat: item.key,
+        amount: formatMoney(item.base, LEDGER_CURRENCY),
+        deduction: input.deduction,
+      })),
+    ];
+    if (input.allocations)
+      for (const item of categories) {
+        const allocated = input.allocations
+          .filter((part) => part.vat === item.key)
+          .reduce((sum, part) => sum + ron(part.amount), 0n);
+        if (
+          allocated !== item.base ||
+          input.allocations.some((part) => !categories.some((c) => c.key === part.vat))
+        )
+          issues.push(
+            block(
+              'ALLOCATION',
+              `Baza categoriei ${item.key} este ${formatMoney(item.base, LEDGER_CURRENCY)} lei; repartizarea însumează ${formatMoney(allocated, LEDGER_CURRENCY)}.`,
+              'allocations',
+            ),
+          );
+      }
     const item = [...loaded.openItems.values()].find(
       (open) => open.documentId === original.record.id,
     );
@@ -801,60 +890,86 @@ export const creditRecognition: Treatment<CreditInput> = {
       );
     if (issues.some((issue) => issue.severity === 'block')) return { effect: null, issues };
 
-    const net = ron(credit.body.totals.net);
-    const tax = ron(credit.body.totals.tax);
+    const purchase = credit.direction === 'purchase';
     const gross = ron(credit.body.totals.gross);
     const partyId = credit.record.partyId!;
-    const code = vat.category === 'S' ? `S-${vat.rate}` : 'O';
+    const partNet = parts.map((part) => ron(part.amount));
+    // Each category's VAT split over its parts; a part reverses the deduction it had.
+    const partTax = parts.map(() => 0n);
+    for (const category of categories) {
+      const members = parts.flatMap((part, p) => (part.vat === category.key ? [p] : []));
+      share(
+        category.tax,
+        members.map((p) => partNet[p]!),
+      ).forEach((value, i) => (partTax[members[i]!] = value));
+    }
+    const limited =
+      purchase && parts.some((part) => part.deduction === 'limited')
+        ? parseScaled(
+            rules.param<string>(
+              'ro.vat.deduction.limited',
+              'vat_chargeability_date',
+              originalTaxPoint,
+            ),
+            4,
+          )
+        : 0n;
+    const deducted = parts.map((part, p) =>
+      !purchase || part.deduction === 'none'
+        ? 0n
+        : part.deduction === 'full'
+          ? partTax[p]!
+          : divRound(partTax[p]! * limited, 1_000_000n, 'halfAwayFromZero'),
+    );
     // Red storno: the original sides with negative amounts, so turnover stays correct.
     const lines: LineSpec[] = [];
     const taxEntries: TaxEntrySpec[] = [];
-    const entry = (line: number | undefined, ledger: bigint, deductible: bigint) =>
-      vatEntry(
-        credit,
-        {
-          baseBani: -net,
-          taxBani: -tax,
-          deductibleBani: -deductible,
-          ledgerBani: -ledger,
-          taxPoint,
-          taxPeriod,
-          ...(line === undefined ? {} : { line }),
-          originTaxEntry: `${original.record.id}:vat`,
-        },
-        code,
-      );
-    if (credit.direction === 'sale') {
-      lines.push({ account: '4111', side: 'D', bani: -gross, openItem: item!.id, partyId });
-      lines.push({ account: input.account, side: 'C', bani: -net });
-      if (tax !== 0n) {
-        lines.push({ account: '4427', side: 'C', bani: -tax });
-        taxEntries.push(entry(2, tax, 0n));
-      }
-    } else if (input.deduction === 'full' || tax === 0n) {
-      lines.push({ account: input.account, side: 'D', bani: -net });
-      if (tax !== 0n) {
-        lines.push({ account: '4426', side: 'D', bani: -tax });
-        taxEntries.push(entry(1, tax, tax));
-      }
+    const partner: LineSpec = {
+      account: purchase ? item!.controlAccount : '4111',
+      side: purchase ? 'C' : 'D',
+      bani: -gross,
+      openItem: item!.id,
+      partyId,
+    };
+    if (!purchase) lines.push(partner);
+    parts.forEach((part, p) =>
       lines.push({
-        account: item!.controlAccount,
-        side: 'C',
-        bani: -gross,
-        openItem: item!.id,
-        partyId,
+        account: part.account,
+        side: purchase ? 'D' : 'C',
+        bani: -(partNet[p]! + (purchase ? partTax[p]! - deducted[p]! : 0n)),
+      }),
+    );
+    for (const category of categories) {
+      if (category.tax === 0n) continue;
+      const members = parts.flatMap((part, p) => (part.vat === category.key ? [p] : []));
+      const deductedTax = members.reduce((sum, p) => sum + deducted[p]!, 0n);
+      const ledger = purchase ? deductedTax : category.tax;
+      if (ledger !== 0n)
+        lines.push({
+          account: purchase ? '4426' : '4427',
+          side: purchase ? 'D' : 'C',
+          bani: -ledger,
+        });
+      const originKey = originalKeys.length === 1 ? 'vat' : `vat:${category.key}`;
+      taxEntries.push({
+        ...vatEntry(
+          credit,
+          {
+            baseBani: -category.base,
+            taxBani: -category.tax,
+            deductibleBani: -deductedTax,
+            ledgerBani: -ledger,
+            taxPoint,
+            taxPeriod,
+            ...(ledger !== 0n ? { line: lines.length - 1 } : {}),
+            originTaxEntry: `${original.record.id}:${originKey}`,
+          },
+          category.category === 'S' ? `S-${category.rate}` : 'O',
+        ),
+        key: categories.length === 1 ? 'vat' : `vat:${category.key}`,
       });
-    } else {
-      lines.push({ account: input.account, side: 'D', bani: -gross });
-      lines.push({
-        account: item!.controlAccount,
-        side: 'C',
-        bani: -gross,
-        openItem: item!.id,
-        partyId,
-      });
-      taxEntries.push(entry(undefined, 0n, 0n));
     }
+    if (purchase) lines.push(partner);
     const effect: Effect = {
       schema: 'effect@1',
       date: date(credit.body.issueDate),

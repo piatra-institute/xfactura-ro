@@ -446,6 +446,24 @@ export const legalSources: readonly LegalSource[] = [
     ],
   },
   {
+    id: 'ANAF/WS-TVA-v9',
+    kind: 'official_document',
+    title:
+      'Documentația serviciului web ANAF de interogare a registrelor contribuabililor (TVA, TVA la încasare, inactivi/reactivați, plata defalcată a TVA, RO e-Factura), versiunea 9',
+    issuer: 'ANAF',
+    publication: null,
+    urls: ['https://static.anaf.ro/static/10/Anaf/Informatii_R/Servicii_web/doc_WS_V9.txt'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/Informatii_R/Servicii_web/doc_WS_V9.txt',
+        sha256: '9346a0f7435234fa9ddf73e9e72c43ae354577d6a7db3b44fa5ef54ad31ae185',
+        retrievedOn: '2026-10-30',
+        mediaType: 'text/plain',
+      },
+    ],
+  },
+  {
     id: 'L53/2003',
     kind: 'act',
     title: 'Legea nr. 53/2003 – Codul muncii, republicată (forma consolidată din 27.04.2026)',
@@ -1014,6 +1032,22 @@ export const clauses: readonly Clause[] = [
     locator: 'art. 290',
     status: 'pending',
     summary: 'Cursul de schimb pentru baza de impozitare a operațiunilor în valută.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.298',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 298 alin. (1)–(4)',
+    status: 'located',
+    summary:
+      'Dreptul de deducere a TVA pentru vehiculele rutiere motorizate și cheltuielile legate de ele se limitează la 50% când nu sunt utilizate exclusiv în scopul activității economice; nu se limitează peste 3.500 kg sau 9 locuri, nici pentru urgențe, pază, curierat, agenți de vânzări, taxi, servicii cu plată, închiriere, leasing sau mărfuri.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.11(7)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 11 alin. (7)',
+    status: 'located',
+    summary:
+      'Cine cumpără bunuri sau servicii de la o persoană impozabilă stabilită în România după înscrierea ei ca inactivă în Registrul contribuabililor inactivi/reactivați nu deduce cheltuielile și TVA aferente; excepții: bunurile achiziționate în procedura de executare silită și achizițiile de la persoane impozabile aflate în procedura falimentului (Legea nr. 85/2014).',
   },
   {
     id: 'ANAF/Cod-fiscal-consolidat:art.323(1)',

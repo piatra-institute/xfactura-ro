@@ -123,6 +123,13 @@ import { assetInput, Assets, disposalInput } from './modules/assets';
 import { Etva, etvaInput } from './modules/etva';
 import { AnafConnections, connectFinishInput } from './modules/anaf-connection';
 import { AnafEFactura, type AnafClient, type AnafEnvironment } from './adapters/anaf-efactura';
+import type { TaxpayerRegistryPort } from './adapters/anaf-taxpayers';
+import {
+  checkStatusInput,
+  checkStatusView,
+  PartyStatuses,
+  partyStatusChecks,
+} from './modules/party-status';
 import {
   issueInput,
   issueView,
@@ -252,6 +259,7 @@ export class Engine {
   readonly assets: Assets;
   readonly etva: Etva;
   readonly anaf: AnafConnections | null;
+  readonly partyStatuses: PartyStatuses;
 
   constructor(
     readonly db: Database,
@@ -271,6 +279,8 @@ export class Engine {
       /** ANAF's OAuth application: with it, companies connect to ANAF and, unless `efactura` is
        * given, the SPV uses the live e-Factura API. */
       anaf?: { client: AnafClient; environment: AnafEnvironment; fetch?: typeof fetch };
+      /** ANAF's registers of taxpayers; without it, partners' statuses cannot be checked. */
+      taxpayers?: TaxpayerRegistryPort;
     } = {},
   ) {
     this.clock = options.clock ?? Date.now;
@@ -311,6 +321,7 @@ export class Engine {
         ...fxChecks,
         ...spvChecks,
         ...deferralChecks,
+        ...partyStatusChecks,
         ...(options.closeChecks ?? []),
       ]),
     );
@@ -355,6 +366,12 @@ export class Engine {
               ...(options.anaf.fetch ? { fetch: options.anaf.fetch } : {}),
             })
           : undefined),
+      options.clock,
+    );
+    this.partyStatuses = new PartyStatuses(
+      this.commands,
+      objects,
+      options.taxpayers,
       options.clock,
     );
     this.declarations = new Declarations(this.commands, objects, options.declarationValidator);
@@ -1170,6 +1187,18 @@ export class Engine {
         input: partyDetailsInput,
         output: z.object({ partyId: z.string(), version: z.number() }),
         run: (actor, key, input) => this.sales.recordPartyDetails(actor, key, input),
+      }),
+      define({
+        id: 'parties.checkStatus',
+        description:
+          'Verifică la ANAF (registrele de TVA, TVA la încasare, contribuabili inactivi, plata defalcată, RO e-Factura) partenerii din România la o dată, sau furnizorii facturilor de achiziție ale unei luni la data fiecărei facturi; păstrează răspunsul ANAF și starea fiecăruia.',
+        permission: 'write',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: checkStatusInput,
+        output: checkStatusView,
+        run: (actor, key, input) => this.partyStatuses.checkStatus(actor, key, input),
       }),
       define({
         id: 'parties.get',

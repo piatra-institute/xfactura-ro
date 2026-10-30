@@ -28,6 +28,7 @@ import type {
   OpenItemKind,
   OpenItemState,
   PartyRecord,
+  PartyStatus,
   PayrollRunState,
   PostedEntry,
   AccountTurnover,
@@ -38,7 +39,7 @@ import type {
   TaxEntrySpec,
   TaxPeriodLedger,
 } from 'xfactura-core/kernel';
-import { turnoverKey } from 'xfactura-core/kernel';
+import { partyStatusKey, turnoverKey } from 'xfactura-core/kernel';
 import type { LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
 import {
@@ -54,6 +55,7 @@ import {
   lines,
   openItems,
   parties,
+  partyStatuses,
   payrollLines,
   payrollRunEvents,
   payrollRuns,
@@ -670,6 +672,44 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
     });
   }
 
+  const statusMap = new Map<string, PartyStatus>();
+  for (const query of plan.partyStatus ?? []) {
+    const key = partyStatusKey(query.partyId, query.date);
+    if (readSet.some((entry) => entry.kind === 'partyStatus' && entry.id === key)) continue;
+    // The latest snapshot for exactly this date; none is a read too (version 0).
+    const [row] = await tx
+      .select()
+      .from(partyStatuses)
+      .where(
+        and(
+          eq(partyStatuses.companyId, companyId),
+          eq(partyStatuses.partyId, query.partyId),
+          eq(partyStatuses.asOf, query.date),
+        ),
+      )
+      .orderBy(desc(partyStatuses.seq))
+      .limit(1);
+    if (row)
+      statusMap.set(key, {
+        partyId: row.partyId,
+        date: date(row.asOf),
+        seq: row.seq,
+        cui: row.cui,
+        name: row.name,
+        vatPayer: row.vatPayer,
+        cashVat: row.cashVat,
+        inactive: row.inactive,
+        inactiveSince: row.inactiveSince ? date(row.inactiveSince) : null,
+        reactivatedOn: row.reactivatedOn ? date(row.reactivatedOn) : null,
+        splitVat: row.splitVat,
+        eInvoice: row.eInvoice,
+        struckOffOn: row.struckOffOn ? date(row.struckOffOn) : null,
+        evidenceId: row.evidenceId,
+        checkedAt: row.createdAt,
+      });
+    readSet.push({ kind: 'partyStatus', id: key, version: String(row?.seq ?? 0) });
+  }
+
   const loaded: Loaded = {
     years,
     evidence: evidenceMap,
@@ -685,6 +725,7 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
     payrollRuns: payrollRunMap,
     turnover,
     assets: assetMap,
+    partyStatus: statusMap,
   };
   return { loaded, readSet };
 }
@@ -727,6 +768,7 @@ export function mergeStates(
     payrollRuns: merge(first.loaded.payrollRuns, second.loaded.payrollRuns),
     turnover: merge(first.loaded.turnover, second.loaded.turnover),
     assets: merge(first.loaded.assets, second.loaded.assets),
+    partyStatus: merge(first.loaded.partyStatus, second.loaded.partyStatus),
   };
   const seen = new Set<string>();
   const readSet = [...first.readSet, ...second.readSet]
