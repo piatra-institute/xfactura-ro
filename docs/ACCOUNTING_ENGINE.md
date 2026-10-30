@@ -223,7 +223,7 @@ The company's regime is the profile axis `vat.cash`. The ceiling is the cited pa
   - They release, on the statement or receipt date and in that date's period, the share of VAT now collected (Dr 4428 / Cr 4427) or paid (Dr 4426 / Cr 4428).
   - The release is rounded cumulatively, so a full settlement releases exactly what is left.
   - **Credit notes** (alin. (10)) first reduce what is deferred, and the excess reduces chargeable VAT at the note's date.
-  - Settling a deferred invoice through the general journal (compensation, cession) is refused.
+  - An offset (`items.offset`) collects and pays, and releases the VAT the same way. Settling a deferred invoice through the general journal (cession, payment in kind) is refused.
 - **Returns:**
   - **D300:** releases go to rows 9–10 and 24–25. The informative fields A, A1, B and B1 hold what is still deferred.
   - **D394:** invoices under the system are listed in full in their period (L, A, AI), with the VAT collected and deducted from the releases.
@@ -231,7 +231,7 @@ The company's regime is the profile axis `vat.cash`. The ceiling is the cited pa
 - **Month close:** warnings for deferred VAT on settled invoices (`CASH_VAT_UNRELEASED`), the ceiling exceeded (`CASH_VAT_CEILING`), and leaving the system (`CASH_VAT_EXIT`).
 - **Not covered:**
   - eligibility (alin. (4)) is not checked;
-  - compensation, cession and payment in kind are not treatments yet;
+  - cession and payment in kind are not treatments yet;
   - one 4428 account holds both sales and purchase deferrals;
   - e-TVA's comparison will differ for a company in the system.
 
@@ -245,6 +245,13 @@ The company's regime is the profile axis `vat.cash`. The ceiling is the cited pa
   - It releases what each open deferral's schedule has due by then, less what was already released (the schedule's total less the item's balance). A missed month is caught up, and nothing is released twice.
   - With nothing due, it is refused (`NOTHING_TO_RELEASE`). A month with a release due does not close.
 - Schedules are read with their open items (an open-item query with `schedules`). They never change, so the item's version covers them.
+
+### `items.offset`: offsetting a partner's debts (compensare)
+
+- What a partner owes the company and what the company owes it cancel each other for the same amount, in lei, on the date of the offset document, with no money moving.
+- Inputs: debit items (receivables, advances paid, debtors) against credit items (payables, advances received, creditors), all of one partner.
+- An invoice under VAT on collection counts as collected or paid for the amount offset, and releases its VAT (norme pct. 26 alin. (10)).
+- Not covered yet: offsets between more than two parties, and foreign-currency items.
 
 ### `accruals.record` and `accruals.settle`: invoices not yet received or issued (408, 418)
 
@@ -499,8 +506,12 @@ The specification, sources and open questions are in [PFA_II_IF.md](PFA_II_IF.md
     - CAS and CASS by the 2026 bands, then income tax at 10%.
   - Every value is a cited parameter (`ro.pit.*`, `ro.cas.*`, `ro.cass.*`, `ro.min_wage.contributions`).
 - **Month close:** a month with a receipt or payment whose nature isn't known doesn't close (`pfa.natures`).
+- **D212 (Declarația unică)** is prepared from the tax register for a resident PFA or II with one independent source in the real system.
+  - For 2024 income it is written in ANAF's structure D212_A1.0.3 and passes ANAF's validator (J13.0.1, which loads only in ANAF's SAF-T kit). That validator doesn't check the arithmetic, so the writer's own checks do.
+  - For 2025 income it follows ANAF's web form (V-1.8.10), which has no published validator. It stops at `prepared`, and can't be authorized while no official validation exists.
+  - It's on the obligations calendar, due 25 May of the next year (art. 122 alin. (3)).
 - **Not built yet:**
-  - D212 (Declarația unică);
+  - D212 for income norms, several sources, IF members, and income outside the books;
   - normă de venit and the IF's members with D204;
   - several sources in one year, and a mid-year change of method;
   - double entry for PFAs.

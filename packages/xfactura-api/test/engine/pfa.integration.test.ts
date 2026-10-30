@@ -1,5 +1,17 @@
 import { afterAll, describe, expect, test } from 'bun:test';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import type { ProposalView } from '../../source/engine/kernel/views';
+import type { ActionView } from '../../source/engine/kernel/actions';
+import {
+  AnafKits,
+  DukIntegrator,
+  saftKitId,
+  type DeclarationValidator,
+} from '../../source/engine/adapters/declaration-validator';
+import { defaultRegister } from '../../source/engine/engine';
+import { ParameterRegister, type ParameterVersion } from 'xfactura-core/rules';
+import { parseLocalDate } from 'xfactura-core/time';
 import { iban } from './fixtures/bank';
 import { invoiceXml, type XmlInput } from './fixtures/invoice';
 import { journal, scenario, type Scenario } from './scenario';
@@ -65,16 +77,28 @@ type Journal = {
 
 const cents = (amount: string) => BigInt(amount.replace('.', ''));
 
-/** A PFA in the real system, VAT payer, keeping single-entry books from 1 January 2026. */
-async function pfa() {
-  const s = await scenario();
+/** A PFA in the real system, VAT payer, keeping single-entry books from 1 January of a year
+ * (2026 unless given). */
+async function pfa(
+  options: {
+    year?: number;
+    register?: ParameterRegister;
+    declarationValidator?: DeclarationValidator;
+  } = {},
+) {
+  const y = options.year ?? 2026;
+  const s = await scenario({
+    year: y,
+    ...(options.register ? { register: options.register } : {}),
+    ...(options.declarationValidator ? { declarationValidator: options.declarationValidator } : {}),
+  });
   open.push(s);
   const { id: certificate } = await s.evidence('certificat-inregistrare.pdf');
   const fact = (axis: string, value: string) =>
     s.invoke(s.owner, 'profile.record', {
       axis,
       value,
-      effectiveFrom: '2026-01-01',
+      effectiveFrom: `${y}-01-01`,
       evidenceId: certificate,
     });
   await fact('entity.form', 'pfa');
@@ -83,13 +107,13 @@ async function pfa() {
   await fact('cas.status', 'liable');
   await fact('cass.exception', 'none');
   const source = await s.invoke<{ sourceId: string }>(s.owner, 'pfa.sources.record', {
-    effectiveFrom: '2026-01-01',
+    effectiveFrom: `${y}-01-01`,
     name: 'Activități de realizare a software-ului la comandă',
     caen: '6201',
     place: 'Str. Exemplu nr. 1, Cluj-Napoca',
     county: 'CJ',
-    authorization: { number: 'F12/345/2026', date: '2025-12-20' },
-    startedOn: '2026-01-01',
+    authorization: { number: `F12/345/${y}`, date: `${y - 1}-12-20` },
+    startedOn: `${y}-01-01`,
     liberal: false,
     method: 'sistem_real',
     realBasis: 'required',
@@ -368,6 +392,8 @@ describe('PFA profile and income sources', () => {
       'ro.cas.rate/2026-01-01',
       'ro.cass.independent/2025-01-01',
       'ro.cass.independent/2026-01-01',
+      'ro.cass.option/2025-01-01',
+      'ro.cass.option/2026-01-01',
       'ro.cass.rate/2026-01-01',
       'ro.fx.rate_date.accounting/single/2024-01-01',
       'ro.min_wage.contributions/2025-01-01',
@@ -770,5 +796,381 @@ describe('PFA foreign currency', () => {
       'vat 1045.07',
     ]);
     expect(register.rows[0]!.explanation).toContain('1210.00 EUR la cursul 4.9900');
+  });
+});
+
+describe('D212 from the books', () => {
+  // ANAF's D212 validator (J13.0.1) runs on the SAF-T kit only; without it or Java the official
+  // test is skipped, never passed.
+  const saftDist = path.join(
+    import.meta.dir,
+    '../../../..',
+    '.validators/anaf-saft/duk_SAFT_an_luna/dist',
+  );
+  const official =
+    existsSync(path.join(saftDist, 'lib/D212Validator.jar')) && Bun.which('java')
+      ? test
+      : test.skip;
+  const kits = () => new AnafKits({ saft: new DukIntegrator(saftDist, saftKitId) });
+  /** A validator that must not be called. */
+  const unused: DeclarationValidator = {
+    id: 'unused',
+    validate: () => Promise.reject(new Error('validated')),
+    pdf: () => Promise.reject(new Error('validated')),
+  };
+
+  /**
+   * The engine's register has no PIT values for 2024 or 2025 (§7.1): these test fixtures, marked
+   * as such, give the year the 2026 rules with the minimum wage and CASS cap the D212 structure
+   * for 2024 states (3,300 lei; 60 wages). They are test data, not sourced values.
+   */
+  function fixtures(year: number) {
+    const base = defaultRegister();
+    const current = (key: string) =>
+      base.versions.find((version) => version.key === key && version.from === '2026-01-01')!.value;
+    const values: Record<string, ParameterVersion['value']> = {
+      'ro.pit.rate': current('ro.pit.rate'),
+      'ro.pit.rounding': current('ro.pit.rounding'),
+      'ro.pit.loss': current('ro.pit.loss'),
+      'ro.pit.limits': current('ro.pit.limits'),
+      'ro.pit.norma': current('ro.pit.norma'),
+      'ro.pit.natures': current('ro.pit.natures'),
+      'ro.cas.rate': current('ro.cas.rate'),
+      'ro.cas.independent': current('ro.cas.independent'),
+      'ro.cass.rate': current('ro.cass.rate'),
+      ...(year === 2024
+        ? {
+            'ro.min_wage.contributions': '3300',
+            'ro.cass.independent': { minimumWages: 6, maximumWages: 60 },
+          }
+        : {}),
+    };
+    const version = (key: string, value: ParameterVersion['value'], at: number) => ({
+      id: `test-fixture:${key}/${at}`,
+      key,
+      scope: {},
+      value,
+      from: parseLocalDate(`${at}-01-01`),
+      to: parseLocalDate(`${at}-12-31`),
+      reviewedThrough: null,
+      knowledgeDate: null,
+      status: 'extracted' as const,
+      clauses: ['test fixture, not a legal value'],
+    });
+    const added = [
+      ...Object.entries(values).map(([key, value]) => version(key, value, year)),
+      // Chapter II of the 2024 return is the option for 2025: its CASS rate.
+      ...(year === 2024 ? [version('ro.cass.rate', current('ro.cass.rate'), 2025)] : []),
+    ];
+    const keys = [...new Set(base.versions.map((item) => item.key))];
+    return new ParameterRegister(
+      keys.map((key) => base.definition(key)),
+      [...base.versions, ...added],
+    );
+  }
+
+  /**
+   * A year of a VAT-paying PFA, every amount by hand: SALE-1 50,000 + 19% collected, INV-1
+   * 4,000 + 19% paid, a 12.00 fee: net income 50,000 − 4,012 = 45,988 lei.
+   */
+  async function books(
+    y: number,
+    options: { register?: ParameterRegister; declarationValidator?: DeclarationValidator } = {},
+  ) {
+    const context = await pfa({ year: y, ...options });
+    const { s, document, person } = context;
+    const holder = await person('ro_individual', 'Popescu Ion (titular)');
+    await s.invoke(s.owner, 'parties.recordCnp', { partyId: holder.id, cnp: '1781105170030' });
+    const yy = String(y).slice(2);
+    const statement = `:20:PFA03${yy}
+:25:${iban}
+:28C:001/001
+:60F:C${yy}0301RON0,00
+:61:${yy}03030303C1000,00NTRFAPORT//PFA-IN-01
+:86:Aport titular
+:61:${yy}03200320C59500,00NTRFSALE-1//PFA-IN-02
+:86:Incasare SALE-1
+:61:${yy}03250325D4760,00NTRFINV-1//PFA-PAY-01
+:86:Plata INV-1
+:61:${yy}03310331D12,00NCHGNONREF//PFA-FEE-01
+:86:Comision bancar
+:62F:C${yy}0331RON55728,00`;
+    const item = (proposal: ProposalView) => proposal.effect!.openItems[0]!.id;
+    const sale = await document({
+      number: 'SALE-1',
+      direction: 'sale',
+      date: `${y}-03-10`,
+      rate: '19',
+      net: '50000.00',
+      tax: '9500.00',
+      gross: '59500.00',
+    });
+    const services = await document({
+      number: 'INV-1',
+      date: `${y}-03-12`,
+      rate: '19',
+      net: '4000.00',
+      tax: '760.00',
+      gross: '4760.00',
+    });
+    const receivable = item(
+      await s.book('invoices.recognize', { documentId: sale.id, account: '704' }),
+    );
+    const payable = item(
+      await s.book('invoices.recognize', { documentId: services.id, account: '628' }),
+    );
+    await s.invoke(s.owner, 'treasury.createAccount', {
+      kind: 'bank',
+      name: 'Cont curent',
+      iban,
+      currency: 'RON',
+      ledgerAccount: '5121',
+      openedOn: `${y}-01-01`,
+    });
+    const { id: extract } = await s.invoke<{ id: string }>(s.owner, 'evidence.record', {
+      filename: `extras-${y}.sta`,
+      mediaType: 'text/plain',
+      base64: Buffer.from(statement).toString('base64'),
+    });
+    await s.invoke(s.owner, 'bank.import', { evidenceId: extract, financialYearId: s.year.id });
+    const movements = await s.invoke<{ id: string; amount: string }[]>(
+      s.owner,
+      'bank.movements',
+      {},
+    );
+    const movement = (amount: string) =>
+      movements.find((entry) => entry.amount.replace('-', '') === amount)!.id;
+    await s.book('bank.settle', {
+      movementId: movement('1000.00'),
+      opens: [{ account: '4551', partyId: holder.id, amount: '1000.00' }],
+    });
+    await s.book('bank.settle', {
+      movementId: movement('59500.00'),
+      allocations: [{ openItem: receivable, amount: '59500.00' }],
+    });
+    await s.book('bank.settle', {
+      movementId: movement('4760.00'),
+      allocations: [{ openItem: payable, amount: '4760.00' }],
+    });
+    await s.book('bank.settle', {
+      movementId: movement('12.00'),
+      lines: [{ account: '627', amount: '12.00' }],
+    });
+    const options212 = {
+      holderPartyId: holder.id,
+      taxpayer: {
+        lastName: 'Popescu',
+        initial: 'M',
+        firstName: 'Ion',
+        address: 'Str. Exemplu nr. 1, Cluj-Napoca, jud. Cluj',
+        email: 'ion.popescu@example.test',
+      },
+      iban: 'RO49AAAA1B31007593840000',
+    };
+    return { ...context, holder, options212 };
+  }
+
+  type Artifact = {
+    id: string;
+    format: string;
+    state: string;
+    xmlHash: string;
+    steps: { state: string; actor: string | null; detail: string | null }[];
+  };
+  const prepare = (s: Scenario, period: string, options: Record<string, unknown>) =>
+    s.invoke<Artifact>(s.owner, 'declarations.prepare', { kind: 'D212', period, options });
+  const xmlOf = async (s: Scenario, artifact: Artifact) =>
+    new TextDecoder().decode(await s.objects.get(s.company.id, artifact.xmlHash));
+  const attribute = (xml: string, name: string) =>
+    new RegExp(`\\s${name}="([^"]*)"`).exec(xml)?.[1];
+
+  official(
+    'income of 2024: from the fiscal register to ANAF’s validator; a change to the books makes it stale',
+    async () => {
+      const { s, options212 } = await books(2024, {
+        register: fixtures(2024),
+        declarationValidator: kits(),
+      });
+      const register = await s.invoke<{ final: boolean; tax: { real: string } }>(
+        s.owner,
+        'pfa.fiscalRegister',
+        { year: 2024 },
+      );
+      expect(register).toMatchObject({ final: true, tax: { real: '3149.00' } });
+      const prepared = await prepare(s, '2024', options212);
+      expect(prepared.format).toBe(
+        'D212 mfp:anaf:dgti:d212:declaratie:v11 an_r 2025 (D212_A1.0.3, 01.08.2025)',
+      );
+      expect(prepared.steps.map((step) => [step.state, step.actor])).toEqual([
+        ['prepared', null],
+        ['validated_official', saftKitId],
+      ]);
+      // 45,988 lei: CAS on 12 × 3,300 = 39,600 lei (9,900), CASS 4,599, taxable 31,489, tax 3,149.
+      const xml = await xmlOf(s, prepared);
+      expect(
+        Object.fromEntries(
+          [
+            'an_r',
+            'cif',
+            'totalPlata_A',
+            'venit_brut',
+            'chelt_deduc',
+            'venit_net_anual',
+            'data_incep',
+            'cas_baza',
+            'cas_datorat',
+            'baza_cass_datorat_ai',
+            'cass_datorat_ai',
+            'real_venit_net_impozabil_ai',
+            'real_impozit_datorat_ai',
+            'dif_de_plata',
+            'cont_bancar',
+          ].map((name) => [name, attribute(xml, name)]),
+        ),
+      ).toEqual({
+        an_r: '2025',
+        cif: '1781105170030',
+        totalPlata_A: '34',
+        venit_brut: '50000',
+        chelt_deduc: '4012',
+        venit_net_anual: '45988',
+        data_incep: '01.01.2024',
+        cas_baza: '39600',
+        cas_datorat: '9900',
+        baza_cass_datorat_ai: '45988',
+        cass_datorat_ai: '4599',
+        real_venit_net_impozabil_ai: '31489',
+        real_impozit_datorat_ai: '3149',
+        dif_de_plata: '17648',
+        cont_bancar: 'RO49AAAA1B31007593840000',
+      });
+      // The CNP is in the XML only: not in the steps or the summary.
+      expect(JSON.stringify(prepared.steps)).not.toContain('1781105170030');
+      expect(JSON.parse(prepared.steps[0]!.detail!)).toMatchObject({
+        anR: 2025,
+        validator: 'D212Validator J13.0.1',
+        tax: '3149.00',
+        cas: '9900.00',
+        cass: '4599.00',
+      });
+      // A late bank fee in 2024 changes the books the return was computed from.
+      await s.book(
+        'ledger.general',
+        journal(
+          (await s.evidence('nota-comision.pdf')).id,
+          [
+            { account: '627', side: 'D', amount: '5.00' },
+            { account: '5121', side: 'C', amount: '5.00' },
+          ],
+          { date: '2024-12-30' },
+        ),
+      );
+      const request = await s.invoke<ActionView>(s.owner, 'declarations.authorize.request', {
+        artifactId: prepared.id,
+      });
+      expect(
+        (request.preview as { findings: { code: string }[] }).findings.map((item) => item.code),
+      ).toEqual(['STALE']);
+    },
+    180_000,
+  );
+
+  test('income of 2025: the web form’s structure, prepared, never officially validated', async () => {
+    const { s, options212 } = await books(2025, {
+      register: fixtures(2025),
+      declarationValidator: unused,
+    });
+    // 45,988 lei is under 12 × 4,050 = 48,600 lei: no CAS. CASS 4,599, taxable 41,389, tax 4,139.
+    const prepared = await prepare(s, '2025', options212);
+    expect(prepared.format).toBe(
+      'D212 mfp:anaf:dgti:d212:declaratie:v11 an_r 2026 (formularul web V-1.8.10 / 15.05.2026)',
+    );
+    expect(prepared.state).toBe('prepared');
+    const xml = await xmlOf(s, prepared);
+    expect(
+      Object.fromEntries(
+        [
+          'an_r',
+          'bifa131',
+          'bifa132',
+          'nume_c',
+          'initiala_c',
+          'prenume_c',
+          'den_venit',
+          'cass_anuala_ai',
+          'real_venit_net_impozabil_ai',
+          'real_impozit_datorat_ai',
+          'dif_de_plata',
+        ].map((name) => [name, attribute(xml, name)]),
+      ),
+    ).toEqual({
+      an_r: '2026',
+      bifa131: '0',
+      bifa132: '1',
+      nume_c: 'Popescu',
+      initiala_c: 'M',
+      prenume_c: 'Ion',
+      den_venit: 'Activități independente in Sistem Real ',
+      cass_anuala_ai: '4599',
+      real_venit_net_impozabil_ai: '41389',
+      real_impozit_datorat_ai: '4139',
+      dif_de_plata: '8738',
+    });
+    expect(
+      (await s.refused(s.invoke(s.owner, 'declarations.validate', { artifactId: prepared.id })))
+        ?.code,
+    ).toBe('NO_OFFICIAL_VALIDATOR');
+    const request = await s.invoke<ActionView>(s.owner, 'declarations.authorize.request', {
+      artifactId: prepared.id,
+    });
+    expect(
+      (request.preview as { findings: { code: string }[] }).findings.map((item) => item.code),
+    ).toEqual(['NOT_VALIDATED']);
+  });
+
+  test('what is refused: a year without a structure or rules, an IF, income outside the books', async () => {
+    // The engine's own register: no PIT values for 2025, no structure for 2026.
+    const { s, options212 } = await books(2025);
+    expect((await s.refused(prepare(s, '2025', options212)))?.code).toBe('RULE_GAP');
+    expect((await s.refused(prepare(s, '2026', options212)))?.code).toBe('FORMAT_GAP');
+
+    const fixed = await books(2025, { register: fixtures(2025) });
+    const refused = (options: Record<string, unknown>) =>
+      fixed.s.refused(prepare(fixed.s, '2025', { ...fixed.options212, ...options }));
+    expect(
+      (
+        await refused({
+          register: {
+            otherIncome: { amount: '10000', evidenceId: (await fixed.s.evidence('d212.pdf')).id },
+          },
+        })
+      )?.code,
+    ).toBe('D212_OTHER_INCOME');
+    // A party with no CNP recorded.
+    const other = await fixed.person('ro_individual', 'Ionescu Maria');
+    expect((await refused({ holderPartyId: other.id }))?.code).toBe('D212_CNP');
+    // The option after a year with income: situation B needs a loss.
+    expect((await refused({ cassOption: { situation: 'B' } }))?.code).toBe('D212_CASS_OPTION');
+    // An IF: each member declares the income distributed to them.
+    await fixed.s.invoke(fixed.s.owner, 'profile.record', {
+      axis: 'entity.form',
+      value: 'if',
+      effectiveFrom: '2025-01-01',
+      evidenceId: fixed.certificate,
+    });
+    expect((await refused({}))?.code).toBe('D212_IF');
+  });
+
+  test('the obligations calendar lists D212 by 25 May of the next year', async () => {
+    const { s } = await pfa();
+    const calendar = await s.invoke<{ kind: string; period: string; due: string | null }[]>(
+      s.owner,
+      'obligations.calendar',
+      { from: '2026-12', to: '2026-12', today: '2026-12-31' },
+    );
+    expect(calendar.find((item) => item.kind === 'D212')).toMatchObject({
+      period: '2026',
+      due: '2027-05-25',
+    });
   });
 });

@@ -77,6 +77,15 @@ export const cassRule = z
   .strict();
 export type CassRule = z.infer<typeof cassRule>;
 
+export const cassOptionRule = z
+  .object({
+    /** The base of the CASS a person opts to pay (art. 180 alin. (2)): this many minimum wages in
+     * force on 1 January of the year the option is for. */
+    baseWages: wages,
+  })
+  .strict();
+export type CassOptionRule = z.infer<typeof cassOptionRule>;
+
 const yearly = (key: string, value: z.ZodType, description: string): ParameterDefinition => ({
   key,
   axis: 'fiscal_year_start',
@@ -139,6 +148,11 @@ export const pitDefinitions: ParameterDefinition[] = [
     'ro.cass.independent',
     cassRule,
     'Baza minimă și plafonul CASS pentru veniturile din activități independente, în salarii minime.',
+  ),
+  yearly(
+    'ro.cass.option',
+    cassOptionRule,
+    'Baza CASS datorate de persoanele fizice care optează pentru plata contribuției (art. 180), în salarii minime, după anul pentru care optează.',
   ),
 ];
 
@@ -243,4 +257,14 @@ export const pitVersions: ParameterVersion[] = [
     'L239/2025:art.XII.pct.19',
     'L239/2025:art.XIII',
   ]),
+  // The option for 2025: 6 minimum wages, 2,430 lei of CASS (the instructions of the D212 for
+  // 2025's income); from 2026 the Code as consolidated.
+  version(
+    'ro.cass.option',
+    { baseWages: 6 },
+    ['OPANAF2736/2025:instr.pct.49.1.5'],
+    '2025-01-01',
+    '2025-12-31',
+  ),
+  version('ro.cass.option', { baseWages: 6 }, [code('art.180(2)')]),
 ];

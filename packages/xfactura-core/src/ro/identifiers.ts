@@ -25,3 +25,17 @@ export function isValidCnp(text: string): boolean {
   const control = total % 11;
   return (control === 10 ? 1 : control) === Number(digits[12]);
 }
+
+/**
+ * An IBAN (ISO 13616): country code, check digits and account, the first four characters moved
+ * to the end and letters read as 10–35, is 1 modulo 97. A Romanian IBAN has 24 characters.
+ */
+export function isValidIban(text: string): boolean {
+  const iban = text.replace(/\s+/g, '').toUpperCase();
+  if (!/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(iban)) return false;
+  if (iban.startsWith('RO') && iban.length !== 24) return false;
+  const digits = [...(iban.slice(4) + iban.slice(0, 4))]
+    .map((char) => (/\d/.test(char) ? char : String(char.charCodeAt(0) - 55)))
+    .join('');
+  return BigInt(digits) % 97n === 1n;
+}

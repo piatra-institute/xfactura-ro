@@ -97,6 +97,14 @@
       ]
     },
     {
+      "name": "anaf-saft",
+      "description": "ANAF D212 validator and PDF generator (J13.0.1 / P10.0.0, 01.08.2025): structure D212_A1.0.3, namespace v11, an_r 2025 only (income of 2024, OPANAF 1929/2025); ANAF publishes none for an_r 2026. Installed in the SAF-T kit: only its newer `dec` library (dec.DECTagCtx) loads this validator, which fails in the general kit with NoClassDefFoundError",
+      "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/D212Validator_01082025.zip",
+      "sha256": "58abef98dd0e5147dfe8c6842014d04c9595841000f8a13a0113b6b78ca61f4d",
+      "extract": ["D212Validator.jar", "D212Pdf.jar"],
+      "into": "duk_SAFT_an_luna/dist/lib"
+    },
+    {
       "name": "anaf",
       "description": "ANAF S1005 validator and PDF generator: microentities' annual financial statements for 2025 (J14.0.3, 17.03.2026)",
       "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/S1005_20260317.zip",

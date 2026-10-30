@@ -16,6 +16,7 @@ import type { EFacturaPort } from '../../source/engine/adapters/efactura';
 import type { TaxpayerRegistryPort } from '../../source/engine/adapters/anaf-taxpayers';
 import type { DeclarationValidator } from '../../source/engine/adapters/declaration-validator';
 import type { DeclarationKind } from '../../source/engine/modules/declarations';
+import type { ParameterRegister } from 'xfactura-core/rules';
 
 export const secret = 'synthetic-engine-secret-at-least-32-characters';
 
@@ -30,6 +31,8 @@ export async function scenario(
     clock?: () => number;
     declarations?: DeclarationKind[];
     declarationValidator?: DeclarationValidator;
+    /** A rule register other than the engine's, for a year the engine's does not cover yet. */
+    register?: ParameterRegister;
     anaf?: ConstructorParameters<typeof Engine>[3] extends infer O
       ? O extends { anaf?: infer A }
         ? A
@@ -48,6 +51,7 @@ export async function scenario(
     ...(options.declarations ? { declarations: options.declarations } : {}),
     ...(options.declarationValidator ? { declarationValidator: options.declarationValidator } : {}),
     ...(options.anaf ? { anaf: options.anaf } : {}),
+    ...(options.register ? { register: options.register } : {}),
   });
   const people = async (...names: string[]) => {
     const ids = names.map(() => randomUUID());

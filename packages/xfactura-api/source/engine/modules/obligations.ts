@@ -1,7 +1,7 @@
 import { and, asc, eq, gte, inArray, lte } from 'drizzle-orm';
 import { z } from 'zod';
 import { profileAt, vatPeriodOf } from 'xfactura-core/kernel';
-import { booksSystemOf } from 'xfactura-core/ro/entity';
+import { booksSystemOf, entityFormOf, individualForms } from 'xfactura-core/ro/entity';
 import { obligationDue, type ObligationKind } from 'xfactura-core/ro/obligations';
 import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
 import type { LocalDate } from 'xfactura-core/time';
@@ -154,7 +154,9 @@ async function postingMonths(
  * - D100 in each quarter's last month for microenterprises (`income_tax`) and in the months
  *   dividend tax was withheld; D205 for the years with dividend tax withheld;
  * - S1005 for each financial year kept in double entry (the company's size category is not
- *   checked: the engine prepares only the microentities' statements).
+ *   checked: the engine prepares only the microentities' statements);
+ * - D212 for each income year of a PFA, II or IF (`entity.form` at the year's end), by 25 May of
+ *   the next (Codul fiscal art. 122 alin. (3)); for an IF each member files their own.
  * A deadline the rule register does not source is `blocked`, never guessed.
  */
 export async function obligationsCalendar(
@@ -218,6 +220,8 @@ export async function obligationsCalendar(
     if (dividendMonths.has(label)) add('D100', label, 'D100.dividends');
     if (label.endsWith('-12') && [...dividendMonths].some((m) => m.startsWith(label.slice(0, 4))))
       add('D205', label.slice(0, 4));
+    if (label.endsWith('-12') && individualForms.includes(entityFormOf(loaded.profile, end)))
+      add('D212', label.slice(0, 4));
   }
   const years = await tx
     .select()

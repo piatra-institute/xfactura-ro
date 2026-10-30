@@ -14,6 +14,7 @@ export const obligationKinds = [
   'D205',
   'D406',
   'S1005',
+  'D212',
 ] as const;
 export type ObligationKind = (typeof obligationKinds)[number];
 
@@ -27,6 +28,14 @@ export const deadlineSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('february_last_day') }).strict(),
   /** A number of days after the period's last day. */
   z.object({ kind: z.literal('days_after'), days: z.number().int().min(1).max(366) }).strict(),
+  /** A day of the year after the period's (D212's 25 May). */
+  z
+    .object({
+      kind: z.literal('next_year_date'),
+      month: z.number().int().min(1).max(12),
+      day: z.number().int().min(1).max(31),
+    })
+    .strict(),
 ]);
 export type Deadline = z.infer<typeof deadlineSchema>;
 
@@ -121,6 +130,13 @@ export const obligationVersions: ParameterVersion[] = [
     ['L82/1991:art.36(1)(a)'],
     '2025-01-01',
   ),
+  // Income of 2025 (OPANAF nr. 2.736/2025) and, as the Code reads now, of 2026.
+  version(
+    'ro.deadline.D212',
+    { kind: 'next_year_date', month: 5, day: 25 },
+    ['ANAF/Cod-fiscal-consolidat:art.122(3)', 'OPANAF2736/2025:instr.I.1'],
+    '2025-01-01',
+  ),
   version(
     'ro.deadline.shift',
     { nonWorking: 'next_working_day', december25: 'december_21_or_previous_working_day' },
@@ -182,7 +198,12 @@ export function obligationDue(
         ? lastDayOf(next.year, next.month)
         : deadline.kind === 'february_last_day'
           ? lastDayOf(year + 1, 2)
-          : addDays(period.end, deadline.days);
+          : deadline.kind === 'next_year_date'
+            ? ([
+                lastDayOf(year + 1, deadline.month),
+                `${year + 1}-${pad(deadline.month)}-${pad(deadline.day)}`,
+              ].sort()[0]! as LocalDate)
+            : addDays(period.end, deadline.days);
   let due = nominal;
   if (nominal.endsWith('-12-25') && shift.december25 === 'december_21_or_previous_working_day') {
     due = `${nominal.slice(0, 4)}-12-21` as LocalDate;

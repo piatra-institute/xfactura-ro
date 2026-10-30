@@ -20,6 +20,7 @@ import { assetDepreciation, assetDerecognition } from 'xfactura-core/ro/treatmen
 import { legalReserve, resultClosing, resultTransfer } from 'xfactura-core/ro/treatments/year-end';
 import { deferral, deferralRelease } from 'xfactura-core/ro/treatments/deferrals';
 import { accrual, accrualSettlement } from 'xfactura-core/ro/treatments/accruals';
+import { offset } from 'xfactura-core/ro/treatments/offset';
 import {
   cashDefinitions,
   cashMovement,
@@ -101,6 +102,7 @@ import { d394Declaration } from './modules/d394';
 import { d406Declaration } from './modules/d406';
 import { d112Declaration } from './modules/d112';
 import { d205Declaration } from './modules/d205';
+import { d212Declaration } from './modules/d212';
 import { d100Declaration } from './modules/d100';
 import { calendarInput, obligationsCalendar, obligationView } from './modules/obligations';
 import { s1005Declaration } from './modules/s1005';
@@ -324,6 +326,7 @@ export class Engine {
       deferralRelease,
       accrual,
       accrualSettlement,
+      offset,
       cashMovement,
       expenseReport,
       ...(options.treatments ?? []),
@@ -406,6 +409,7 @@ export class Engine {
       d205Declaration(secret),
       d100Declaration(),
       s1005Declaration(),
+      d212Declaration(secret, (tx, companyId) => this.proposals.ruleContext(tx, companyId)),
       ...(options.declarations ?? []),
     );
     this.actions.add(this.declarations.authorizeHandler());

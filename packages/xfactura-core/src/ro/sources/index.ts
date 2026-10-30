@@ -1320,6 +1320,38 @@ export const clauses: readonly Clause[] = [
       'Pierderea compensată în an este cel mult 70% din venitul net anual al sursei; pierderile anilor dinaintea lui 2024 rămase la 31.12.2023 se compensează pe perioada rămasă din cei 7 ani, tot în limita a 70%, cumulate cu cele de după 2024.',
   },
   {
+    id: 'OPANAF2736/2025:instr.I.1',
+    source: 'OPANAF2736/2025',
+    locator: 'anexa nr. 2 (instrucțiuni), cap. I „Termenul de depunere a declarației”, pct. 1',
+    status: 'located',
+    summary:
+      'Declarația se depune până la 25 mai inclusiv a anului următor celui de realizare a veniturilor; pentru opțiunea de plată a CASS, oricând în cursul anului.',
+  },
+  {
+    id: 'OPANAF2736/2025:instr.pct.49.1.5',
+    source: 'OPANAF2736/2025',
+    locator: 'anexa nr. 2 (instrucțiuni), cap. I, secțiunea a 3-a, subsecțiunea a 2-a, pct. 49.1.5',
+    status: 'located',
+    summary:
+      'CASS datorată ca urmare a opțiunii exercitate în 2025 este cea corespunzătoare a 6 salarii minime brute pe țară, 2.430 lei (24.300 lei bază).',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.122(3)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 122 alin. (3)',
+    status: 'located',
+    summary:
+      'Declarația unică se completează și se depune pentru fiecare an fiscal până la 25 mai inclusiv a anului următor celui de realizare a veniturilor, și când activitatea începe, încetează sau se întrerupe în cursul anului.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.180(2)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 180 alin. (2)',
+    status: 'located',
+    summary:
+      'Persoanele care optează pentru plata CASS datorează contribuția pe anul opțiunii la o bază de 6 salarii de bază minime brute pe țară în vigoare la 1 ianuarie a acelui an.',
+  },
+  {
     id: 'OMFP170/2015:art.2-5',
     source: 'OMFP170/2015',
     locator: 'art. 2–5',

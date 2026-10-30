@@ -22,14 +22,15 @@ export interface DeclarationValidator {
 }
 
 /** The declarations only ANAF's SAF-T kit validates: its DUKIntegrator and `dec` library alone
- * load the D406 validators. */
-export const saftKinds: readonly string[] = ['D406', 'D406T'];
+ * load the D406 validators and D212's (J13.0.1 needs `dec.DECTagCtx`, absent from the general
+ * kit). */
+export const saftKinds: readonly string[] = ['D406', 'D406T', 'D212'];
 /** The SAF-T kit pinned as `anaf-saft` in scripts/validators/sources.json. */
 export const saftKitId = 'DUKIntegrator 1.4.18.3.3 SAF-T';
 
 /**
- * ANAF's two kits: the SAF-T kit for D406 and D406T, the general DUKIntegrator for every other
- * declaration. Each kind runs on its own kit, whose id is recorded with the result.
+ * ANAF's two kits: the SAF-T kit for D406, D406T and D212, the general DUKIntegrator for every
+ * other declaration. Each kind runs on its own kit, whose id is recorded with the result.
  */
 export class AnafKits implements DeclarationValidator {
   readonly id: string;

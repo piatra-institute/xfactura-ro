@@ -73,9 +73,20 @@ describe('filing deadlines', () => {
     expect(due('D394', '2026-07-01', '2026-09-30').due).toBe('2026-10-30');
   });
 
+  test('D212 on 25 May of the year after the income’s', () => {
+    expect(due('D212', '2025-01-01', '2025-12-31')).toMatchObject({
+      nominal: '2026-05-25',
+      due: '2026-05-25',
+      versions: ['ro.deadline.D212/2025-01-01', 'ro.deadline.shift/2016-01-01'],
+    });
+    expect(due('D212', '2026-01-01', '2026-12-31').due).toBe('2027-05-25');
+  });
+
   test('a deadline before its source is a gap, never a guess', () => {
     expect(() => due('D394', '2016-01-01', '2016-01-31')).toThrow(RuleGapError);
     expect(() => due('D406', '2021-10-01', '2021-12-31')).toThrow(RuleGapError);
+    // The texts read give D212's deadline from the income of 2025.
+    expect(() => due('D212', '2024-01-01', '2024-12-31')).toThrow(RuleGapError);
   });
 
   test('every deadline cites registered clauses', () => {

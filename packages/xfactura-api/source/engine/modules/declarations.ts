@@ -48,6 +48,10 @@ export interface DeclarationKind {
   /** Reads the same inputs again, for staleness. */
   inputs(tx: Transaction, companyId: string, period: string): Promise<ReadSetEntry[]>;
   options?: z.ZodType<Record<string, unknown>>;
+  /** False when ANAF publishes no validator for the period's format (D212 for the income of
+   * 2025, filed only through ANAF's web form): its returns are checked by the module's own
+   * controls, never reach `validated_official`, and so cannot be authorized. */
+  officialValidation?(period: string): boolean;
 }
 
 export const prepareInput = z
@@ -280,19 +284,13 @@ export class Declarations {
         return { artifactId: id };
       },
     );
-    if (this.validatorFor(kind.kind))
+    if (this.validatorFor(kind.kind) && kind.officialValidation?.(period) !== false)
       await this.validate(actor, { artifactId: prepared.artifactId });
     return this.view(actor, prepared.artifactId);
   }
 
   /** Runs ANAF's validator on a prepared return's exact XML. */
   async validate(actor: Actor, input: z.infer<typeof artifactInput>) {
-    requireCondition(
-      this.validator,
-      'VALIDATOR_UNAVAILABLE',
-      'Validatorul ANAF nu este instalat.',
-      503,
-    );
     const target = await this.commands.db.read(async (tx) => {
       await this.commands.authorize(tx, actor, 'write', 'declarations.validate');
       const [row] = await tx
@@ -302,6 +300,18 @@ export class Declarations {
       requireCondition(row, 'NOT_FOUND', 'Declarația nu există.', 404);
       return row;
     });
+    requireCondition(
+      this.kind(target.kind).officialValidation?.(target.period) !== false,
+      'NO_OFFICIAL_VALIDATOR',
+      `ANAF nu publică un validator pentru declarația ${target.kind} pe ${target.period}: ea se depune prin formularul ANAF, după controalele structurii.`,
+      422,
+    );
+    requireCondition(
+      this.validator,
+      'VALIDATOR_UNAVAILABLE',
+      'Validatorul ANAF nu este instalat.',
+      503,
+    );
     const validator = this.installedValidator(target.kind);
     const result = await validator.validate(
       target.kind,
