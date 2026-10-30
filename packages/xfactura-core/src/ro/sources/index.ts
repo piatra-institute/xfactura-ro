@@ -1311,6 +1311,31 @@ export const clauses: readonly Clause[] = [
       'Pentru veniturile anului 2025, baza anuală a CASS pentru veniturile din activități independente nu poate depăși 60 de salarii minime brute pe țară.',
   },
   {
+    id: 'OPANAF2736/2025:instr.cap.I.rd.9',
+    source: 'OPANAF2736/2025',
+    locator:
+      'anexa nr. 2, instrucțiuni, cap. I secț. 1, rd. 9 "Impozit anual datorat" (venitul anului 2025)',
+    status: 'located',
+    summary:
+      'Impozitul anual pe venitul net din activități independente al anului 2025 este de 10%.',
+  },
+  {
+    id: 'OPANAF2736/2025:instr.pct.43',
+    source: 'OPANAF2736/2025',
+    locator: 'anexa nr. 2, instrucțiuni, pct. 43',
+    status: 'located',
+    summary:
+      'Pentru anul fiscal 2025, plafonul minim anual al CAS (12 salarii minime) se stabilește cu salariul minim de 4.050 lei din HG nr. 1.506/2024 (art. 135^1 alin. (3)).',
+  },
+  {
+    id: 'OPANAF2736/2025:instr.pct.46',
+    source: 'OPANAF2736/2025',
+    locator: 'anexa nr. 2, instrucțiuni, pct. 46.1–46.4 și secț. 3 rd. 2',
+    status: 'located',
+    summary:
+      'CAS pentru venitul anului 2025: 25% asupra unei baze de cel puțin 12 salarii minime pentru venituri între 12 și 24 de salarii și de cel puțin 24 de salarii peste acest nivel.',
+  },
+  {
     id: 'OPANAF2736/2025:instr.cap.I.rd.6',
     source: 'OPANAF2736/2025',
     locator:

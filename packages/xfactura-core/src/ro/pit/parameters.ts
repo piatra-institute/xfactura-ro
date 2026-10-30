@@ -182,7 +182,28 @@ const version = (
   clauses,
 });
 
+/**
+ * Income of 2025 (the D212 filed in 2026): the values the instructions of OPANAF nr. 2736/2025
+ * state for it, and art. 66 and 68 alin. (2)–(7) as consolidated for 2026. No amendment to these
+ * was found in OUG nr. 156/2024, Legea nr. 141/2025, Legea nr. 239/2025 (which changes only art.
+ * 68 alin. (1), for art. 68^3) or Legea nr. 204/2026; the expert confirms.
+ */
+const income2025 = (key: string, value: ParameterVersion['value'], clauses: string[]) =>
+  version(key, value, clauses, '2025-01-01', '2025-12-31');
+
 export const pitVersions: ParameterVersion[] = [
+  income2025('ro.pit.rate', '10', ['OPANAF2736/2025:instr.cap.I.rd.9', code('art.64(1)(a)')]),
+  income2025('ro.pit.rounding', 'leu_half_down', [code('art.66')]),
+  income2025('ro.pit.loss', { sharePercent: '70', years: 5, legacyBefore: 2024, legacyYears: 7 }, [
+    'OPANAF2736/2025:instr.cap.I.rd.6',
+    code('art.118(4)-(5)'),
+  ]),
+  income2025('ro.cas.rate', '25', ['OPANAF2736/2025:instr.pct.46', code('art.138(a)')]),
+  income2025('ro.cas.independent', { thresholdWages: 12, lowerBaseWages: 12, upperBaseWages: 24 }, [
+    'OPANAF2736/2025:instr.pct.43',
+    'OPANAF2736/2025:instr.pct.46',
+  ]),
+  income2025('ro.cass.rate', '10', ['OPANAF2736/2025:instr.pct.47.1', code('art.156')]),
   version('ro.pit.rate', '10', [code('art.64(1)(a)'), code('art.69^2')]),
   version('ro.pit.rounding', 'leu_half_down', [code('art.66')]),
   version('ro.pit.loss', { sharePercent: '70', years: 5, legacyBefore: 2024, legacyYears: 7 }, [
@@ -213,6 +234,32 @@ export const pitVersions: ParameterVersion[] = [
     'L239/2025:art.XIII',
   ]),
   version('ro.pit.natures', defaultCatalogue, [
+    code('art.68(2)-(3)'),
+    code('art.68(4)'),
+    code('art.68(5)-(6)'),
+    code('art.68(7)'),
+    'OMFP3254/2017:art.4-5',
+    'OMFP170/2015:cap.V.14-1-1',
+  ]),
+  income2025(
+    'ro.pit.limits',
+    {
+      scholarshipPercent: '5',
+      protocolPercent: '2',
+      socialPercent: '5',
+      professionalPercent: '5',
+      vehiclePercent: '50',
+      associationEur: '4000',
+      pensionEur: '400',
+      occupationalPensionEur: '400',
+      peppEur: '400',
+      healthEur: '400',
+      sportEur: '100',
+      etfEur: '400',
+    },
+    [code('art.68(5)-(6)'), code('art.68(7)'), code('norme.art.68.pct.7(6)-(7)')],
+  ),
+  income2025('ro.pit.natures', defaultCatalogue, [
     code('art.68(2)-(3)'),
     code('art.68(4)'),
     code('art.68(5)-(6)'),

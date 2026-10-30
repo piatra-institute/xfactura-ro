@@ -655,3 +655,17 @@ Built 30 October 2026. Every value is still `extracted`.
 - Section 4 rows 2–3: in the 2024 structure the register's deductions, capped at the recalculated income (art. 118 alin. (2^4); the structure's rd.1 ≥ rd.2 + rd.3); in the 2025 form the weighted 4.1/4.2 amounts, uncapped, as the form writes them. The taxable income and the tax are the same.
 - The 2025 form's zeros and absences for a loss, for income below 12 wages and for a pensioner (`statut` 2; `statut` 5 for an own system) are read from its code, not confirmed by ANAF: the manual oracle (typing the same data into the form and comparing the XML) is still to be run. `den_caen` (the form's CAEN title) is not written; `adresa_c` is, though the form has no field for it.
 - The fiscal register's PIT parameters for 2024 and 2025 are not in the register: sourcing them (the 2024 instructions, OPANAF nr. 1929/2025, were not read) is what unblocks those years in production.
+
+### 7.7 The 2025 income year in the rule register
+
+- **Sourced versions for 2025** (`2025-01-01`–`2025-12-31`), from the instructions in OPANAF 2736/2025's annex:
+  - `ro.pit.rate`, from rd. 9;
+  - `ro.pit.loss`, from rd. 6;
+  - `ro.cas.rate` and `ro.cas.independent`, from pct. 43 and 46;
+  - `ro.cass.rate`, from pct. 47.1.
+- **Carried from the 2026 consolidated text:** `ro.pit.rounding` (art. 66) and `ro.pit.limits` / `ro.pit.natures` (art. 68 alin. (2)–(7)). They are taken as unchanged because none of OUG 156/2024, Legea 141/2025, Legea 239/2025 (which changes only art. 68 alin. (1)) or Legea 204/2026 amends those paragraphs. The expert confirms.
+- **Effect:** the D212 for 2025 income is prepared from the engine's own register, no longer from test values.
+- **Still gaps:**
+  - 2024 income;
+  - `ro.pit.norma` for 2025. The register reads it only for a source on a norm, so a source in the real system is unaffected.
+

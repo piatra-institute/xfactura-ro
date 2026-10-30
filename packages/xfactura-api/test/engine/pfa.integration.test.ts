@@ -388,21 +388,29 @@ describe('PFA profile and income sources', () => {
       (item) => /^ro\.(pit|cas|cass|min_wage)\./.test(item.id) || item.id.includes('/single/'),
     );
     expect(pit.map((item) => item.id).sort()).toEqual([
+      'ro.cas.independent/2025-01-01',
       'ro.cas.independent/2026-01-01',
+      'ro.cas.rate/2025-01-01',
       'ro.cas.rate/2026-01-01',
       'ro.cass.independent/2025-01-01',
       'ro.cass.independent/2026-01-01',
       'ro.cass.option/2025-01-01',
       'ro.cass.option/2026-01-01',
+      'ro.cass.rate/2025-01-01',
       'ro.cass.rate/2026-01-01',
       'ro.fx.rate_date.accounting/single/2024-01-01',
       'ro.min_wage.contributions/2025-01-01',
       'ro.min_wage.contributions/2026-01-01',
+      'ro.pit.limits/2025-01-01',
       'ro.pit.limits/2026-01-01',
+      'ro.pit.loss/2025-01-01',
       'ro.pit.loss/2026-01-01',
+      'ro.pit.natures/2025-01-01',
       'ro.pit.natures/2026-01-01',
       'ro.pit.norma/2026-01-01',
+      'ro.pit.rate/2025-01-01',
       'ro.pit.rate/2026-01-01',
+      'ro.pit.rounding/2025-01-01',
       'ro.pit.rounding/2026-01-01',
     ]);
     for (const item of pit) {
@@ -857,10 +865,20 @@ describe('D212 from the books', () => {
       status: 'extracted' as const,
       clauses: ['test fixture, not a legal value'],
     });
+    // Only what the engine's register lacks for the year: its own versions are kept.
+    const has = (key: string, at: number) =>
+      base.versions.some(
+        (item) =>
+          item.key === key && item.from <= `${at}-01-01` && (item.to ?? '9999') >= `${at}-01-01`,
+      );
     const added = [
-      ...Object.entries(values).map(([key, value]) => version(key, value, year)),
+      ...Object.entries(values)
+        .filter(([key]) => !has(key, year))
+        .map(([key, value]) => version(key, value, year)),
       // Chapter II of the 2024 return is the option for 2025: its CASS rate.
-      ...(year === 2024 ? [version('ro.cass.rate', current('ro.cass.rate'), 2025)] : []),
+      ...(year === 2024 && !has('ro.cass.rate', 2025)
+        ? [version('ro.cass.rate', current('ro.cass.rate'), 2025)]
+        : []),
     ];
     const keys = [...new Set(base.versions.map((item) => item.key))];
     return new ParameterRegister(
@@ -1076,10 +1094,8 @@ describe('D212 from the books', () => {
   );
 
   test('income of 2025: the web form’s structure, prepared, never officially validated', async () => {
-    const { s, options212 } = await books(2025, {
-      register: fixtures(2025),
-      declarationValidator: unused,
-    });
+    // The engine's own register: the 2025 values from the instructions of OPANAF 2736/2025.
+    const { s, options212 } = await books(2025, { declarationValidator: unused });
     // 45,988 lei is under 12 × 4,050 = 48,600 lei: no CAS. CASS 4,599, taxable 41,389, tax 4,139.
     const prepared = await prepare(s, '2025', options212);
     expect(prepared.format).toBe(
@@ -1129,10 +1145,10 @@ describe('D212 from the books', () => {
   });
 
   test('what is refused: a year without a structure or rules, an IF, income outside the books', async () => {
-    // The engine's own register: no PIT values for 2025, no structure for 2026.
-    const { s, options212 } = await books(2025);
-    expect((await s.refused(prepare(s, '2025', options212)))?.code).toBe('RULE_GAP');
-    expect((await s.refused(prepare(s, '2026', options212)))?.code).toBe('FORMAT_GAP');
+    // The engine's own register: no PIT values for 2024, no structure for 2026.
+    const old = await books(2024);
+    expect((await old.s.refused(prepare(old.s, '2024', old.options212)))?.code).toBe('RULE_GAP');
+    expect((await old.s.refused(prepare(old.s, '2026', old.options212)))?.code).toBe('FORMAT_GAP');
 
     const fixed = await books(2025, { register: fixtures(2025) });
     const refused = (options: Record<string, unknown>) =>

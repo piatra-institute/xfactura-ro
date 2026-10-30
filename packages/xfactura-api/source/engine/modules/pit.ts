@@ -328,7 +328,8 @@ interface YearParams {
   rounding: Rounding;
   loss: LossRule;
   limits: PitLimits;
-  norma: NormaRule;
+  /** Read only for a source taxed by norm: a year without its rule blocks only such sources. */
+  norma: NormaRule | { gap: string };
   catalogue: NatureCatalogue;
   minimumWage: bigint;
   casRate: string;
@@ -347,7 +348,14 @@ function yearParams(rules: RuleContext, income: number): YearParams {
       rounding: param('ro.pit.rounding'),
       loss: param('ro.pit.loss'),
       limits: param('ro.pit.limits'),
-      norma: param('ro.pit.norma'),
+      norma: (() => {
+        try {
+          return param<NormaRule>('ro.pit.norma');
+        } catch (error) {
+          if (!(error instanceof RuleGapError)) throw error;
+          return { gap: error.message };
+        }
+      })(),
       catalogue: param('ro.pit.natures'),
       minimumWage: parseMoney(param<string>('ro.min_wage.contributions'), LEDGER_CURRENCY),
       casRate: param('ro.cas.rate'),
@@ -782,31 +790,33 @@ export async function fiscalRegister(
       );
       continue;
     }
+    const normaRule = params.norma;
+    if ('gap' in normaRule) requireCondition(false, 'RULE_GAP', normaRule.gap, 422);
     const adjusted = adjustedNorm(
       {
         norm: parseMoney(given.norm, LEDGER_CURRENCY),
         increasePercent: given.increasePercent ?? null,
         reductionPercent: given.reductionPercent ?? null,
         activeDays: activeDays(current, input.year),
-        floor: params.minimumWage * BigInt(params.norma.floorWages),
+        floor: params.minimumWage * BigInt(normaRule.floorWages),
       },
       params.rounding,
     );
     issues.push(...adjusted.issues);
     if (eurRate) {
-      const threshold = euroToBani(params.norma.realAboveEur, eurRate);
+      const threshold = euroToBani(normaRule.realAboveEur, eurRate);
       if (gross > threshold)
         issues.push(
           info(
             'PIT_NORMA_THRESHOLD',
-            `${current.name}: venitul brut de ${lei(gross)} lei depășește ${params.norma.realAboveEur} euro (${lei(threshold)} lei): din ${input.year + 1} venitul net se stabilește în sistem real (art. 69 alin. (9)).`,
+            `${current.name}: venitul brut de ${lei(gross)} lei depășește ${normaRule.realAboveEur} euro (${lei(threshold)} lei): din ${input.year + 1} venitul net se stabilește în sistem real (art. 69 alin. (9)).`,
           ),
         );
     } else
       issues.push(
         info(
           'PIT_EUR_RATE',
-          `Pragul de ${params.norma.realAboveEur} euro al normei (art. 69 alin. (9)) se verifică la cursul mediu BNR al anului: indicați-l.`,
+          `Pragul de ${normaRule.realAboveEur} euro al normei (art. 69 alin. (9)) se verifică la cursul mediu BNR al anului: indicați-l.`,
         ),
       );
     norms += adjusted.adjusted;

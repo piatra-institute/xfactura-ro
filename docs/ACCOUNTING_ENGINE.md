@@ -510,6 +510,9 @@ The specification, sources and open questions are in [PFA_II_IF.md](PFA_II_IF.md
   - For 2024 income it is written in ANAF's structure D212_A1.0.3 and passes ANAF's validator (J13.0.1, which loads only in ANAF's SAF-T kit). That validator doesn't check the arithmetic, so the writer's own checks do.
   - For 2025 income it follows ANAF's web form (V-1.8.10), which has no published validator. It stops at `prepared`, and can't be authorized while no official validation exists.
   - It's on the obligations calendar, due 25 May of the next year (art. 122 alin. (3)).
+  - The 2025 values come from the instructions of OPANAF 2736/2025: tax 10%, CAS 25% in the 12- and 24-wage bands at the 4,050-lei minimum wage, CASS within 6–60 wages, losses at 70%.
+    - The expense limits and natures of art. 68 are the 2026 consolidated text. No 2025–2026 act amending them was found; the expert confirms.
+    - Income of 2024 and the 2025 rules for income norms are still gaps.
 - **Not built yet:**
   - D212 for income norms, several sources, IF members, and income outside the books;
   - normă de venit and the IF's members with D204;
