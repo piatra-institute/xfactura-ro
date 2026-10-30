@@ -2,11 +2,11 @@
 
 ## Current boundary and planned provider path
 
-The capability API and MCP are implemented. The accounting-first sequence in [ROADMAP.md](ROADMAP.md) now takes priority; browser OAuth delegation and a built-in provider-key agent are deferred. [AGENT_API.md](AGENT_API.md) describes the implemented command/MCP surface and its current manual-credential connection path. The built-in accounting agent is not implemented yet. Agents may prepare work and execute exact human-approved versions; agent credentials never inherit the delegator's ability to approve.
+The capability API and MCP are implemented. The built-in provider-key agent and MCP over OAuth are Phase 4 of the agent-first order in [ROADMAP.md](ROADMAP.md), after the engine plumbing for agents and the remaining regimes. [AGENT_API.md](AGENT_API.md) describes the implemented command/MCP surface and its current manual-credential connection path. The built-in accounting agent is not implemented yet. Agents may prepare work and execute exact human-approved versions; agent credentials never inherit the delegator's ability to approve.
 
 The provider configuration, credential handling, model execution and autonomy requirements below specify that future accounting agent; they do not describe an existing accounting-agent settings screen. An external MCP client can operate current tools today. Neither external nor built-in models can supply missing VAT, payroll, tax-calculation or filing capabilities. [FEATURE_VISION.md](FEATURE_VISION.md) owns proposed grounded explanations, continuous close and governed automation experiences.
 
-Implement company-owner configuration of provider keys, models, permitted actions and spending controls. Self-hosted backends call Piatra AI with a regular paid user API key or connect directly to a user-supplied provider such as OpenAI/OpenRouter. Piatra's normal scopes, capabilities, limits and billing apply exactly as for other users.
+Implement company-owner configuration of provider keys, models, permitted actions and spending controls. Supported providers are Anthropic, OpenAI and any OpenAI-compatible endpoint: OpenRouter, local Ollama or vLLM, and Piatra AI, which is OpenAI-compatible. The backend calls them directly with the company's own key. Piatra's normal scopes, capabilities, limits and billing apply exactly as for other users.
 
 No hosted xFactura commerce relay, privileged service credential, prepaid xFactura balance, or paid AI is required for accounting. Hosted company-supplied keys use the same adapters and have no xFactura AI surcharge. Provider billing remains with the provider account.
 
@@ -27,7 +27,14 @@ AI proposes facts or domain commands with source references. Arithmetic, eligibi
 | L4 Continuous compliance | Keep applicable filing packages ready and cross-reconciled. | Signed fiscal packages, complete tax positions, validator and review readiness. |
 | L5 Authorized external action | Submit exact approved artifacts under an applicable mandate. | Mandate, scoped authorization and artifact/policy approval; receipts tracked independently. |
 
-The initial AI release is L0/L1. L2 follows measured shadow execution, not model confidence. L3/L4 are bounded by the company's released profile composition. Initial L5 requires per-artifact approval. Standing submission policies require a later reviewed RFC and cannot silently replace that decision.
+The initial AI release is L0/L1. L2 follows measured shadow execution, not model confidence. L2 is earned per booking template; the engine implements it ([ACCOUNTING_ENGINE.md](ACCOUNTING_ENGINE.md#batches-templates-and-earned-autonomy)):
+- every proposal a template would make is recorded next to the decision the person actually took;
+- a policy can be requested only after a run of correct bookings: by default at least 6 across at least 3 months, no corrections, and unchanged rules; the owner or the accountant may tighten these criteria, never loosen them;
+- a person approves the policy; it is limited by partner and amount, and expires after 90 days;
+- what an agent read from a PDF or a photo never posts by itself unless the policy explicitly allows that source;
+- a reversal or correction of an auto-posted entry, a new partner or an unusual amount demotes it automatically (the system pauses it until a person resumes it), and any member can pause automation.
+
+Matching payments that already happened (`bank.settle`) can be earned this way. It records money that already moved and never moves any. L3/L4 are bounded by the company's released profile composition. Initial L5 requires per-artifact approval. Standing submission policies require a later reviewed RFC and cannot silently replace that decision.
 
 Payments are a separate authority domain and remain outside the initial release. Permission to post an expense or submit a return never permits moving bank funds.
 

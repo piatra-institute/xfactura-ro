@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { DomainError, requireCondition } from 'xfactura-core/errors';
@@ -10,13 +9,15 @@ import {
   type InvoiceDraft,
 } from 'xfactura-core/einvoice';
 import { canonical, hashOf } from 'xfactura-core/hash';
+import { documentIdentity } from 'xfactura-core/documents/schemas';
 import { isValidCnp } from 'xfactura-core/ro/identifiers';
 import { invoiceKinds } from 'xfactura-core/ro/treatments/invoices';
 import { parseInvoiceXml, type InvoiceDocument } from 'xfactura-core/ubl/invoice-document';
 import type { Transaction } from '../db/database';
 import { companies, documents, evidence, parties } from '../db/schema';
 import { sha256, type ObjectStore } from '../adapters/object-store';
-import type { Actor, Commands } from '../kernel/commands';
+import type { Actor, Commands, Ids } from '../kernel/commands';
+import { joinIdentityGroup } from '../kernel/sources';
 import { appendDetails } from './sales';
 
 export const invoicerImportInput = z.object({ evidenceId: z.uuid() }).strict();
@@ -90,7 +91,7 @@ function convert(record: unknown): Converted {
 }
 
 /** The partner for a buyer: an individual is known by a hash of the CNP, never the CNP. */
-async function buyerParty(tx: Transaction, actor: Actor, draft: InvoiceDraft) {
+async function buyerParty(tx: Transaction, actor: Actor, draft: InvoiceDraft, ids: Ids) {
   const buyer = draft.buyer;
   const code = (buyer.vatId ?? buyer.legalId ?? '').replace(/^RO/i, '');
   const individual = buyer.address.country === 'RO' && isValidCnp(code);
@@ -105,7 +106,7 @@ async function buyerParty(tx: Transaction, actor: Actor, draft: InvoiceDraft) {
         eq(parties.taxId, taxId),
       ),
     );
-  const id = existing?.id ?? randomUUID();
+  const id = existing?.id ?? ids();
   if (!existing)
     await tx.insert(parties).values({
       id,
@@ -213,7 +214,8 @@ export class InvoicerImport {
           );
           continue;
         }
-        const documentId = randomUUID();
+        const documentId = this.commands.ids();
+        const identityKey = documentIdentity(invoiceKinds.sale, item.body, company!.cui);
         await tx.insert(documents).values({
           id: documentId,
           companyId: actor.companyId,
@@ -225,11 +227,14 @@ export class InvoicerImport {
           evidenceId: source.id,
           origin: 'invoicer-export',
           docDate: item.date,
-          partyId: await buyerParty(tx, actor, item.draft),
+          partyId: await buyerParty(tx, actor, item.draft, this.commands.ids),
           currency: item.body.currency,
           number: item.number,
+          identityKey,
+          authority: 'invoicer',
           createdBy: actor.actorId,
         });
+        await joinIdentityGroup(tx, actor, { id: documentId, identityKey });
         outcomes.push({ ...base, state: 'imported', documentId });
       }
       const states: Record<string, number> = {};

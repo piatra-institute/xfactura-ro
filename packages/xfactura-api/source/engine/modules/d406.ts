@@ -336,7 +336,8 @@ async function booksOf(tx: Transaction, companyId: string, period: string) {
   );
   const recognized = new Map(
     treatments.flatMap((row) => {
-      const id = row.documentId ?? (input.get(row.entryId)!.documentId as string | undefined);
+      // The posted version's input first: a revision may name another document than the first.
+      const id = (input.get(row.entryId)!.documentId as string | undefined) ?? row.documentId;
       return id ? [[row.entryId, id] as const] : [];
     }),
   );
@@ -499,6 +500,8 @@ export function d406Declaration(
   objects: ObjectStore,
   rules: (tx: Transaction, companyId: string) => Promise<RuleContext>,
   secret: string,
+  /** The engine's time: the file's creation date. */
+  clock: () => number = Date.now,
 ): DeclarationKind {
   const sealer = new Sealer(secret);
   return {
@@ -934,7 +937,8 @@ export function d406Declaration(
           id,
           date: books.justifying.get(header.id)?.date ?? header.date,
           posted: header.date,
-          entered: bucharestDate(Date.parse(header.postedAt)),
+          // The engine's time of posting; the database's for entries posted before it was kept.
+          entered: bucharestDate(header.engineAt ?? Date.parse(header.postedAt)),
           description: clip(header.description, 256),
           lines: transactionLines,
         });
@@ -1211,7 +1215,7 @@ export function d406Declaration(
       const details = JSON.parse(seller.details) as Party;
       const model: D406 = {
         ...filePeriod(period),
-        created: bucharestDate(Date.now()),
+        created: bucharestDate(clock()),
         software: { company: 'xFactura', name: 'xFactura', version: '0.0.1' },
         company: {
           cui: books.company!.cui,

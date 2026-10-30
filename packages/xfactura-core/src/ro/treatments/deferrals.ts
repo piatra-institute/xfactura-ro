@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { Effect, Issue, LineSpec, OpenItemState, ScheduleRow, Treatment } from '../../kernel';
 import { allocate, formatMoney, LEDGER_CURRENCY, parseMoney } from '../../money';
+import { questionIssue } from '../../questions/kinds';
 import { isLocalDate, type LocalDate } from '../../time';
 
 const block = (code: string, message: string, path?: string): Issue => ({
@@ -26,9 +27,11 @@ export const deferralInput = z
     /** The expense (6xx) or revenue (70x) account it was booked on, and is released back to. */
     account: z.string().regex(/^(6\d{2,5}|70\d{1,4})$/),
     amount: z.string().regex(/^(0|[1-9]\d{0,15})(\.\d{1,2})?$/),
-    /** The first month released, and how many months the amount covers. */
-    from: month,
-    months: z.number().int().min(1).max(120),
+    /** The first month released, and how many months the amount covers. When the documents do
+     * not say, leave both out: the proposal asks a person (`deferral.schedule`), and is revised
+     * with the answer as its basis. */
+    from: month.optional(),
+    months: z.number().int().min(1).max(120).optional(),
     /** The supplier or customer the amount concerns. */
     partyId: z.uuid(),
     /** The invoice it was booked from, when there is one. */
@@ -52,6 +55,8 @@ export const deferral: Treatment<DeferralInput> = {
     'Cheltuieli sau venituri în avans (471, 472): suma trece din contul ei, cu graficul lunar de reluare.',
   input: deferralInput,
   agent: true,
+  summary:
+    'Prepaid expense or deferred revenue (471, 472): the amount leaves its account with a monthly release schedule.',
   subject: (input) => `deferral:${input.evidenceId}:${input.account}`,
   plan: (input) => ({
     evidence: [input.evidenceId],
@@ -68,17 +73,37 @@ export const deferral: Treatment<DeferralInput> = {
       issues.push(block('DOCUMENT', 'Documentul nu este disponibil.', 'documentId'));
     const amount = parseMoney(input.amount, LEDGER_CURRENCY);
     if (amount <= 0n) issues.push(block('AMOUNT', 'Suma este zero.', 'amount'));
-    if (input.from < input.date.slice(0, 7))
+    const { from, months } = input;
+    if (from === undefined || months === undefined)
+      issues.push(
+        questionIssue(
+          'DEFERRAL_SCHEDULE',
+          'Perioada acoperită de sumă nu reiese din date: întrebați o persoană ce luni acoperă.',
+          {
+            kind: 'deferral.schedule',
+            subject: { kind: 'deferral', id: `${input.evidenceId}:${input.account}` },
+            params: {
+              account: input.account,
+              amount: input.amount,
+              evidenceId: input.evidenceId,
+              ...(input.documentId ? { documentId: input.documentId } : {}),
+              date: input.date,
+            },
+          },
+          'block',
+          from === undefined ? 'from' : 'months',
+        ),
+      );
+    else if (from < input.date.slice(0, 7))
       issues.push(block('FROM', 'Reluarea începe în luna înregistrării sau după ea.', 'from'));
-    if (issues.length) return { effect: null, issues };
+    if (issues.length || from === undefined || months === undefined)
+      return { effect: null, issues };
 
     const revenue = input.account.startsWith('7');
-    const rows: ScheduleRow[] = allocate(amount, Array(input.months).fill(1n)).map(
-      (bani, index) => {
-        const key = addMonths(input.from, index);
-        return { key, due: lastDay(key), bani, counterAccount: input.account };
-      },
-    );
+    const rows: ScheduleRow[] = allocate(amount, Array(months).fill(1n)).map((bani, index) => {
+      const key = addMonths(from, index);
+      return { key, due: lastDay(key), bani, counterAccount: input.account };
+    });
     const control = revenue ? '472' : '471';
     const lines: LineSpec[] = revenue
       ? [
@@ -107,7 +132,7 @@ export const deferral: Treatment<DeferralInput> = {
       date: input.date as LocalDate,
       journalClass: 'general',
       journalCode: 'DIVERSE',
-      description: `${revenue ? 'Venituri' : 'Cheltuieli'} în avans ${input.from}–${until}`,
+      description: `${revenue ? 'Venituri' : 'Cheltuieli'} în avans ${from}–${until}`,
       lines,
       openItems: [
         {
@@ -129,12 +154,12 @@ export const deferral: Treatment<DeferralInput> = {
           version: 1,
           method: 'monthly_equal',
           rows,
-          basis: { from: input.from, months: input.months, amount: input.amount },
+          basis: { from, months, amount: input.amount },
         },
       ],
       explanation: {
-        summary: `${formatMoney(amount, LEDGER_CURRENCY)} lei din ${input.account} în ${control}, reluați în ${input.months} luni (${input.from}–${until}).`,
-        details: { account: input.account, from: input.from, months: input.months },
+        summary: `${formatMoney(amount, LEDGER_CURRENCY)} lei din ${input.account} în ${control}, reluați în ${months} luni (${from}–${until}).`,
+        details: { account: input.account, from, months },
       },
     };
     return { effect, issues };
@@ -185,6 +210,8 @@ export const deferralRelease: Treatment<ReleaseInput> = {
   description: 'Reluarea lunară a cheltuielilor și veniturilor în avans (471, 472).',
   input: releaseInput,
   agent: true,
+  summary: 'Monthly release of prepaid expenses and deferred revenue (471, 472).',
+  toolset: 'close',
   subject: (input) => `deferrals-release:${input.month}:${input.round}`,
   plan: () => ({
     openItems: [

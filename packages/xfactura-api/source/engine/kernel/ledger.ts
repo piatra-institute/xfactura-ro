@@ -22,7 +22,33 @@ export interface EntryHeader {
   policyId?: string;
   postedBy: string;
   agentId?: string;
+  /** The engine's time of posting: a policy must be unexpired then (`inv:binding`). */
+  engineAt: number;
 }
+
+/**
+ * Whether the posted entry `entry` (a table alias or the quoted name of `acc_entries`) still
+ * stands: no reversal of it was posted (`ledger.reverse`, whose subject is `reverse:<entry>`).
+ * A correction is a reversal and a new proposal, so what is booked for a subject is its standing
+ * entry, and the subject of a reversed entry is free again. A reversal is never reversed in turn
+ * (`REVERSAL_OF_REVERSAL`), so one level decides.
+ */
+const standsText = (entry: string) => `not exists (select 1 from acc_proposals stv
+    join acc_entries ste on ste.company_id = stv.company_id and ste.proposal_id = stv.id
+    where stv.company_id = ${entry}.company_id and stv.subject_key = 'reverse:' || ${entry}.id)`;
+export const entryStands = (entry: string) => sql.raw(standsText(entry));
+
+/**
+ * Whether the proposal `proposal` (a table alias or the quoted name of `acc_proposals`) holds its
+ * subject: it is not withdrawn, and not posted by an entry reversed since. A company has at most
+ * one such proposal per subject (`inv:subject_taken`).
+ */
+export const holdsSubject = (proposal: string) =>
+  sql.raw(`(not exists (select 1 from acc_withdrawals hsw
+      where hsw.company_id = ${proposal}.company_id and hsw.proposal_id = ${proposal}.id)
+    and not exists (select 1 from acc_entries hse
+      where hse.company_id = ${proposal}.company_id and hse.proposal_id = ${proposal}.id
+        and not ${standsText('hse')}))`);
 
 /** The text stored as `effect_json`; the entry invariant reads the approved effect from it. */
 export function serializeEffect(effect: Effect) {
@@ -162,6 +188,7 @@ export async function writeEntry(tx: Transaction, header: EntryHeader, effect: E
     policyId: header.policyId ?? null,
     postedBy: header.postedBy,
     agentId: header.agentId ?? null,
+    engineAt: header.engineAt,
   });
   return { id: entryId, number, seq };
 }

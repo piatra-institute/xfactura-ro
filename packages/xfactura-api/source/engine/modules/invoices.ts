@@ -1,83 +1,33 @@
-import { randomUUID } from 'node:crypto';
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireCondition } from 'xfactura-core/errors';
 import { canonical, hashOf } from 'xfactura-core/hash';
+import { documentIdentity, normalizedTaxId } from 'xfactura-core/documents/schemas';
 import { invoiceKinds } from 'xfactura-core/ro/treatments/invoices';
 import { parseInvoiceXml, type InvoiceDocument } from 'xfactura-core/ubl/invoice-document';
 import type { Transaction } from '../db/database';
-import { companies, documents, evidence, parties } from '../db/schema';
+import { companies, documents, evidence } from '../db/schema';
 import type { ObjectStore } from '../adapters/object-store';
-import type { Actor, Commands } from '../kernel/commands';
+import type { Actor, Commands, Ids } from '../kernel/commands';
+import { joinIdentityGroup } from '../kernel/sources';
+import { documentViewOf, partyFor } from './documents';
 
 export const importInput = z.object({ evidenceId: z.uuid() }).strict();
-export const documentView = z.object({
-  id: z.string(),
-  kind: z.string(),
-  number: z.string().nullable(),
-  date: z.string(),
-  partyId: z.string().nullable(),
-  currency: z.string().nullable(),
-  totals: z.object({ net: z.string(), tax: z.string(), gross: z.string() }).nullable(),
-  evidenceId: z.string().nullable(),
-});
-
-const normalizedTaxId = (value: string) => value.replace(/^RO/i, '').replace(/\s+/g, '');
-
-/** Finds the partner by country and tax identifier, or records it from the document. */
-async function partyFor(tx: Transaction, actor: Actor, party: InvoiceDocument['supplier']) {
-  const taxId = party.country === 'RO' ? normalizedTaxId(party.taxId) : party.taxId;
-  const [existing] = await tx
-    .select({ id: parties.id })
-    .from(parties)
-    .where(
-      and(
-        eq(parties.companyId, actor.companyId),
-        eq(parties.country, party.country),
-        eq(parties.taxId, taxId),
-      ),
-    );
-  if (existing) return existing.id;
-  const id = randomUUID();
-  await tx.insert(parties).values({
-    id,
-    companyId: actor.companyId,
-    kind: party.country === 'RO' ? 'ro_legal_entity' : 'eu_taxable',
-    country: party.country,
-    taxId,
-    name: party.name,
-    createdBy: actor.actorId,
-  });
-  return id;
-}
-
-export function view(row: typeof documents.$inferSelect) {
-  const body = JSON.parse(row.body) as Partial<InvoiceDocument>;
-  return {
-    id: row.id,
-    kind: row.kind,
-    number: row.number,
-    date: row.docDate,
-    partyId: row.partyId,
-    currency: row.currency,
-    totals: body.totals
-      ? { net: body.totals.net, tax: body.totals.tax, gross: body.totals.gross }
-      : null,
-    evidenceId: row.evidenceId,
-  };
-}
 
 /**
- * Records an e-Factura invoice or credit note from its XML. The company must be its supplier
- * or its customer. One document per supplier, number, date and type: the same invoice from
- * another file is the same document if its content is identical, and a conflict otherwise.
+ * Records an e-Factura invoice or credit note from its XML, from ANAF's SPV (`spv`) or uploaded
+ * (`upload`). The company must be its supplier or its customer. One document per supplier,
+ * number, date and type: the same invoice from another file is the same document if its content
+ * is identical, and a conflict otherwise. A copy read earlier from a PDF stays a document of its
+ * own, in the same group (`joinIdentityGroup`).
  */
 export async function recordInvoice(
   tx: Transaction,
   actor: Actor,
   evidenceId: string,
   bytes: Uint8Array,
-  origin: string,
+  origin: 'spv' | 'upload',
+  ids: Ids,
 ) {
   const body = parseInvoiceXml(bytes);
   const [company] = await tx.select().from(companies).where(eq(companies.id, actor.companyId));
@@ -113,11 +63,11 @@ export async function recordInvoice(
     );
     return { row: existing, body, created: false };
   }
-  const partyId = await partyFor(tx, actor, sale ? body.customer : body.supplier);
+  const partyId = await partyFor(tx, actor, sale ? body.customer : body.supplier, ids);
   const [row] = await tx
     .insert(documents)
     .values({
-      id: randomUUID(),
+      id: ids(),
       companyId: actor.companyId,
       kind,
       schema: body.parserVersion,
@@ -130,9 +80,12 @@ export async function recordInvoice(
       partyId,
       currency: body.currency,
       number: body.number,
+      identityKey: documentIdentity(kind, body, company!.cui),
+      authority: origin === 'spv' ? 'efactura' : 'ubl_upload',
       createdBy: actor.actorId,
     })
     .returning();
+  await joinIdentityGroup(tx, actor, row!);
   return { row: row!, body, created: true };
 }
 
@@ -156,25 +109,9 @@ export class Invoices {
         source.id,
         await this.objects.get(actor.companyId, source.hash),
         'upload',
+        this.commands.ids,
       );
-      return view(recorded.row);
+      return documentViewOf(tx, recorded.row);
     });
-  }
-
-  list(actor: Actor, input: { kinds?: string[] }) {
-    return this.commands.read(actor, 'documents.list', async (tx) =>
-      (
-        await tx
-          .select()
-          .from(documents)
-          .where(
-            and(
-              eq(documents.companyId, actor.companyId),
-              input.kinds?.length ? inArray(documents.kind, input.kinds) : undefined,
-            ),
-          )
-          .orderBy(asc(documents.docDate), asc(documents.id))
-      ).map(view),
-    );
   }
 }

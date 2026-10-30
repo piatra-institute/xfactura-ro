@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test';
+import { count, eq } from 'drizzle-orm';
 import type { LocalDate } from 'xfactura-core/time';
 import {
   ANAF_TAXPAYERS_URL,
@@ -8,6 +9,7 @@ import {
   TaxpayerLookupFailed,
   type TaxpayerQuery,
 } from '../../source/engine/adapters/anaf-taxpayers';
+import { evidence, partyStatuses } from '../../source/engine/db/schema';
 import type { ProposalView } from '../../source/engine/kernel/views';
 import { FakeTaxpayers } from './fakes/anaf-taxpayers';
 import { recordedAnswer, recordedQueries } from './fixtures/anaf-taxpayers';
@@ -216,6 +218,7 @@ type CheckView = {
     date: string;
     outcome: string;
     status: { seq: number; inactive: boolean; evidenceId: string; [field: string]: unknown } | null;
+    recorded: boolean;
     detail: string | null;
   }[];
 };
@@ -258,6 +261,22 @@ const lines = (proposal: ProposalView) =>
   proposal.effect?.lines.map((line) => `${line.side} ${line.account} ${line.amount}`);
 const codes = (proposal: ProposalView) =>
   proposal.issues.map((issue) => `${issue.code}/${issue.severity}`);
+/** The proposal re-evaluated against the books now, as the worker does. */
+const recheck = (s: Scenario, proposal: ProposalView) =>
+  s.invoke<ProposalView>(s.owner, 'proposals.get', { id: proposal.id, recheck: true });
+/** The company's status snapshots and kept files. */
+const counts = (s: Scenario) =>
+  s.db.read(async (tx) => ({
+    snapshots: (
+      await tx
+        .select({ n: count() })
+        .from(partyStatuses)
+        .where(eq(partyStatuses.companyId, s.company.id))
+    )[0]!.n,
+    evidence: (
+      await tx.select({ n: count() }).from(evidence).where(eq(evidence.companyId, s.company.id))
+    )[0]!.n,
+  }));
 
 describe('checking partners at ANAF', () => {
   test('records the status of each supplier of the month on its tax point, with ANAF’s answer', async () => {
@@ -488,7 +507,8 @@ describe('the status read', () => {
     const revised = await s.revise('invoices.recognize', unchecked, input);
     expect(codes(revised)).toEqual(['SUPPLIER_INACTIVE/block']);
 
-    // A newer snapshot for the same date is a change too, even when it says the same.
+    // A newer snapshot for the same date is a change too, even when the proposal uses nothing
+    // it changed.
     const other = await importInvoice(s, { number: 'F-7', date: '2026-10-07' });
     fake.taxpayer(supplier);
     await check(s, { partyIds: [other.partyId], date: '2026-10-07' });
@@ -497,8 +517,108 @@ describe('the status read', () => {
     );
     // A snapshot for another date is not read.
     await check(s, { partyIds: [other.partyId], date: '2026-10-08' });
+    expect(await recheck(s, approved)).toMatchObject({
+      status: 'approved',
+      check: { stale: false },
+    });
+    fake.taxpayer(supplier, { name: 'FURNIZOR REDENUMIT SRL' });
     await check(s, { partyIds: [other.partyId], date: '2026-10-07' });
     expect((await s.refused(s.post(approved)))?.code).toBe('STALE');
+  });
+
+  test('ANAF answering the same records no snapshot, and the proposals reading it stay current', async () => {
+    const { s, fake } = await company();
+    fake.taxpayer(supplier);
+    const document = await importInvoice(s, { number: 'F-10' });
+    const [first] = (await check(s, { month: '2026-10' })).results;
+    expect(first).toMatchObject({ outcome: 'checked', recorded: true, status: { seq: 1 } });
+    const input = { documentId: document.id, account: '628' };
+    const proposal = await s.propose('invoices.recognize', input);
+    expect(proposal.effect?.explanation.details).toMatchObject({
+      supplierStatus: { evidenceId: first!.status!.evidenceId },
+    });
+    const before = await counts(s);
+
+    // Asked again by name, ANAF is asked, and says the same: the snapshot read stands.
+    const again = await check(s, { partyIds: [document.partyId], date: '2026-10-01' });
+    expect(fake.requests).toHaveLength(2);
+    expect(again.results).toEqual([
+      { ...first!, recorded: false, detail: expect.stringContaining('la fel') },
+    ]);
+    expect(await counts(s)).toEqual(before);
+    expect(await recheck(s, proposal)).toMatchObject({
+      status: 'proposed',
+      check: { stale: false },
+    });
+    expect((await s.post(await s.approve(proposal))).status).toBe('posted');
+
+    // A changed answer is recorded, with ANAF's answer, and the proposals reading it go stale.
+    const second = await importInvoice(s, { number: 'F-11' });
+    const pending = await s.propose('invoices.recognize', { ...input, documentId: second.id });
+    fake.inactivate(supplier, '2026-09-15');
+    const changed = await check(s, { partyIds: [document.partyId], date: '2026-10-01' });
+    expect(changed.results[0]).toMatchObject({
+      outcome: 'checked',
+      recorded: true,
+      status: { seq: 2, inactive: true },
+      detail: null,
+    });
+    expect(changed.results[0]!.status!.evidenceId).not.toBe(first!.status!.evidenceId);
+    expect(await counts(s)).toEqual({
+      snapshots: before.snapshots + 1,
+      evidence: before.evidence + 2,
+    });
+    expect((await recheck(s, pending)).status).toBe('stale');
+    expect(
+      codes(await s.revise('invoices.recognize', pending, { ...input, documentId: second.id })),
+    ).toEqual(['SUPPLIER_INACTIVE/block']);
+  });
+
+  test('an answer no snapshot is recorded from is not kept', async () => {
+    const { s, fake } = await company();
+    fake.taxpayer('18547290').taxpayer('14399840');
+    const one = await s.party('Unu SRL', '18547290');
+    const two = await s.party('Doi SRL', '14399840');
+    const date = '2026-10-01';
+    await check(s, { partyIds: [one.id], date });
+    await check(s, { partyIds: [two.id], date });
+    const before = await counts(s);
+    // Asked together, ANAF's answer is new bytes saying what both snapshots say.
+    const both = await check(s, { partyIds: [one.id, two.id], date });
+    expect(fake.requests.at(-1)).toHaveLength(2);
+    expect(both.results.map((item) => [item.outcome, item.recorded, item.status?.seq])).toEqual([
+      ['checked', false, 1],
+      ['checked', false, 1],
+    ]);
+    expect(await counts(s)).toEqual(before);
+  });
+});
+
+describe('checking a month again', () => {
+  test('asks ANAF only about the purchases whose supplier has no snapshot for their date', async () => {
+    const { s, fake } = await company();
+    fake.taxpayer(supplier);
+    await importInvoice(s, { number: 'F-12', date: '2026-10-01' });
+    const [first] = (await check(s, { month: '2026-10' })).results;
+    expect(first).toMatchObject({ recorded: true, status: { seq: 1 } });
+    const before = await counts(s);
+
+    const rerun = await check(s, { month: '2026-10' });
+    expect(fake.requests).toHaveLength(1);
+    expect(rerun.results).toEqual([
+      { ...first!, recorded: false, detail: expect.stringContaining('deja verificată') },
+    ]);
+    expect(await counts(s)).toEqual(before);
+
+    // A new invoice of the month: only its supplier on its date is asked about.
+    await importInvoice(s, { number: 'F-13', date: '2026-10-02' });
+    const later = await check(s, { month: '2026-10' });
+    expect(fake.requests).toHaveLength(2);
+    expect(fake.requests[1]).toEqual([{ cui: supplier, date: '2026-10-02' as LocalDate }]);
+    expect(later.results.map((item) => [item.date, item.recorded, item.status?.seq])).toEqual([
+      ['2026-10-01', false, 1],
+      ['2026-10-02', true, 2],
+    ]);
   });
 });
 

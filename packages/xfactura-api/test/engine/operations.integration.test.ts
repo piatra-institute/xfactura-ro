@@ -4,7 +4,7 @@ import { Database } from '../../source/engine/db/database';
 import { entries } from '../../source/engine/db/schema';
 import { backup, restore } from '../../source/engine/backup';
 import { LocalObjectStore } from '../../source/engine/adapters/object-store';
-import { companyRecords, Exports } from '../../source/engine/modules/exports';
+import { companyRecords } from '../../source/engine/modules/exports';
 import { guardedTables } from '../../source/engine/db/invariants';
 import { journal, scenario, type Scenario } from './scenario';
 
@@ -43,7 +43,7 @@ describe('exports', () => {
     expect((await s.refused(s.invoke(s.viewer, 'exports.request')))?.code).toBe('FORBIDDEN');
     const job = await s.invoke<{ id: string; status: string }>(s.reviewer, 'exports.request');
     expect(job.status).toBe('pending');
-    expect(await Exports.runOne(s.db, s.engine.commands, s.objects)).toBe(true);
+    expect(await s.engine.jobs.runOne()).toBe(true);
     const { bytes, hash } = await s.engine.exports.download(s.reviewer, job.id);
     const file = JSON.parse(bytes.toString()) as {
       tables: Record<string, { bani?: string }[]>;
@@ -73,7 +73,7 @@ describe('exports', () => {
     const agent = await s.engine.agents.authenticate(grant.token, s.company.id);
     const job = await s.invoke<{ id: string }>(agent, 'exports.request');
     await s.invoke(s.reviewer, 'agents.revoke', { id: grant.id });
-    await Exports.runOne(s.db, s.engine.commands, s.objects);
+    await s.engine.jobs.runOne();
     expect(
       (await s.invoke<{ status: string }>(s.reviewer, 'exports.get', { id: job.id })).status,
     ).toBe('failed');
@@ -92,7 +92,7 @@ describe('backup and restore', () => {
       await db.migrate();
       expect(await db.orm.select({ seq: entries.seq }).from(entries)).toEqual([{ seq: 1 }]);
       const objects = new LocalObjectStore(restored.objectDir);
-      const [source] = await s.invoke<{ hash: string }[]>(s.owner, 'evidence.list');
+      const [source] = await s.list<{ hash: string }>(s.owner, 'evidence.list');
       expect((await objects.get(s.company.id, source!.hash)).toString()).toBe(
         'Notă contabilă originală',
       );

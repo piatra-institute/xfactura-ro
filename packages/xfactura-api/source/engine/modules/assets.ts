@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { and, asc, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireCondition } from 'xfactura-core/errors';
@@ -90,7 +89,7 @@ export class Assets {
         .from(assets)
         .where(and(eq(assets.companyId, actor.companyId), eq(assets.number, input.number)));
       requireCondition(!existing, 'ASSET_NUMBER', 'Numărul de inventar este deja folosit.', 409);
-      const id = randomUUID();
+      const id = this.commands.ids();
       await tx.insert(assets).values({
         id,
         companyId: actor.companyId,

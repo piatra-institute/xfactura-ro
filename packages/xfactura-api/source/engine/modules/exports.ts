@@ -1,18 +1,18 @@
-import { randomUUID } from 'node:crypto';
-import { and, asc, eq, gt, gte, lt, max, or } from 'drizzle-orm';
+import { and, eq, max } from 'drizzle-orm';
 import { requireCondition } from 'xfactura-core/errors';
 import type { Database } from '../db/database';
 import * as schema from '../db/schema';
 import type { ObjectStore } from '../adapters/object-store';
 import type { Actor, Commands } from '../kernel/commands';
+import { Jobs, type ClaimedJob, type JobHandler } from '../kernel/jobs';
 
 const { jobs, entries } = schema;
 type Tx = Parameters<Parameters<Database['read']>[0]>[0];
-const LEASE_MS = 60_000;
 const EVIDENCE_LIMIT = 64 * 1024 * 1024;
 
-/** Every company record an export contains. Authentication, work queues, command replays and
- * global reference data are not company records. */
+/** Every company record an export contains. Authentication, work queues (jobs, outbox),
+ * consumers' cursors, caches recomputed from the books (`acc_proposal_checks`), command replays
+ * and global reference data are not company records. Schedules are the company's configuration. */
 export async function companyRecords(tx: Tx, companyId: string) {
   const s = schema;
   return {
@@ -99,6 +99,10 @@ export async function companyRecords(tx: Tx, companyId: string) {
       .select()
       .from(s.bankMovements)
       .where(eq(s.bankMovements.companyId, companyId)),
+    acc_bank_mappings: await tx
+      .select()
+      .from(s.bankMappings)
+      .where(eq(s.bankMappings.companyId, companyId)),
     acc_period_events: await tx
       .select()
       .from(s.periodEvents)
@@ -183,6 +187,37 @@ export async function companyRecords(tx: Tx, companyId: string) {
       .select()
       .from(s.payrollLines)
       .where(eq(s.payrollLines.companyId, companyId)),
+    acc_schedules: await tx.select().from(s.schedules).where(eq(s.schedules.companyId, companyId)),
+    acc_questions: await tx.select().from(s.questions).where(eq(s.questions.companyId, companyId)),
+    acc_question_answers: await tx
+      .select()
+      .from(s.questionAnswers)
+      .where(eq(s.questionAnswers.companyId, companyId)),
+    acc_question_withdrawals: await tx
+      .select()
+      .from(s.questionWithdrawals)
+      .where(eq(s.questionWithdrawals.companyId, companyId)),
+    acc_dispositions: await tx
+      .select()
+      .from(s.dispositions)
+      .where(eq(s.dispositions.companyId, companyId)),
+    acc_templates: await tx.select().from(s.templates).where(eq(s.templates.companyId, companyId)),
+    acc_template_revocations: await tx
+      .select()
+      .from(s.templateRevocations)
+      .where(eq(s.templateRevocations.companyId, companyId)),
+    acc_template_predictions: await tx
+      .select()
+      .from(s.templatePredictions)
+      .where(eq(s.templatePredictions.companyId, companyId)),
+    acc_automation_events: await tx
+      .select()
+      .from(s.automationEvents)
+      .where(eq(s.automationEvents.companyId, companyId)),
+    acc_automation_criteria: await tx
+      .select()
+      .from(s.automationCriteria)
+      .where(eq(s.automationCriteria.companyId, companyId)),
   };
 }
 
@@ -206,6 +241,66 @@ const view = (job: typeof jobs.$inferSelect): JobView => {
 const json = (value: unknown) =>
   JSON.stringify(value, (_, item) => (typeof item === 'bigint' ? item.toString() : item));
 
+const actorOf = (job: ClaimedJob): Actor => ({
+  actorId: job.actorId,
+  companyId: job.companyId,
+  ...(job.agentId ? { agentId: job.agentId } : {}),
+});
+
+/** Builds a requested export. Authority is rechecked when the work runs and again when the
+ * file is stored, not only when it was requested. */
+export function exportJob(commands: Commands, objects: ObjectStore): JobHandler {
+  return {
+    kind: 'export',
+    interrupted: 'Exportul a fost întrerupt repetat; cereți un export nou.',
+    async run(job, lease) {
+      const actor = actorOf(job);
+      const snapshot = await commands.db.read(async (tx) => {
+        await commands.authorize(tx, actor, 'review', 'exports.request');
+        const tables = await companyRecords(tx, job.companyId);
+        const [last] = await tx
+          .select({ seq: max(entries.seq) })
+          .from(entries)
+          .where(eq(entries.companyId, job.companyId));
+        return { tables, watermark: last?.seq ?? 0 };
+      });
+      const sources = snapshot.tables.acc_evidence;
+      requireCondition(
+        sources.reduce((total, source) => total + source.size, 0) <= EVIDENCE_LIMIT,
+        'EXPORT_LIMIT',
+        'Documentele depășesc 64 MB; exportul complet se face de operator.',
+      );
+      const originals = [];
+      for (const source of sources) {
+        const bytes = await objects.get(job.companyId, source.hash);
+        originals.push({
+          id: source.id,
+          hash: source.hash,
+          filename: source.filename,
+          base64: bytes.toString('base64'),
+        });
+        await lease.renew();
+      }
+      const bytes = Buffer.from(
+        json({
+          format: 'xfactura-export',
+          version: 2,
+          companyId: job.companyId,
+          exportedAt: new Date(commands.clock()).toISOString(),
+          watermark: snapshot.watermark,
+          tables: snapshot.tables,
+          originals,
+        }),
+      );
+      const hash = await objects.put(job.companyId, bytes, 128 * 1024 * 1024);
+      return { hash, size: bytes.length };
+    },
+    async complete(tx, job) {
+      await commands.authorize(tx, actorOf(job), 'review', 'exports.request');
+    },
+  };
+}
+
 /** Complete company exports: every record and every original file, built by the worker. */
 export class Exports {
   constructor(
@@ -215,18 +310,14 @@ export class Exports {
 
   request(actor: Actor, key: string) {
     return this.commands.run(actor, key, 'exports.request', {}, 'review', async (tx) => {
-      const id = randomUUID();
-      const [job] = await tx
-        .insert(jobs)
-        .values({
-          id,
-          companyId: actor.companyId,
-          actorId: actor.actorId,
-          agentId: actor.agentId ?? null,
-          kind: 'export',
-          params: {},
-        })
-        .returning();
+      const job = await Jobs.enqueue(tx, {
+        id: this.commands.ids(),
+        companyId: actor.companyId,
+        actorId: actor.actorId,
+        agentId: actor.agentId ?? null,
+        kind: 'export',
+        params: {},
+      });
       return view(job!);
     });
   }
@@ -251,129 +342,5 @@ export class Exports {
       409,
     );
     return { bytes: await this.objects.get(actor.companyId, job.hash), hash: job.hash };
-  }
-
-  /** Claims and builds one export; returns false when there is no work. */
-  static async runOne(db: Database, commands: Commands, objects: ObjectStore) {
-    const job = await db.write(async (tx) => {
-      const now = Date.now();
-      await tx
-        .update(jobs)
-        .set({
-          status: 'failed',
-          error: 'Exportul a fost întrerupt repetat; cereți un export nou.',
-        })
-        .where(and(eq(jobs.status, 'running'), lt(jobs.leaseUntil, now), gte(jobs.attempts, 3)));
-      const [next] = await tx
-        .select()
-        .from(jobs)
-        .where(
-          and(
-            eq(jobs.kind, 'export'),
-            lt(jobs.attempts, 3),
-            or(
-              eq(jobs.status, 'pending'),
-              and(eq(jobs.status, 'running'), lt(jobs.leaseUntil, now)),
-            ),
-          ),
-        )
-        .orderBy(asc(jobs.createdAt))
-        .limit(1);
-      if (!next) return null;
-      const leaseToken = randomUUID();
-      await tx
-        .update(jobs)
-        .set({
-          status: 'running',
-          attempts: next.attempts + 1,
-          leaseToken,
-          leaseUntil: now + LEASE_MS,
-        })
-        .where(and(eq(jobs.companyId, next.companyId), eq(jobs.id, next.id)));
-      return { ...next, leaseToken };
-    });
-    if (!job) return false;
-    const actor: Actor = {
-      actorId: job.actorId,
-      companyId: job.companyId,
-      ...(job.agentId ? { agentId: job.agentId } : {}),
-    };
-    const owned = () =>
-      and(
-        eq(jobs.companyId, job.companyId),
-        eq(jobs.id, job.id),
-        eq(jobs.leaseToken, job.leaseToken),
-        eq(jobs.status, 'running'),
-      );
-    try {
-      // Authority is rechecked when the work runs, not only when it was requested.
-      const snapshot = await db.read(async (tx) => {
-        await commands.authorize(tx, actor, 'review', 'exports.request');
-        const tables = await companyRecords(tx, job.companyId);
-        const [last] = await tx
-          .select({ seq: max(entries.seq) })
-          .from(entries)
-          .where(eq(entries.companyId, job.companyId));
-        return { tables, watermark: last?.seq ?? 0 };
-      });
-      const sources = snapshot.tables.acc_evidence;
-      requireCondition(
-        sources.reduce((total, source) => total + source.size, 0) <= EVIDENCE_LIMIT,
-        'EXPORT_LIMIT',
-        'Documentele depășesc 64 MB; exportul complet se face de operator.',
-      );
-      const originals = [];
-      for (const source of sources) {
-        const bytes = await objects.get(job.companyId, source.hash);
-        originals.push({
-          id: source.id,
-          hash: source.hash,
-          filename: source.filename,
-          base64: bytes.toString('base64'),
-        });
-        const renewed = await db.orm
-          .update(jobs)
-          .set({ leaseUntil: Date.now() + LEASE_MS })
-          .where(and(owned(), gt(jobs.leaseUntil, Date.now())))
-          .returning({ id: jobs.id });
-        requireCondition(
-          renewed.length,
-          'LEASE_LOST',
-          'Exportul a fost preluat de alt proces.',
-          409,
-        );
-      }
-      const bytes = Buffer.from(
-        json({
-          format: 'xfactura-export',
-          version: 2,
-          companyId: job.companyId,
-          exportedAt: new Date().toISOString(),
-          watermark: snapshot.watermark,
-          tables: snapshot.tables,
-          originals,
-        }),
-      );
-      const hash = await objects.put(job.companyId, bytes, 128 * 1024 * 1024);
-      await db.write(async (tx) => {
-        await commands.authorize(tx, actor, 'review', 'exports.request');
-        const saved = await tx
-          .update(jobs)
-          .set({ status: 'done', result: { hash, size: bytes.length }, leaseUntil: null })
-          .where(and(owned(), gt(jobs.leaseUntil, Date.now())))
-          .returning({ id: jobs.id });
-        requireCondition(saved.length, 'LEASE_LOST', 'Exportul a fost preluat de alt proces.', 409);
-      });
-    } catch (error) {
-      await db.orm
-        .update(jobs)
-        .set({
-          status: 'failed',
-          error: error instanceof Error ? error.message.slice(0, 500) : 'Export failed',
-          leaseUntil: null,
-        })
-        .where(owned());
-    }
-    return true;
   }
 }

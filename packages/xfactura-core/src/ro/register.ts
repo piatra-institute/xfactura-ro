@@ -1,0 +1,53 @@
+import { ParameterRegister, type ParameterDefinition, type ParameterVersion } from '../rules';
+import { dividendDefinitions, dividendVersions } from './dividends';
+import { etvaDefinitions, etvaVersions } from './etva';
+import { interestDefinitions, interestVersions } from './financing';
+import { fxDefinitions, fxVersions } from './fx';
+import { microDefinitions, microVersions } from './micro';
+import { obligationDefinitions, obligationVersions } from './obligations';
+import { payrollDefinitions, payrollVersions } from './payroll/parameters';
+import { sickLeaveDefinitions, sickLeaveVersions } from './payroll/sick-leave';
+import { pitDefinitions, pitVersions } from './pit/parameters';
+import { procedureDefinitions, procedureVersions } from './procedure';
+import { cashDefinitions, cashVersions } from './treatments/cash';
+import { determinationDefinitions, determinationVersions } from './determinations/parameters';
+import { vatDefinitions, vatVersions } from './vat';
+
+/**
+ * Every Romanian parameter family, in the order the engine's `defaultRegister()` assembles them
+ * (`xfactura-api/source/engine/engine.ts`; `scripts/review/review.test.ts` checks the two agree).
+ * The review packets and the binding check run over this register.
+ */
+export const roDefinitions: readonly ParameterDefinition[] = [
+  ...vatDefinitions,
+  ...fxDefinitions,
+  ...procedureDefinitions,
+  ...obligationDefinitions,
+  ...cashDefinitions,
+  ...payrollDefinitions,
+  ...sickLeaveDefinitions,
+  ...microDefinitions,
+  ...dividendDefinitions,
+  ...interestDefinitions,
+  ...etvaDefinitions,
+  ...pitDefinitions,
+  ...determinationDefinitions,
+];
+
+export const roVersions: readonly ParameterVersion[] = [
+  ...vatVersions,
+  ...fxVersions,
+  ...procedureVersions,
+  ...obligationVersions,
+  ...cashVersions,
+  ...payrollVersions,
+  ...sickLeaveVersions,
+  ...microVersions,
+  ...dividendVersions,
+  ...interestVersions,
+  ...etvaVersions,
+  ...pitVersions,
+  ...determinationVersions,
+];
+
+export const roRegister = () => new ParameterRegister(roDefinitions, roVersions);

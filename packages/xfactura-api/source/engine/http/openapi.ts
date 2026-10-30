@@ -1,5 +1,4 @@
-import { z } from 'zod';
-import type { Operation } from '../kernel/operations';
+import { inputSchema, outputSchema, type Operation } from '../kernel/operations';
 
 const errors = {
   '401': { description: 'Authentication required.' },
@@ -33,11 +32,19 @@ export function openApi(operations: Operation[], publicUrl: string) {
     paths[`/api/accounting/v1/companies/{companyId}/capabilities/${operation.id}`] = {
       post: {
         operationId: operation.id.replaceAll('.', '_'),
+        summary: operation.summary,
         description: operation.description,
+        tags: [operation.toolset],
         'x-xfactura': {
           permission: operation.permission,
+          agent: operation.agent,
           effect: operation.effect,
           approval: operation.approval,
+          toolset: operation.toolset,
+          dataClasses: operation.dataClasses,
+          reversible: operation.reversible,
+          externalEffect: operation.externalEffect,
+          risk: operation.risk,
         },
         security: operation.agent ? [{ session: [] }, { agent: [] }] : [{ session: [] }],
         parameters: [
@@ -61,18 +68,14 @@ export function openApi(operations: Operation[], publicUrl: string) {
         requestBody: {
           required: true,
           content: {
-            'application/json': {
-              schema: z.toJSONSchema(operation.input, { io: 'input', unrepresentable: 'any' }),
-            },
+            'application/json': { schema: inputSchema(operation) },
           },
         },
         responses: {
           '200': {
             description: 'Validated result.',
             content: {
-              'application/json': {
-                schema: z.toJSONSchema(operation.output, { io: 'output', unrepresentable: 'any' }),
-              },
+              'application/json': { schema: outputSchema(operation) },
             },
           },
           ...errors,
@@ -83,9 +86,9 @@ export function openApi(operations: Operation[], publicUrl: string) {
     openapi: '3.1.0',
     info: {
       title: 'xFactura accounting API',
-      version: '2.0.0',
+      version: '3.0.0',
       description:
-        'One command interface for people and agents. Amounts are decimal strings. A proposal is approved by a person for its exact effect hash and re-evaluated against the books when posted.',
+        'One command interface for people and agents. Amounts are decimal strings. Every result is a JSON object; a list is `{ items, next }`. A proposal is approved by a person for its exact effect hash and re-evaluated against the books when posted.',
     },
     servers: [{ url: publicUrl }],
     paths,

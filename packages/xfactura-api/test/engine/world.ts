@@ -216,6 +216,10 @@ export async function propose(
     readSet?: { kind: string; id: string; version: string }[];
     rulesHash?: string;
     effectJson?: string;
+    issues?: { code: string; severity: 'block' | 'ack' | 'info'; message: string }[];
+    /** Whom the version is created in the name of (the owner), and through which agent grant. */
+    createdBy?: string;
+    agentId?: string;
   } = {},
 ): Promise<Proposed> {
   const proposalId = options.proposalId ?? randomUUID();
@@ -242,11 +246,12 @@ export async function propose(
       rules: '{}',
       rulesHash: options.rulesHash ?? 'rules-1',
       effect: effectJson,
-      issues: '[]',
+      issues: canonical(options.issues ?? []),
       blocking: options.blocking ?? false,
       effectHash,
       entryDate: value.date,
-      createdBy: world.owner,
+      createdBy: options.createdBy ?? world.owner,
+      agentId: options.agentId ?? null,
     });
   });
   return { proposalId, version, effectHash, effect: value };
@@ -300,6 +305,7 @@ export function post(
         version: proposed.version,
         ...binding,
         postedBy: world.owner,
+        engineAt: Date.now(),
       },
       rows,
     ),

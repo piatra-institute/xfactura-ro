@@ -6,6 +6,7 @@ COPY package.json bun.lock ./
 COPY packages/xfactura-core/package.json packages/xfactura-core/package.json
 COPY packages/xfactura-api/package.json packages/xfactura-api/package.json
 COPY packages/xfactura-web/package.json packages/xfactura-web/package.json
+COPY packages/xfactura-eval/package.json packages/xfactura-eval/package.json
 RUN bun install --frozen-lockfile
 COPY packages/xfactura-core packages/xfactura-core
 COPY packages/xfactura-api packages/xfactura-api

@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { and, asc, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireCondition } from 'xfactura-core/errors';
@@ -245,7 +244,7 @@ export class Declarations {
           .select({ id: evidence.id })
           .from(evidence)
           .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.hash, hash)));
-        const evidenceId = stored?.id ?? randomUUID();
+        const evidenceId = stored?.id ?? this.commands.ids();
         if (!stored) {
           await this.objects.put(actor.companyId, bytes, 64 * 1024 * 1024);
           await tx.insert(evidence).values({
@@ -256,9 +255,10 @@ export class Declarations {
             mediaType: 'application/xml',
             size: bytes.length,
             createdBy: actor.actorId,
+            engineAt: this.commands.clock(),
           });
         }
-        const id = randomUUID();
+        const id = this.commands.ids();
         await tx.insert(artifacts).values({
           id,
           companyId: actor.companyId,
@@ -370,7 +370,7 @@ export class Declarations {
         .select({ id: evidence.id })
         .from(evidence)
         .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.hash, hash)));
-      const evidenceId = stored?.id ?? randomUUID();
+      const evidenceId = stored?.id ?? this.commands.ids();
       if (!stored) {
         await this.objects.put(actor.companyId, bytes, 64 * 1024 * 1024);
         await tx.insert(evidence).values({
@@ -381,6 +381,7 @@ export class Declarations {
           mediaType: 'application/pdf',
           size: bytes.length,
           createdBy: actor.actorId,
+          engineAt: this.commands.clock(),
         });
       }
       if ((await latestStep(tx, actor.companyId, target.id))?.state === 'authorized')

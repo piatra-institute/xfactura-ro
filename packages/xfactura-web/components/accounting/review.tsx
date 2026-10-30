@@ -17,6 +17,7 @@ const statusLabels: Record<ProposalView['status'], string> = {
   blocked: 'Blocată',
   proposed: 'De aprobat',
   approved: 'Aprobată',
+  stale: 'Depășită',
   posted: 'Contabilizată',
   withdrawn: 'Retrasă',
 };
@@ -101,6 +102,12 @@ export function ProposalCard({ proposal }: { proposal: ProposalView }) {
             </li>
           ))}
         </ul>
+      ) : null}
+      {proposal.status === 'stale' ? (
+        <p className="acc-hint">
+          Registrele s-au schimbat de la evaluarea acestei versiuni; revizuiți propunerea înainte de
+          aprobare sau contabilizare.
+        </p>
       ) : null}
       {unreviewed.length ? (
         <p className="acc-hint">

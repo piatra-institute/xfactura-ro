@@ -36,9 +36,18 @@ import {
   type CashVatAmounts,
   type CashVatParty,
 } from '../cash-vat';
+import { normalizePlate, questionIssue } from '../../questions/kinds';
 import { RuleGapError, type RuleContext } from '../../rules';
 import { isLocalDate, type LocalDate } from '../../time';
 import { invoiceDocumentSchema, type InvoiceDocument } from '../../ubl/invoice-document';
+import {
+  answerCovers,
+  suggestsVehicle,
+  VEHICLE_CLAUSES,
+  vehicleAnswer,
+  vehicleDeduction,
+  vehicleSubject,
+} from '../vehicles';
 
 /** Document kinds produced by importing an e-Factura invoice or credit note. */
 export const invoiceKinds = {
@@ -61,10 +70,121 @@ const warn = (code: string, message: string): Issue => ({ code, severity: 'ack',
 const ron = (value: string) => parseMoney(value, LEDGER_CURRENCY);
 const date = (value: string) => value as LocalDate;
 
-/** A document's tax point: its issue date unless it states another (BT-7). It is also the date
- * a purchase's supplier status is checked on. */
-export const taxPointOf = (body: Pick<InvoiceDocument, 'issueDate' | 'taxPointDate'>) =>
-  date(body.taxPointDate ?? body.issueDate);
+/** How a document's tax point was found: the supply's date (BT-72), the invoice issued before
+ * the supply, the tax point it states (BT-7), or the issue date standing for a supply date the
+ * document does not give. */
+export type TaxPointBasis = 'supply' | 'invoice' | 'tax_point' | 'issue_date';
+
+/**
+ * When VAT on an invoice becomes chargeable, which is also the date its rate is read on (Codul
+ * fiscal art. 282 alin. (1)–(2), art. 291 alin. (4)–(5)): the supply's date, the fapt generator
+ * of art. 281, unless the invoice came first, or an advance the stated tax point (BT-7) records.
+ * The document gives the supply's date in BT-72; without it, the stated tax point or, last, the
+ * issue date stands for it. The invoicing period (BG-14) is not used: for a continuous supply the
+ * fapt generator is the payment date in the contract or the invoice (art. 281 alin. (8)), for
+ * another service its completion (alin. (12)), and the document does not say which it is.
+ */
+export function chargeabilityOf(
+  body: Pick<InvoiceDocument, 'issueDate' | 'taxPointDate' | 'deliveryDate'>,
+): { date: LocalDate; basis: TaxPointBasis; supplied: LocalDate | null } {
+  const issued = date(body.issueDate);
+  const stated = body.taxPointDate ? date(body.taxPointDate) : null;
+  const supplied = body.deliveryDate ? date(body.deliveryDate) : null;
+  if (!supplied)
+    return { date: stated ?? issued, basis: stated ? 'tax_point' : 'issue_date', supplied };
+  const earliest = [supplied, issued, ...(stated ? [stated] : [])].sort()[0]!;
+  return {
+    date: earliest,
+    basis: earliest === supplied ? 'supply' : earliest === issued ? 'invoice' : 'tax_point',
+    supplied,
+  };
+}
+
+/** A document's tax point (`chargeabilityOf`). It is also the date a purchase's supplier status
+ * is checked on. */
+export const taxPointOf = (
+  body: Pick<InvoiceDocument, 'issueDate' | 'taxPointDate' | 'deliveryDate'>,
+) => chargeabilityOf(body).date;
+
+const RATE_CLAUSES = [
+  'ANAF/Cod-fiscal-consolidat:art.281(1)',
+  'ANAF/Cod-fiscal-consolidat:art.282(1)',
+  'ANAF/Cod-fiscal-consolidat:art.282(2)',
+  'ANAF/Cod-fiscal-consolidat:art.291(4)-(6)',
+];
+
+/**
+ * What the reviewer is told about the date an invoice's standard rate was read on: a stated tax
+ * point later than the supply (art. 282 alin. (1)); the regularization of art. 291 alin. (6) when
+ * the invoice or an advance came before a supply at another rate; and, without a supply date, a
+ * change of the standard rate since the first day of the month before the issue date (or the
+ * invoiced period's start), within which the supply may have taken place (art. 319 alin. (16)
+ * has the invoice issued by the 15th of the next month).
+ */
+function chargeabilityIssues(
+  body: InvoiceDocument,
+  chargeable: ReturnType<typeof chargeabilityOf>,
+  rules: RuleContext,
+): Issue[] {
+  if (!body.taxes.some((tax) => tax.category === 'S')) return [];
+  const rateOn = (day: LocalDate) => {
+    try {
+      return rules.param<string>('ro.vat.rate', 'vat_chargeability_date', day, { category: 'S' });
+    } catch (error) {
+      if (error instanceof RuleGapError) return null;
+      throw error;
+    }
+  };
+  const issues: Issue[] = [];
+  const { date: at, supplied } = chargeable;
+  const now = rateOn(at);
+  if (supplied && body.taxPointDate && body.taxPointDate > at)
+    issues.push({
+      ...warn(
+        'TAX_POINT_DATES',
+        `Factura înscrie data exigibilității ${body.taxPointDate} (BT-7), după ${supplied === at ? `data livrării sau a prestării, ${supplied} (BT-72)` : `emiterea ei, ${at}`}. TVA devine exigibilă la data faptului generator sau la emiterea facturii, dacă aceasta a fost emisă înainte (art. 282 alin. (1) și (2) din Codul fiscal): se înregistrează la ${at}, cu cota de atunci. Confirmați.`,
+      ),
+      details: { taxPoint: at, stated: body.taxPointDate, clauses: RATE_CLAUSES },
+    });
+  if (supplied && supplied > at) {
+    const then = rateOn(supplied);
+    if (now && then && then !== now)
+      issues.push({
+        ...warn(
+          'RATE_REGULARIZATION',
+          `TVA a devenit exigibilă la ${at}, înainte de livrare sau prestare (${supplied}), cu cota de ${now}%; la data livrării cota standard este ${then}%. Art. 291 alin. (6) din Codul fiscal cere regularizarea la cota de la data livrării: emiteți sau înregistrați factura de regularizare.`,
+        ),
+        details: { taxPoint: at, supplied, rates: [now, then], clauses: RATE_CLAUSES },
+      });
+  }
+  if (chargeable.basis === 'issue_date') {
+    const month = Number(at.slice(5, 7));
+    const previous = date(
+      month === 1
+        ? `${Number(at.slice(0, 4)) - 1}-12-01`
+        : `${at.slice(0, 5)}${String(month - 1).padStart(2, '0')}-01`,
+    );
+    const start = body.invoicePeriod?.start;
+    const from = start && start < previous ? date(start) : previous;
+    const before = rateOn(from);
+    if (now && before && before !== now) {
+      const period = body.invoicePeriod;
+      issues.push({
+        ...warn(
+          'SUPPLY_DATE_ASSUMED',
+          `Factura nu înscrie data livrării sau a prestării (BT-72), nici data exigibilității (BT-7): cota TVA este citită la data emiterii, ${at}, luată drept dată a livrării. Cota standard era ${before}% la ${from} și este ${now}% la ${at}. Dacă livrarea sau prestarea a avut loc înainte de schimbarea cotei, se aplică cota de la data ei, iar TVA este exigibilă la acea dată (art. 281, art. 282 alin. (1) și art. 291 alin. (4) din Codul fiscal), pe care factura trebuie să o înscrie.${period ? ` Factura privește perioada ${period.start ?? '…'}–${period.end ?? '…'} (BG-14): un serviciu încheiat la sfârșitul ei are faptul generator la acea dată (art. 281 alin. (12)); unul prestat continuu, la data de plată din contract sau, în lipsa ei, la emiterea facturii (art. 281 alin. (8)).` : ''} Confirmați data livrării.`,
+        ),
+        details: {
+          taxPoint: at,
+          from,
+          rates: [before, now],
+          clauses: [...RATE_CLAUSES, 'ANAF/Cod-fiscal-consolidat:art.281(8)'],
+        },
+      });
+    }
+  }
+  return issues;
+}
 
 /** No deduction from a supplier entered in the register of inactive taxpayers. */
 const INACTIVE_CLAUSE = 'ANAF/Cod-fiscal-consolidat:art.11(7)';
@@ -180,6 +300,17 @@ function amountsFor(invoice: Invoice, loaded: Loaded, rules: RuleContext, taxPoi
 /** An allocated amount: negative only for an advance deducted by the final invoice. */
 const amountPattern = /^-?(0|[1-9]\d{0,15})(\.\d{1,2})?$/;
 
+/** A road vehicle's registration as written (`B-123-XFA`); it is read without spaces or dashes,
+ * as the `vehicle.use` question names it. */
+export const registration = z
+  .string()
+  .trim()
+  .min(2)
+  .max(20)
+  .refine((value) => /^[\p{L}\p{N}]{2,15}$/u.test(normalizePlate(value)), {
+    message: 'Numărul de înmatriculare are doar litere și cifre, despărțite de spații sau cratime.',
+  });
+
 export const recognitionInput = z
   .object({
     documentId: z.uuid(),
@@ -189,6 +320,9 @@ export const recognitionInput = z
     /** Input VAT deduction for a purchase booked on one account; ignored for a sale. `limited`
      * deducts the register's share for vehicles not used only for the business (art. 298). */
     deduction: z.enum(['full', 'none', 'limited']).default('full'),
+    /** The road vehicle a purchase booked on one account concerns (its registration): what it
+     * deducts follows the person's answer about the vehicle's use (`vehicle.use`, art. 298). */
+    vehicle: registration.optional(),
     /**
      * Instead of `account`: each VAT category's taxable amount (BT-116) split over accounts, in
      * the document's currency. A category is `S-<rate>` or `O`, and its parts add up to its
@@ -205,6 +339,8 @@ export const recognitionInput = z
             amount: z.string().regex(amountPattern),
             /** Input VAT deduction of this part, for a purchase. */
             deduction: z.enum(['full', 'none', 'limited']).default('full'),
+            /** The road vehicle this part of a purchase concerns (its registration). */
+            vehicle: registration.optional(),
             /** The advance (its open item) a negative part on 419, 4091 or 4092 settles. */
             advance: z.uuid().optional(),
             /** The finance lease (its open item on 167) whose principal a part on 167 repays. */
@@ -242,6 +378,11 @@ export const recognitionInput = z
   .strict()
   .refine((input) => (input.account === undefined) !== (input.allocations === undefined), {
     message: 'Indicați fie contul, fie repartizarea pe conturi (allocations).',
+  })
+  .refine((input) => input.vehicle === undefined || input.allocations === undefined, {
+    message:
+      'Cu repartizarea pe conturi, vehiculul se indică pe fiecare parte (allocations.vehicle).',
+    path: ['vehicle'],
   });
 export type RecognitionInput = z.infer<typeof recognitionInput>;
 
@@ -257,8 +398,17 @@ function vatCategories(invoice: Invoice, loaded: Loaded, rules: RuleContext, tax
   const body = invoice.body;
   const status = profileAt(loaded, 'vat.status', taxPoint);
   if (!status)
+    // An owner fact nobody recorded: a question for a reviewer, whose answer records the fact.
     issues.push(
-      block('DETERMINATION_MISSING', 'Înregistrați regimul TVA al companiei pentru această dată.'),
+      questionIssue(
+        'DETERMINATION_MISSING',
+        'Înregistrați regimul TVA al companiei pentru această dată.',
+        {
+          kind: 'profile.fact',
+          subject: { kind: 'profile', id: 'vat.status' },
+          params: { axis: 'vat.status', from: taxPoint },
+        },
+      ),
     );
   const categories = body.taxes.map((tax) => ({
     key: categoryKey(tax.category, tax.rate),
@@ -346,6 +496,9 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
     'Factură internă: venit, cheltuială sau imobilizare pe unul sau mai multe conturi, TVA pe cote și creanța sau datoria față de partener.',
   input: recognitionInput,
   agent: true,
+  summary:
+    'Domestic invoice: revenue, expense or asset lines, VAT by rate and the receivable or payable to the partner.',
+  toolset: 'inbox',
   subject: (input) => `document:${input.documentId}`,
   plan: (input) => {
     const advances = (input.allocations ?? []).flatMap((part) =>
@@ -371,10 +524,13 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
     if (!record || !parsed.success) return null;
     const body = parsed.data;
     const plan: ReadPlan = {};
+    // The rates up to the issue date (accounting) and up to the tax point (VAT), which a supply
+    // date (BT-72) can put weeks earlier.
     if (body.currency !== LEDGER_CURRENCY)
-      plan.fx = [
-        { currency: body.currency, until: date([body.issueDate, taxPointOf(body)].sort().at(-1)!) },
-      ];
+      plan.fx = [...new Set([body.issueDate, taxPointOf(body)])].map((until) => ({
+        currency: body.currency,
+        until: date(until),
+      }));
     // A lease in a currency the invoice is not in: its principal at the issue date's rate.
     const leaseCurrencies = [
       ...new Set(
@@ -401,16 +557,24 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
     const invoice = invoiceOf(loaded, input.documentId, false);
     if ('code' in invoice) return { effect: null, issues: [invoice] };
     const { body, direction } = invoice;
-    const taxPoint = taxPointOf(body);
+    // The supply's date when the document states it (BT-72), else BT-7 or the issue date: it
+    // gives the rate, the exigibility and so the VAT period (art. 282 alin. (1), 291 alin. (4)).
+    const chargeable = chargeabilityOf(body);
+    const taxPoint = chargeable.date;
     const taxPeriod = vatPeriodOf(loaded, taxPoint);
     const vat = vatCategories(invoice, loaded, rules, taxPoint);
     const amounts = amountsFor(invoice, loaded, rules, taxPoint);
-    const issues = [...vat.issues, ...amounts.issues];
+    const issues = [
+      ...vat.issues,
+      ...chargeabilityIssues(body, chargeable, rules),
+      ...amounts.issues,
+    ];
     const parts: {
       account: string;
       vat: string;
       amount: string;
       deduction: 'full' | 'none' | 'limited';
+      vehicle?: string;
       advance?: string;
       lease?: string;
       principal?: string;
@@ -421,6 +585,7 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
         vat: item.key,
         amount: item.base,
         deduction: input.deduction,
+        ...(input.vehicle === undefined ? {} : { vehicle: input.vehicle }),
       })),
     ];
     // Advances: received from customers on 419, paid to suppliers on 4091 (stocks) or 4092
@@ -656,6 +821,13 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
             },
       );
     }
+    // Art. 298 limits a deduction: nothing to ask when the purchase deducts nothing anyway (a
+    // non-payer, an inactive supplier outside the exceptions).
+    const vehicles =
+      vat.status === 'non_vat' || (supplier?.inactive && !input.inactiveException)
+        ? { issues: [], decided: [] }
+        : vehicleIssues(input, invoice, parts, vat.categories, isAdvance, loaded, taxPoint);
+    issues.push(...vehicles.issues);
     const cash = cashVatOf(input, invoice, loaded, vat.status, supplier, isAdvance);
     issues.push(...cash.issues);
     if (input.serviceDate && input.serviceDate.slice(0, 7) !== taxPoint.slice(0, 7))
@@ -924,10 +1096,16 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
           : `${body.number} din ${body.issueDate}: bază ${body.totals.net}, TVA ${body.totals.tax}, total ${body.totals.gross} lei.`,
         details: {
           taxPoint,
+          ...(chargeable.supplied
+            ? { supplyDate: chargeable.supplied, taxPointBasis: chargeable.basis }
+            : {}),
           ...(categories.length === 1
             ? { category: categories[0]!.category, rate: categories[0]!.rate }
             : { categories: categories.map((category) => category.key) }),
           deduction: direction === 'purchase' && !input.allocations ? input.deduction : null,
+          ...(vehicles.decided.length
+            ? { vehicles: vehicles.decided, vehicleClauses: VEHICLE_CLAUSES }
+            : {}),
           ...(input.allocations
             ? {
                 allocations: parts.map(
@@ -970,6 +1148,137 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
     return { effect, issues };
   },
 };
+
+/** What a vehicle's answer decided for an invoice, as the explanation shows it. */
+type VehicleDecision = {
+  vehicle: string;
+  use: 'business_only' | 'mixed';
+  from: string;
+  exception: string | null;
+  deduction: 'full' | 'limited';
+  questionId: string;
+  answerId: string;
+  evidence: string[];
+};
+
+/**
+ * Codul fiscal art. 298 on a purchase: a part about a road vehicle (`vehicle`) deducts what the
+ * person's answer about that vehicle allows, cited in the proposal's basis (`vehicle.use`): in
+ * full when it is used only for the business, shown by its log, or the article does not limit it
+ * (over 3,500 kg or 9 seats, alin. (2); the uses of alin. (3) lit. b)–f)); else the limited
+ * share. Without an answer that speaks for the tax point, the question is asked (`VEHICLE_USE`);
+ * a deduction the answer does not allow is refused (`VEHICLE_DEDUCTION`). A part deducting the
+ * limited share, or on an account that suggests a vehicle, without naming one, is confirmed by
+ * the reviewer (`VEHICLE_UNNAMED`). Parts deducting nothing (`none`, or no VAT) need no answer.
+ */
+function vehicleIssues(
+  input: RecognitionInput,
+  invoice: Invoice,
+  parts: readonly { account: string; vat: string; deduction: string; vehicle?: string }[],
+  categories: readonly { key: string; category: string }[],
+  isAdvance: readonly boolean[],
+  loaded: Loaded,
+  taxPoint: LocalDate,
+): { issues: Issue[]; decided: VehicleDecision[] } {
+  const issues: Issue[] = [];
+  const decided: VehicleDecision[] = [];
+  const at = (index: number, field: string) =>
+    input.allocations ? `allocations.${index}.${field}` : field;
+  if (invoice.direction === 'sale') {
+    parts.forEach((part, index) => {
+      if (part.vehicle)
+        issues.push(
+          block(
+            'VEHICLE',
+            'Vehiculul se indică doar pe o achiziție (art. 298 din Codul fiscal).',
+            at(index, 'vehicle'),
+          ),
+        );
+    });
+    return { issues, decided };
+  }
+  const lines = invoice.body.lines.map((line) => line.description);
+  const named = new Map<string, number[]>();
+  const unnamed = new Set<string>();
+  parts.forEach((part, index) => {
+    const deducts =
+      part.deduction !== 'none' &&
+      categories.find((item) => item.key === part.vat)?.category === 'S';
+    if (part.vehicle !== undefined && isAdvance[index]) {
+      issues.push(
+        block(
+          'VEHICLE',
+          'Limitarea deducerii pentru vehicule nu este încă suportată pe avansuri: un avans se înregistrează fără vehicul, cu TVA dedusă integral.',
+          at(index, 'vehicle'),
+        ),
+      );
+      return;
+    }
+    if (!deducts || isAdvance[index]) return;
+    if (part.vehicle === undefined) {
+      if (part.deduction === 'limited' || suggestsVehicle(part.account, lines))
+        unnamed.add(part.account);
+      return;
+    }
+    const plate = normalizePlate(part.vehicle);
+    named.set(plate, [...(named.get(plate) ?? []), index]);
+  });
+  if (unnamed.size)
+    issues.push({
+      ...warn(
+        'VEHICLE_UNNAMED',
+        `Achiziția pare să privească un vehicul rutier (contul ${[...unnamed].join(', ')} sau liniile facturii), ori deduce TVA limitat, fără să numească vehiculul. Indicați numărul lui de înmatriculare (vehicle), ca deducerea să urmeze răspunsul despre folosirea lui (art. 298 din Codul fiscal), sau confirmați deducerea aleasă.`,
+      ),
+      details: { accounts: [...unnamed], clauses: VEHICLE_CLAUSES },
+    });
+  for (const [plate, indexes] of named) {
+    const found = vehicleAnswer(loaded, plate);
+    if (!found || !answerCovers(found.value, taxPoint)) {
+      issues.push(
+        questionIssue(
+          'VEHICLE_USE',
+          found
+            ? `Răspunsul despre vehiculul ${plate} privește folosirea lui de la ${found.value.from}, după data exigibilității facturii (${taxPoint}): proprietarul spune cum era folosit la acea dată, iar propunerea se revizuiește citând răspunsul.`
+            : `Achiziția privește vehiculul ${plate}: TVA se deduce integral doar dacă vehiculul este folosit exclusiv în scopul activității economice, cu foaia de parcurs, sau dacă art. 298 nu îl limitează (peste 3.500 kg sau 9 locuri, agenți de vânzări, transport cu plată, închiriere, mărfuri); altfel 50%. Întrebați proprietarul (vehicle.use) și revizuiți propunerea citând răspunsul.`,
+          {
+            kind: 'vehicle.use',
+            subject: vehicleSubject(plate),
+            params: { documentId: invoice.record.id, date: taxPoint },
+          },
+          'block',
+          at(indexes[0]!, 'vehicle'),
+        ),
+      );
+      continue;
+    }
+    const allowed = vehicleDeduction(found.value);
+    const answer = { questionId: found.record.questionId, answerId: found.record.answerId };
+    for (const index of indexes)
+      if (parts[index]!.deduction !== allowed)
+        issues.push({
+          ...block(
+            'VEHICLE_DEDUCTION',
+            `După răspunsul despre vehiculul ${plate} (${found.value.exception ? `exceptat de la limitare: ${found.value.exception}` : found.value.use === 'business_only' ? 'folosit exclusiv în scopul activității economice' : 'folosit și în alte scopuri'}, de la ${found.value.from}), TVA se deduce ${allowed === 'full' ? 'integral (deduction: full)' : 'limitat, în proporția de la art. 298 (deduction: limited)'}.`,
+            at(index, 'deduction'),
+          ),
+          details: { vehicle: plate, allowed, ...answer, clauses: VEHICLE_CLAUSES },
+        });
+    decided.push({
+      vehicle: plate,
+      use: found.value.use,
+      from: found.value.from,
+      exception: found.value.exception ?? null,
+      deduction: allowed,
+      ...answer,
+      evidence: [
+        found.record.evidenceId,
+        ...(found.value.logEvidenceId ? [found.value.logEvidenceId] : []),
+        ...(found.value.exceptionEvidenceId ? [found.value.exceptionEvidenceId] : []),
+      ],
+    });
+  }
+  return { issues, decided };
+}
 
 /**
  * Whether an invoice falls under VAT on collection, and what to tell the reviewer about it. The
@@ -1117,6 +1426,9 @@ export const creditRecognition: Treatment<CreditInput> = {
     'Notă de credit sau factură storno legată de factura inițială, cu cotele TVA ale acesteia.',
   input: creditInput,
   agent: true,
+  summary:
+    "Credit note or storno invoice linked to its original invoice, with the original's VAT rates.",
+  toolset: 'inbox',
   subject: (input) => `document:${input.documentId}`,
   plan: (input) => ({
     documents: [input.documentId, input.originalDocumentId],
@@ -1162,9 +1474,12 @@ export const creditRecognition: Treatment<CreditInput> = {
           'originalDocumentId',
         ),
       );
+    // The credit note's VAT is chargeable on its own date, the event's (art. 282 alin. (9)), even
+    // if it repeats the original supply's date (BT-72); its rates are the original's, read on the
+    // original's tax point.
     const taxPoint = date(credit.body.taxPointDate ?? credit.body.issueDate);
     const taxPeriod = vatPeriodOf(loaded, taxPoint);
-    const originalTaxPoint = date(original.body.taxPointDate ?? original.body.issueDate);
+    const originalTaxPoint = taxPointOf(original.body);
     const originalVat = vatCategories(original, loaded, rules, originalTaxPoint);
     issues.push(...originalVat.issues);
     const originalKeys = originalVat.categories.map((item) => item.key);

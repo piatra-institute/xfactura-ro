@@ -38,6 +38,9 @@ const excludedAccounts: [prefix: string, letter: string][] = [
  * Romanian companies…): each needs a determination when it has revenue in the quarter. */
 const determinedAccounts = ['781', '786', '7581', '7588', '768', '761', '762'];
 export const microLetters = ['e', 'f', 'g', 'i', 'k', 'l', 'm', 'n', 'o', 'p'] as const;
+/** The account of revenue from selling assets (OMFP 1802/2014): fixed assets and land among them. */
+const ASSET_SALES = '7583';
+const lei = z.string().regex(/^(0|[1-9]\d{0,15})(\.\d{1,2})?$/);
 
 export const microTaxInput = z
   .object({
@@ -54,13 +57,49 @@ export const microTaxInput = z
             /** The letter of art. 53 alin. (1) under which `excluded` leaves the base; null when
              * nothing on the account is excluded. */
             letter: z.enum(microLetters).nullable(),
-            excluded: z.string().regex(/^(0|[1-9]\d{0,15})(\.\d{1,2})?$/),
+            excluded: lei,
             evidenceId: z.uuid(),
           })
           .strict(),
       )
       .max(50)
       .default([]),
+    /**
+     * The fixed assets and land transferred (sold, contributed…) from the year's start to the
+     * quarter's end, required once the year has revenue on 7583: art. 54 alin. (1) adds their
+     * revenue to the turnover the limit is checked on when more than one asset of a subgroup of
+     * the fixed-asset catalogue (HG nr. 2.139/2004), or more than one plot of land, was
+     * transferred. The books do not say which assets a sale's revenue was for.
+     */
+    assetTransfers: z
+      .object({
+        /** Fixed assets transferred, by subgroup of the catalogue (`2.3`: means of transport),
+         * with the revenue from them in lei. */
+        subgroups: z
+          .array(
+            z
+              .object({
+                subgroup: z.string().regex(/^\d\.\d{1,2}$/),
+                count: z.number().int().min(1).max(10_000),
+                revenue: lei,
+              })
+              .strict(),
+          )
+          .max(30)
+          .refine((items) => new Set(items.map((item) => item.subgroup)).size === items.length, {
+            message: 'Fiecare subgrupă se indică o singură dată.',
+          })
+          .default([]),
+        /** Plots of land transferred, with the revenue from them in lei. */
+        land: z
+          .object({ count: z.number().int().min(1).max(10_000), revenue: lei })
+          .strict()
+          .optional(),
+        /** The sale contracts or invoices and the asset cards. */
+        evidenceId: z.uuid(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type MicroTaxInput = z.infer<typeof microTaxInput>;
@@ -101,6 +140,48 @@ const net = (rows: readonly AccountTurnover[], prefix: string, side: 'C' | 'D' =
     );
 
 /**
+ * What the year's transfers of fixed assets and land add to the turnover the limit is checked on
+ * (art. 54 alin. (1)): the fixed assets' revenue once more than one asset of the same subgroup of
+ * the catalogue was transferred, and the land's once more than one plot was ("respectiv" pairs
+ * each condition with its revenue). Assets from different subgroups are the reading the text
+ * leaves open ("mai mult de un activ din oricare subgrupă"): their revenue is `disputed`, not
+ * added. `assetSales` is the year's revenue on 7583.
+ */
+function assetTransfersOf(input: MicroTaxInput, assetSales: bigint) {
+  const issues: Issue[] = [];
+  const given = input.assetTransfers;
+  if (!given) {
+    if (assetSales !== 0n)
+      issues.push(
+        block(
+          'MICRO_ASSET_TRANSFERS',
+          `Anul are venituri din vânzarea activelor (${ASSET_SALES}: ${formatMoney(assetSales, 'RON')} lei). Art. 54 alin. (1) le adaugă la cifra de afaceri pentru verificarea plafonului când se transferă mai mult de un mijloc fix din aceeași subgrupă a Catalogului sau mai mult de un teren: indicați mijloacele fixe transferate de la începutul anului, pe subgrupe, și terenurile, cu veniturile din transferul lor (assetTransfers).`,
+          'assetTransfers',
+        ),
+      );
+    return { issues, added: 0n, disputed: 0n, count: 0 };
+  }
+  const assets = given.subgroups.reduce((sum, item) => sum + parseMoney(item.revenue, 'RON'), 0n);
+  const land = given.land ? parseMoney(given.land.revenue, 'RON') : 0n;
+  const count = given.subgroups.reduce((sum, item) => sum + item.count, 0);
+  if (assets + land > assetSales)
+    issues.push(
+      block(
+        'MICRO_ASSET_TRANSFERS',
+        `Veniturile din transferuri (${formatMoney(assets + land, 'RON')} lei) depășesc veniturile anului din ${ASSET_SALES} (${formatMoney(assetSales, 'RON')} lei).`,
+        'assetTransfers',
+      ),
+    );
+  const sameSubgroup = given.subgroups.some((item) => item.count > 1);
+  return {
+    issues,
+    added: (sameSubgroup ? assets : 0n) + ((given.land?.count ?? 0) > 1 ? land : 0n),
+    disputed: !sameSubgroup && count > 1 ? assets : 0n,
+    count,
+  };
+}
+
+/**
  * The quarterly tax on a micro-enterprise's revenues (Codul fiscal title III): 1% of the
  * quarter's revenues of any source, less those art. 53 alin. (1) excludes and plus those its
  * alin. (2) adds, while the year's turnover stays within the limit. Books the tax (698 = 4418)
@@ -112,13 +193,19 @@ export const microTax: Treatment<MicroTaxInput> = {
   description: 'Impozitul pe veniturile microîntreprinderii pentru un trimestru.',
   input: microTaxInput,
   agent: true,
+  summary: 'Micro-enterprise income tax for a quarter.',
+  toolset: 'tax',
+  dataClasses: ['books', 'tax'],
   subject: (input) => `micro:${input.quarter}:${input.round}`,
   plan: (input) => {
     const { range, inQuarter, yearToDate } = queries(input.quarter);
     return {
       turnover: [inQuarter, yearToDate],
       parties: [input.authorityId],
-      evidence: input.determinations.map((item) => item.evidenceId),
+      evidence: [
+        ...input.determinations.map((item) => item.evidenceId),
+        ...(input.assetTransfers ? [input.assetTransfers.evidenceId] : []),
+      ],
       profile: true,
       fx: [{ currency: 'EUR', until: range.before }],
     };
@@ -158,9 +245,18 @@ export const microTax: Treatment<MicroTaxInput> = {
             `determinations.${index}.evidenceId`,
           ),
         );
+    if (input.assetTransfers && !loaded.evidence.has(input.assetTransfers.evidenceId))
+      issues.push(
+        block(
+          'EVIDENCE',
+          'Documentul justificativ nu este disponibil.',
+          'assetTransfers.evidenceId',
+        ),
+      );
 
     let rate: string;
     let limit: string;
+    let rounding: string;
     try {
       rate = rules.param<string>('ro.micro.rate', 'reporting_period_start', range.from);
       limit = rules.param<string>(
@@ -168,17 +264,26 @@ export const microTax: Treatment<MicroTaxInput> = {
         'reporting_period_start',
         range.from,
       );
+      rounding = rules.param<string>(
+        'ro.declaration.rounding',
+        'reporting_period_start',
+        range.from,
+      );
     } catch (error) {
       if (!(error instanceof RuleGapError)) throw error;
       return { effect: null, issues: [...issues, block('RULE_GAP', error.message)] };
     }
+    if (rounding !== 'half_up_leu') throw new Error(`Unknown rounding ${rounding}.`);
 
     const quarter = loaded.turnover.get(turnoverKey(inQuarter)) ?? [];
     const year = loaded.turnover.get(turnoverKey(yearToDate)) ?? [];
 
-    // The year's turnover (70x, net of 709) against the limit, at the previous year-end rate.
+    // The year's turnover (70x, net of 709) against the limit, at the previous year-end rate,
+    // with the revenue from transferring fixed assets or land when art. 54 alin. (1) adds it.
     const euro = loaded.fxRates.get('EUR')?.[0];
     const turnover = net(year, '70');
+    const transfers = assetTransfersOf(input, net(year, ASSET_SALES));
+    issues.push(...transfers.issues);
     if (!euro) issues.push(block('FX_RATE', `Lipsește cursul EUR de la ${range.before}.`));
     else {
       const limitBani = divRound(
@@ -186,13 +291,30 @@ export const microTax: Treatment<MicroTaxInput> = {
         10_000n * BigInt(euro.multiplier),
         'halfAwayFromZero',
       );
-      if (turnover > limitBani)
+      const counted = turnover + transfers.added;
+      if (counted > limitBani)
         issues.push(
           block(
             'MICRO_LIMIT',
-            `Cifra de afaceri a anului (${formatMoney(turnover, 'RON')} lei) depășește ${limit} euro (${formatMoney(limitBani, 'RON')} lei): din acest trimestru se datorează impozit pe profit.`,
+            `Cifra de afaceri a anului (${formatMoney(turnover, 'RON')} lei)${transfers.added ? `, cu veniturile din transferul mijloacelor fixe și al terenurilor (${formatMoney(transfers.added, 'RON')} lei, art. 54 alin. (1)),` : ''} depășește ${limit} euro (${formatMoney(limitBani, 'RON')} lei): din acest trimestru se datorează impozit pe profit.`,
           ),
         );
+      else if (transfers.disputed && counted + transfers.disputed > limitBani)
+        issues.push({
+          ...ack(
+            'MICRO_LIMIT_READING',
+            `S-au transferat în acest an ${transfers.count} mijloace fixe, câte unul din subgrupe diferite ale Catalogului. Art. 54 alin. (1) adaugă la cifra de afaceri veniturile din transfer când se transferă „mai mult de un activ din oricare subgrupă”: motorul citește „din aceeași subgrupă” și nu le adaugă. Citit ca „oricare două mijloace fixe”, cifra de afaceri cu veniturile din transfer (${formatMoney(counted + transfers.disputed, 'RON')} lei) depășește ${limit} euro (${formatMoney(limitBani, 'RON')} lei), iar din acest trimestru s-ar datora impozit pe profit. Lectura este o întrebare deschisă pentru expertul contabil: confirmați că o aplicați pe a motorului.`,
+          ),
+          details: {
+            clause: `${CLAUSE}:art.54(1)`,
+            readings: {
+              engine: 'same_subgroup',
+              alternative: 'any_subgroup',
+            },
+            revenue: formatMoney(transfers.disputed, 'RON'),
+            limit: formatMoney(limitBani, 'RON'),
+          },
+        });
     }
 
     // Revenues the law excludes only in some cases must be determined, account by account.
@@ -242,12 +364,16 @@ export const microTax: Treatment<MicroTaxInput> = {
       ...(discounts > 0n ? [{ letter: 'a', account: '609', bani: discounts }] : []),
       ...(fxGain > 0n ? [{ letter: 'b', account: '765-665', bani: fxGain }] : []),
     ];
+    // Revenue from selling fixed assets (7583) is not among the exclusions: it stays in the base.
     const base =
       [...exclusions, ...decided].reduce((sum, item) => sum - item.bani, revenue) +
       additions.reduce((sum, item) => sum + item.bani, 0n);
-    // Whole lei: the base half up, then the tax on it.
-    const baseLei = base > 0n ? divRound(base, 100n, 'halfAwayFromZero') : 0n;
-    const tax = divRound(baseLei * parseScaled(rate, 4), 1_000_000n, 'halfAwayFromZero') * 100n;
+    // The tax is set in whole lei, half up at 50 bani (`half_up_leu`, OUG nr. 59/2005 art. 1
+    // alin. (1)); no text rounds the base, which is taxed in lei and bani.
+    const tax =
+      base > 0n
+        ? divRound(base * parseScaled(rate, 4), 100_000_000n, 'halfAwayFromZero') * 100n
+        : 0n;
     if (tax === 0n)
       return {
         effect: null,
@@ -284,7 +410,7 @@ export const microTax: Treatment<MicroTaxInput> = {
       taxEntries: [],
       schedules: [],
       explanation: {
-        summary: `Venituri ${formatMoney(revenue, 'RON')} lei, bază ${baseLei} lei, impozit ${rate}%: ${formatMoney(tax, 'RON')} lei.`,
+        summary: `Venituri ${formatMoney(revenue, 'RON')} lei, bază ${formatMoney(base, 'RON')} lei, impozit ${rate}%: ${formatMoney(tax, 'RON')} lei.`,
         details: {
           quarter: input.quarter,
           revenue: formatMoney(revenue, 'RON'),
@@ -298,10 +424,27 @@ export const microTax: Treatment<MicroTaxInput> = {
             account: item.account,
             amount: formatMoney(item.bani, 'RON'),
           })),
-          base: String(baseLei),
+          base: formatMoney(base, 'RON'),
           rate,
+          rounding,
           turnover: formatMoney(turnover, 'RON'),
-          clauses: [`${CLAUSE}:art.51(1)`, `${CLAUSE}:art.53`, `${CLAUSE}:art.52(1),(5)`],
+          ...(input.assetTransfers
+            ? {
+                assetTransfers: {
+                  subgroups: input.assetTransfers.subgroups,
+                  ...(input.assetTransfers.land ? { land: input.assetTransfers.land } : {}),
+                  addedToTurnover: formatMoney(transfers.added, 'RON'),
+                  reading: 'same_subgroup',
+                },
+              }
+            : {}),
+          clauses: [
+            `${CLAUSE}:art.51(1)`,
+            `${CLAUSE}:art.53`,
+            `${CLAUSE}:art.52(1),(5)`,
+            ...(input.assetTransfers ? [`${CLAUSE}:art.54(1)`] : []),
+            'OUG59/2005:art.1(1)',
+          ],
         },
       },
     };

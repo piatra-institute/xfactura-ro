@@ -23,9 +23,9 @@ const model = (obligations: D100Obligation[], extra: Partial<D100> = {}): D100 =
   obligations,
   ...extra,
 });
-const micro = (base: number, extra: Partial<D100MicroTax> = {}): D100MicroTax => ({
+const micro = (tax: number, extra: Partial<D100MicroTax> = {}): D100MicroTax => ({
   kind: 'micro',
-  base,
+  tax,
   ...extra,
 });
 const dividends = (
@@ -46,7 +46,7 @@ const other = (extra: Partial<D100OtherObligation> = {}): D100OtherObligation =>
 });
 const june = { year: 2026, month: 6 };
 const december = { year: 2026, month: 12 };
-const quarter = model([micro(120_000)]);
+const quarter = model([micro(1200)]);
 const paid = model([dividends('individual', 4800), dividends('company', 1600)], { period: june });
 const codes = (value: D100) => checkD100(value).map((check) => `${check.severity}:${check.code}`);
 const attribute = (xml: string, name: string) => new RegExp(` ${name}="([^"]*)"`).exec(xml)?.[1];
@@ -86,7 +86,7 @@ describe('D100 obligations, namespace and payment number', () => {
 });
 
 describe('D100 calculation', () => {
-  test('declares the quarter micro tax as 1% of the base, due on the 25th of the next month', () => {
+  test('declares the quarter micro tax, due on the 25th of the next month', () => {
     expect(calculateD100(quarter)).toEqual({
       namespace: 'mfp:anaf:dgti:d100:declaratie:v2',
       lines: [
@@ -107,20 +107,14 @@ describe('D100 calculation', () => {
     });
   });
 
-  test('rounds the micro tax half up to whole lei', () => {
-    const due = (base: number) => calculateD100(model([micro(base)])).lines[0]!.due;
-    expect([due(120_049), due(120_050), due(49), due(50), due(0)]).toEqual([
-      1200n,
-      1201n,
-      0n,
-      1n,
-      0n,
-    ]);
+  test('declares the micro tax the books hold, without computing it again', () => {
+    const due = (tax: number) => calculateD100(model([micro(tax)])).lines[0]!.due;
+    expect([due(1200), due(249), due(0)]).toEqual([1200n, 249n, 0n]);
   });
 
   test('subtracts the deductible amount and the reduction from the micro tax, never below 0', () => {
     const { lines, controlSum } = calculateD100(
-      model([micro(120_000, { deductible: 100, reduction: 150 })]),
+      model([micro(1200, { deductible: 100, reduction: 150 })]),
     );
     expect(lines[0]).toMatchObject({
       due: 1200n,
@@ -130,7 +124,7 @@ describe('D100 calculation', () => {
     });
     // suma_redu counts towards totalPlata_A: 1200 + 100 + 950 + 0 + 150.
     expect(controlSum).toBe(2400n);
-    expect(calculateD100(model([micro(1000, { deductible: 15 })])).lines[0]!.payable).toBe(0n);
+    expect(calculateD100(model([micro(10, { deductible: 15 })])).lines[0]!.payable).toBe(0n);
   });
 
   test('declares dividend tax by beneficiary for the month of payment', () => {
@@ -162,7 +156,7 @@ describe('D100 calculation', () => {
 
   test('dates the fourth quarter as chosen', () => {
     const dueDate = (fourthQuarterDue: 'january' | 'june') =>
-      calculateD100(model([micro(90_000, { fourthQuarterDue })], { period: december })).lines[0]!
+      calculateD100(model([micro(900, { fourthQuarterDue })], { period: december })).lines[0]!
         .dueDate;
     expect(dueDate('january')).toBe('2027-01-25');
     expect(dueDate('june')).toBe('2027-06-25');
@@ -170,7 +164,7 @@ describe('D100 calculation', () => {
 
   test('takes other obligations as given, padding the budget code', () => {
     const { lines, controlSum } = calculateD100(
-      model([micro(120_000), other({ due: 300, deductible: 50, payable: 250, minimumTax: true })]),
+      model([micro(1200), other({ due: 300, deductible: 50, payable: 250, minimumTax: true })]),
     );
     expect(lines[1]).toEqual({
       code: '608',
@@ -189,15 +183,14 @@ describe('D100 calculation', () => {
   test('keeps the micro payable and the control sum consistent', () => {
     const amount = fc.integer({ min: 0, max: 1_000_000_000 });
     fc.assert(
-      fc.property(amount, amount, amount, (base, deductible, reduction) => {
+      fc.property(amount, amount, amount, (booked, deductible, reduction) => {
         const { lines, controlSum } = calculateD100(
-          model([micro(base, { deductible, reduction }), dividends('individual', deductible)]),
+          model([micro(booked, { deductible, reduction }), dividends('individual', deductible)]),
         );
         const [tax, dividend] = lines as [(typeof lines)[0], (typeof lines)[0]];
         const rest = tax.due - tax.deductible - tax.reduction!;
         expect(tax.payable).toBe(rest > 0n ? rest : 0n);
-        expect(tax.due * 100n - BigInt(base)).toBeLessThanOrEqual(50n);
-        expect(BigInt(base) - tax.due * 100n).toBeLessThan(50n);
+        expect(tax.due).toBe(BigInt(booked));
         expect(controlSum).toBe(
           tax.due + tax.deductible + tax.payable + tax.reduction! + 2n * dividend.due,
         );
@@ -237,21 +230,21 @@ describe('D100 XML', () => {
   });
 
   test('writes the reduction after cota', () => {
-    const xml = writeD100(model([micro(120_000, { deductible: 100, reduction: 150 })]));
+    const xml = writeD100(model([micro(1200, { deductible: 100, reduction: 150 })]));
     expect(xml).toContain(
       'suma_dat="1200" suma_ded="100" suma_plata="950" suma_rest="0" cota="1" suma_redu="150"',
     );
   });
 
   test('marks a declaration filed after the reserve of subsequent verification was cancelled', () => {
-    const xml = writeD100(model([micro(120_000)], { afterReserveCancellation: true }));
+    const xml = writeD100(model([micro(1200)], { afterReserveCancellation: true }));
     expect(xml).toContain(' d_anulare="1" temei="2" d_succ="0"');
     expect(writeD100(quarter)).not.toContain('temei');
   });
 
   test('writes the successor, dissolution, contacts and representative, escaping text', () => {
     const xml = writeD100(
-      model([micro(40_000)], {
+      model([micro(400)], {
         period: { year: 2026, month: 8 },
         dissolution: true,
         successorCui: '14399840',
@@ -316,18 +309,18 @@ describe('D100 checks', () => {
   test('pass for consistent declarations', () => {
     expect(checkD100(quarter)).toEqual([]);
     expect(checkD100(paid)).toEqual([]);
-    expect(checkD100(model([micro(120_000)], { afterReserveCancellation: true }))).toEqual([]);
+    expect(checkD100(model([micro(1200)], { afterReserveCancellation: true }))).toEqual([]);
     expect(
       checkD100(
         model([dividends('individual', 800, { unpaidAtYearEnd: 4000 })], { period: december }),
       ),
     ).toEqual([]);
-    expect(checkD100(model([micro(120_000), other()]))).toEqual([]);
+    expect(checkD100(model([micro(1200), other()]))).toEqual([]);
   });
 
   test('check the identification fields', () => {
     const checks = checkD100(
-      model([micro(120_000)], {
+      model([micro(1200)], {
         successorCui: '14399841',
         declarant: { lastName: 'Popescu', firstName: 'A'.repeat(76), role: ' ' },
         payer: {
@@ -382,9 +375,9 @@ describe('D100 checks', () => {
   });
 
   test('warn when the micro deductions leave a negative payable or exceed 15%', () => {
-    expect(codes(model([micro(120_000, { reduction: 180 })]))).toEqual([]);
-    expect(codes(model([micro(120_000, { reduction: 181 })]))).toEqual(['warning:D100_REDUCTION']);
-    expect(codes(model([micro(120_000, { deductible: 1100, reduction: 101 })]))).toEqual([
+    expect(codes(model([micro(1200, { reduction: 180 })]))).toEqual([]);
+    expect(codes(model([micro(1200, { reduction: 181 })]))).toEqual(['warning:D100_REDUCTION']);
+    expect(codes(model([micro(1200, { deductible: 1100, reduction: 101 })]))).toEqual([
       'warning:D100_DEDUCTIBLE',
     ]);
   });

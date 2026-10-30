@@ -25,6 +25,8 @@ export type Evidence = {
   size: number;
 };
 type Capability = { id: string };
+/** What every list operation returns: one page of items, and the cursor of the next or null. */
+export type List<T> = { items: T[]; next: string | null };
 type Balance = { rows: { account: string; closing: { debit: string; credit: string } }[] };
 
 /** What every section needs: the company, its capabilities and a way to act and report. */
@@ -91,14 +93,14 @@ export default function WorkspaceView({ company }: { company: Company }) {
     (async () => {
       const [available, known, files] = await Promise.all([
         call<{ capabilities: Capability[] }>('capabilities.list'),
-        call<Year[]>('years.list'),
-        call<Evidence[]>('evidence.list'),
+        call<List<Year>>('years.list'),
+        call<List<Evidence>>('evidence.list'),
       ]);
       if (!active) return;
       setCapabilities(new Set(available.capabilities.map((capability) => capability.id)));
-      setYears(known);
-      setEvidence(files);
-      const financial = known.filter((year) => year.kind === 'financial');
+      setYears(known.items);
+      setEvidence(files.items);
+      const financial = known.items.filter((year) => year.kind === 'financial');
       const current = financial.find((year) => year.id === yearId) ?? financial.at(-1);
       if (current) {
         setYearId(current.id);
@@ -202,6 +204,12 @@ export default function WorkspaceView({ company }: { company: Company }) {
       </section>
     </Context.Provider>
   );
+}
+
+/** Loads a list operation's items and reloads them whenever the workspace changes. */
+export function useList<T>(operation: string, input: unknown, enabled = true) {
+  const { data, error } = useLoad<List<T>>(operation, input, enabled);
+  return { data: data?.items ?? null, error };
 }
 
 /** Loads a capability's result and reloads it whenever the workspace changes. */

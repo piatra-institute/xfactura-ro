@@ -20,6 +20,18 @@ Add explicit RO-TAX-MICRO, RO-PAY, RO-STOCK and RO-PRODUCTION facets with their 
 
 The first filing path produces a versioned official validation/signing/submission package and imports the actual external receipt. A direct ANAF connector is optional; the complete authorized handoff is required. Unpublished later annual packages remain gaps until checked.
 
+## Release stages per profile
+
+Every profile moves through three stages. `scripts/conformance/report.ts` (planned) prints each profile's stage from the rule register and the recorded proof.
+
+| Stage | What it allows | Required |
+|---|---|---|
+| Preview | Books are computed and shown as drafts. | Every rule cited (`extracted`); official validators pass where they exist, and a skip doesn't count; cross-return checks green on the synthetic corpus. |
+| Shadow | A real company runs in parallel with its accountant, who keeps filing from their own books. | Every parameter the profile uses is at least `interpreted`, reviewed by a partner accountant; one replay or differential comparison with every difference explained. |
+| Live | The company's books and returns come from xFactura. | Every parameter is `signed` by the expert, through a signed review packet bound to its value; two real monthly closes, a quarter and a year-end; obligation closure ELIGIBLE; a restore drill passed; the company's accountant accepts. |
+
+PFA, II and IF profiles (single-entry books, income tax in the real system or by norm, IF members) go through the same stages. Their specification and build record are in [PFA_II_IF.md](PFA_II_IF.md).
+
 ## Representative company combinations
 
 These are coverage-design examples, not released profiles or assertions that every listed obligation applies. Use verified facts and reviewed rules to derive each company's actual closure. The [implementation matrix](IMPLEMENTATION.md) owns the current gap assessment and [ROADMAP.md](ROADMAP.md) the build backlog.
@@ -77,6 +89,41 @@ Examples that must fail closed include a non-VAT company's Irish advertising/sof
 ```
 
 The example is a draft failure result, not a general assertion that every foreign invoice has that exact treatment. Applicability must be derived from verified facts and the reviewed source catalogue.
+
+### The closure as built (T1, 30 October 2026)
+
+The evaluator is pure, in core `src/ro/determinations/closure.ts` (`evaluateClosure`, version `ro-closure@2`, with a hash of its rule set). The engine feeds it (`modules/determinations.ts`) and exposes it as `closure.evaluate {from, to}` (at most three calendar years). Its inputs:
+
+- the recorded profile facts (superseded ones left out);
+- the **yearly determinations** of every year the range touches ([ACCOUNTING_ENGINE.md](ACCOUNTING_ENGINE.md#determinations-and-the-obligation-closure)), and which of them a person confirmed against the exact computation;
+- what the books show over the range: employment contracts, sick leave and contract ends, services across the EU border, dividend tax withheld, invoices from suppliers outside Romania, stock accounts, sponsorship (6582), payroll taxes without a contract, a PFA's income sources, the financial years kept and the first day of the first one.
+
+**Only the months the books cover.** The months before the company's first financial year (the earliest by its start; one starting mid-month covers that month) have no returns and no needs: the facts are recorded from the books' start, so nothing about an earlier month is asked. The annual returns of a year before it (D212, D205, S1005…) are not listed either, and a range wholly before the books evaluates nothing. A company that keeps no financial year at all is not restricted: every month is read from its facts.
+
+**Rules and the fixed point.** Each rule reads named slots (`vat@2026-09`, `incomeTax@2026-12`, `size@2026`…) and fires once all of them are derived; each pass fires every ready rule, until a pass fires none. A rule left over is a named gap, `CYCLE` when what it reads is derived by another rule left over, `UNRESOLVED` otherwise; a gap makes the closure UNSUPPORTED (`CLOSURE_CYCLE`, `CLOSURE_UNRESOLVED`). Every return carries the rule that produced it, the clauses it cites and the slots it read with their basis (`vat@2026-09=non_vat (fapt vat.status)`); the trace lists every firing.
+
+- **Fact rules**, per month: the legal form, the books system (from the form when not recorded: OUG nr. 44/2008 art. 15), the VAT status, the VAT period, special VAT identification for non-payers (`vat.eu`), whether the company employs (from its employment contracts, else the recorded fact), the D112 period and the income tax; per year, the size category. A **yearly determination** (`income_tax`, `vat.period`, `payroll.period`, `size.category`) counts only from a fact effective within that year: one carried from an earlier year is not the year's determination. A recorded fact the computation contradicts is a need too (`DETERMINATION_CONFLICT`), until a person confirms it against that exact computation.
+- **Return rules**, per month: D300 and D394 for each VAT period; D406 for each VAT period, quarterly outside VAT, for a company (an SRL); for a PFA, II or IF, D406 is UNSUPPORTED `D406_INDIVIDUAL` at the same periods, since whether OPANAF nr. 1783/2021 reaches individuals is open for the expert contabil ([PFA_II_IF.md](PFA_II_IF.md) §5, question 7), never assumed either way; D390 for the months with EU services; D112 monthly, or each month after the quarter for a quarterly filer, except a month with sick leave or a contract ended (art. 147 alin. (11)); D100 for each quarter of micro tax and each month with dividend tax; D205; D212 and D204 for a known PFA, II or IF; the annual statements by size category (none in single entry, so none for a PFA, II or IF keeping it; no D100 nor D101 either, their income tax being title IV's).
+- **Scope rules:** the cases below.
+
+**States.** Every blocker is returned. Any known uncovered case makes the closure UNSUPPORTED; otherwise any unknown material fact makes it NEEDS_EVIDENCE; only a fully known and covered range is ELIGIBLE.
+
+- **NEEDS_EVIDENCE**, each need naming its question: `FACT_UNKNOWN` (a `profile.fact` question about the axis: `entity.form`, `vat.status`, `vat.eu`, `employer`, `activity.goods`, `regime.excluded`), `DETERMINATION_MISSING` (the computed value to confirm, `determination.confirm`; or the input the computation lacks, `year.figures` or `micro.conditions`; or, with no computation, `profile.fact` for the year) and `DETERMINATION_CONFLICT`. A return whose applicability depends on an unknown slot is listed as `needs_evidence`, never dropped and never assumed, with one exception: the returns of individuals (D212, D204) wait for the legal form. While it is unknown they are not listed, so a company is never offered them; the form's need is (`fact.entity.form`, and D100, D406 and the statements read it, listed `needs_evidence`), so the closure stays NEEDS_EVIDENCE.
+- **UNSUPPORTED**, each with its trigger, missing capabilities and evidence: `PROFIT_TAX` (D101 listed as unsupported), `MICRO_PROFIT_TRANSITION`, `SMALL_ENTITY_STATEMENTS`, `SIZE_MEDIUM_LARGE`, `AUDIT_REQUIRED`, `VAT_THRESHOLD_EXCEEDED`, `VAT_ART317`, `EU_SERVICES_NON_VAT`, `FOREIGN_SERVICE_PURCHASE` (with the invoices), `GOODS_STOCK` (declared or seen on class 3), `SPONSORSHIP`, `PAYROLL_WITHOUT_EMPLOYEES`, `PFA_SOURCES_MULTIPLE`, `D406_INDIVIDUAL` (D406 of a PFA, II or IF listed as unsupported), and `REGIME_EXCISE`, `REGIME_FISCAL_GROUP`, `REGIME_IFRS` (`regime.excluded`).
+
+**The calendar** (`obligations.calendar`) lists the closure's returns: those that apply with their cited deadline and status; the others `blocked`, with the question to ask (`question`), the blockers and the gap in words; each with its `basis` (rule, facts, clauses). The worklist shows a blocked return with `determinations.propose` (for a yearly determination) or `questions.ask` (for a company fact) as its agent step; the months before the books list nothing, so it asks nothing about them.
+
+**The fail-closed examples above, as fixtures** (core `test/determinations.test.ts`; engine `test/engine/determinations.integration.test.ts`):
+
+| Example | Result |
+|---|---|
+| A non-VAT company's Irish software purchase | UNSUPPORTED `FOREIGN_SERVICE_PURCHASE`, capabilities `VAT_ART317`, `D301`, `D390`, with the invoice |
+| A VAT-ceiling transition | the small-enterprise threshold crossed: UNSUPPORTED `VAT_THRESHOLD_EXCEEDED`; the VAT on collection ceiling crossed while the recorded regime stays on it: NEEDS_EVIDENCE `DETERMINATION_CONFLICT` |
+| No normal VAT, yet D406 applies | D406 quarterly applies; with the VAT status or the legal form unknown, D406 is `needs_evidence`, not absent; for a PFA, II or IF, UNSUPPORTED `D406_INDIVIDUAL` |
+| Payroll-type remuneration of the administrator without employees | UNSUPPORTED `PAYROLL_WITHOUT_EMPLOYEES` |
+| Sponsorship | UNSUPPORTED `SPONSORSHIP` (credit and D107) |
+
+Not yet derived: corrections of earlier periods, carried balances and external-fulfillment dependencies; the profile composition and claim scopes of the machine-readable contract below; D406 by taxpayer category (anexa 5); the art. 147 alin. (11) months beyond sick leave and contracts ended.
 
 ## Machine-readable contract
 

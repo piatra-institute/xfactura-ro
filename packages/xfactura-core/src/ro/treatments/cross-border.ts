@@ -75,6 +75,10 @@ export const crossBorderRecognition: Treatment<CrossBorderInput> = {
     'Servicii cumpărate din străinătate (taxare inversă) sau prestate unor beneficiari din străinătate, după regula generală.',
   input: crossBorderInput,
   agent: true,
+  summary:
+    'Services bought from abroad (reverse charge) or supplied to customers abroad under the general place-of-supply rule.',
+  toolset: 'inbox',
+  dataClasses: ['books', 'tax'],
   subject: (input) => `document:${input.documentId}`,
   plan: (input) => ({ documents: [input.documentId], profile: true }),
   followUp(input, loaded) {

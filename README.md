@@ -86,11 +86,25 @@ The backup command takes a consistent database snapshot, verifies and copies its
 
 Inside Compose, run backup with `docker compose exec api bun run backup /app/.accounting/backups/<new-name>` and copy that completed directory off the deployment volume. A backup kept only on the same volume does not provide disaster recovery. The local backup command intentionally refuses remote databases; Turso needs its provider backup/export procedure paired with the document manifest.
 
+## Legacy paid acts
+
+Existing deployments of the original invoicer keep its Stripe-paid AI extractions ("acte inteligente"). Their routes mount only when `DATABASE_URL` (the legacy database with the `users` table) and `STRIPE_SECRET_KEY` are set:
+
+- `STRIPE_SECRET_KEY`: the Stripe secret key.
+- `STRIPE_PRICE_300`, `STRIPE_PRICE_1000`, `STRIPE_PRICE_5000`: the Price ids of the three packs.
+- `STRIPE_WEBHOOK_SECRET`: the signing secret (`whsec_...`) of the webhook endpoint. When set, `POST /stripe-webhook` verifies each delivery's signature and credits on `checkout.session.completed` and `checkout.session.async_payment_succeeded`. In the Stripe dashboard, add an endpoint for `https://<api-host>/stripe-webhook` with exactly those two events.
+- `LEGACY_ALLOWED_ORIGINS`: comma-separated origins allowed by the legacy CORS, `https://xfactura.ro` by default.
+
+Acts are credited only for a completed session whose payment is `paid`, and exactly once per session id (recorded in `users.payments`), whether the webhook or the `/plata` return page sees it first. Charging an act is a single conditional update that never takes a balance below zero.
+
+`bun packages/xfactura-api/scripts/legacy/reconcile-acts.ts [--since=YYYY-MM-DD] [--json]` compares the credited sessions with Stripe and lists credited sessions that Stripe reports unpaid, paid sessions never credited and sessions credited twice. It only reads the database and Stripe.
+
 ## Verification
 
 ```sh
 bun run test
 bun run test:integration
+bun run test:legacy
 bun run test:perf
 bun run typecheck
 bun run lint

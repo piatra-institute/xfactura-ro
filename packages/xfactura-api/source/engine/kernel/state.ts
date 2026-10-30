@@ -61,6 +61,7 @@ import {
   payrollRunEvents,
   payrollRuns,
   profileFacts,
+  proposals,
   scheduleRows,
   taxEntries,
   treasuryAccounts,
@@ -226,8 +227,20 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
   if (plan.entries?.length) {
     const ids = plan.entries;
     const headers = await tx
-      .select()
+      .select({
+        id: entries.id,
+        number: entries.number,
+        seq: entries.seq,
+        date: entries.date,
+        journalCode: entries.journalCode,
+        description: entries.description,
+        subject: proposals.subjectKey,
+      })
       .from(entries)
+      .innerJoin(
+        proposals,
+        and(eq(proposals.companyId, entries.companyId), eq(proposals.id, entries.proposalId)),
+      )
       .where(and(eq(entries.companyId, companyId), inArray(entries.id, ids)))
       .orderBy(asc(entries.seq));
     const lineRows = await tx
@@ -249,6 +262,9 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
         description: header.description,
         lines: lineRows.filter((row) => row.entryId === header.id).map(lineSpec),
         taxEntries: taxRows.filter((row) => row.entryId === header.id).map(taxEntrySpec),
+        ...(header.subject.startsWith('reverse:')
+          ? { reverses: header.subject.slice('reverse:'.length) }
+          : {}),
       });
       readSet.push({ kind: 'entry', id: header.id, version: String(header.seq) });
     }
@@ -268,7 +284,16 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
             .where(and(eq(lines.companyId, companyId), eq(lines.entryId, query.touchedBy))),
         ),
       );
-    if (query.documentId) where.push(eq(openItems.documentId, query.documentId));
+    // A document's open items from its bookings that stand: an item a reversal cleared belongs
+    // to a booking that no longer counts, and a new booking of the document opens its own.
+    if (query.documentId)
+      where.push(
+        eq(openItems.documentId, query.documentId),
+        sql`not exists (select 1 from ${proposals} rv join ${entries} re
+          on re.company_id = rv.company_id and re.proposal_id = rv.id
+          where rv.company_id = ${openItems.companyId}
+            and rv.subject_key = 'reverse:' || ${openItems.originEntryId})`,
+      );
     if (query.partyId) where.push(eq(openItems.partyId, query.partyId));
     if (query.kind) where.push(eq(openItems.kind, query.kind));
     if (query.accounts)
@@ -818,6 +843,8 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
     itemLines: itemLineMap,
     assets: assetMap,
     partyStatus: statusMap,
+    // A basis's answers, never a plan's: the proposal adds them (`basisAnswers`).
+    answers: new Map(),
   };
   return { loaded, readSet };
 }
@@ -862,6 +889,7 @@ export function mergeStates(
     itemLines: merge(first.loaded.itemLines, second.loaded.itemLines),
     assets: merge(first.loaded.assets, second.loaded.assets),
     partyStatus: merge(first.loaded.partyStatus, second.loaded.partyStatus),
+    answers: merge(first.loaded.answers, second.loaded.answers),
   };
   const seen = new Set<string>();
   const readSet = [...first.readSet, ...second.readSet]

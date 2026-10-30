@@ -99,6 +99,69 @@
       "when": 1793358616190,
       "tag": "0013_enterprise_members",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1793365517500,
+      "tag": "0014_agent_toolsets",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1793367673050,
+      "tag": "0015_change_feed",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1793370392376,
+      "tag": "0016_document_sources",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1793373127731,
+      "tag": "0017_worklist_questions",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1793376726544,
+      "tag": "0018_batch_approval",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1793376743045,
+      "tag": "0019_templates",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1793376757716,
+      "tag": "0020_earned_autonomy",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1793381448547,
+      "tag": "0021_engine_clock",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1793384902207,
+      "tag": "0022_answer_engine_clock",
+      "breakpoints": true
     }
   ]
 }

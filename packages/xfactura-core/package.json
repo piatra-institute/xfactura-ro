@@ -23,6 +23,9 @@
     "./bank/statement-document": "./src/bank/statement-document.ts",
     "./bank/mt940": "./src/bank/mt940.ts",
     "./bank/camt": "./src/bank/camt.ts",
+    "./bank/csv": "./src/bank/csv.ts",
+    "./documents/schemas": "./src/documents/schemas.ts",
+    "./documents/checks": "./src/documents/checks.ts",
     "./ro/treatments/invoices": "./src/ro/treatments/invoices.ts",
     "./ro/treatments/settlement": "./src/ro/treatments/settlement.ts",
     "./fx/bnr": "./src/fx/bnr.ts",
@@ -69,7 +72,13 @@
     "./ro/saft/accounts": "./src/ro/saft/accounts.ts",
     "./ro/saft/tax-codes": "./src/ro/saft/tax-codes.ts",
     "./ro/entity": "./src/ro/entity.ts",
-    "./ro/pit": "./src/ro/pit/index.ts"
+    "./ro/vehicles": "./src/ro/vehicles.ts",
+    "./ro/pit": "./src/ro/pit/index.ts",
+    "./ro/register": "./src/ro/register.ts",
+    "./ro/reviews": "./src/ro/reviews/index.ts",
+    "./questions/kinds": "./src/questions/kinds.ts",
+    "./ro/determinations": "./src/ro/determinations/index.ts",
+    "./templates": "./src/templates/index.ts"
   },
   "dependencies": {
     "@noble/hashes": "2.4.0",

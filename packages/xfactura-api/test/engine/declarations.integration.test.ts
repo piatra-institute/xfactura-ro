@@ -200,7 +200,7 @@ describe('declarations', () => {
       outcome: 'accepted',
       evidenceId: (await s.evidence('confirmare.pdf')).id,
     });
-    const [filed] = await s.invoke<Artifact[]>(s.owner, 'declarations.list');
+    const [filed] = await s.list<Artifact>(s.owner, 'declarations.list');
     expect(filed!.steps.map((step) => step.state)).toEqual([
       'prepared',
       'validated_official',
@@ -226,7 +226,7 @@ describe('declarations', () => {
     });
     await authorized(s, reopen);
     const [document] = (
-      await s.invoke<{ id: string; number: string }[]>(s.owner, 'documents.list')
+      await s.list<{ id: string; number: string }>(s.owner, 'documents.list')
     ).filter((item) => item.number === 'V-9');
     const late = await s.revise('invoices.recognize', blocked, {
       documentId: document!.id,
@@ -240,7 +240,7 @@ describe('declarations', () => {
       supersedesId: prepared.id,
     });
     expect(rectification.state).toBe('validated_official');
-    const all = await s.invoke<Artifact[]>(s.owner, 'declarations.list');
+    const all = await s.list<Artifact>(s.owner, 'declarations.list');
     expect(all.find((item) => item.id === prepared.id)?.state).toBe('superseded');
   });
 

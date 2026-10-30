@@ -153,6 +153,8 @@ export const loanReceipt: Treatment<ReceiptInput> = {
     'Credit sau împrumut primit prin bancă (162, 519, 166, 167, 4551), cu graficul de rambursare și dobânzile.',
   input: receiptInput,
   agent: true,
+  summary:
+    'Loan or credit received through the bank (162, 519, 166, 167, 4551), with its repayment schedule and interest.',
   subject: (input) => `movement:${input.movementId}`,
   plan: (input) => ({
     movements: [input.movementId],
@@ -319,6 +321,7 @@ export const loanPlan: Treatment<ScheduleInput> = {
   description: 'Graficul de rambursare al unui împrumut existent, sau o versiune nouă a lui.',
   input: scheduleInput,
   agent: true,
+  summary: 'Repayment schedule of an existing loan, or a new version of it.',
   subject: (input) => `loan-schedule:${input.openItem}:${input.evidenceId}`,
   plan: (input) => ({
     evidence: [input.evidenceId],
@@ -509,6 +512,8 @@ export const loanAccrual: Treatment<LoanAccrualInput> = {
   description: 'Dobânda lunară a împrumuturilor (666 = 1682, 5198, 1687, 4558).',
   input: accrualInput,
   agent: true,
+  summary: "The month's loan interest (666 against 1682, 5198, 1687, 4558).",
+  toolset: 'close',
   subject: (input) => `loans-accrue:${input.month}:${input.round}`,
   plan: () => accrualReads,
   followUp(input, loaded) {
@@ -645,6 +650,9 @@ export const interestWithholding: Treatment<InterestWithholdingInput> = {
   description: 'Impozitul pe dobânzi reținut la plata dobânzii către o persoană fizică.',
   input: withholdingInput,
   agent: true,
+  summary: 'Tax withheld on interest paid to an individual.',
+  toolset: 'tax',
+  dataClasses: ['books', 'tax'],
   subject: (input) => `interest-tax:${input.openItem}:${input.date}`,
   plan: (input) => ({ openItems: [{ ids: [input.openItem] }], parties: [input.authorityId] }),
   followUp(input, loaded) {

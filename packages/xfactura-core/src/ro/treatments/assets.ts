@@ -60,6 +60,8 @@ export const assetDepreciation: Treatment<DepreciationInput> = {
   description: 'Amortizarea lunară, liniară, a mijloacelor fixe din registru.',
   input: depreciationInput,
   agent: true,
+  summary: "The month's straight-line depreciation of the fixed assets in the register.",
+  toolset: 'close',
   subject: (input) => `depreciation:${input.month}`,
   plan: () => ({ assets: true, profile: true }),
   evaluate(input, loaded) {
@@ -156,6 +158,7 @@ export const assetDerecognition: Treatment<DerecognitionInput> = {
   description: 'Scoaterea din evidență a unui mijloc fix cedat sau casat.',
   input: derecognitionInput,
   agent: true,
+  summary: 'Derecognition of a fixed asset that was sold or scrapped.',
   subject: (input) => `asset-disposal:${input.assetId}`,
   plan: () => ({ assets: true, profile: true }),
   evaluate(input, loaded) {

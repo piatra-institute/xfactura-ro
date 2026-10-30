@@ -40,7 +40,7 @@ async function company() {
       evidenceId: (await s.evidence(`pv-${account}.pdf`)).id,
     });
   const accrualOf = async (kind: string) =>
-    (await s.invoke<{ id: string }[]>(s.owner, 'openItems.list', { kind }))[0]!.id;
+    (await s.list<{ id: string }>(s.owner, 'openItems.list', { kind }))[0]!.id;
   return { s, partner, invoice, accrue, accrualOf };
 }
 

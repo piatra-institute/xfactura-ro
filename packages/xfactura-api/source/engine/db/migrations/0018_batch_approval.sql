@@ -1,0 +1,1 @@
+ALTER TABLE `acc_approvals` ADD `batch_request_id` text;

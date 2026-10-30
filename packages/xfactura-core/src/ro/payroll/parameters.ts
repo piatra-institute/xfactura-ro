@@ -224,5 +224,5 @@ export const payrollVersions: ParameterVersion[] = [
     '2026-12-31',
   ),
   version('ro.payroll.tax_base_rounding', 'leu_half_down', [code('norme.art.64.pct.4')]),
-  version('ro.payroll.amount_rounding', 'leu_half_up', ['L207/2015:rounding']),
+  version('ro.payroll.amount_rounding', 'leu_half_up', ['OUG59/2005:art.1(1)']),
 ];

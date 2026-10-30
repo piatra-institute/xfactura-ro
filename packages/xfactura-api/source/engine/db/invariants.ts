@@ -48,6 +48,7 @@ const appendOnly = [
   'acc_treasury_accounts',
   'acc_bank_statements',
   'acc_bank_movements',
+  'acc_bank_mappings',
   'acc_party_versions',
   'acc_series',
   'acc_issued_numbers',
@@ -69,11 +70,21 @@ const appendOnly = [
   'acc_party_status',
   'acc_income_sources',
   'acc_enterprise_members',
+  'acc_questions',
+  'acc_question_answers',
+  'acc_question_withdrawals',
+  'acc_dispositions',
+  'acc_templates',
+  'acc_template_revocations',
+  'acc_template_predictions',
+  'acc_automation_events',
+  'acc_automation_criteria',
   'ref_fx_rates',
 ];
 // Tables with narrowly guarded updates (below) that are never deleted from.
 const neverDeleted = ['acc_memberships', 'acc_agent_grants', 'acc_invitations', 'acc_accounts'];
-/** Tables outside the invariant regime: authentication, work queues and bookkeeping. */
+/** Tables outside the invariant regime: authentication, work queues, schedules, consumers'
+ * cursors, caches recomputed from the books, and bookkeeping. */
 export const mutableTables = [
   'user',
   'session',
@@ -81,6 +92,9 @@ export const mutableTables = [
   'verification',
   'acc_jobs',
   'acc_outbox',
+  'acc_schedules',
+  'acc_cursors',
+  'acc_proposal_checks',
   'acc_invariants',
   '__drizzle_migrations',
 ];
@@ -140,11 +154,51 @@ const isWithdrawn = `EXISTS (
       SELECT 1 FROM acc_withdrawals WHERE company_id = NEW.company_id AND proposal_id = NEW.proposal_id)`;
 const isPosted = `EXISTS (
       SELECT 1 FROM acc_entries WHERE company_id = NEW.company_id AND proposal_id = NEW.proposal_id)`;
+/**
+ * The posted entry `entry` (an alias of acc_entries) stands: no reversal of it was posted. A
+ * correction is a reversal and a new proposal, so the subject of a reversed entry is free again.
+ */
+const stands = (entry: string) => `NOT EXISTS (
+          SELECT 1 FROM acc_proposals rv JOIN acc_entries re ON re.company_id = rv.company_id AND re.proposal_id = rv.id
+          WHERE rv.company_id = ${entry}.company_id AND rv.subject_key = 'reverse:' || ${entry}.id)`;
+/** The proposal `proposal` (an alias of acc_proposals) holds its subject: not withdrawn, and not
+ * posted by an entry reversed since. */
+const holdsSubject = (proposal: string) => `NOT EXISTS (
+              SELECT 1 FROM acc_withdrawals w WHERE w.company_id = ${proposal}.company_id AND w.proposal_id = ${proposal}.id)
+            AND NOT EXISTS (
+              SELECT 1 FROM acc_entries he WHERE he.company_id = ${proposal}.company_id AND he.proposal_id = ${proposal}.id
+                AND NOT ${stands('he')})`;
 /** An active owner or reviewer whose membership has not changed since the given epoch. */
 const isReviewer = (user: string, epoch: string) => `EXISTS (
       SELECT 1 FROM acc_memberships m
       WHERE m.company_id = NEW.company_id AND m.user_id = ${user}
         AND m.active = 1 AND m.role IN ('owner', 'reviewer') AND m.epoch = ${epoch})`;
+/**
+ * The engine's time of the row being written, in milliseconds: its `engine_at`, which the
+ * application takes from the engine's clock, as every decision on time does (tests and the
+ * evaluation harness run the engine at another time than the wall's). The database's own clock
+ * for a row written without it.
+ */
+const engineNow = `COALESCE(NEW.engine_at, CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER))`;
+/** The UTC date of the engine's time, or `offset` from it (`'+1 day'`). */
+const engineDate = (offset?: string) =>
+  `date(${engineNow} / 1000, 'unixepoch'${offset ? `, '${offset}'` : ''})`;
+/** The segregation of duties (`controls.segregation`) in force on a date: 0 off, 1 on, 2 strict. */
+const segregationOn = (date: string) => `COALESCE((
+        SELECT CASE f.value WHEN 'strict' THEN 2 WHEN 'on' THEN 1 ELSE 0 END FROM acc_profile_facts f
+        WHERE f.company_id = NEW.company_id AND f.axis = 'controls.segregation' AND f.effective_from <= ${date}
+          AND NOT EXISTS (
+            SELECT 1 FROM acc_profile_facts g WHERE g.company_id = f.company_id AND g.supersedes_id = f.id)
+        ORDER BY f.effective_from DESC, f.created_at DESC, f.id DESC LIMIT 1), 0)`;
+/**
+ * Whether segregation forbids `person` approving work created by `creator` (through `agent`): on,
+ * their own work without an agent; strict, also their agents'. The application reads the fact on
+ * the engine's Bucharest date, which is the UTC date of the row's engine time or the next day; the
+ * lenient of the two is applied here so the database never refuses what the application allowed.
+ */
+const selfApproval = (person: string, creator: string, agent: string) => `(${person} = ${creator}
+      AND min(${segregationOn(engineDate())}, ${segregationOn(engineDate('+1 day'))})
+        >= CASE WHEN ${agent} IS NULL THEN 1 ELSE 2 END)`;
 /**
  * A tax period's read version, as the state loader records it for `${tax}|${period}`: its tax
  * entries, its settlement lines and the last sequence among their entries, excluding the
@@ -175,7 +229,19 @@ const partyStatusVersion = (id: string) => `CAST(COALESCE((
           AND s.as_of = substr(${id}, instr(${id}, '|') + 1)), 0) AS TEXT)`;
 const latest = (table: string, scope: string) =>
   `(SELECT kind FROM ${table} WHERE company_id = NEW.company_id AND ${scope} ORDER BY seq DESC LIMIT 1)`;
-const nowMs = `CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)`;
+/** The id of a question's latest answer, NULL while it has none. */
+const latestAnswer = (question: string) => `(
+        SELECT a.id FROM acc_question_answers a
+        WHERE a.company_id = NEW.company_id AND a.question_id = ${question} ORDER BY a.seq DESC LIMIT 1)`;
+/** The media type answers are kept as evidence with. */
+export const answerMediaType = 'application/vnd.xfactura.answer+json';
+/** The engine's own principal (`SYSTEM_PRINCIPAL` in kernel/automation.ts): never a member. */
+const systemPrincipal = `'system'`;
+/** The latest pause or resume of an automation scope, 'resume' when there is none. */
+const automationState = (scope: string, id: string) => `COALESCE((
+        SELECT a.kind FROM acc_automation_events a
+        WHERE a.company_id = NEW.company_id AND a.scope = '${scope}' AND a.scope_id IS ${id}
+        ORDER BY a.seq DESC LIMIT 1), 'resume')`;
 const thisEntry = `company_id = NEW.company_id AND entry_id = NEW.id`;
 
 /**
@@ -279,12 +345,23 @@ const scheduleRowFields: Field[] = [
 const entryChecks: Check[] = [
   {
     code: 'subject_posted',
-    rule: 'A subject (document, movement, …) is posted at most once.',
+    rule: 'A subject (document, movement, …) has at most one posted entry that stands: it is posted again only once every earlier entry of it was reversed.',
     violation: `EXISTS (
       SELECT 1 FROM acc_entries e
       JOIN acc_proposals p ON p.company_id = e.company_id AND p.id = e.proposal_id
       WHERE e.company_id = NEW.company_id AND p.subject_key = (
-        SELECT subject_key FROM acc_proposals WHERE company_id = NEW.company_id AND id = NEW.proposal_id))`,
+        SELECT subject_key FROM acc_proposals WHERE company_id = NEW.company_id AND id = NEW.proposal_id)
+        AND ${stands('e')})`,
+  },
+  {
+    code: 'reversal_of_reversal',
+    rule: 'A reversal is never reversed in turn: a wrong storno is corrected by booking its subject again, which its reversal freed.',
+    violation: `EXISTS (
+      SELECT 1 FROM acc_proposals p
+      JOIN acc_entries t ON t.company_id = p.company_id AND t.id = substr(p.subject_key, 9)
+      JOIN acc_proposals tp ON tp.company_id = t.company_id AND tp.id = t.proposal_id
+      WHERE p.company_id = NEW.company_id AND p.id = NEW.proposal_id
+        AND p.subject_key LIKE 'reverse:%' AND tp.subject_key LIKE 'reverse:%')`,
   },
   {
     code: 'proposal_version_missing',
@@ -321,7 +398,7 @@ const entryChecks: Check[] = [
   },
   {
     code: 'binding',
-    rule: 'An entry is bound either to an approval of exactly this effect by a current reviewer, or to an active posting policy, approved by a current reviewer, that covers this treatment and rule set.',
+    rule: "An entry is bound either to an approval of exactly this effect by a current reviewer, or to an active posting policy, approved by a current reviewer, that covers this treatment and rule set, acknowledges each of the version's warnings (an `acknowledges` condition names its code and no `noWarnings` condition refuses it), is not paused (nor the company, nor a template it is bound to) and posts an extracted document only when a `sourceAuthority` condition allows it.",
     violation: `NOT (
       (NEW.approval_id IS NOT NULL AND NEW.policy_id IS NULL AND EXISTS (
         SELECT 1 FROM acc_approvals a
@@ -334,7 +411,7 @@ const entryChecks: Check[] = [
         SELECT 1 FROM acc_posting_policies p
         JOIN acc_memberships m ON m.company_id = p.company_id AND m.user_id = p.approved_by
         WHERE p.company_id = NEW.company_id AND p.id = NEW.policy_id
-          AND p.valid_from <= NEW.date AND p.expires_at > ${nowMs}
+          AND p.valid_from <= NEW.date AND p.expires_at > ${engineNow}
           AND m.active = 1 AND m.role IN ('owner', 'reviewer') AND m.epoch = p.approver_epoch
           AND NOT EXISTS (
             SELECT 1 FROM acc_policy_revocations r WHERE r.company_id = p.company_id AND r.policy_id = p.id)
@@ -342,7 +419,39 @@ const entryChecks: Check[] = [
             SELECT 1 FROM json_each(p.treatments_json) t, acc_proposals q
             WHERE q.company_id = NEW.company_id AND q.id = NEW.proposal_id AND t.value = q.treatment_id)
           AND EXISTS (
-            SELECT 1 FROM json_each(p.rules_hashes_json) h WHERE h.value = ${version('rules_hash')}))))`,
+            SELECT 1 FROM json_each(p.rules_hashes_json) h WHERE h.value = ${version('rules_hash')})
+          AND NOT EXISTS (
+            SELECT 1 FROM json_each(${version('issues_json')}) i
+            WHERE json_extract(i.value, '$.severity') = 'ack'
+              AND (EXISTS (
+                  SELECT 1 FROM json_each(p.preconditions_json) c
+                  WHERE json_extract(c.value, '$.kind') = 'noWarnings')
+                OR NOT EXISTS (
+                  SELECT 1 FROM json_each(p.preconditions_json) c, json_each(c.value, '$.codes') k
+                  WHERE json_extract(c.value, '$.kind') = 'acknowledges'
+                    AND k.value = json_extract(i.value, '$.code'))))
+          AND ${automationState('company', 'NULL')} = 'resume'
+          AND ${automationState('policy', 'p.id')} = 'resume'
+          AND NOT EXISTS (
+            SELECT 1 FROM json_each(p.preconditions_json) c
+            WHERE json_extract(c.value, '$.kind') = 'template'
+              AND ${automationState('template', "json_extract(c.value, '$.id')")} = 'pause')
+          AND NOT EXISTS (
+            SELECT 1 FROM json_each(${version('read_set_json')}) r
+            JOIN acc_documents d ON d.company_id = NEW.company_id AND d.id = json_extract(r.value, '$.id')
+            WHERE json_extract(r.value, '$.kind') = 'document' AND d.authority = 'extracted'
+              AND NOT EXISTS (
+                SELECT 1 FROM json_each(p.preconditions_json) c, json_each(c.value, '$.allow') k
+                WHERE json_extract(c.value, '$.kind') = 'sourceAuthority' AND k.value = 'extracted')))))`,
+  },
+  {
+    code: 'segregation',
+    rule: 'Under segregation of duties, a posting policy does not post the work of the person who approved it: on, what they proposed themselves; strict, also what their agents proposed.',
+    violation: `NEW.policy_id IS NOT NULL AND ${selfApproval(
+      `(SELECT approved_by FROM acc_posting_policies WHERE company_id = NEW.company_id AND id = NEW.policy_id)`,
+      version('created_by'),
+      version('agent_id'),
+    )}`,
   },
   {
     code: 'closed_period',
@@ -482,10 +591,12 @@ const entryChecks: Check[] = [
   },
   {
     code: 'stale_read',
-    rule: "The open items, schedules, tax periods, payroll runs and party statuses the proposal read have not changed since: an open item's version is its number of lines, a schedule's its latest version, a tax period's its tax entries, settlement lines and last entry sequence, a payroll run's its result and state, a party's status for a date its latest snapshot for that date.",
+    rule: "The open items, schedules, tax periods, payroll runs, party statuses and answers the proposal read have not changed since: an open item's version is its number of lines, a schedule's its latest version, a tax period's its tax entries, settlement lines and last entry sequence, a payroll run's its result and state, a party's status for a date its latest snapshot for that date, a question's answer its latest answer.",
     violation: `EXISTS (
       SELECT 1 FROM json_each(${version('read_set_json')}) r
-      WHERE (json_extract(r.value, '$.kind') = 'taxPeriod'
+      WHERE (json_extract(r.value, '$.kind') = 'answer'
+          AND json_extract(r.value, '$.version') IS NOT ${latestAnswer("json_extract(r.value, '$.id')")})
+        OR (json_extract(r.value, '$.kind') = 'taxPeriod'
           AND json_extract(r.value, '$.version') <> ${taxPeriodVersion("json_extract(r.value, '$.id')")})
         OR (json_extract(r.value, '$.kind') = 'partyStatus'
           AND json_extract(r.value, '$.version') <> ${partyStatusVersion("json_extract(r.value, '$.id')")})
@@ -531,6 +642,31 @@ const approvalChecks: Check[] = [
     code: 'approver',
     rule: 'The approver is a current owner or reviewer.',
     violation: `NOT ${isReviewer('NEW.approver_id', 'NEW.approver_epoch')}`,
+  },
+  {
+    code: 'segregation',
+    rule: 'Under segregation of duties, nobody approves a version they created themselves (on), or that an agent created under their grant (strict).',
+    violation: selfApproval('NEW.approver_id', version('created_by'), version('agent_id')),
+  },
+  {
+    code: 'batch_member',
+    rule: "An approval given with a batch names a version the batch's approved preview lists as ready with this effect hash, is the decider's under the epoch they decided in, and needs no acknowledgement.",
+    violation: `NEW.batch_request_id IS NOT NULL AND (NOT EXISTS (
+        SELECT 1 FROM acc_action_requests r
+        JOIN acc_action_decisions d ON d.company_id = r.company_id AND d.request_id = r.id
+        WHERE r.company_id = NEW.company_id AND r.id = NEW.batch_request_id
+          AND r.operation = 'proposals.batch' AND d.decision = 'approve'
+          AND d.preview_hash = r.preview_hash
+          AND d.decided_by = NEW.approver_id AND d.decided_epoch = NEW.approver_epoch
+          AND EXISTS (
+            SELECT 1 FROM json_each(r.preview_json, '$.members') m
+            WHERE json_extract(m.value, '$.proposalId') = NEW.proposal_id
+              AND json_extract(m.value, '$.version') = NEW.version
+              AND json_extract(m.value, '$.effectHash') = NEW.effect_hash
+              AND json_extract(m.value, '$.state') = 'ready'))
+      OR EXISTS (
+        SELECT 1 FROM json_each(${version('issues_json')}) i
+        WHERE json_extract(i.value, '$.severity') = 'ack'))`,
   },
 ];
 
@@ -903,6 +1039,73 @@ const assetChecks: Record<'cards' | 'events', Check[]> = {
   ],
 };
 
+/** Links that make a document a member of another's group: the engine's, between documents of
+ * the same identity, and a person's, between near matches. */
+const groupLinks = `('same_as', 'same_as_confirmed')`;
+/** The root of the group of the document `id` names: the document it joined, or itself. */
+const rootOf = (id: string) => `COALESCE((
+          SELECT l.to_id FROM acc_document_links l
+          WHERE l.company_id = NEW.company_id AND l.from_id = ${id} AND l.kind IN ${groupLinks}), ${id})`;
+const subjectDocument = `substr(NEW.subject_key, 10)`;
+
+const documentChecks: Check[] = [
+  {
+    code: 'document_authority',
+    rule: 'A document records where its content comes from: e-Factura, the engine issuing it, an uploaded UBL file, the invoicer or an agent extracting it.',
+    violation: `NEW.authority IS NULL
+        OR NEW.authority NOT IN ('efactura', 'issued', 'ubl_upload', 'invoicer', 'extracted')`,
+  },
+  {
+    code: 'extracted_source',
+    rule: 'A document an agent extracted keeps the file it was read from, under a source key naming that file’s hash and the part read (`extract:<hash>:<part>`), so that it never takes the place of a structured source; no other document uses such a key.',
+    violation: `(NEW.authority = 'extracted' AND (NEW.evidence_id IS NULL
+          OR NEW.source_key NOT GLOB 'extract:' || COALESCE((
+            SELECT hash FROM acc_evidence WHERE company_id = NEW.company_id AND id = NEW.evidence_id), '') || ':[1-9]*'))
+        OR (NEW.authority IS NOT 'extracted' AND NEW.source_key GLOB 'extract:*')`,
+  },
+];
+
+const documentLinkChecks: Check[] = [
+  {
+    code: 'same_as_root',
+    rule: 'A document joins a group (`same_as` for the same identity, `same_as_confirmed` when a person matched it) only while it belongs to no group and has no members, and only through the group’s root, a document that is no member itself; a `same_as` link joins a group holding a document with the same identity key.',
+    violation: `NEW.kind IN ${groupLinks} AND (NEW.from_id = NEW.to_id
+        OR EXISTS (
+          SELECT 1 FROM acc_document_links l
+          WHERE l.company_id = NEW.company_id AND l.kind IN ${groupLinks}
+            AND (l.from_id = NEW.from_id OR l.from_id = NEW.to_id OR l.to_id = NEW.from_id))
+        OR (NEW.kind = 'same_as' AND NOT EXISTS (
+          SELECT 1 FROM acc_documents f
+          JOIN acc_documents t ON t.company_id = f.company_id AND t.identity_key = f.identity_key
+          WHERE f.company_id = NEW.company_id AND f.id = NEW.from_id AND f.identity_key IS NOT NULL
+            AND (t.id = NEW.to_id OR EXISTS (
+              SELECT 1 FROM acc_document_links m
+              WHERE m.company_id = t.company_id AND m.from_id = t.id AND m.to_id = NEW.to_id
+                AND m.kind IN ${groupLinks})))))`,
+  },
+  {
+    code: 'supersede',
+    rule: 'Only an extracted document is superseded, by another extracted document of its kind, once, and only while no posted entry that stands recognizes it or its group (whose subject is the group’s root); after posting, a correction is a reversal, then the correction of the extraction and a new proposal.',
+    violation: `NEW.kind = 'supersedes' AND (
+        NOT EXISTS (
+          SELECT 1 FROM acc_documents f
+          JOIN acc_documents t ON t.company_id = f.company_id AND t.id = NEW.to_id
+          WHERE f.company_id = NEW.company_id AND f.id = NEW.from_id AND f.id <> t.id
+            AND f.authority = 'extracted' AND t.authority = 'extracted' AND f.kind = t.kind)
+        OR EXISTS (
+          SELECT 1 FROM acc_document_links l
+          WHERE l.company_id = NEW.company_id AND l.kind = 'supersedes'
+            AND (l.to_id = NEW.to_id OR l.from_id = NEW.from_id))
+        OR EXISTS (
+          SELECT 1 FROM acc_proposals p
+          JOIN acc_entries e ON e.company_id = p.company_id AND e.proposal_id = p.id
+          WHERE p.company_id = NEW.company_id
+            AND (p.subject_key IN ('document:' || NEW.to_id, 'document:' || ${rootOf('NEW.to_id')})
+              OR p.document_id = NEW.to_id)
+            AND ${stands('e')}))`,
+  },
+];
+
 // 3. Triggers
 
 type Trigger = { name: string; on: string; checks: Check[] };
@@ -965,14 +1168,36 @@ const triggers: Trigger[] = [
     checks: [
       {
         code: 'subject_taken',
-        rule: 'A subject has at most one proposal that is not withdrawn.',
+        rule: 'A subject has at most one proposal that holds it: not withdrawn, and not posted by an entry reversed since.',
         violation: `EXISTS (
           SELECT 1 FROM acc_proposals p
           WHERE p.company_id = NEW.company_id AND p.subject_key = NEW.subject_key
-            AND NOT EXISTS (
-              SELECT 1 FROM acc_withdrawals w WHERE w.company_id = p.company_id AND w.proposal_id = p.id))`,
+            AND ${holdsSubject('p')})`,
+      },
+      {
+        code: 'identity_taken',
+        rule: 'A document is recognized once, whatever its copies: no proposal names a document while another document of its identity (the same identity key) or of its group (the same root) has a proposal that holds its subject (open, or posted by an entry that stands).',
+        violation: `NEW.subject_key LIKE 'document:%' AND EXISTS (
+          SELECT 1 FROM acc_proposals p
+          WHERE p.company_id = NEW.company_id AND p.subject_key <> NEW.subject_key
+            AND p.subject_key IN (
+              SELECT 'document:' || d.id FROM acc_documents d
+              WHERE d.company_id = NEW.company_id AND d.identity_key = (
+                SELECT identity_key FROM acc_documents
+                WHERE company_id = NEW.company_id AND id = ${subjectDocument})
+              UNION SELECT 'document:' || ${rootOf(subjectDocument)}
+              UNION SELECT 'document:' || l.from_id FROM acc_document_links l
+              WHERE l.company_id = NEW.company_id AND l.kind IN ${groupLinks}
+                AND l.to_id = ${rootOf(subjectDocument)})
+            AND ${holdsSubject('p')})`,
       },
     ],
+  },
+  { name: 'inv_document_guard', on: 'BEFORE INSERT ON acc_documents', checks: documentChecks },
+  {
+    name: 'inv_document_link_guard',
+    on: 'BEFORE INSERT ON acc_document_links',
+    checks: documentLinkChecks,
   },
   {
     name: 'inv_withdrawal_guard',
@@ -994,6 +1219,112 @@ const triggers: Trigger[] = [
         rule: 'A posting policy is approved by a current owner or reviewer.',
         violation: `NOT ${isReviewer('NEW.approved_by', 'NEW.approver_epoch')}`,
       },
+      {
+        code: 'policy_scope',
+        rule: 'A posting policy never posts a return or an SPV submission: it names no `declarations.*` or `spv.*` operation.',
+        violation: `EXISTS (
+          SELECT 1 FROM json_each(NEW.treatments_json) t
+          WHERE t.value LIKE 'declarations.%' OR t.value LIKE 'spv.%')`,
+      },
+    ],
+  },
+  {
+    name: 'inv_template_guard',
+    on: 'BEFORE INSERT ON acc_templates',
+    checks: [
+      {
+        code: 'template_version',
+        rule: "A template's versions are numbered from 1 without gaps.",
+        violation: `NEW.version <> 1 + COALESCE((
+          SELECT max(version) FROM acc_templates WHERE company_id = NEW.company_id AND id = NEW.id), 0)`,
+      },
+      {
+        code: 'template_request',
+        rule: 'A template version is written by a `templates.request` that a current owner or reviewer approved, in their name and under the epoch they decided in.',
+        violation: `NOT EXISTS (
+          SELECT 1 FROM acc_action_requests r
+          JOIN acc_action_decisions d ON d.company_id = r.company_id AND d.request_id = r.id
+          WHERE r.company_id = NEW.company_id AND r.id = NEW.request_id
+            AND r.operation = 'templates.request' AND d.decision = 'approve'
+            AND d.decided_by = NEW.approved_by AND d.decided_epoch = NEW.approver_epoch)
+          OR NOT ${isReviewer('NEW.approved_by', 'NEW.approver_epoch')}`,
+      },
+    ],
+  },
+  {
+    name: 'inv_template_revocation_guard',
+    on: 'BEFORE INSERT ON acc_template_revocations',
+    checks: [
+      {
+        code: 'template_missing',
+        rule: 'Only an existing template of the company is revoked.',
+        violation: `NOT EXISTS (
+          SELECT 1 FROM acc_templates WHERE company_id = NEW.company_id AND id = NEW.template_id)`,
+      },
+    ],
+  },
+  {
+    name: 'inv_template_prediction_guard',
+    on: 'BEFORE INSERT ON acc_template_predictions',
+    checks: [
+      {
+        code: 'prediction_posted',
+        rule: 'A prediction is recorded before anything is posted for its subject: a track record is never written after the fact.',
+        violation: `NEW.subject_key IS NOT NULL AND EXISTS (
+          SELECT 1 FROM acc_proposals q JOIN acc_entries e ON e.company_id = q.company_id AND e.proposal_id = q.id
+          WHERE q.company_id = NEW.company_id AND q.subject_key = NEW.subject_key)`,
+      },
+    ],
+  },
+  {
+    name: 'inv_automation_event_guard',
+    on: 'BEFORE INSERT ON acc_automation_events',
+    checks: [
+      {
+        code: 'automation_sequence',
+        rule: "A company's pauses and resumes are numbered from 1 without gaps.",
+        violation: `NEW.seq <> 1 + COALESCE((
+          SELECT max(seq) FROM acc_automation_events WHERE company_id = NEW.company_id), 0)`,
+      },
+      {
+        code: 'automation_actor',
+        rule: 'Automation is paused by a member under their current epoch, or by the system principal; never by anyone else.',
+        violation: `NEW.created_by <> ${systemPrincipal} AND NOT EXISTS (
+          SELECT 1 FROM acc_memberships m
+          WHERE m.company_id = NEW.company_id AND m.user_id = NEW.created_by
+            AND m.active = 1 AND m.epoch = NEW.epoch)`,
+      },
+      {
+        code: 'automation_resume',
+        rule: 'Only a person who is a current owner or reviewer resumes automation: never an agent or the system.',
+        violation: `NEW.kind = 'resume' AND (NEW.agent_id IS NOT NULL
+          OR NOT ${isReviewer('NEW.created_by', 'NEW.epoch')})`,
+      },
+      {
+        code: 'automation_scope',
+        rule: "A pause or resume names one of the company's policies or templates, or the whole company.",
+        violation: `(NEW.scope = 'policy' AND NOT EXISTS (
+            SELECT 1 FROM acc_posting_policies WHERE company_id = NEW.company_id AND id = NEW.scope_id))
+          OR (NEW.scope = 'template' AND NOT EXISTS (
+            SELECT 1 FROM acc_templates WHERE company_id = NEW.company_id AND id = NEW.scope_id))`,
+      },
+    ],
+  },
+  {
+    name: 'inv_automation_criteria_guard',
+    on: 'BEFORE INSERT ON acc_automation_criteria',
+    checks: [
+      {
+        code: 'criteria_sequence',
+        rule: "A company's graduation criteria are numbered from 1 without gaps; the latest holds.",
+        violation: `NEW.seq <> 1 + COALESCE((
+          SELECT max(seq) FROM acc_automation_criteria WHERE company_id = NEW.company_id), 0)`,
+      },
+      {
+        code: 'criteria_person',
+        rule: 'Graduation criteria are set by a current owner or reviewer.',
+        violation: `NOT ${isReviewer('NEW.created_by', 'NEW.epoch')}`,
+      },
     ],
   },
   {
@@ -1011,6 +1342,15 @@ const triggers: Trigger[] = [
         rule: 'Actions are decided by a current owner or reviewer.',
         violation: `NOT ${isReviewer('NEW.decided_by', 'NEW.decided_epoch')}`,
       },
+      {
+        code: 'segregation',
+        rule: 'Under segregation of duties, nobody approves an action they requested themselves (on), or that an agent requested under their grant (strict); rejecting one stays open to them.',
+        violation: `NEW.decision = 'approve' AND ${selfApproval(
+          'NEW.decided_by',
+          '(SELECT created_by FROM acc_action_requests WHERE company_id = NEW.company_id AND id = NEW.request_id)',
+          '(SELECT agent_id FROM acc_action_requests WHERE company_id = NEW.company_id AND id = NEW.request_id)',
+        )}`,
+      },
     ],
   },
   {
@@ -1022,6 +1362,15 @@ const triggers: Trigger[] = [
         rule: 'Only an approved action is executed.',
         violation: `(SELECT decision FROM acc_action_decisions
           WHERE company_id = NEW.company_id AND request_id = NEW.request_id) IS NOT 'approve'`,
+      },
+      {
+        code: 'decider',
+        rule: 'The approval executed was given by a person who is still a current owner or reviewer, under the membership epoch they decided in.',
+        violation: `NOT EXISTS (
+          SELECT 1 FROM acc_action_decisions d
+          JOIN acc_memberships m ON m.company_id = d.company_id AND m.user_id = d.decided_by
+          WHERE d.company_id = NEW.company_id AND d.request_id = NEW.request_id
+            AND m.active = 1 AND m.role IN ('owner', 'reviewer') AND m.epoch = d.decided_epoch)`,
       },
     ],
   },
@@ -1050,6 +1399,17 @@ const triggers: Trigger[] = [
             SELECT max(seq) FROM acc_tax_period_events
             WHERE company_id = NEW.company_id AND tax = NEW.tax AND period = NEW.period), 0)
           OR COALESCE(${latest('acc_tax_period_events', 'tax = NEW.tax AND period = NEW.period')}, 'unlock') = NEW.kind`,
+      },
+    ],
+  },
+  {
+    name: 'inv_membership_insert',
+    on: 'BEFORE INSERT ON acc_memberships',
+    checks: [
+      {
+        code: 'system_member',
+        rule: 'The system principal is never a member of a company, so it never approves, decides or creates a policy.',
+        violation: `NEW.user_id = ${systemPrincipal}`,
       },
     ],
   },
@@ -1091,8 +1451,8 @@ const triggers: Trigger[] = [
         code: 'immutable_record',
         rule: 'A grant can only be revoked, once; nothing else about it changes.',
         violation: `OLD.revoked_at IS NOT NULL OR NEW.revoked_at IS NULL
-          OR (NEW.id, NEW.company_id, NEW.name, NEW.token_hash, NEW.scopes, NEW.membership_epoch, NEW.expires_at, NEW.created_by)
-            IS NOT (OLD.id, OLD.company_id, OLD.name, OLD.token_hash, OLD.scopes, OLD.membership_epoch, OLD.expires_at, OLD.created_by)`,
+          OR (NEW.id, NEW.company_id, NEW.name, NEW.token_hash, NEW.scopes, NEW.toolsets, NEW.membership_epoch, NEW.expires_at, NEW.created_by)
+            IS NOT (OLD.id, OLD.company_id, OLD.name, OLD.token_hash, OLD.scopes, OLD.toolsets, OLD.membership_epoch, OLD.expires_at, OLD.created_by)`,
       },
     ],
   },
@@ -1245,6 +1605,133 @@ const triggers: Trigger[] = [
     name: 'inv_payroll_line_guard',
     on: 'BEFORE INSERT ON acc_payroll_lines',
     checks: payrollChecks.lines,
+  },
+  // A statement covers its opening-balance date to its closing date. Some banks date the opening
+  // balance with the previous statement's closing date (SWIFT field 60F), so consecutive
+  // statements may share that one day: the later one takes over on it, reporting nothing there.
+  {
+    name: 'inv_bank_statement_guard',
+    on: 'BEFORE INSERT ON acc_bank_statements',
+    checks: [
+      {
+        code: 'statement_overlap',
+        rule: 'Statements of one account never report a day twice. One opens on the day another closes only by taking over: at its closing balance, covering later days too, and reporting no movement that day.',
+        violation: `EXISTS (
+          SELECT 1 FROM acc_bank_statements s
+          WHERE s.company_id = NEW.company_id AND s.treasury_account_id = NEW.treasury_account_id
+            AND s.date_from <= NEW.date_to AND NEW.date_from <= s.date_to
+            AND NOT (s.date_to = NEW.date_from AND NEW.date_from < NEW.date_to
+              AND NEW.opening_minor = s.closing_minor)
+            AND NOT (NEW.date_to = s.date_from AND s.date_from < s.date_to
+              AND s.opening_minor = NEW.closing_minor
+              AND NOT EXISTS (
+                SELECT 1 FROM acc_bank_movements m
+                WHERE m.company_id = s.company_id AND m.treasury_account_id = s.treasury_account_id
+                  AND m.booking_date = s.date_from AND m.statement_id = s.id)))`,
+      },
+    ],
+  },
+  {
+    name: 'inv_bank_movement_guard',
+    on: 'BEFORE INSERT ON acc_bank_movements',
+    checks: [
+      {
+        code: 'statement_overlap',
+        rule: "A movement is on a day its own statement covers, on the statement's account, and not on the day that statement takes over from one closing on it.",
+        violation: `NOT EXISTS (
+          SELECT 1 FROM acc_bank_statements s
+          WHERE s.company_id = NEW.company_id AND s.id = NEW.statement_id
+            AND s.treasury_account_id = NEW.treasury_account_id
+            AND NEW.booking_date BETWEEN s.date_from AND s.date_to
+            AND NOT (NEW.booking_date = s.date_from AND EXISTS (
+              SELECT 1 FROM acc_bank_statements e
+              WHERE e.company_id = s.company_id AND e.treasury_account_id = s.treasury_account_id
+                AND e.id <> s.id AND e.date_to = s.date_from)))`,
+      },
+    ],
+  },
+  {
+    name: 'inv_question_guard',
+    on: 'BEFORE INSERT ON acc_questions',
+    checks: [
+      {
+        code: 'question_open',
+        rule: 'A kind of question has at most one open question (unanswered, not withdrawn) about a subject.',
+        violation: `EXISTS (
+          SELECT 1 FROM acc_questions q
+          WHERE q.company_id = NEW.company_id AND q.kind = NEW.kind
+            AND q.subject_kind = NEW.subject_kind AND q.subject_id = NEW.subject_id
+            AND NOT EXISTS (
+              SELECT 1 FROM acc_question_answers a WHERE a.company_id = q.company_id AND a.question_id = q.id)
+            AND NOT EXISTS (
+              SELECT 1 FROM acc_question_withdrawals w WHERE w.company_id = q.company_id AND w.question_id = q.id))`,
+      },
+    ],
+  },
+  {
+    name: 'inv_question_answer_guard',
+    on: 'BEFORE INSERT ON acc_question_answers',
+    checks: [
+      {
+        code: 'answer_sequence',
+        rule: "A question's answers are numbered from 1 without gaps; the latest holds.",
+        violation: `NEW.seq <> 1 + COALESCE((
+          SELECT max(seq) FROM acc_question_answers
+          WHERE company_id = NEW.company_id AND question_id = NEW.question_id), 0)`,
+      },
+      {
+        code: 'answer_person',
+        rule: 'Only a person answers a question, never an agent.',
+        violation: 'NEW.agent_id IS NOT NULL',
+      },
+      {
+        code: 'answerer',
+        rule: 'The person answering is a current owner or reviewer, under the membership epoch they answered in.',
+        violation: `NOT ${isReviewer('NEW.answered_by', 'NEW.epoch')}`,
+      },
+      {
+        code: 'question_withdrawn',
+        rule: 'A withdrawn question is not answered.',
+        violation: `EXISTS (
+          SELECT 1 FROM acc_question_withdrawals
+          WHERE company_id = NEW.company_id AND question_id = NEW.question_id)`,
+      },
+      {
+        code: 'answer_evidence',
+        rule: `An answer is kept as evidence of its own kind (${answerMediaType}), which proposals and profile facts cite.`,
+        violation: `(SELECT media_type FROM acc_evidence
+          WHERE company_id = NEW.company_id AND id = NEW.evidence_id) IS NOT '${answerMediaType}'`,
+      },
+    ],
+  },
+  {
+    name: 'inv_question_withdrawal_guard',
+    on: 'BEFORE INSERT ON acc_question_withdrawals',
+    checks: [
+      {
+        code: 'question_answered',
+        rule: 'Only a question nobody answered is withdrawn; an answer is replaced by a later one.',
+        violation: `EXISTS (
+          SELECT 1 FROM acc_question_answers
+          WHERE company_id = NEW.company_id AND question_id = NEW.question_id)`,
+      },
+    ],
+  },
+  {
+    name: 'inv_disposition_guard',
+    on: 'BEFORE INSERT ON acc_dispositions',
+    checks: [
+      {
+        code: 'disposition_subject',
+        rule: 'A disposition is about a document, an SPV message, a close finding or evidence used nowhere.',
+        violation: `NEW.subject_kind NOT IN ('document', 'spvMessage', 'finding', 'evidence')`,
+      },
+      {
+        code: 'disposition_person',
+        rule: 'Only a person decides that a document needs no booking, an SPV message or a close finding was dealt with; an agent may dispose only of evidence used nowhere.',
+        violation: `NEW.agent_id IS NOT NULL AND NEW.subject_kind <> 'evidence'`,
+      },
+    ],
   },
   {
     name: 'inv_audit_chain',

@@ -1,5 +1,41 @@
 # Delivery roadmap and executable gates
 
+## Agent-first delivery (owner decision, 2026-10-30)
+
+AI agents drive the engine: they gather evidence, propose bookings, ask the questions only a person can answer, and prepare returns. People check, approve and make quick corrections. The engine computes every amount from cited rules.
+
+**Who approves.** The owner approves everyday items. The company's accountant reviews the month and signs the annual statements.
+- For an SRL, Legea 82/1991 requires an employee with higher economic studies or a CECCAR member to keep the books (art. 10 alin. (2)–(4)), and that person signs the annual statements together with the administrator (art. 28 alin. (10)–(13)).
+- A PFA, II or IF may keep its own books (art. 10 alin. (4^1)).
+
+**Autonomy is earned.**
+- People first approve agent proposals in batches.
+- A booking template posts on its own only after a measured run of correct shadow bookings, within partner and amount limits. This includes matching payments that already happened.
+- It is demoted automatically after a correction.
+- Returns, submissions and money transfers always need a person.
+
+**Order:**
+1. **Phase 0:** safety fixes and the yearly rule rollover ([ROLLOVER.md](ROLLOVER.md)).
+2. **Phase 1, engine plumbing for agents:**
+   - intake of any document with checked extraction;
+   - bank statements from CSV and PDF;
+   - one worklist and a change feed;
+   - questions to people;
+   - batch approval;
+   - booking templates with a track record;
+   - earned auto-posting with a kill switch.
+3. **Phase 2:** every remaining regime for SRL, PFA, II and IF under about $1M, each module agent-ready from the start: its document types, questions, worklist detectors and template fields.
+4. **Phase 3, correctness machinery, running throughout:**
+   - two-tier rule review: partner accountants mark rules `interpreted`, which unlocks shadow use; the expert's signed review packets unlock live use;
+   - cross-return checks;
+   - differential comparison with other software;
+   - an agent evaluation harness;
+   - release gates per profile.
+5. **Phase 4:** the built-in agent on the company's own model key (Anthropic, OpenAI or any OpenAI-compatible endpoint), MCP over OAuth for external clients, and the five-view dashboard.
+6. **Phase 5:** the free hosted launch in the EU, and retiring the legacy paid extraction.
+
+PFA, II and IF are in scope ([PFA_II_IF.md](PFA_II_IF.md)). Excise, fiscal groups, IFRS and medium, large or audited entities stay explicitly unsupported.
+
 ## Sequencing
 
 Keep the public invoicer available. Agents perform routine work through the same typed command API used by the application. The UI primarily verifies evidence, exact effects, decisions and results; manual accounting remains available without a model. Every domain feature needs an API/tool capability and a corresponding review projection.
@@ -26,7 +62,7 @@ Run steps in this order, carrying forward existing evidence, API/MCP access, exa
 
 Initial verification covers 2025 and 2026. Historical opening balances and tax vintages need retained authority; later annual formats remain pending until published and independently checked. Both VAT and non-VAT, micro/profit taxation, payroll and manufacturing remain committed scope, not unspecified future product ideas.
 
-The existing capability API and scoped-credential MCP are infrastructure already available to every new accounting module. Deployment, browser OAuth delegation, a built-in model agent and AI billing are outside this accounting sequence. The UI verifies actual evidence/effects; do not grow a second manual accounting application alongside the engine.
+The existing capability API and scoped-credential MCP are infrastructure already available to every new accounting module. The built-in agent and MCP over OAuth follow the accounting modules (Phase 4 above); AI billing is outside the sequence. The UI verifies actual evidence/effects; do not grow a second manual accounting application alongside the engine.
 
 Filing fulfillment initially uses external signing/submission of the validated official package and receipt import. Reserve explicit authorization for exact artifacts and keep prepared/validated/exported/submitted/accepted states distinct. Direct submission automation is not a prerequisite.
 
@@ -155,7 +191,7 @@ For every applicable output: pin the legal/form version → establish independen
 | Migration continuity, signed versions and complete recovery | Migration assistance, reproducible filing/audit packages and portable full-company archives. |
 | Demonstrated domain coverage plus reviewed policy/provider contracts | Built-in L0/L1 assistance first; governed L2+ automation later. Forecasts, outbound follow-up and new integrations remain separately scoped candidates. |
 
-Broader entity types such as PFA, SA or nonprofit organizations require separate accounting frameworks, conformance profiles and reviewed obligations. They are future scope decisions beyond the committed SRL sequence. Do not advertise support for every Romanian legal entity from the SRL engine alone.
+PFA, II and IF are in scope with their own single-entry books, profiles and obligations. Other entity types, such as SA or nonprofit organizations, need separate accounting frameworks, conformance profiles and reviewed obligations; they are not in scope. Do not advertise support for an entity type before its profile exists.
 
 ## Launch gates and dependencies
 
@@ -171,4 +207,4 @@ Track executable work in one implementation tracker when tickets begin; keep thi
 
 ## Work outside this sequence
 
-Browser OAuth delegation, the built-in Piatra AI/BYOK agent, direct ANAF submission automation, deployment expansion and managed-AI billing have separate backlog items. Existing operating/security requirements still apply to any live service. Fiscal completeness and the committed native accounting modules take priority.
+The built-in agent and MCP over OAuth are now Phase 4 of the agent-first order above. Direct ANAF submission automation, deployment expansion and managed-AI billing still have separate backlog items. Existing operating/security requirements still apply to any live service. Fiscal completeness and the committed native accounting modules take priority.

@@ -51,3 +51,6 @@ coverage/
 
 # Snapshots of the official texts the rule register cites (hashes in src/ro/sources)
 .sources/
+
+# Generated rule review packets (scripts/review/packet.ts); records are committed in xfactura-core
+.reviews/

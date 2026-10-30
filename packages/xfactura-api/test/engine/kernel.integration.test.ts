@@ -1,11 +1,83 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
+import { and, eq } from 'drizzle-orm';
+import { z } from 'zod';
+import type { Treatment } from 'xfactura-core/kernel';
+import { parseLocalDate } from 'xfactura-core/time';
+import { proposals } from '../../source/engine/db/schema';
+import type { ActionView } from '../../source/engine/kernel/actions';
+import type { Actor } from '../../source/engine/kernel/commands';
 import type { ProposalView } from '../../source/engine/kernel/views';
+import type { WorkItem } from '../../source/engine/kernel/work';
+import { invoiceXml } from './fixtures/invoice';
 import { journal, scenario, type Scenario } from './scenario';
 
+/** A small expense whose warnings (`ack`) and notes (`info`) the input chooses. */
+const warned: Treatment<{ reference: string; warnings: string[]; notes: string[] }> = {
+  id: 'test.warned',
+  version: 1,
+  description: 'Cheltuială de test cu avertismentele alese.',
+  summary: 'Test expense with the warnings the input chooses.',
+  input: z
+    .object({
+      reference: z.string(),
+      warnings: z.array(z.string()).default([]),
+      notes: z.array(z.string()).default([]),
+    })
+    .strict(),
+  agent: true,
+  subject: (input) => `test:${input.reference}`,
+  plan: () => ({}),
+  evaluate: (input) => ({
+    effect: {
+      schema: 'effect@1',
+      date: parseLocalDate('2026-03-10'),
+      journalClass: 'general',
+      journalCode: 'DIVERSE',
+      description: 'Cheltuială de test',
+      lines: [
+        { account: '628', side: 'D', bani: 1000n },
+        { account: '5121', side: 'C', bani: 1000n },
+      ],
+      openItems: [],
+      taxEntries: [],
+      schedules: [],
+      explanation: { summary: 'test' },
+    },
+    issues: [
+      ...input.warnings.map((code) => ({
+        code,
+        severity: 'ack' as const,
+        message: 'Avertisment.',
+      })),
+      ...input.notes.map((code) => ({ code, severity: 'info' as const, message: 'Notă.' })),
+    ],
+  }),
+};
+
+/** An expense whose proposals read personal data, as payroll's do; blocked when the input asks. */
+const personal: Treatment<{ reference: string; blocked: boolean }> = {
+  id: 'test.personal',
+  version: 1,
+  description: 'Cheltuială de test care citește date personale.',
+  summary: 'Test expense whose proposals read personal data.',
+  dataClasses: ['books', 'personal'],
+  input: z.object({ reference: z.string(), blocked: z.boolean().default(false) }).strict(),
+  agent: true,
+  subject: (input) => `test:${input.reference}`,
+  plan: () => ({}),
+  evaluate: (input, loaded, rules) =>
+    input.blocked
+      ? {
+          effect: null,
+          issues: [{ code: 'TEST_BLOCKED', severity: 'block' as const, message: 'Blocată.' }],
+        }
+      : warned.evaluate({ reference: input.reference, warnings: [], notes: [] }, loaded, rules),
+};
+
 const open: Scenario[] = [];
-const fresh = async () => {
-  const s = await scenario();
+const fresh = async (options: Parameters<typeof scenario>[0] = {}) => {
+  const s = await scenario(options);
   open.push(s);
   return s;
 };
@@ -31,10 +103,7 @@ describe('company setup', () => {
       control('4423'),
       control('5121'),
     ]).toEqual(['receivable', 'payable', 'tax', 'tax.payable', undefined]);
-    const years = await s.invoke<{ kind: string; from: string; to: string }[]>(
-      s.owner,
-      'years.list',
-    );
+    const years = await s.list<{ kind: string; from: string; to: string }>(s.owner, 'years.list');
     expect(years.map((year) => `${year.kind}:${year.from}:${year.to}`)).toEqual([
       'financial:2026-01-01:2026-12-31',
       'fiscal:2026-01-01:2026-12-31',
@@ -330,7 +399,9 @@ describe('agents', () => {
     expect((await s.refused(s.post(approved, agent)))?.code).toBe('AGENT_SCOPE');
     const listed = await s.invoke<{ capabilities: { id: string }[] }>(agent, 'capabilities.list');
     expect(listed.capabilities.map((capability) => capability.id).sort()).toEqual([
+      'capabilities.describe',
       'capabilities.list',
+      'capabilities.search',
       'ledger.general.propose',
       'proposals.get',
     ]);
@@ -412,6 +483,228 @@ describe('posting policies', () => {
   });
 });
 
+describe('policy warnings', () => {
+  const policyFor = (s: Scenario, rulesHash: string, preconditions: unknown[]) =>
+    s.invoke<{ id: string }>(s.reviewer, 'policies.create', {
+      name: 'Cheltuieli de test',
+      treatments: ['test.warned'],
+      rulesHashes: [rulesHash],
+      preconditions,
+      validFrom: '2026-01-01',
+      expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+    });
+  const propose = (s: Scenario, warnings: string[] = [], notes: string[] = []) =>
+    s.propose('test.warned', { reference: randomUUID(), warnings, notes });
+
+  test('a policy posts only the warnings it names, and the entry shows its binding', async () => {
+    const s = await fresh({ treatments: [warned] });
+    const sample = await propose(s);
+    const policy = await policyFor(s, sample.rulesHash, [
+      { kind: 'acknowledges', codes: ['VAT_FX'] },
+    ]);
+    expect((await propose(s, ['PARTY_INACTIVE'])).status).toBe('proposed');
+    expect((await propose(s, ['VAT_FX', 'PARTY_INACTIVE'])).status).toBe('proposed');
+    const posted = await propose(s, ['VAT_FX'], ['NOTE']);
+    expect(posted.status).toBe('posted');
+    expect(posted.approval).toBeNull();
+    expect(posted.entry).toMatchObject({
+      policyId: policy.id,
+      postedBy: s.owner.actorId,
+      agentId: null,
+    });
+  });
+
+  test('noWarnings refuses every warning but lets notes through', async () => {
+    const s = await fresh({ treatments: [warned] });
+    const sample = await propose(s);
+    await policyFor(s, sample.rulesHash, [
+      { kind: 'noWarnings' },
+      { kind: 'acknowledges', codes: ['VAT_FX'] },
+    ]);
+    expect((await propose(s, ['VAT_FX'])).status).toBe('proposed');
+    expect((await propose(s, [], ['NOTE'])).status).toBe('posted');
+  });
+
+  test('an approved entry shows who posted it and through which agent', async () => {
+    const s = await fresh({ treatments: [warned] });
+    const grant = await s.invoke<{ id: string; token: string }>(s.reviewer, 'agents.issue', {
+      name: 'Asistent',
+      scopes: ['ledger.post'],
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+    });
+    const agent = await s.engine.agents.authenticate(grant.token, s.company.id);
+    const approved = await s.approve(await propose(s, ['VAT_FX']), s.reviewer, ['VAT_FX']);
+    const posted = await s.post(approved, agent);
+    expect(posted.entry).toMatchObject({
+      policyId: null,
+      postedBy: s.reviewer.actorId,
+      agentId: grant.id,
+    });
+    expect(posted.approval?.approverId).toBe(s.reviewer.actorId);
+  });
+});
+
+describe('approval controls', () => {
+  const expense = (evidenceId: string, amount = '10.00', date = '2026-03-10') =>
+    journal(
+      evidenceId,
+      [
+        { account: '628', side: 'D', amount },
+        { account: '5121', side: 'C', amount },
+      ],
+      { date },
+    );
+  const segregate = async (s: Scenario, value: 'on' | 'strict') => {
+    const { id: evidenceId } = await s.evidence('decizie-administrator.pdf');
+    await s.invoke(s.owner, 'profile.record', {
+      axis: 'controls.segregation',
+      value,
+      effectiveFrom: '2026-01-01',
+      evidenceId,
+    });
+  };
+  const decide = (s: Scenario, actor: Actor, request: ActionView) =>
+    s.invoke<ActionView>(actor, 'actions.approve', {
+      id: request.id,
+      previewHash: request.previewHash,
+    });
+  const agentOf = async (s: Scenario, issuer: Actor) => {
+    const grant = await s.invoke<{ token: string }>(issuer, 'agents.issue', {
+      name: 'Asistent',
+      scopes: ['ledger.general.propose', 'periods.close.request'],
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+    });
+    return s.engine.agents.authenticate(grant.token, s.company.id);
+  };
+
+  test('without segregation, one person proposes, approves, posts and closes alone', async () => {
+    const s = await fresh();
+    const { id: evidenceId } = await s.evidence();
+    const proposal = await s.propose('ledger.general', expense(evidenceId));
+    expect((await s.post(await s.approve(proposal, s.owner), s.owner)).status).toBe('posted');
+    const request = await s.close('2026-03');
+    await decide(s, s.owner, request);
+    const closed = await s.invoke<ActionView>(s.owner, 'actions.execute', { id: request.id });
+    expect(closed.status).toBe('executed');
+  });
+
+  test('segregation on: nobody approves their own version; a grant issuer approves its agent', async () => {
+    const s = await fresh();
+    await segregate(s, 'on');
+    const { id: evidenceId } = await s.evidence();
+    const own = await s.propose('ledger.general', expense(evidenceId));
+    const refusal = await s.refused(s.approve(own, s.owner));
+    expect(refusal).toMatchObject({ code: 'SEGREGATION', details: { segregation: 'on' } });
+    expect((await s.approve(own, s.reviewer)).status).toBe('approved');
+    const agent = await agentOf(s, s.reviewer);
+    const drafted = await s.propose('ledger.general', expense(evidenceId, '11.00'), agent);
+    expect((await s.approve(drafted, s.reviewer)).status).toBe('approved');
+  });
+
+  test('segregation on: an action is approved by someone other than who requested it', async () => {
+    const s = await fresh();
+    await segregate(s, 'on');
+    const first = await s.close('2026-03');
+    expect((await s.refused(decide(s, s.owner, first)))?.code).toBe('SEGREGATION');
+    const rejected = await s.invoke<ActionView>(s.owner, 'actions.reject', {
+      id: first.id,
+      previewHash: first.previewHash,
+      reason: 'Cerută din greșeală',
+    });
+    expect(rejected.status).toBe('rejected');
+    const second = await s.close('2026-03');
+    await decide(s, s.reviewer, second);
+    const closed = await s.invoke<ActionView>(s.owner, 'actions.execute', { id: second.id });
+    expect(closed.status).toBe('executed');
+  });
+
+  test('segregation strict: nobody approves what their own agent prepared', async () => {
+    const s = await fresh();
+    await segregate(s, 'strict');
+    const { id: evidenceId } = await s.evidence();
+    const agent = await agentOf(s, s.reviewer);
+    const drafted = await s.propose('ledger.general', expense(evidenceId), agent);
+    expect(await s.refused(s.approve(drafted, s.reviewer))).toMatchObject({
+      code: 'SEGREGATION',
+      details: { segregation: 'strict' },
+    });
+    expect((await s.post(await s.approve(drafted, s.owner))).status).toBe('posted');
+    const request = await s.invoke<ActionView>(agent, 'periods.close.request', {
+      month: '2026-03',
+    });
+    expect((await s.refused(decide(s, s.reviewer, request)))?.code).toBe('SEGREGATION');
+    expect((await decide(s, s.owner, request)).status).toBe('approved');
+  });
+
+  test('segregation on: a policy does not post the work of the person who approved it', async () => {
+    const s = await fresh();
+    await segregate(s, 'on');
+    const { id: evidenceId } = await s.evidence();
+    const sample = await s.propose('ledger.general', expense(evidenceId, '1.00'), s.reviewer);
+    const policy = await s.invoke<{ id: string }>(s.reviewer, 'policies.create', {
+      name: 'Comisioane bancare mici',
+      treatments: ['ledger.general'],
+      rulesHashes: [sample.rulesHash],
+      preconditions: [{ kind: 'maxLineAmount', amount: '100.00' }],
+      validFrom: '2026-01-01',
+      expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+    });
+    const own = await s.propose('ledger.general', expense(evidenceId, '2.00'), s.reviewer);
+    expect(own.status).toBe('proposed');
+    const others = await s.propose('ledger.general', expense(evidenceId, '3.00'));
+    expect(others.status).toBe('posted');
+    expect(others.entry?.policyId).toBe(policy.id);
+  });
+
+  test('an approval stops counting once its giver loses authority', async () => {
+    const s = await fresh();
+    const { id: evidenceId } = await s.evidence();
+    const request = await s.close('2026-03');
+    await decide(s, s.reviewer, request);
+    const approved = await s.approve(
+      await s.propose('ledger.general', expense(evidenceId, '10.00', '2026-04-10')),
+    );
+    await s.invoke(s.owner, 'company.revoke', { userId: s.reviewer.actorId });
+    // Coming back is a new membership epoch: the earlier approvals stay void.
+    await s.join(s.reviewer.actorId, 'reviewer');
+    const execute = await s.refused(s.invoke(s.owner, 'actions.execute', { id: request.id }));
+    expect(execute?.code).toBe('APPROVER_INACTIVE');
+    expect((await s.refused(s.post(approved, s.owner)))?.code).toBe('APPROVER_INACTIVE');
+  });
+});
+
+describe('proposal documents', () => {
+  test('a proposal records the document its subject names', async () => {
+    const s = await fresh();
+    const { id: evidenceId } = await s.invoke<{ id: string }>(s.owner, 'evidence.record', {
+      filename: 'INV-1.xml',
+      mediaType: 'application/xml',
+      base64: Buffer.from(invoiceXml({ number: 'INV-1', date: '2026-03-10' })).toString('base64'),
+    });
+    const document = await s.invoke<{ id: string }>(s.owner, 'invoices.import', { evidenceId });
+    const recognized = await s.propose('invoices.recognize', {
+      documentId: document.id,
+      account: '628',
+    });
+    const general = await s.propose('ledger.general', journalOf(evidenceId));
+    const documentOf = async (proposal: ProposalView) =>
+      (
+        await s.db.orm
+          .select({ documentId: proposals.documentId })
+          .from(proposals)
+          .where(and(eq(proposals.companyId, s.company.id), eq(proposals.id, proposal.id)))
+      )[0]?.documentId;
+    expect(await documentOf(recognized)).toBe(document.id);
+    expect(await documentOf(general)).toBeNull();
+  });
+});
+
+const journalOf = (evidenceId: string) =>
+  journal(evidenceId, [
+    { account: '628', side: 'D', amount: '5.00' },
+    { account: '5121', side: 'C', amount: '5.00' },
+  ]);
+
 describe('periods', () => {
   test('a month closes only through an approved, unchanged preview', async () => {
     const s = await fresh();
@@ -459,9 +752,7 @@ describe('periods', () => {
     expect(closed.status).toBe('executed');
     const late = await s.propose('ledger.general', entry('2026-03-31', '10.00'));
     expect(late.issues.map((issue) => issue.code)).toEqual(['PERIOD_CLOSED']);
-    expect(await s.invoke(s.owner, 'periods.list')).toEqual([
-      { month: '2026-03', state: 'closed' },
-    ]);
+    expect(await s.list(s.owner, 'periods.list')).toEqual([{ month: '2026-03', state: 'closed' }]);
   });
 
   test('a later entry makes an approved close stale', async () => {
@@ -514,5 +805,109 @@ describe('periods', () => {
       },
     );
     expect(reopen.preview.findings.map((item) => item.code)).toEqual(['LATER_CLOSED']);
+  });
+});
+
+describe('reading proposals', () => {
+  test('a proposal shows its input and basis to whoever may read every data class of its treatment', async () => {
+    const s = await fresh({ treatments: [warned, personal] });
+    const { id: evidenceId } = await s.evidence();
+    const books = await s.propose(
+      'ledger.general',
+      journal(evidenceId, [
+        { account: '628', side: 'D', amount: '42.00' },
+        { account: '5121', side: 'C', amount: '42.00' },
+      ]),
+    );
+    const sensitive = await s.propose('test.personal', { reference: 'P-1', blocked: true });
+    // A person answers a question the sensitive proposal then relies on.
+    const asked = await s.invoke<{ id: string }>(s.owner, 'questions.ask', {
+      kind: 'choice',
+      subject: { kind: 'proposal', id: sensitive.id },
+      params: {
+        question: 'Se înregistrează?',
+        options: [
+          { value: 'yes', label: 'Da' },
+          { value: 'no', label: 'Nu' },
+        ],
+      },
+    });
+    await s.invoke(s.owner, 'questions.answer', { questionId: asked.id, value: { value: 'yes' } });
+    const revised = await s.invoke<ProposalView>(s.owner, 'proposals.revise', {
+      proposalId: sensitive.id,
+      version: 1,
+      input: { reference: 'P-1', blocked: true },
+      basis: { answers: [asked.id] },
+    });
+    // What proposing returns is unchanged: no input.
+    expect(books.input).toBeUndefined();
+    expect(revised.basis?.answers).toEqual([expect.objectContaining({ questionId: asked.id })]);
+
+    const read = (actor: Actor, id: string) =>
+      s.invoke<ProposalView>(actor, 'proposals.get', { id });
+    const agent = async (scopes: string[]) => {
+      const grant = await s.invoke<{ token: string }>(s.reviewer, 'agents.issue', {
+        name: 'Asistent',
+        scopes,
+        expiresAt: s.expiresIn(7),
+      });
+      return s.engine.agents.authenticate(grant.token, s.company.id);
+    };
+    // People read every input: roles carry no data-class rules.
+    const whole = await read(s.viewer, revised.id);
+    expect(whole).toMatchObject({
+      version: 2,
+      input: { reference: 'P-1', blocked: true },
+      basis: {
+        answers: [expect.objectContaining({ questionId: asked.id, value: { value: 'yes' } })],
+      },
+    });
+    expect(whole.redacted).toBeUndefined();
+    const journalInput = (await read(s.owner, books.id)).input!;
+    expect(journalInput).toMatchObject({ evidenceId, purpose: 'general' });
+
+    // An agent whose reads cover the books but not personal data: the books' input, and the
+    // personal proposal redacted, in reads, lists and the worklist alike.
+    const narrow = await agent(['toolset:review', 'test.personal.revise']);
+    expect((await read(narrow, books.id)).input).toEqual(journalInput);
+    expect(await read(narrow, revised.id)).toMatchObject({
+      id: revised.id,
+      status: 'blocked',
+      input: null,
+      basis: null,
+      redacted: true,
+    });
+    const list = (actor: Actor, input: Record<string, unknown> = {}) =>
+      s.list<ProposalView>(actor, 'proposals.list', input);
+    expect((await list(narrow)).map((view) => 'input' in view)).toEqual([false, false]);
+    expect(
+      (await list(narrow, { withInput: true })).map((view) => [view.input, view.redacted]),
+    ).toEqual([
+      [journalInput, undefined],
+      [null, true],
+    ]);
+    const revise = async (actor: Actor) =>
+      (await s.list<WorkItem>(actor, 'work.list', { kinds: ['proposal.blocked'], limit: 200 }))
+        .find((item) => item.subject.id === revised.id)!
+        .next.find((step) => step.operation === 'proposals.revise')!;
+    expect(await revise(narrow)).toEqual({
+      operation: 'proposals.revise',
+      by: 'agent',
+      allowed: true,
+      inputHint: { proposalId: revised.id, version: 2 },
+    });
+    expect((await revise(s.owner)).inputHint).toEqual({
+      proposalId: revised.id,
+      version: 2,
+      input: { reference: 'P-1', blocked: true },
+    });
+
+    // A read that covers personal data (questions.list) discloses it.
+    const wide = await agent(['toolset:review', 'test.personal.revise', 'questions.list']);
+    expect(await read(wide, revised.id)).toMatchObject({
+      input: { reference: 'P-1', blocked: true },
+      basis: { answers: [expect.objectContaining({ questionId: asked.id })] },
+    });
+    expect((await revise(wide)).inputHint).toMatchObject({ input: { reference: 'P-1' } });
   });
 });

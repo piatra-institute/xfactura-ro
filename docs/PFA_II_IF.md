@@ -412,7 +412,7 @@ See §1.5: an annual table per source.
 | D300, D394, D390 | VAT payer | existing, unchanged |
 | D301 / art. 317 | non-payer buying EU services | not built (B1) |
 | D100 / D205 | only if the PFA withholds tax at source (open question 6) | existing writers |
-| D406 SAF-T | applicability to individuals is open question 7 | existing writer |
+| D406 SAF-T | applicability to individuals is open question 7 | existing writer; the closure lists it UNSUPPORTED (`D406_INDIVIDUAL`) for a PFA, II or IF at the periods a company would file it, until answered: never assumed either way |
 | S1005 | **not applicable** (OMFP 170 cap. II pct. 11) | block by `entity.form` |
 | D101, micro tax, dividends | not applicable | block |
 

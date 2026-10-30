@@ -54,10 +54,7 @@ describe('submissions', () => {
       uploadId: submitted.uploadId,
     });
     expect((await sync('2026-03-10T00:00:00Z')).outcomes).toEqual({ matched: 1 });
-    const [message] = await s.invoke<{ kind: string; documentId: string }[]>(
-      s.owner,
-      'spv.messages',
-    );
+    const [message] = await s.list<{ kind: string; documentId: string }>(s.owner, 'spv.messages');
     expect(message).toMatchObject({ kind: 'sent', documentId: invoice.documentId });
   });
 
@@ -69,7 +66,7 @@ describe('submissions', () => {
     expect(rejected.state).toBe('rejected');
     expect(rejected.detail).toContain('BR-RO-100');
     expect((await submit(invoice.documentId)).state).toBe('submitted');
-    const all = await s.invoke<Submission[]>(s.owner, 'spv.submissions');
+    const all = await s.list<Submission>(s.owner, 'spv.submissions');
     expect(all.map((item) => item.state)).toEqual(['rejected', 'submitted']);
   });
 
@@ -87,7 +84,7 @@ describe('submissions', () => {
     const synced = await sync('2026-03-10T00:00:00Z');
     expect(synced.submissions).toEqual({ [uncertain.id]: 'accepted' });
     expect(synced.outcomes).toEqual({ reconciled: 1 });
-    const [resolved] = await s.invoke<Submission[]>(s.owner, 'spv.submissions');
+    const [resolved] = await s.list<Submission>(s.owner, 'spv.submissions');
     expect(resolved).toMatchObject({ state: 'accepted', uploadId: fake.uploads[0]!.uploadId });
   });
 
@@ -105,7 +102,7 @@ describe('submissions', () => {
     expect((await submit(invoice.documentId)).state).toBe('submitted');
     expect(fake.uploads.length).toBe(1);
     expect(
-      (await s.invoke<Submission[]>(s.owner, 'spv.submissions')).map((item) => item.state),
+      (await s.list<Submission>(s.owner, 'spv.submissions')).map((item) => item.state),
     ).toEqual(['absent', 'submitted']);
   });
 
@@ -147,7 +144,7 @@ describe('inbox', () => {
     const first = await sync('2026-03-10T00:00:00Z');
     expect([first.listed, first.outcomes]).toEqual([2, { created: 2 }]);
     expect((await sync('2026-03-10T00:00:00Z')).recorded).toBe(0);
-    const purchases = await s.invoke<{ number: string }[]>(s.owner, 'documents.list', {
+    const purchases = await s.list<{ number: string }>(s.owner, 'documents.list', {
       kinds: ['invoice.received'],
     });
     expect(purchases.map((item) => item.number).sort()).toEqual(['F-10', 'F-11']);
@@ -204,7 +201,7 @@ describe('inbox', () => {
       differs: 1,
       created: 1,
     });
-    const messages = await s.invoke<{ outcome: string; detail: string | null }[]>(
+    const messages = await s.list<{ outcome: string; detail: string | null }>(
       s.owner,
       'spv.messages',
     );

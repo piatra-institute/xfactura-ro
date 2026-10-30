@@ -1,5 +1,8 @@
 import { inflateSync } from 'node:zlib';
 
+/** No attachment inflates past the evidence size limit, so a compression bomb fails fast. */
+const MAX_INFLATED = 64 * 1024 * 1024;
+
 /**
  * Files attached to a PDF, as ANAF's tools attach a declaration's XML to its PDF. Reads the
  * file specifications (`/F` or `/UF` names with an `/EF` stream) and their embedded-file
@@ -31,9 +34,12 @@ export function pdfAttachments(bytes: Uint8Array): { name: string; bytes: Uint8A
     if (!Number.isFinite(length)) return undefined;
     const offset = object.start + marker.index + marker[0].length;
     const raw = Buffer.from(text.slice(offset, offset + length), 'latin1');
-    return /\/FlateDecode/.test(dictionary)
-      ? new Uint8Array(inflateSync(raw))
-      : new Uint8Array(raw);
+    if (!/\/FlateDecode/.test(dictionary)) return new Uint8Array(raw);
+    try {
+      return new Uint8Array(inflateSync(raw, { maxOutputLength: MAX_INFLATED }));
+    } catch {
+      return undefined;
+    }
   };
   const attachments: { name: string; bytes: Uint8Array }[] = [];
   for (const { body } of objects.values()) {

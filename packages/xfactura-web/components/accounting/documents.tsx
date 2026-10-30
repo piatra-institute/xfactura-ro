@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { companyPath, field, formatMoney } from './api';
-import { useLoad, useWorkspace } from './workspace';
+import { useList, useWorkspace } from './workspace';
 
 type Document = {
   id: string;
@@ -21,7 +21,7 @@ const kindLabels: Record<string, string> = {
 
 export default function Documents() {
   const { company, can, evidence, upload, invoke, act, year } = useWorkspace();
-  const { data: documents } = useLoad<Document[]>('documents.list', {});
+  const { data: documents } = useList<Document>('documents.list', {});
   const [busy, setBusy] = useState(false);
   const run = async (action: () => Promise<unknown>, success: string) => {
     setBusy(true);

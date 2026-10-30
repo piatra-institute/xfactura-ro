@@ -1,0 +1,1147 @@
+import { and, asc, desc, eq, gte, inArray, lte, ne, sql } from 'drizzle-orm';
+import { z } from 'zod';
+import { canonical, hashOf } from 'xfactura-core/hash';
+import type { ProfileFact } from 'xfactura-core/kernel';
+import { s1005FromLedger, type S1005LedgerEntry } from 'xfactura-core/ro/annual/s1005-accounts';
+import {
+  average,
+  confirmQuestion,
+  determineYear,
+  evaluateClosure,
+  figuresQuestion,
+  microQuestion,
+  monthlyHeadcount,
+  recordedAt,
+  recordedInYear,
+  thresholdWatches,
+  yearlyAxes,
+  type Closure,
+  type ClosureBooks,
+  type Contract,
+  type Determination,
+  type DeterminationContext,
+  type Known,
+  type ThresholdWatch,
+  type YearActivity,
+  type YearFigures,
+} from 'xfactura-core/ro/determinations';
+import { euVatPrefixes } from 'xfactura-core/ro/geo';
+import {
+  microConditionsAnswer,
+  type MicroConditionsAnswer,
+  type QuestionRequest,
+  type YearFigureName,
+} from 'xfactura-core/questions/kinds';
+import type { RuleContext } from 'xfactura-core/rules';
+import { bucharestDate, type LocalDate } from 'xfactura-core/time';
+import type { Transaction } from '../db/database';
+import {
+  documents,
+  employmentTerms,
+  entries,
+  fiscalYears,
+  fxRates,
+  incomeSources,
+  lines,
+  parties,
+  payrollLines,
+  payrollRunEvents,
+  payrollRuns,
+  profileFacts,
+  proposals,
+  questionAnswers,
+  questions,
+  questionWithdrawals,
+  taxEntries,
+} from '../db/schema';
+import type { Actor, Commands } from '../kernel/commands';
+import { standing } from './questions';
+
+/*
+ * The yearly determinations and the obligation closure, fed from the books (core
+ * `ro/determinations` is pure): each year's figures (turnover, revenues, VAT bases, total assets,
+ * headcount, the BNR rate at the close), the employment contracts, the answers people gave, and
+ * what the books show over a range of months. `determinations.propose` opens the questions a
+ * person answers: the computed facts to confirm, and what only the owner knows.
+ */
+
+const yearInput = z.number().int().min(2016).max(2100);
+export const determinationsInput = z.object({ year: yearInput }).strict();
+export const closureInput = z
+  .object({
+    from: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+    to: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+  })
+  .strict()
+  .refine((input) => input.from <= input.to, {
+    message: 'Luna de început este după cea de sfârșit.',
+  })
+  .refine((input) => Number(input.to.slice(0, 4)) - Number(input.from.slice(0, 4)) <= 2, {
+    message: 'Închiderea cuprinde cel mult trei ani calendaristici.',
+  });
+
+const questionView = z.object({
+  kind: z.string(),
+  subject: z.object({ kind: z.string(), id: z.string() }),
+  params: z.record(z.string(), z.unknown()),
+});
+export const determinationView = z.object({
+  axis: z.string(),
+  year: z.number(),
+  status: z.enum(['proposed', 'needs_evidence', 'unsupported', 'rule_gap', 'not_applicable']),
+  value: z.string().nullable(),
+  effectiveFrom: z.string(),
+  changes: z.array(z.object({ value: z.string(), effectiveFrom: z.string(), reason: z.string() })),
+  summary: z.string(),
+  lines: z.array(z.string()),
+  inputs: z.record(z.string(), z.unknown()),
+  clauses: z.array(z.string()),
+  versions: z.array(z.string()),
+  questions: z.array(questionView),
+  dependsOn: z.array(z.string()),
+  unsupported: z
+    .object({ trigger: z.string(), message: z.string(), capabilities: z.array(z.string()) })
+    .nullable(),
+  fingerprint: z.string(),
+  /** The facts recorded within the year on this axis, and whether they agree with the
+   * computation (or were confirmed against it). */
+  recorded: z.object({
+    values: z.array(z.object({ value: z.string(), effectiveFrom: z.string() })),
+    confirmed: z.boolean(),
+    agrees: z.boolean().nullable(),
+  }),
+});
+export const watchView = z.object({
+  key: z.string(),
+  axis: z.string(),
+  year: z.number(),
+  limit: z.string(),
+  value: z.string(),
+  percent: z.number(),
+  clauses: z.array(z.string()),
+  message: z.string(),
+});
+export const determinationsView = z.object({
+  year: z.number(),
+  determinations: z.array(determinationView),
+  watches: z.array(watchView),
+});
+export const proposeView = determinationsView.extend({
+  asked: z.array(
+    questionView.extend({ questionId: z.string(), reused: z.boolean(), answered: z.boolean() }),
+  ),
+  withdrawn: z.array(z.string()),
+});
+const obligationItem = z.object({
+  kind: z.string(),
+  deadline: z.string().nullable(),
+  period: z.string(),
+  deadlinePeriod: z.string().nullable(),
+  state: z.enum(['applies', 'needs_evidence', 'unsupported']),
+  rule: z.string(),
+  clauses: z.array(z.string()),
+  facts: z.array(z.string()),
+  blockers: z.array(z.string()),
+});
+export const closureView = z.object({
+  version: z.string(),
+  rulesHash: z.string(),
+  interval: z.object({ from: z.string(), to: z.string() }),
+  status: z.enum(['ELIGIBLE', 'NEEDS_EVIDENCE', 'UNSUPPORTED']),
+  obligations: z.array(obligationItem),
+  needs: z.array(
+    z.object({
+      id: z.string(),
+      code: z.string(),
+      fact: z.string(),
+      message: z.string(),
+      question: questionView,
+      rules: z.array(z.string()),
+    }),
+  ),
+  unsupported: z.array(
+    z.object({
+      trigger: z.string(),
+      message: z.string(),
+      missingCapabilities: z.array(z.string()),
+      evidenceIds: z.array(z.string()),
+      rule: z.string(),
+      resolution: z.string(),
+    }),
+  ),
+  gaps: z.array(
+    z.object({
+      code: z.string(),
+      rules: z.array(z.string()),
+      slots: z.array(z.string()),
+      message: z.string(),
+    }),
+  ),
+  trace: z.array(
+    z.object({
+      rule: z.string(),
+      iteration: z.number(),
+      read: z.array(z.string()),
+      produced: z.array(z.string()),
+    }),
+  ),
+});
+
+const pad = (value: number) => String(value).padStart(2, '0');
+const lastDay = (month: string) =>
+  new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0))
+    .toISOString()
+    .slice(0, 10);
+const debit = sql<bigint>`sum(CASE WHEN ${lines.side} = 'D' THEN ${lines.bani} ELSE 0 END)`.mapWith(
+  BigInt,
+);
+const credit =
+  sql<bigint>`sum(CASE WHEN ${lines.side} = 'C' THEN ${lines.bani} ELSE 0 END)`.mapWith(BigInt);
+const lineEntry = and(eq(entries.companyId, lines.companyId), eq(entries.id, lines.entryId));
+const known = <T>(value: T, source: 'books' | 'answer', ref: string | null = null): Known<T> => ({
+  known: true,
+  value,
+  source,
+  ref,
+});
+const unknown = <T>(reason: string, question: QuestionRequest | null): Known<T> => ({
+  known: false,
+  reason,
+  question,
+});
+
+/** The recorded facts, superseded ones left out, with their ids and evidence. */
+async function factRows(tx: Transaction, companyId: string) {
+  const rows = await tx
+    .select()
+    .from(profileFacts)
+    .where(eq(profileFacts.companyId, companyId))
+    .orderBy(asc(profileFacts.effectiveFrom), asc(profileFacts.createdAt), asc(profileFacts.id));
+  const superseded = new Set(rows.map((row) => row.supersedesId).filter(Boolean));
+  return rows.filter((row) => !superseded.has(row.id));
+}
+const asFacts = (rows: Awaited<ReturnType<typeof factRows>>): ProfileFact[] =>
+  rows.map((row) => ({
+    axis: row.axis,
+    value: row.value,
+    effectiveFrom: row.effectiveFrom as LocalDate,
+  }));
+
+/**
+ * The fingerprint each yearly fact was confirmed against: a fact recorded by an answer to a
+ * `determination.confirm` question cites the answer as evidence, and the question holds the
+ * fingerprint of the computation shown.
+ */
+async function confirmations(
+  tx: Transaction,
+  companyId: string,
+  rows: Awaited<ReturnType<typeof factRows>>,
+) {
+  const evidenceIds = [...new Set(rows.map((row) => row.evidenceId))];
+  if (!evidenceIds.length) return {};
+  const answered = await tx
+    .select({ params: questions.params })
+    .from(questionAnswers)
+    .innerJoin(
+      questions,
+      and(
+        eq(questions.companyId, questionAnswers.companyId),
+        eq(questions.id, questionAnswers.questionId),
+      ),
+    )
+    .where(
+      and(
+        eq(questionAnswers.companyId, companyId),
+        eq(questions.kind, 'determination.confirm'),
+        inArray(questionAnswers.evidenceId, evidenceIds),
+      ),
+    )
+    // In the engine's time of the answers, never the database's: the latest confirmation holds.
+    .orderBy(sql`coalesce(${questionAnswers.engineAt}, 0)`, asc(questionAnswers.id));
+  const result: Record<string, string> = {};
+  for (const row of answered) {
+    const params = JSON.parse(row.params) as { axis: string; year: number; fingerprint: string };
+    result[`${params.axis}/${params.year}`] = params.fingerprint;
+  }
+  return result;
+}
+
+/** Each contract's latest terms. */
+async function contractsOf(tx: Transaction, companyId: string): Promise<Contract[]> {
+  const rows = await tx
+    .select()
+    .from(employmentTerms)
+    .where(eq(employmentTerms.companyId, companyId))
+    .orderBy(asc(employmentTerms.contractId), asc(employmentTerms.seq));
+  const latest = new Map<string, (typeof rows)[number]>();
+  for (const row of rows) latest.set(row.contractId, row);
+  return [...latest.values()].map((row) => ({
+    employeeId: row.employeeId,
+    start: row.startDate as LocalDate,
+    end: (row.endDate as LocalDate | null) ?? null,
+    dailyHours: row.dailyHours,
+  }));
+}
+
+/** The latest answer to a question of a kind about a subject. */
+async function latestAnswers(tx: Transaction, companyId: string, kind: string, subjectId: string) {
+  return (
+    tx
+      .select({ value: questionAnswers.value, evidenceId: questionAnswers.evidenceId })
+      .from(questionAnswers)
+      .innerJoin(
+        questions,
+        and(
+          eq(questions.companyId, questionAnswers.companyId),
+          eq(questions.id, questionAnswers.questionId),
+        ),
+      )
+      .where(
+        and(
+          eq(questionAnswers.companyId, companyId),
+          eq(questions.kind, kind),
+          eq(questions.subjectKind, 'year'),
+          eq(questions.subjectId, subjectId),
+        ),
+      )
+      // In the engine's time of the answers (one recorded before it kept it counts as the
+      // earliest), then by the question's own order.
+      .orderBy(
+        sql`coalesce(${questionAnswers.engineAt}, 0)`,
+        asc(questionAnswers.seq),
+        asc(questionAnswers.id),
+      )
+  );
+}
+
+/** Whether the engine keeps a year's books from 1 January: a financial year starting then. */
+async function keeps(tx: Transaction, companyId: string, year: number) {
+  const [row] = await tx
+    .select({ id: fiscalYears.id })
+    .from(fiscalYears)
+    .where(
+      and(
+        eq(fiscalYears.companyId, companyId),
+        eq(fiscalYears.kind, 'financial'),
+        lte(fiscalYears.from, `${year}-01-01`),
+        gte(fiscalYears.to, `${year}-12-31`),
+      ),
+    );
+  return Boolean(row);
+}
+
+/** The year's turnover of classes 6 and 7 by account, without the closing journal. */
+async function yearTurnover(tx: Transaction, companyId: string, from: string, to: string) {
+  return tx
+    .select({ account: lines.account, debit, credit })
+    .from(lines)
+    .innerJoin(entries, lineEntry)
+    .where(
+      and(
+        eq(lines.companyId, companyId),
+        gte(entries.date, from),
+        lte(entries.date, to),
+        sql`substr(${lines.account}, 1, 1) = '7'`,
+        ne(entries.journalCode, 'INCHIDERE'),
+      ),
+    )
+    .groupBy(lines.account);
+}
+const netCredit = (
+  rows: readonly { account: string; debit: bigint; credit: bigint }[],
+  test: (account: string) => boolean,
+) => rows.filter((row) => test(row.account)).reduce((sum, row) => sum + row.credit - row.debit, 0n);
+
+/**
+ * Each day's supplies in the two VAT bases:
+ * - art. 310 alin. (2), the small-enterprise threshold: the revenue booked on 70x (net of 709)
+ *   on the day, less the supplies with the place abroad (EXP-… tax entries). A non-payer's sales
+ *   carry no VAT tax entries, so the revenue is the measure; selling fixed or intangible assets
+ *   (7583) is left out, as the article leaves it out;
+ * - art. 282 alin. (3^1) and art. 322 alin. (2): the bases of the output tax entries, taxable
+ *   (S-…) and abroad with a right of deduction (EXP-…), by tax point.
+ */
+async function outputBases(tx: Transaction, companyId: string, from: string, to: string) {
+  const taxed = await tx
+    .select({
+      date: taxEntries.taxPoint,
+      code: taxEntries.code,
+      base: sql<bigint>`sum(${taxEntries.baseBani})`.mapWith(BigInt),
+    })
+    .from(taxEntries)
+    .where(
+      and(
+        eq(taxEntries.companyId, companyId),
+        eq(taxEntries.tax, 'VAT'),
+        eq(taxEntries.direction, 'output'),
+        gte(taxEntries.taxPoint, from),
+        lte(taxEntries.taxPoint, to),
+      ),
+    )
+    .groupBy(taxEntries.taxPoint, taxEntries.code);
+  const revenue = await tx
+    .select({ date: entries.date, debit, credit })
+    .from(lines)
+    .innerJoin(entries, lineEntry)
+    .where(
+      and(
+        eq(lines.companyId, companyId),
+        gte(entries.date, from),
+        lte(entries.date, to),
+        sql`substr(${lines.account}, 1, 2) = '70'`,
+        ne(entries.journalCode, 'INCHIDERE'),
+      ),
+    )
+    .groupBy(entries.date);
+  const days = new Map<string, { date: LocalDate; exemption: bigint; vat: bigint }>();
+  const day = (date: string) => {
+    const found = days.get(date) ?? { date: date as LocalDate, exemption: 0n, vat: 0n };
+    days.set(date, found);
+    return found;
+  };
+  for (const row of revenue) day(row.date).exemption += row.credit - row.debit;
+  for (const row of taxed) {
+    if (row.code.startsWith('EXP-')) day(row.date).exemption -= row.base;
+    if (row.code.startsWith('S-') || row.code.startsWith('EXP-')) day(row.date).vat += row.base;
+  }
+  return [...days.values()].sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/** Total assets at a date: balance sheet A–C of the abridged balance sheet (OMFP pct. 15). */
+async function totalAssets(tx: Transaction, companyId: string, date: string) {
+  const partner = sql<
+    string | null
+  >`CASE WHEN ${lines.openItemId} IS NOT NULL THEN ${lines.partyId} END`;
+  const rows = await tx
+    .select({ account: lines.account, partner, debit, credit })
+    .from(lines)
+    .innerJoin(entries, lineEntry)
+    .where(and(eq(lines.companyId, companyId), lte(entries.date, date)))
+    .groupBy(lines.account, partner);
+  // Accounts the form spreads over two asset rows: either row counts the same in the total.
+  const assetRows: Record<string, '07' | '11' | '03'> = { '508': '07', '471': '11', '267': '03' };
+  const closing: S1005LedgerEntry[] = rows
+    .filter((row) => row.debit !== row.credit && '12345'.includes(row.account[0]!))
+    .map((row) => {
+      const rowOf = Object.entries(assetRows).find(([prefix]) => row.account.startsWith(prefix));
+      return {
+        account: row.account,
+        debit: row.debit > row.credit ? row.debit - row.credit : 0n,
+        credit: row.credit > row.debit ? row.credit - row.debit : 0n,
+        ...(rowOf ? { rows: { F10: rowOf[1] } } : {}),
+      };
+    });
+  const mapped = s1005FromLedger({ closing, turnover: [] });
+  const unplaced = mapped.issues.filter((issue) =>
+    ['S1005_SPLIT', 'S1005_UNMAPPED', 'S1005_ROW'].includes(issue.code),
+  );
+  if (unplaced.length) return { unplaced: unplaced.map((issue) => issue.message) };
+  const asset = ['01', '02', '03', '05', '06a', '06b', '07', '08', '11', '12'] as const;
+  return {
+    lei: asset.reduce((sum, row) => sum + BigInt(mapped.F10[row] ?? 0), 0n) * 100n,
+  };
+}
+
+/** The BNR EUR rate valid at a year's close: the publication on or before 31 December. */
+async function closingRate(tx: Transaction, year: number) {
+  const [row] = await tx
+    .select()
+    .from(fxRates)
+    .where(
+      and(
+        eq(fxRates.source, 'BNR'),
+        eq(fxRates.currency, 'EUR'),
+        lte(fxRates.rateDate, `${year}-12-31`),
+        gte(fxRates.rateDate, `${year}-12-24`),
+      ),
+    )
+    .orderBy(desc(fxRates.rateDate), desc(fxRates.revision))
+    .limit(1);
+  return row;
+}
+
+/** Whether invoices from EU suppliers in a year were all booked as services. */
+async function euGoodsUnknown(tx: Transaction, companyId: string, year: number) {
+  const eu = Object.keys(euVatPrefixes).filter((code) => code !== 'RO');
+  const rows = await tx
+    .select({ id: documents.id })
+    .from(documents)
+    .innerJoin(
+      parties,
+      and(eq(parties.companyId, documents.companyId), eq(parties.id, documents.partyId)),
+    )
+    .where(
+      and(
+        eq(documents.companyId, companyId),
+        eq(documents.kind, 'invoice.received'),
+        inArray(parties.country, eu),
+        gte(documents.docDate, `${year}-01-01`),
+        lte(documents.docDate, `${year}-12-31`),
+        sql`not exists (select 1 from ${taxEntries} t where t.company_id = ${documents.companyId}
+          and t.document_id = ${documents.id} and t.code = 'RC-EU-SERV')`,
+      ),
+    )
+    .limit(1);
+  return rows.length > 0;
+}
+
+/** A year's figures: from the books when the engine keeps the year, else from the answers. */
+async function figuresOf(
+  tx: Transaction,
+  companyId: string,
+  year: number,
+  contracts: readonly Contract[],
+  today: LocalDate,
+): Promise<YearFigures> {
+  const kept = await keeps(tx, companyId, year);
+  const from = `${year}-01-01`;
+  const to = `${year}-12-31`;
+  const ended = to < today;
+  const answers = await latestAnswers(tx, companyId, 'year.figures', String(year));
+  const answered = new Map<YearFigureName, { value: string; evidenceId: string }>();
+  for (const row of answers)
+    for (const [name, value] of Object.entries(
+      (JSON.parse(row.value) as { values: Record<string, string> }).values,
+    ))
+      answered.set(name as YearFigureName, { value, evidenceId: row.evidenceId });
+  // Every figure the books lack names one question: the year's figures, all of them.
+  const missing: YearFigureName[] = [];
+  const pending: { name: YearFigureName; figure: { question: QuestionRequest | null } }[] = [];
+  const fromAnswer = <T>(name: YearFigureName, parse: (value: string) => T): Known<T> => {
+    const answer = answered.get(name);
+    if (answer) return known(parse(answer.value), 'answer', answer.evidenceId);
+    if (!missing.includes(name)) missing.push(name);
+    const figure = {
+      known: false as const,
+      reason: `${kept ? 'Registrele nu dau' : `Anul ${year} nu este în registre`}: ${name} se ia din situațiile și declarațiile depuse pentru ${year}.`,
+      question: null as QuestionRequest | null,
+    };
+    pending.push({ name, figure });
+    return figure;
+  };
+  const bani = (value: string) => BigInt(Math.round(Number(value) * 100));
+  const rate = await closingRate(tx, year);
+  const eurRate: Known<YearFigures['eurRate'] extends Known<infer T> ? T : never> = rate
+    ? known(
+        { rate: rate.rate, multiplier: rate.multiplier, date: rate.rateDate },
+        'books',
+        `BNR ${rate.rateDate}`,
+      )
+    : unknown(`Cursul BNR al EUR valabil la 31.12.${year} nu este importat (fx.importBnr).`, null);
+  let figures: YearFigures;
+  if (kept) {
+    const turnover = await yearTurnover(tx, companyId, from, to);
+    const days = await outputBases(tx, companyId, from, to);
+    const headcount = monthlyHeadcount(contracts, year);
+    const withEmployees = headcount.filter((count) => count > 0);
+    const assets = ended ? await totalAssets(tx, companyId, to) : null;
+    figures = {
+      year,
+      kept,
+      turnover: known(
+        netCredit(turnover, (account) => account.startsWith('70')),
+        'books',
+      ),
+      netTurnover: known(
+        netCredit(turnover, (account) => account.startsWith('70') || account.startsWith('7411')),
+        'books',
+      ),
+      totalRevenue: known(
+        netCredit(turnover, () => true),
+        'books',
+      ),
+      vatTurnover: known(
+        days.reduce((sum, day) => sum + day.vat, 0n),
+        'books',
+      ),
+      exemptionTurnover: known(
+        days.reduce((sum, day) => sum + day.exemption, 0n),
+        'books',
+      ),
+      totalAssets: !assets
+        ? unknown(
+            `Exercițiul ${year} nu s-a încheiat: totalul activelor se citește la 31.12.${year}.`,
+            null,
+          )
+        : assets.lei !== undefined
+          ? known(assets.lei, 'books')
+          : fromAnswer('totalAssets', bani),
+      averageEmployees: known(
+        average(
+          headcount.reduce((sum, n) => sum + n, 0),
+          12,
+        ),
+        'books',
+      ),
+      averageEmployeesD112: known(
+        average(
+          withEmployees.reduce((sum, n) => sum + n, 0),
+          withEmployees.length,
+        ),
+        'books',
+      ),
+      euGoodsAcquisitions: (await euGoodsUnknown(tx, companyId, year))
+        ? fromAnswer('euGoodsAcquisitions', (value) => value === 'yes')
+        : known(false, 'books'),
+      eurRate,
+    };
+  } else
+    figures = {
+      year,
+      kept,
+      turnover: fromAnswer('turnover', bani),
+      netTurnover: fromAnswer('netTurnover', bani),
+      totalRevenue: fromAnswer('totalRevenue', bani),
+      vatTurnover: fromAnswer('vatTurnover', bani),
+      exemptionTurnover: fromAnswer('exemptionTurnover', bani),
+      totalAssets: fromAnswer('totalAssets', bani),
+      averageEmployees: fromAnswer('averageEmployees', (value) => value),
+      averageEmployeesD112: fromAnswer('averageEmployees', (value) => value),
+      euGoodsAcquisitions: fromAnswer('euGoodsAcquisitions', (value) => value === 'yes'),
+      eurRate,
+    };
+  if (missing.length) {
+    const question = figuresQuestion(year, missing);
+    for (const item of pending) item.figure.question = question;
+  }
+  return figures;
+}
+
+/** The current year's movements: turnover by quarter and the VAT bases by day. */
+async function activityOf(tx: Transaction, companyId: string, year: number): Promise<YearActivity> {
+  const quarters: bigint[] = [];
+  for (let quarter = 1; quarter <= 4; quarter++) {
+    const rows = await yearTurnover(
+      tx,
+      companyId,
+      `${year}-${pad(quarter * 3 - 2)}-01`,
+      lastDay(`${year}-${pad(quarter * 3)}`),
+    );
+    quarters.push(netCredit(rows, (account) => account.startsWith('70')));
+  }
+  return {
+    year,
+    kept: await keeps(tx, companyId, year),
+    quarterTurnover: quarters as unknown as YearActivity['quarterTurnover'],
+    days: await outputBases(tx, companyId, `${year}-01-01`, `${year}-12-31`),
+  };
+}
+
+/** The owner's latest answer to `micro.conditions` for a year. */
+async function microOf(
+  tx: Transaction,
+  companyId: string,
+  year: number,
+): Promise<Known<MicroConditionsAnswer>> {
+  const [row] = (await latestAnswers(tx, companyId, 'micro.conditions', String(year))).slice(-1);
+  return row
+    ? known(microConditionsAnswer.parse(JSON.parse(row.value)), 'answer', row.evidenceId)
+    : unknown(
+        `Condițiile microîntreprinderii pentru ${year} nu au fost întrebate.`,
+        microQuestion(year),
+      );
+}
+
+/** What a determination evaluation reads, per transaction: the worklist's detectors share it. */
+const cache = new WeakMap<Transaction, Map<string, Promise<unknown>>>();
+function memo<T>(tx: Transaction, key: string, run: () => Promise<T>): Promise<T> {
+  let map = cache.get(tx);
+  if (!map) cache.set(tx, (map = new Map()));
+  if (!map.has(key)) map.set(key, run());
+  return map.get(key) as Promise<T>;
+}
+
+/** A year's determination context. */
+export function contextOf(
+  tx: Transaction,
+  companyId: string,
+  year: number,
+  today: LocalDate,
+): Promise<{
+  context: DeterminationContext;
+  confirmed: Record<string, string>;
+  rows: Awaited<ReturnType<typeof factRows>>;
+}> {
+  return memo(tx, `context|${companyId}|${year}|${today}`, async () => {
+    const rows = await factRows(tx, companyId);
+    const contracts = await contractsOf(tx, companyId);
+    return {
+      rows,
+      confirmed: await confirmations(tx, companyId, rows),
+      context: {
+        year,
+        facts: asFacts(rows),
+        previous: await figuresOf(tx, companyId, year - 1, contracts, today),
+        current: await figuresOf(tx, companyId, year, contracts, today),
+        activity: await activityOf(tx, companyId, year),
+        contracts,
+        micro: await microOf(tx, companyId, year),
+        today,
+      },
+    };
+  });
+}
+
+/** A year's determinations, with the facts recorded for them. */
+export async function determinationsOf(
+  tx: Transaction,
+  companyId: string,
+  year: number,
+  rules: RuleContext,
+  today: LocalDate,
+) {
+  const { context, confirmed } = await contextOf(tx, companyId, year, today);
+  const determinations = determineYear(context, rules);
+  const watches = thresholdWatches(context, rules);
+  return { context, confirmed, determinations, watches };
+}
+
+const view = (
+  determination: Determination,
+  facts: readonly ProfileFact[],
+  confirmed: Record<string, string>,
+) => {
+  const key = `${determination.axis}/${determination.year}`;
+  const yearly = yearlyAxes.includes(determination.axis);
+  const values = facts
+    .filter(
+      (fact) =>
+        fact.axis === determination.axis &&
+        fact.effectiveFrom >= `${determination.year}-01-01` &&
+        fact.effectiveFrom <= `${determination.year}-12-31`,
+    )
+    .map((fact) => ({ value: fact.value, effectiveFrom: fact.effectiveFrom }));
+  const atStart = yearly
+    ? recordedInYear(facts, determination.axis, determination.year, `${determination.year}-01-01`)
+    : recordedAt(facts, determination.axis, `${determination.year}-01-01`);
+  const computed = [
+    { value: determination.value, effectiveFrom: determination.effectiveFrom },
+    ...determination.changes,
+  ];
+  const agrees =
+    determination.status !== 'proposed'
+      ? null
+      : computed.every(
+          (item) =>
+            (yearly
+              ? recordedInYear(facts, determination.axis, determination.year, item.effectiveFrom)
+              : recordedAt(facts, determination.axis, item.effectiveFrom)) === item.value,
+        ) && atStart !== null;
+  return {
+    ...determination,
+    recorded: { values, confirmed: confirmed[key] === determination.fingerprint, agrees },
+  };
+};
+const watchOut = (watch: ThresholdWatch) => ({
+  ...watch,
+  limit: (Number(watch.limit) / 100).toFixed(2),
+  value: (Number(watch.value) / 100).toFixed(2),
+});
+
+/** The first day the books cover: the start of the company's first financial year; null when
+ * it keeps none (the closure is then not restricted). */
+async function firstBooksDay(tx: Transaction, companyId: string): Promise<string | null> {
+  const [first] = await tx
+    .select({ from: fiscalYears.from })
+    .from(fiscalYears)
+    .where(and(eq(fiscalYears.companyId, companyId), eq(fiscalYears.kind, 'financial')))
+    .orderBy(asc(fiscalYears.from))
+    .limit(1);
+  return first?.from ?? null;
+}
+
+/** What the books show over a range of months, for the closure. */
+async function booksOf(
+  tx: Transaction,
+  companyId: string,
+  range: { from: string; to: string },
+  contracts: readonly Contract[],
+  firstDay: string | null,
+): Promise<ClosureBooks> {
+  const from = `${range.from}-01`;
+  const to = lastDay(range.to);
+  const months: string[] = [];
+  for (let y = Number(range.from.slice(0, 4)), m = Number(range.from.slice(5, 7)); ;) {
+    const label = `${y}-${pad(m)}`;
+    if (label > range.to) break;
+    months.push(label);
+    if (++m === 13) [y, m] = [y + 1, 1];
+  }
+  const employmentMonths = months.filter((month) =>
+    contracts.some(
+      (contract) =>
+        contract.start <= lastDay(month) &&
+        (contract.end === null || contract.end >= `${month}-01`),
+    ),
+  );
+  const monthsOfLines = async (accounts: string[]) => {
+    const rows = await tx
+      .select({ month: sql<string>`substr(${entries.date}, 1, 7)` })
+      .from(lines)
+      .innerJoin(entries, lineEntry)
+      .where(
+        and(
+          eq(lines.companyId, companyId),
+          gte(entries.date, from),
+          lte(entries.date, to),
+          sql`(${sql.join(
+            accounts.map((account) => sql`${lines.account} LIKE ${`${account}%`}`),
+            sql` OR `,
+          )})`,
+        ),
+      )
+      .groupBy(sql`substr(${entries.date}, 1, 7)`);
+    return rows.map((row) => row.month).sort();
+  };
+  const sick = await tx
+    .select({ month: payrollRuns.month })
+    .from(payrollLines)
+    .innerJoin(
+      payrollRuns,
+      and(
+        eq(payrollRuns.companyId, payrollLines.companyId),
+        eq(payrollRuns.id, payrollLines.runId),
+      ),
+    )
+    .where(
+      and(
+        eq(payrollLines.companyId, companyId),
+        gte(payrollRuns.month, range.from),
+        lte(payrollRuns.month, range.to),
+        sql`${payrollLines.input} LIKE '%"sick":%'`,
+        sql`not exists (select 1 from ${payrollRunEvents} e where e.company_id = ${payrollRuns.companyId}
+          and e.run_id = ${payrollRuns.id} and e.state = 'superseded')`,
+      ),
+    );
+  const ends = contracts.flatMap((contract) =>
+    contract.end && contract.end >= from && contract.end <= to ? [contract.end.slice(0, 7)] : [],
+  );
+  const european = await tx
+    .select({ month: sql<string>`substr(${taxEntries.taxPoint}, 1, 7)` })
+    .from(taxEntries)
+    .where(
+      and(
+        eq(taxEntries.companyId, companyId),
+        eq(taxEntries.tax, 'VAT'),
+        inArray(taxEntries.code, ['RC-EU-SERV', 'EXP-EU-SERV']),
+        gte(taxEntries.taxPoint, from),
+        lte(taxEntries.taxPoint, to),
+      ),
+    )
+    .groupBy(sql`substr(${taxEntries.taxPoint}, 1, 7)`);
+  const dividends = await tx
+    .select({ month: sql<string>`substr(${entries.date}, 1, 7)` })
+    .from(entries)
+    .innerJoin(
+      proposals,
+      and(eq(proposals.companyId, entries.companyId), eq(proposals.id, entries.proposalId)),
+    )
+    .where(
+      and(
+        eq(entries.companyId, companyId),
+        eq(proposals.treatmentId, 'dividends.withhold'),
+        gte(entries.date, `${range.from.slice(0, 4)}-01-01`),
+        lte(entries.date, to),
+      ),
+    )
+    .groupBy(sql`substr(${entries.date}, 1, 7)`);
+  const foreign = await tx
+    .select({ id: documents.id, date: documents.docDate, country: parties.country })
+    .from(documents)
+    .innerJoin(
+      parties,
+      and(eq(parties.companyId, documents.companyId), eq(parties.id, documents.partyId)),
+    )
+    .where(
+      and(
+        eq(documents.companyId, companyId),
+        eq(documents.kind, 'invoice.received'),
+        ne(parties.country, 'RO'),
+        gte(documents.docDate, from),
+        lte(documents.docDate, to),
+      ),
+    );
+  const payrollTax = await monthsOfLines(['444', '431', '436']);
+  const sources = await tx
+    .select()
+    .from(incomeSources)
+    .where(eq(incomeSources.companyId, companyId))
+    .orderBy(asc(incomeSources.sourceId), asc(incomeSources.seq));
+  const years = [...new Set(months.map((month) => month.slice(0, 4)))];
+  const bySource = [...Map.groupBy(sources, (row) => row.sourceId).values()];
+  const yearEnds = await tx
+    .select({ to: fiscalYears.to })
+    .from(fiscalYears)
+    .where(
+      and(
+        eq(fiscalYears.companyId, companyId),
+        eq(fiscalYears.kind, 'financial'),
+        gte(fiscalYears.to, from),
+        lte(fiscalYears.to, to),
+      ),
+    );
+  return {
+    firstDay,
+    financialYearEnds: yearEnds.map((row) => row.to),
+    employmentMonths,
+    payrollEventMonths: [...new Set([...sick.map((row) => row.month), ...ends])].sort(),
+    euServiceMonths: european.map((row) => row.month).sort(),
+    dividendMonths: dividends.map((row) => row.month).sort(),
+    foreignPurchases: foreign.map((row) => ({
+      month: row.date.slice(0, 7),
+      documentId: row.id,
+      country: row.country,
+    })),
+    stockMonths: await monthsOfLines(['3']),
+    sponsorshipMonths: await monthsOfLines(['6582']),
+    payrollWithoutContractMonths: payrollTax.filter((month) => !employmentMonths.includes(month)),
+    incomeSources: years.map((year) => {
+      const active = bySource.filter((versions) => {
+        const current = versions.filter((row) => row.effectiveFrom <= `${year}-12-31`).at(-1);
+        return (
+          current &&
+          current.startedOn <= `${year}-12-31` &&
+          (!current.endedOn || current.endedOn >= `${year}-01-01`)
+        );
+      });
+      return {
+        year,
+        count: active.length,
+        real: active.some(
+          (versions) =>
+            versions.filter((row) => row.effectiveFrom <= `${year}-12-31`).at(-1)?.method ===
+            'sistem_real',
+        ),
+      };
+    }),
+  };
+}
+
+/** The closure of a range of months, computed on read. */
+export function closureOf(
+  tx: Transaction,
+  companyId: string,
+  range: { from: string; to: string },
+  rules: RuleContext,
+  today: LocalDate,
+): Promise<Closure> {
+  return memo(tx, `closure|${companyId}|${range.from}|${range.to}|${today}`, async () => {
+    // The closure lists nothing before the books start: the years before the first financial
+    // year are not determined.
+    const firstDay = await firstBooksDay(tx, companyId);
+    const start = Math.max(Number(range.from.slice(0, 4)), Number(firstDay?.slice(0, 4) ?? 0));
+    const years: number[] = [];
+    for (let year = start; year <= Number(range.to.slice(0, 4)); year++) years.push(year);
+    const determinations: Determination[] = [];
+    let confirmed: Record<string, string> = {};
+    let facts: ProfileFact[] = [];
+    let contracts: readonly Contract[] = [];
+    for (const year of years) {
+      const result = await determinationsOf(tx, companyId, year, rules, today);
+      determinations.push(...result.determinations);
+      confirmed = { ...confirmed, ...result.confirmed };
+      facts = [...result.context.facts];
+      contracts = result.context.contracts;
+    }
+    return evaluateClosure({
+      interval: range,
+      facts,
+      determinations,
+      confirmed,
+      books: await booksOf(tx, companyId, range, contracts, firstDay),
+    });
+  });
+}
+
+export class Determinations {
+  constructor(
+    private readonly commands: Commands,
+    private readonly rules: (tx: Transaction, companyId: string) => Promise<RuleContext>,
+    private readonly clock: () => number = Date.now,
+  ) {}
+
+  private today(): LocalDate {
+    return bucharestDate(this.clock());
+  }
+
+  /** A year's determinations with their computation, and the thresholds approached. */
+  evaluate(actor: Actor, input: z.infer<typeof determinationsInput>) {
+    return this.commands.read(actor, 'determinations.evaluate', async (tx) => {
+      const result = await determinationsOf(
+        tx,
+        actor.companyId,
+        input.year,
+        await this.rules(tx, actor.companyId),
+        this.today(),
+      );
+      return {
+        year: input.year,
+        determinations: result.determinations.map((item) =>
+          view(item, result.context.facts, result.confirmed),
+        ),
+        watches: result.watches.map(watchOut),
+      };
+    });
+  }
+
+  /** The closure of a range of months. */
+  closure(actor: Actor, input: z.infer<typeof closureInput>) {
+    return this.commands.read(actor, 'closure.evaluate', async (tx) =>
+      closureOf(tx, actor.companyId, input, await this.rules(tx, actor.companyId), this.today()),
+    );
+  }
+
+  /**
+   * Opens what a person must answer for a year: each computed determination not yet recorded
+   * or that the recorded facts contradict, to confirm (`determination.confirm`); each question
+   * an unknown input names (`micro.conditions`, `year.figures`, `profile.fact`). A question still
+   * open about an older computation is withdrawn first; an answer that still holds is returned.
+   */
+  propose(actor: Actor, key: string, input: z.infer<typeof determinationsInput>) {
+    return this.commands.run(actor, key, 'determinations.propose', input, 'write', async (tx) => {
+      const rules = await this.rules(tx, actor.companyId);
+      const result = await determinationsOf(tx, actor.companyId, input.year, rules, this.today());
+      const views = result.determinations.map((item) =>
+        view(item, result.context.facts, result.confirmed),
+      );
+      const wanted: QuestionRequest[] = [];
+      for (const item of views) {
+        if (item.status === 'proposed' && !item.recorded.agrees && !item.recorded.confirmed)
+          wanted.push(confirmQuestion(item));
+        if (item.status === 'needs_evidence' || item.status === 'rule_gap')
+          wanted.push(...item.questions);
+      }
+      const asked: z.infer<typeof proposeView>['asked'] = [];
+      const withdrawn: string[] = [];
+      const seen = new Set<string>();
+      for (const request of wanted) {
+        const identity = `${request.kind}|${request.subject.kind}:${request.subject.id}`;
+        if (seen.has(identity)) continue;
+        seen.add(identity);
+        let found = await standing(tx, actor.companyId, request);
+        if (found.answered) {
+          asked.push({
+            ...request,
+            questionId: found.answered.row.id,
+            reused: true,
+            answered: true,
+          });
+          continue;
+        }
+        if (found.open && hashOf(JSON.parse(found.open.row.params)) !== hashOf(found.params)) {
+          await tx.insert(questionWithdrawals).values({
+            companyId: actor.companyId,
+            questionId: found.open.row.id,
+            reason: 'Calculul determinării s-a schimbat de când a fost întrebată.',
+            createdBy: actor.actorId,
+            agentId: actor.agentId ?? null,
+          });
+          withdrawn.push(found.open.row.id);
+          found = { ...found, open: null };
+        }
+        if (found.open) {
+          asked.push({ ...request, questionId: found.open.row.id, reused: true, answered: false });
+          continue;
+        }
+        const id = this.commands.ids();
+        await tx.insert(questions).values({
+          id,
+          companyId: actor.companyId,
+          kind: request.kind,
+          subjectKind: request.subject.kind,
+          subjectId: request.subject.id,
+          params: canonical(found.params),
+          askedBy: actor.actorId,
+          agentId: actor.agentId ?? null,
+          due: null,
+        });
+        asked.push({ ...request, questionId: id, reused: false, answered: false });
+      }
+      return {
+        year: input.year,
+        determinations: views,
+        watches: result.watches.map(watchOut),
+        asked,
+        withdrawn,
+      };
+    });
+  }
+}
+
+/** A worklist item of the determinations detector, before the worklist adds its id. */
+export interface DeterminationItem {
+  kind: 'determination.missing' | 'threshold.approaching';
+  subjectId: string;
+  severity: 'block' | 'warn';
+  year: number;
+  message: string;
+  details: { [key: string]: string | number | boolean | null };
+}
+
+/**
+ * What the worklist shows about determinations for the current year (and the next one in
+ * December): the yearly axes without a fact for the year, or whose fact the books contradict,
+ * and the thresholds at 80% or more.
+ */
+export async function determinationItems(
+  tx: Transaction,
+  companyId: string,
+  rules: RuleContext,
+  today: LocalDate,
+): Promise<DeterminationItem[]> {
+  const year = Number(today.slice(0, 4));
+  const items: DeterminationItem[] = [];
+  for (const current of today.slice(5, 7) === '12' ? [year, year + 1] : [year]) {
+    const result = await determinationsOf(tx, companyId, current, rules, today);
+    for (const determination of result.determinations) {
+      const shown = view(determination, result.context.facts, result.confirmed);
+      const yearly = yearlyAxes.includes(determination.axis);
+      const missing =
+        yearly &&
+        determination.status !== 'not_applicable' &&
+        determination.status !== 'unsupported' &&
+        !shown.recorded.values.length;
+      // A conflict needs a recorded value the computation contradicts: a computed value with
+      // nothing recorded is missing (yearly axes) or simply not recorded (the others).
+      const recorded = yearly
+        ? shown.recorded.values.length > 0
+        : recordedAt(result.context.facts, determination.axis, `${current}-12-31`) !== null;
+      const conflict = shown.recorded.agrees === false && !shown.recorded.confirmed && recorded;
+      if (!missing && !conflict) continue;
+      items.push({
+        kind: 'determination.missing',
+        subjectId: `${determination.axis}/${current}`,
+        severity: conflict ? 'block' : 'warn',
+        year: current,
+        message: conflict
+          ? `${determination.axis} înregistrat pentru ${current} diferă de calcul: ${determination.summary}`
+          : `${determination.axis} nu este stabilit pentru ${current}: ${determination.summary}`,
+        details: {
+          axis: determination.axis,
+          year: current,
+          status: determination.status,
+          value: determination.value,
+          conflict,
+          fingerprint: determination.fingerprint,
+        },
+      });
+    }
+    for (const watch of result.watches)
+      items.push({
+        kind: 'threshold.approaching',
+        subjectId: `${watch.key}/${current}`,
+        severity: watch.percent >= 100 ? 'block' : 'warn',
+        year: current,
+        message: watch.message,
+        details: {
+          key: watch.key,
+          axis: watch.axis,
+          year: current,
+          limit: (Number(watch.limit) / 100).toFixed(2),
+          value: (Number(watch.value) / 100).toFixed(2),
+          level: watch.percent >= 100 ? 100 : 80,
+        },
+      });
+  }
+  return items;
+}

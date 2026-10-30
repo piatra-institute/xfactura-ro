@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { and, asc, desc, eq, inArray, max } from 'drizzle-orm';
 import { z } from 'zod';
 import { DomainError, requireCondition } from 'xfactura-core/errors';
@@ -13,9 +12,10 @@ import {
   type Invoice,
   type Party,
 } from 'xfactura-core/einvoice';
+import { documentIdentity, normalizedTaxId } from 'xfactura-core/documents/schemas';
 import { accountCodePattern, profileAt } from 'xfactura-core/kernel';
 import { cashVatMention, mentionsCashVat } from 'xfactura-core/ro/cash-vat';
-import { invoiceKinds } from 'xfactura-core/ro/treatments/invoices';
+import { invoiceKinds, taxPointOf } from 'xfactura-core/ro/treatments/invoices';
 import { RuleGapError } from 'xfactura-core/rules';
 import type { LocalDate } from 'xfactura-core/time';
 import { parseInvoiceXml } from 'xfactura-core/ubl/invoice-document';
@@ -33,6 +33,7 @@ import {
 import { sha256, type ObjectStore } from '../adapters/object-store';
 import type { Actor, Commands } from '../kernel/commands';
 import type { Proposals } from '../kernel/proposals';
+import { joinIdentityGroup } from '../kernel/sources';
 import { loadState } from '../kernel/state';
 
 export const sellerInput = z.object({ details: partySchema }).strict();
@@ -188,7 +189,7 @@ export class Sales {
         [party] = await tx
           .insert(parties)
           .values({
-            id: randomUUID(),
+            id: this.commands.ids(),
             companyId: actor.companyId,
             kind: 'self',
             country: 'RO',
@@ -252,7 +253,7 @@ export class Sales {
       const [row] = await tx
         .insert(series)
         .values({
-          id: randomUUID(),
+          id: this.commands.ids(),
           companyId: actor.companyId,
           ...input,
           typeCodes: canonical(input.typeCodes),
@@ -313,7 +314,7 @@ export class Sales {
           .select()
           .from(evidence)
           .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.hash, hash)));
-        const evidenceId = stored?.id ?? randomUUID();
+        const evidenceId = stored?.id ?? this.commands.ids();
         if (!stored) {
           await this.objects.put(actor.companyId, bytes, 64 * 1024 * 1024);
           await tx.insert(evidence).values({
@@ -324,14 +325,17 @@ export class Sales {
             mediaType: 'application/xml',
             size: bytes.length,
             createdBy: actor.actorId,
+            engineAt: this.commands.clock(),
           });
         }
         const body = parseInvoiceXml(bytes);
-        const documentId = randomUUID();
+        const documentId = this.commands.ids();
+        const kind = input.typeCode === '381' ? invoiceKinds.saleCredit : invoiceKinds.sale;
+        const identityKey = documentIdentity(kind, body, normalizedTaxId(body.supplier.taxId));
         await tx.insert(documents).values({
           id: documentId,
           companyId: actor.companyId,
-          kind: input.typeCode === '381' ? invoiceKinds.saleCredit : invoiceKinds.sale,
+          kind,
           schema: body.parserVersion,
           body: canonical(body),
           bodyHash: hashOf(body),
@@ -342,8 +346,11 @@ export class Sales {
           partyId: input.buyerId,
           currency: invoice.currency,
           number,
+          identityKey,
+          authority: 'issued',
           createdBy: actor.actorId,
         });
+        await joinIdentityGroup(tx, actor, { id: documentId, identityKey });
         for (const toId of input.precedingDocumentIds)
           await tx.insert(documentLinks).values({
             companyId: actor.companyId,
@@ -491,7 +498,13 @@ export class Sales {
         'Facturile către persoane fizice așteaptă regulile de identificare B2C.',
       );
 
-    const taxPoint = input.taxPointDate ?? input.issueDate;
+    // The rate's date, as `invoices.recognize` will read the issued XML: the supply's date (BT-72)
+    // unless the invoice or the stated tax point comes first (Codul fiscal art. 282, 291 alin. (4)).
+    const taxPoint = taxPointOf({
+      issueDate: input.issueDate,
+      taxPointDate: input.taxPointDate ?? null,
+      ...(input.deliveryDate ? { deliveryDate: input.deliveryDate } : {}),
+    });
     const { loaded } = await loadState(tx, companyId, { profile: true });
     const status = profileAt(loaded, 'vat.status', taxPoint);
     if (!status)

@@ -11,6 +11,7 @@ import type {
   TaxEntrySpec,
 } from './effect';
 import type { OpenItemInfo } from './validate';
+import type { DataClass, Toolset } from './contract';
 
 /**
  * What a treatment reads before it evaluates. The kernel loads exactly this, records what it
@@ -134,6 +135,8 @@ export interface OpenItemQuery {
   ids?: string[];
   /** Open items that lines of this posted entry touched. */
   touchedBy?: string;
+  /** The items a document's bookings opened, those whose booking was reversed left out: a
+   * document booked again after a reversal has the new booking's items only. */
   documentId?: string;
   partyId?: string;
   kind?: OpenItemKind;
@@ -170,7 +173,13 @@ export interface ReadSetEntry {
     | 'turnover'
     | 'itemLines'
     | 'assets'
-    | 'partyStatus';
+    | 'partyStatus'
+    /** Where a document read comes from: its authority, its group and whether it was
+     * superseded (the engine adds it beside the document's own entry). */
+    | 'documentSource'
+    /** A question a proposal's basis cites, by its id: the version is its latest answer's id
+     * (the engine adds it, and loads the answer into `Loaded.answers`). */
+    | 'answer';
   id: string;
   version: string;
 }
@@ -249,6 +258,8 @@ export interface PostedEntry {
   description: string;
   lines: LineSpec[];
   taxEntries: TaxEntrySpec[];
+  /** For a reversal (`ledger.reverse`), the entry it reverses. */
+  reverses?: string;
 }
 
 export interface FxRate {
@@ -344,6 +355,26 @@ export interface PayrollRunState {
   lines: readonly PayrollLineState[];
 }
 
+/**
+ * A person's answer to a question a proposal's basis cites (`questions.answer`): its latest
+ * answer, which the read-set records. The engine loads the basis's answers, never a plan.
+ */
+export interface AnswerRecord {
+  questionId: string;
+  /** The answer's id: its version in the read-set. */
+  answerId: string;
+  kind: string;
+  /** As the question was asked; compare through its kind's `normalize`. */
+  subject: { kind: string; id: string };
+  params: JsonValue;
+  /** As the kind's answer schema read it. */
+  value: JsonValue;
+  /** The answer kept as evidence. */
+  evidenceId: string;
+  /** When the engine recorded the answer (its clock, never the database's), as an ISO instant. */
+  answeredAt: string;
+}
+
 export interface Loaded {
   years: readonly FiscalYear[];
   evidence: ReadonlyMap<string, EvidenceRecord>;
@@ -365,6 +396,8 @@ export interface Loaded {
   assets: ReadonlyMap<string, AssetState>;
   /** By `partyStatusKey`: only the statuses a snapshot exists for. */
   partyStatus: ReadonlyMap<string, PartyStatus>;
+  /** By question id: the answers the proposal's basis cites, and only those. */
+  answers: ReadonlyMap<string, AnswerRecord>;
 }
 
 /** The company profile value on an axis at a date, or null when nothing is recorded. */
@@ -409,6 +442,12 @@ export interface Treatment<Input = unknown> {
   evaluate(input: Input, loaded: Loaded, rules: RuleContext): Evaluation;
   /** Whether an agent credential may propose this treatment. */
   agent: boolean;
+  /** What it books, in one line of English for agents, beside the Romanian `description`. */
+  summary: string;
+  /** The toolset its `.propose` and `.revise` operations belong to; `books` when omitted. */
+  toolset?: Toolset;
+  /** The data its proposals read and show; the books alone when omitted. */
+  dataClasses?: readonly DataClass[];
 }
 
 /** The financial year containing a date, if exactly one does. */

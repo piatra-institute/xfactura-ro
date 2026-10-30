@@ -15,13 +15,19 @@ app.get('/health', async (_request, response) => {
     response.status(503).json({ status: 'unavailable' });
   }
 });
+// Existing Turso/Google/Stripe deployments can retain the original endpoints.
+const legacy = Boolean(process.env.DATABASE_URL && process.env.STRIPE_SECRET_KEY);
+// Stripe signs the raw body, so the legacy webhook is registered before the JSON parser.
+if (legacy && process.env.STRIPE_WEBHOOK_SECRET) {
+  const stripeWebhook = await import('./handlers/stripeWebhook');
+  app.post('/stripe-webhook', stripeWebhook.rawBody, stripeWebhook.default);
+}
 app.use(express.json());
 app.use(cookieParser());
 app.use(express.static('public'));
 app.get('/', home);
 
-// Existing Turso/Google/Stripe deployments can retain the original endpoints.
-if (process.env.DATABASE_URL && process.env.STRIPE_SECRET_KEY) {
+if (legacy) {
   const handlers = await import('./handlers');
   app.use((request, response, next) => {
     const origin = request.get('origin');

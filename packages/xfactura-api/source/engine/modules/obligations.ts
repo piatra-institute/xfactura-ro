@@ -1,21 +1,11 @@
-import { and, asc, eq, gte, inArray, lte } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
-import { profileAt, vatPeriodOf } from 'xfactura-core/kernel';
-import { booksSystemOf, entityFormOf, individualForms } from 'xfactura-core/ro/entity';
 import { obligationDue, type ObligationKind } from 'xfactura-core/ro/obligations';
 import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
 import type { LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
-import {
-  artifactEvents,
-  artifacts,
-  entries,
-  fiscalYears,
-  incomeSources,
-  proposals,
-  taxEntries,
-} from '../db/schema';
-import { loadState } from '../kernel/state';
+import { artifactEvents, artifacts } from '../db/schema';
+import { closureOf } from './determinations';
 
 const month = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
 export const calendarInput = z
@@ -75,14 +65,29 @@ export const obligationView = z.object({
       }),
     )
     .nullable(),
+  /** The closure rule that produced the return, the facts it read (with their basis) and the
+   * clauses it cites (docs/CONFORMANCE.md). */
+  basis: z.object({
+    rule: z.string(),
+    facts: z.array(z.string()),
+    clauses: z.array(z.string()),
+  }),
+  /** For a return blocked by an unknown fact: the question to ask (NEEDS_EVIDENCE). */
+  question: z
+    .object({
+      kind: z.string(),
+      subject: z.object({ kind: z.string(), id: z.string() }),
+      params: z.record(z.string(), z.unknown()),
+    })
+    .nullable(),
+  /** What blocks it: the closure's needs (ids) or the cases not covered (UNSUPPORTED triggers). */
+  blockers: z.array(z.string()),
 });
 type ObligationView = z.infer<typeof obligationView>;
 
 const pad = (value: number) => String(value).padStart(2, '0');
 const lastDay = (year: number, monthNumber: number) =>
   new Date(Date.UTC(year, monthNumber, 0)).toISOString().slice(0, 10) as LocalDate;
-/** EU services across the border, which the recapitulative statement (D390) reports. */
-const intraCommunity = ['RC-EU-SERV', 'EXP-EU-SERV'];
 
 /** A VAT period's first and last day ('2026-10' or '2026-Q4'). */
 function bounds(period: string): { start: LocalDate; end: LocalDate } {
@@ -129,68 +134,14 @@ const statusOf = (state: string): ObligationView['status'] =>
           ? state
           : 'prepared';
 
-/** Whether an income source in the real system was active in a year (its version at the end). */
-async function realSourceIn(tx: Transaction, companyId: string, year: string) {
-  const rows = await tx
-    .select()
-    .from(incomeSources)
-    .where(eq(incomeSources.companyId, companyId))
-    .orderBy(asc(incomeSources.sourceId), asc(incomeSources.seq));
-  return [...Map.groupBy(rows, (row) => row.sourceId).values()].some((versions) => {
-    const current = versions.filter((row) => row.effectiveFrom <= `${year}-12-31`).at(-1);
-    return (
-      current?.method === 'sistem_real' &&
-      current.startedOn <= `${year}-12-31` &&
-      (!current.endedOn || current.endedOn >= `${year}-01-01`)
-    );
-  });
-}
-
-/** Months in which a treatment posted, from its entries. */
-async function postingMonths(
-  tx: Transaction,
-  companyId: string,
-  treatmentId: string,
-  range: { from: string; to: string },
-) {
-  const rows = await tx
-    .select({ date: entries.date })
-    .from(entries)
-    .innerJoin(
-      proposals,
-      and(eq(proposals.companyId, entries.companyId), eq(proposals.id, entries.proposalId)),
-    )
-    .where(
-      and(
-        eq(entries.companyId, companyId),
-        eq(proposals.treatmentId, treatmentId),
-        gte(entries.date, range.from),
-        lte(entries.date, range.to),
-      ),
-    );
-  return new Set(rows.map((row) => row.date.slice(0, 7)));
-}
-
 /**
  * The company's returns whose periods end in a range of months, each with its deadline and
- * where it stands. Which returns apply is read from the company's profile and books:
- * - VAT payers (`vat.status`): D300 and D394 for each VAT period, and D390 for the months with
- *   services across the EU border;
- * - D406 for each VAT period, quarterly for companies not registered for VAT (OPANAF 1783/2021
- *   anexa 4 pct. 2–3); the date from which the company's category reports (anexa 5) is not
- *   checked;
- * - employers (`employer`): D112 monthly (the quarterly filing of art. 147 alin. (4) is not
- *   covered);
- * - D100 in each quarter's last month for microenterprises (`income_tax`) and in the months
- *   dividend tax was withheld; D205 for the years with dividend tax withheld;
- * - S1005 for each financial year kept in double entry (the company's size category is not
- *   checked: the engine prepares only the microentities' statements);
- * - D212 for each income year of a PFA, II or IF (`entity.form` at the year's end), by 25 May of
- *   the next (Codul fiscal art. 122 alin. (3)); for an IF each member files their own;
- * - D204 for each income year of an IF with an income source in the real system (art. 125 alin.
- *   (4); not for norms, alin. (1) lit. c)); the Code and the form's instructions disagree on its
- *   deadline, and both are shown.
- * A deadline the rule register does not source is `blocked`, never guessed.
+ * where it stands. Which returns apply is the obligation closure's (`closureOf`, core
+ * `ro/determinations/closure.ts`), from the recorded facts, the yearly determinations and the
+ * books: a return whose applicability depends on a fact nobody recorded is `blocked`, naming the
+ * question to ask; one the engine does not cover is `blocked` with the case (UNSUPPORTED). A
+ * deadline the rule register does not source is `blocked` too, never guessed. The months before
+ * the company's first financial year list nothing.
  */
 export async function obligationsCalendar(
   tx: Transaction,
@@ -199,95 +150,69 @@ export async function obligationsCalendar(
   rules: RuleContext,
   today: string,
 ): Promise<ObligationView[]> {
-  const { loaded } = await loadState(tx, companyId, { profile: true });
-  const from = `${input.from}-01` as LocalDate;
-  const to = bounds(input.to).end;
-  const months: string[] = [];
-  for (let y = Number(input.from.slice(0, 4)), m = Number(input.from.slice(5, 7)); ;) {
-    const label = `${y}-${pad(m)}`;
-    if (label > input.to) break;
-    months.push(label);
-    if (++m === 13) [y, m] = [y + 1, 1];
+  const closure = await closureOf(
+    tx,
+    companyId,
+    { from: input.from, to: input.to },
+    rules,
+    today as LocalDate,
+  );
+  const needs = new Map(closure.needs.map((need) => [need.id, need]));
+  const unsupported = new Map(closure.unsupported.map((item) => [item.trigger, item]));
+  // One row per return and period; a return due on one ground is due whatever else is unknown.
+  const rank = { applies: 0, needs_evidence: 1, unsupported: 2 } as const;
+  const chosen = new Map<string, (typeof closure.obligations)[number]>();
+  for (const item of closure.obligations) {
+    const key = `${item.kind}|${item.period}`;
+    const known = chosen.get(key);
+    if (!known || rank[item.state] < rank[known.state]) chosen.set(key, item);
   }
-
-  const due: { kind: string; deadline: ObligationKind; period: string }[] = [];
-  const add = (kind: string, period: string, deadline: ObligationKind = kind as ObligationKind) =>
-    due.some((item) => item.kind === kind && item.period === period)
-      ? undefined
-      : due.push({ kind, deadline, period });
-
-  const european = await tx
-    .select({ taxPoint: taxEntries.taxPoint })
-    .from(taxEntries)
-    .where(
-      and(
-        eq(taxEntries.companyId, companyId),
-        eq(taxEntries.tax, 'VAT'),
-        inArray(taxEntries.code, intraCommunity),
-        gte(taxEntries.taxPoint, from),
-        lte(taxEntries.taxPoint, to),
-      ),
-    );
-  const europeanMonths = new Set(european.map((row) => row.taxPoint.slice(0, 7)));
-  const dividendMonths = await postingMonths(tx, companyId, 'dividends.withhold', {
-    from: `${input.from.slice(0, 4)}-01-01`,
-    to,
-  });
-
-  for (const label of months) {
-    const end = bounds(label).end;
-    const quarterEnd = Number(label.slice(5, 7)) % 3 === 0;
-    const vatPayer = profileAt(loaded, 'vat.status', end) === 'normal_vat';
-    const vatPeriod = vatPeriodOf(loaded, end);
-    const periodEnds = !vatPeriod.includes('Q') || quarterEnd;
-    if (vatPayer && periodEnds) {
-      add('D300', vatPeriod);
-      add('D394', vatPeriod);
-    }
-    if (vatPayer && europeanMonths.has(label)) add('D390', label);
-    if (vatPayer ? periodEnds : quarterEnd)
-      add('D406', vatPayer ? vatPeriod : `${label.slice(0, 4)}-Q${Number(label.slice(5, 7)) / 3}`);
-    if (profileAt(loaded, 'employer', end) === 'yes') add('D112', label);
-    if (quarterEnd && profileAt(loaded, 'income_tax', end) === 'micro')
-      add('D100', label, 'D100.micro');
-    if (dividendMonths.has(label)) add('D100', label, 'D100.dividends');
-    if (label.endsWith('-12') && [...dividendMonths].some((m) => m.startsWith(label.slice(0, 4))))
-      add('D205', label.slice(0, 4));
-    if (label.endsWith('-12') && individualForms.includes(entityFormOf(loaded.profile, end)))
-      add('D212', label.slice(0, 4));
-    if (
-      label.endsWith('-12') &&
-      entityFormOf(loaded.profile, end) === 'if' &&
-      (await realSourceIn(tx, companyId, label.slice(0, 4)))
-    )
-      add('D204', label.slice(0, 4));
-  }
-  const years = await tx
-    .select()
-    .from(fiscalYears)
-    .where(
-      and(
-        eq(fiscalYears.companyId, companyId),
-        eq(fiscalYears.kind, 'financial'),
-        gte(fiscalYears.to, from),
-        lte(fiscalYears.to, to),
-      ),
-    );
-  // Single-entry books draw up no annual statements (OMFP nr. 170/2015 cap. II pct. 11).
-  for (const year of years)
-    if (booksSystemOf(loaded.profile, year.to as LocalDate) !== 'single')
-      add('S1005', year.to.slice(0, 4));
-
+  const due = [...chosen.values()];
   const filed = await standing(tx, companyId, [...new Set(due.map((item) => item.kind))]);
   return (
     due
       .map((item): ObligationView => {
         const { start, end } = bounds(item.period);
         const artifact = filed.get(`${item.kind}|${item.period}`);
+        const basis = { rule: item.rule, facts: item.facts, clauses: item.clauses };
+        const blocked = (gap: string, question: ObligationView['question']): ObligationView => ({
+          kind: item.kind,
+          deadline: item.deadline ?? item.kind,
+          period: item.period,
+          start,
+          end,
+          nominal: null,
+          due: null,
+          status: artifact ? statusOf(artifact.state) : 'blocked',
+          artifactId: artifact?.artifactId ?? null,
+          versions: [],
+          gap,
+          conflict: null,
+          basis,
+          question,
+          blockers: item.blockers,
+        });
+        if (item.state === 'needs_evidence') {
+          const first = item.blockers.map((id) => needs.get(id)).find(Boolean);
+          return blocked(
+            item.blockers
+              .map((id) => needs.get(id)?.message ?? unsupported.get(id)?.message ?? id)
+              .join(' '),
+            first ? { ...first.question, params: { ...first.question.params } } : null,
+          );
+        }
+        if (item.state === 'unsupported' || !item.deadline)
+          return blocked(
+            `UNSUPPORTED: ${item.blockers.map((id) => unsupported.get(id)?.message ?? needs.get(id)?.message ?? id).join(' ')}`,
+            null,
+          );
         try {
-          const deadline = obligationDue(item.deadline, { start, end }, rules);
+          const counted = item.deadlinePeriod ? bounds(item.deadlinePeriod) : { start, end };
+          const deadline = obligationDue(item.deadline as ObligationKind, counted, rules);
           return {
-            ...item,
+            kind: item.kind,
+            deadline: item.deadline,
+            period: item.period,
             start,
             end,
             nominal: deadline.nominal,
@@ -303,21 +228,13 @@ export async function obligationsCalendar(
                 clauses: reading.clauses,
                 text: reading.text,
               })) ?? null,
+            basis,
+            question: null,
+            blockers: [],
           };
         } catch (error) {
           if (!(error instanceof RuleGapError)) throw error;
-          return {
-            ...item,
-            start,
-            end,
-            nominal: null,
-            due: null,
-            status: artifact ? statusOf(artifact.state) : 'blocked',
-            artifactId: artifact?.artifactId ?? null,
-            versions: [],
-            gap: error.message,
-            conflict: null,
-          };
+          return { ...blocked(error.message, null), deadline: item.deadline };
         }
       })
       // By due date, the blocked ones (without a deadline) last; then by period and return.

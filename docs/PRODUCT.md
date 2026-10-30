@@ -6,7 +6,12 @@ xFactura should make accounting understandable and largely automatic for Romania
 
 The initial commercial audience is companies below €1M annual turnover. Revenue is not a domain eligibility rule, license restriction, or feature lock. The actual complexity vector and supported combinations live in [CONFORMANCE.md](CONFORMANCE.md).
 
-The committed suite scope is Romanian SRLs on supported VAT/non-VAT and microenterprise/profit-tax branches, including native payroll, assets/financing/owner transactions, inventory and production when their facts apply. “Full accounting” means the company's complete monthly/quarterly/annual cycle, including calculated taxes, applicable statutory outputs, annual statements and authorized fulfillment. A service company without stock or employees still needs its applicable tax and annual accounting coverage. Broader legal-entity frameworks require separate scope decisions and profiles.
+The committed suite scope is Romanian SRLs, PFAs, IIs and IFs under about $1M of turnover:
+- every VAT branch: normal, on collection, non-payer, OSS/IOSS, margin schemes and the agricultural flat rate;
+- every income-tax branch: micro, profit tax, income tax in the real system and by norm;
+- native payroll, assets, financing and owner transactions, inventory and production when their facts apply.
+
+The statements of microentities and small entities are in scope. Excise, fiscal groups, IFRS and medium, large or audited entities are not. “Full accounting” means the company's complete monthly/quarterly/annual cycle, including calculated taxes, applicable statutory outputs, annual statements and authorized fulfillment. A service company without stock or employees still needs its applicable tax and annual accounting coverage. Other legal-entity frameworks, such as SA or nonprofits, require separate scope decisions and profiles.
 
 This is the product contract and target direction. [IMPLEMENTATION.md](IMPLEMENTATION.md) owns what exists and what prevents sole-system replacement; [ROADMAP.md](ROADMAP.md) owns the remaining modules. The [feature vision](FEATURE_VISION.md) describes how the completed engine should reduce work and make every figure understandable.
 
@@ -21,7 +26,7 @@ This is the product contract and target direction. [IMPLEMENTATION.md](IMPLEMENT
 
 ## Experience and distribution
 
-Use an owner-first interface and accountant-first distribution. Recruit accounting partners for the parallel pilot, conformance cases, and company migrations; they are design and review partners, not merely a later sales channel.
+Use an owner-first interface and accountant-first distribution. An SRL's books must be kept by an employee with higher economic studies or a CECCAR member, who signs the annual statements with the administrator (Legea 82/1991 art. 10 alin. (2)–(4), art. 28 alin. (10)–(13)). Every SRL therefore has an accountant seat: the owner approves everyday items, and the accountant reviews the month and signs the year. A PFA, II or IF may keep its own books (art. 10 alin. (4^1)). Recruit accounting partners for the parallel pilot, conformance cases, and company migrations; they are design and review partners, not merely a later sales channel.
 
 Treat the UI primarily as a verification and decision layer. External MCP clients and the planned built-in Piatra AI/BYOK agent use the same capability contract to collect evidence, prepare work and execute authorized versions. People inspect sources, exact effects and exceptions; routine operation should not require re-entering data into forms. Keep professional registers and manual fallbacks available. Initially, humans authorize postings and consequential actions; agents cannot approve their own work.
 
@@ -41,6 +46,6 @@ Optional migration services, professional support, enterprise operation, bank ag
 
 ## Optional AI
 
-Company owners choose providers and permissions. Regular Piatra AI, OpenAI, and OpenRouter keys connect directly from the instance backend. Provider charging remains with that account. A self-hoster needs no xFactura commerce account.
+Company owners choose providers and permissions. Anthropic, OpenAI and OpenAI-compatible keys (OpenRouter, local models, Piatra AI) connect directly from the instance backend. Provider charging remains with that account. A self-hoster needs no xFactura commerce account.
 
 Prioritize correctness, migration, and reduced human work over AI monetization. Do not justify hosting with hypothetical AI margins or treat the critique's example token cost as measured usage. [AI.md](AI.md) owns the autonomy ladder and economic gate for future managed AI.

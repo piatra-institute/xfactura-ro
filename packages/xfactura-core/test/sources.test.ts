@@ -35,13 +35,11 @@ describe('source register', () => {
   });
 
   test('reports the parameters still cited only to texts nobody has read', () => {
-    // The FX rate-date conventions and the rounding of declarations and payroll amounts cite acts
-    // not yet snapshotted.
+    // The FX rate-date conventions cite acts not yet snapshotted. The rounding of declarations
+    // and payroll amounts is read in OUG nr. 59/2005 art. 1 alin. (1).
     expect(unsourced(versions).map((version) => version.id)).toEqual([
       'ro.fx.rate_date.accounting/2024-01-01',
       'ro.fx.rate_date.vat/2024-01-01',
-      'ro.declaration.rounding/2016-01-01',
-      'ro.payroll.amount_rounding/2026-01-01',
     ]);
   });
 

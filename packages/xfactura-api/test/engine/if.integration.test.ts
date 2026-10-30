@@ -175,7 +175,7 @@ async function books(context: Awaited<ReturnType<typeof enterprise>>) {
     base64: Buffer.from(statement).toString('base64'),
   });
   await s.invoke(s.owner, 'bank.import', { evidenceId: extract, financialYearId: s.year.id });
-  const movements = await s.invoke<{ id: string; amount: string }[]>(s.owner, 'bank.movements', {});
+  const movements = await s.list<{ id: string; amount: string }>(s.owner, 'bank.movements', {});
   const movement = (amount: string) =>
     movements.find((entry) => entry.amount.replace('-', '') === amount)!.id;
   await s.book('bank.settle', {
@@ -249,9 +249,11 @@ describe('family enterprise members', () => {
       members: [member(ion.id, '60', true), member(maria.id, '40')],
       evidenceId: agreement,
     });
-    const list = await s.invoke<
-      { version: number; effectiveFrom: string; members: { name: string; quota: string }[] }[]
-    >(s.owner, 'if.members.list');
+    const list = await s.list<{
+      version: number;
+      effectiveFrom: string;
+      members: { name: string; quota: string }[];
+    }>(s.owner, 'if.members.list');
     expect(
       list.map((item) => [
         item.version,
@@ -349,14 +351,12 @@ describe('family enterprise members', () => {
 
   test('the obligations calendar lists D204 with both deadlines the texts give, and D212', async () => {
     const { s } = await enterprise();
-    const calendar = await s.invoke<
-      {
-        kind: string;
-        period: string;
-        due: string | null;
-        conflict: { due: string; clauses: string[] }[] | null;
-      }[]
-    >(s.owner, 'obligations.calendar', { from: '2025-12', to: '2025-12', today: '2025-12-31' });
+    const calendar = await s.list<{
+      kind: string;
+      period: string;
+      due: string | null;
+      conflict: { due: string; clauses: string[] }[] | null;
+    }>(s.owner, 'obligations.calendar', { from: '2025-12', to: '2025-12', today: '2025-12-31' });
     expect(calendar.find((item) => item.kind === 'D204')).toMatchObject({
       period: '2025',
       // 28 February 2026 is a Saturday; 15 March 2026 a Sunday.

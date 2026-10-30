@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import type { ActionView } from 'xfactura-api/contracts';
 import { field } from './api';
-import { useLoad, useWorkspace } from './workspace';
+import { useList, useWorkspace } from './workspace';
 
 type Finding = { code: string; severity: 'block' | 'warn'; message: string; count?: number };
 type Preview = {
@@ -14,10 +14,7 @@ type Preview = {
 
 export default function Periods() {
   const { can, invoke, act } = useWorkspace();
-  const { data: states } = useLoad<{ month: string; state: 'closed' | 'open' }[]>(
-    'periods.list',
-    {},
-  );
+  const { data: states } = useList<{ month: string; state: 'closed' | 'open' }>('periods.list', {});
   const [request, setRequest] = useState<ActionView | null>(null);
   const preview = request?.preview as Preview | undefined;
   const blocking = preview?.findings.some((finding) => finding.severity === 'block') ?? true;

@@ -56,6 +56,21 @@ function statement(
 }
 
 /** A VAT payer with its invoicing details, BNR rates, a lei and a euro bank account. */
+/** The owner's answer that the car is used privately too (Codul fiscal art. 298), which the
+ * proposals booking its lease cite: its VAT is half deducted. */
+async function usedPrivately(s: Scenario, plate: string) {
+  const asked = await s.invoke<{ id: string }>(s.owner, 'questions.ask', {
+    kind: 'vehicle.use',
+    subject: { kind: 'vehicle', id: plate },
+    params: {},
+  });
+  await s.invoke(s.owner, 'questions.answer', {
+    questionId: asked.id,
+    value: { use: 'mixed', from: '2026-01-01' },
+  });
+  return { answers: [asked.id] };
+}
+
 async function company(validator?: DukIntegrator) {
   const s = await scenario({
     cui: '18547290',
@@ -104,7 +119,7 @@ async function company(validator?: DukIntegrator) {
       evidenceId: (await file(`extras-${currency}.sta`, text, 'text/plain')).id,
       financialYearId: s.year.id,
     });
-    const movements = await s.invoke<{ id: string; bookingDate: string; currency: string }[]>(
+    const movements = await s.list<{ id: string; bookingDate: string; currency: string }>(
       s.owner,
       'bank.movements',
       {},
@@ -237,7 +252,7 @@ describe('a bank loan in lei', () => {
 
     // At the year's end: 23,000.00 owed, of which 2027's twelve instalments and the eight
     // overdue of 2026 are due within the year.
-    const [view] = await s.invoke<Record<string, unknown>[]>(s.owner, 'loans.list', {
+    const [view] = await s.list<Record<string, unknown>>(s.owner, 'loans.list', {
       at: '2026-12-31',
     });
     expect(view).toMatchObject({
@@ -293,7 +308,7 @@ describe('a bank loan in euro', () => {
     ]);
     await s.post(await s.approve(revalued));
     expect(await closing(s, '1621')).toEqual({ debit: '0.00', credit: '50500.00' });
-    const [view] = await s.invoke<Record<string, unknown>[]>(s.owner, 'loans.list', {
+    const [view] = await s.list<Record<string, unknown>>(s.owner, 'loans.list', {
       at: '2026-03-31',
     });
     // Due by 31 March 2027: the first two instalments.
@@ -521,6 +536,7 @@ describe('a finance lease of a car in euro, invoiced in lei', () => {
       tax: '4200.00',
       gross: '24200.00',
     });
+    const basis = await usedPrivately(s, 'GL-10-LSG');
     const leasePart = (amount: string, principal: string) => ({
       account: '167',
       vat: 'S-21',
@@ -528,6 +544,7 @@ describe('a finance lease of a car in euro, invoiced in lei', () => {
       lease: lease.id,
       principal,
       deduction: 'limited',
+      vehicle: 'GL-10-LSG',
       vatExpense: '635',
     });
     const unnamed = await s.propose('invoices.recognize', {
@@ -535,9 +552,11 @@ describe('a finance lease of a car in euro, invoiced in lei', () => {
       allocations: [{ account: '167', vat: 'S-21', amount: '20000.00', deduction: 'full' }],
     });
     expect(codes(unnamed)).toEqual(['LEASE']);
-    const advanced = await s.revise('invoices.recognize', unnamed, {
-      documentId: advance.id,
-      allocations: [leasePart('20000.00', '4000.00')],
+    const advanced = await s.invoke<ProposalView>(s.owner, 'proposals.revise', {
+      proposalId: unnamed.id,
+      version: unnamed.version,
+      input: { documentId: advance.id, allocations: [leasePart('20000.00', '4000.00')] },
+      basis,
     });
     expect(codes(advanced)).toEqual([]);
     expect(lines(advanced)).toEqual([
@@ -574,12 +593,22 @@ describe('a finance lease of a car in euro, invoiced in lei', () => {
         { rate: '21', net: '403.20', name: 'Dobânda' },
       ],
     });
-    const split = await s.propose('invoices.recognize', {
-      documentId: instalment.id,
-      allocations: [
-        leasePart('1512.00', '300.00'),
-        { account: '666', vat: 'S-21', amount: '403.20', deduction: 'limited' },
-      ],
+    const split = await s.invoke<ProposalView>(s.owner, 'proposals.propose', {
+      treatment: 'invoices.recognize',
+      input: {
+        documentId: instalment.id,
+        allocations: [
+          leasePart('1512.00', '300.00'),
+          {
+            account: '666',
+            vat: 'S-21',
+            amount: '403.20',
+            deduction: 'limited',
+            vehicle: 'GL-10-LSG',
+          },
+        ],
+      },
+      basis,
     });
     expect(codes(split)).toEqual([]);
     expect(lines(split)).toEqual([
@@ -611,7 +640,7 @@ describe('a finance lease of a car in euro, invoiced in lei', () => {
     expect(await findings(s, '2026-05')).toContainEqual(
       expect.objectContaining({ code: 'LEASE_INSTALMENT_DUE', severity: 'warn' }),
     );
-    const [view] = await s.invoke<Record<string, unknown>[]>(s.owner, 'loans.list', {
+    const [view] = await s.list<Record<string, unknown>>(s.owner, 'loans.list', {
       at: '2026-04-30',
     });
     expect(view).toMatchObject({
@@ -722,10 +751,18 @@ describe('an operating lease', () => {
       tax: '210.00',
       gross: '1210.00',
     });
-    const proposal = await s.propose('invoices.recognize', {
-      documentId: rent.id,
-      account: '612',
-      deduction: 'limited',
+    const input = { documentId: rent.id, account: '612', deduction: 'limited' };
+    // Naming no car, the reviewer confirms the deduction; naming it, the owner's answer decides.
+    const unnamed = await s.propose('invoices.recognize', input);
+    const named = { ...input, vehicle: 'B-77-OPL' };
+    expect(codes(unnamed)).toEqual(['VEHICLE_UNNAMED']);
+    const asking = await s.revise('invoices.recognize', unnamed, named);
+    expect(codes(asking)).toEqual(['VEHICLE_USE']);
+    const proposal = await s.invoke<ProposalView>(s.owner, 'proposals.revise', {
+      proposalId: asking.id,
+      version: asking.version,
+      input: named,
+      basis: await usedPrivately(s, 'B 77 OPL'),
     });
     expect(codes(proposal)).toEqual([]);
     expect(lines(proposal)).toEqual(['D 612 1105.00', 'D 4426 105.00', 'C 401 1210.00']);

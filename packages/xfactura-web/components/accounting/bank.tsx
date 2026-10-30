@@ -1,7 +1,7 @@
 'use client';
 
 import { amountField, field, formatMoney } from './api';
-import { useLoad, useWorkspace } from './workspace';
+import { useList, useWorkspace } from './workspace';
 
 type TreasuryAccount = {
   id: string;
@@ -32,9 +32,9 @@ type Position = {
 
 export default function Bank() {
   const { can, invoke, act } = useWorkspace();
-  const { data: accounts } = useLoad<TreasuryAccount[]>('treasury.accounts', {});
-  const { data: movements } = useLoad<Movement[]>('bank.movements', {});
-  const { data: positions } = useLoad<Position[]>('openItems.list', {});
+  const { data: accounts } = useList<TreasuryAccount>('treasury.accounts', {});
+  const { data: movements } = useList<Movement>('bank.movements', {});
+  const { data: positions } = useList<Position>('openItems.list', {});
   const unsettled = (movements ?? []).filter((movement) => !movement.settled);
   return (
     <>

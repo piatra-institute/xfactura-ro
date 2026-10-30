@@ -168,10 +168,11 @@ export async function justifyingDocuments(
         ),
       ),
     );
-  // The recognized document: the proposal's, or the one its input names.
+  // The recognized document: the one the posted version's input names (a revision may name
+  // another than the first version), or the proposal's.
   const documentOf = (row: (typeof rows)[number]) =>
-    row.documentId ??
     ((JSON.parse(row.input) as { documentId?: unknown }).documentId as string | undefined) ??
+    row.documentId ??
     null;
   const documentIds = rows.flatMap((row) => {
     const id = documentOf(row);

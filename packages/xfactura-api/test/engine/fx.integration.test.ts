@@ -101,7 +101,7 @@ describe('BNR rates', () => {
     });
     expect(again).toEqual({ rates: 5, added: 0, revised: 0 });
     expect(
-      await s.invoke(s.owner, 'fx.rates', {
+      await s.list(s.owner, 'fx.rates', {
         currency: 'HUF',
         from: '2026-03-01',
         to: '2026-03-31',
@@ -170,7 +170,7 @@ describe('revaluation and settlement', () => {
       evidenceId: (await file(`extras-${amount}.sta`, statement(amount))).id,
       financialYearId: s.year.id,
     });
-    const [movement] = await s.invoke<{ id: string }[]>(s.owner, 'bank.movements', {
+    const [movement] = await s.list<{ id: string }>(s.owner, 'bank.movements', {
       unsettled: true,
     });
     return movement!.id;

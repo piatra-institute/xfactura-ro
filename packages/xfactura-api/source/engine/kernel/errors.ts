@@ -21,7 +21,33 @@ const invariants: Record<string, [code: string, message: string]> = {
   open_item_balance: ['OPEN_ITEM_BALANCE', 'Operațiunea depășește soldul poziției deschise.'],
   immutable_record: ['IMMUTABLE', 'Înregistrarea nu mai poate fi modificată.'],
   approver: ['FORBIDDEN', 'Aprobarea cere un proprietar sau un revizor activ.'],
+  decider: [
+    'APPROVER_INACTIVE',
+    'Persoana care a aprobat acțiunea nu mai este proprietar sau revizor activ.',
+  ],
+  segregation: ['SEGREGATION', 'Separarea atribuțiilor cere aprobarea altei persoane.'],
   year_overlap: ['YEAR_OVERLAP', 'Exercițiul se suprapune cu unul existent.'],
+  identity_taken: [
+    'DOCUMENT_BOOKED',
+    'Același document, din altă sursă, are deja o propunere deschisă sau contabilizată.',
+  ],
+  supersede: [
+    'DOCUMENT_POSTED',
+    'Documentul nu mai poate fi înlocuit: corectați prin stornare și o propunere nouă.',
+  ],
+  statement_overlap: [
+    'BANK_STATEMENT_OVERLAP',
+    'Zilele extrasului sunt deja acoperite de alt extras al aceluiași cont.',
+  ],
+  question_open: [
+    'QUESTION_OPEN',
+    'Aceeași întrebare despre același obiect așteaptă deja un răspuns.',
+  ],
+  question_answered: ['QUESTION_ANSWERED', 'Întrebarea are deja un răspuns.'],
+  question_withdrawn: ['QUESTION_WITHDRAWN', 'Întrebarea a fost retrasă.'],
+  answer_person: ['AGENT_SCOPE', 'Răspunsul aparține unei persoane.'],
+  answerer: ['FORBIDDEN', 'Răspunsul cere un proprietar sau un revizor activ.'],
+  disposition_person: ['AGENT_SCOPE', 'Această decizie aparține unei persoane.'],
 };
 
 function causes(error: unknown) {

@@ -21,6 +21,8 @@ xFactura's goal is a free, open Romanian accounting suite operated through a sha
 | Audience, free accounting, distribution and UI purpose | [PRODUCT.md](PRODUCT.md) |
 | Conformance profiles, company eligibility and complete obligation coverage | [CONFORMANCE.md](CONFORMANCE.md) |
 | Dated regulatory planning findings | [REGULATORY_BASELINE.md](REGULATORY_BASELINE.md) |
+| PFA, II and IF: single-entry books, income tax, contributions, D212 and D204 | [PFA_II_IF.md](PFA_II_IF.md) |
+| Yearly rule rollover and what stops on 1 January | [ROLLOVER.md](ROLLOVER.md) |
 | Evidence, accounting/fiscal branches, invariants and architecture | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | Implemented purchase corrections | [CORRECTIONS.md](CORRECTIONS.md) |
 | Historical books, tax history and migration activation | [MIGRATION.md](MIGRATION.md) |

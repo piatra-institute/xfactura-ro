@@ -52,6 +52,7 @@ export const dividendDistribution: Treatment<DistributionInput> = {
   description: 'Repartizarea dividendelor din profitul reportat, prin hotărârea asociaților.',
   input: distributionInput,
   agent: true,
+  summary: "Distribution of dividends from retained earnings under the shareholders' resolution.",
   subject: (input) => `dividends:${input.evidenceId}`,
   plan: (input) => ({
     evidence: [input.evidenceId],
@@ -161,6 +162,9 @@ export const dividendWithholding: Treatment<WithholdingInput> = {
   description: 'Impozitul pe dividende reținut la plata dividendelor.',
   input: withholdingInput,
   agent: true,
+  summary: 'Dividend tax withheld when dividends are paid.',
+  toolset: 'tax',
+  dataClasses: ['books', 'tax'],
   subject: (input) => `dividend-tax:${input.openItem}:${input.date}`,
   plan: (input) => ({
     entries: [input.distributionEntryId],

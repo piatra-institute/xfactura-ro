@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import type { JobView } from 'xfactura-api/contracts';
 import { companyPath, field } from './api';
-import { useLoad, useWorkspace } from './workspace';
+import { useList, useWorkspace } from './workspace';
 
 type Fact = { id: string; axis: string; value: string; effectiveFrom: string };
 const axes: Record<string, { label: string; values: Record<string, string> }> = {
@@ -33,7 +33,7 @@ const axes: Record<string, { label: string; values: Record<string, string> }> = 
 
 export default function Settings() {
   const { company, can, evidence, invoke, act } = useWorkspace();
-  const { data: facts } = useLoad<Fact[]>('profile.read', {});
+  const { data: facts } = useList<Fact>('profile.read', {});
   const [axis, setAxis] = useState('vat.status');
   const [exportJob, setExportJob] = useState<JobView | null>(null);
   const [invitation, setInvitation] = useState('');

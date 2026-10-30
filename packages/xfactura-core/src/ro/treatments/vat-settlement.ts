@@ -55,6 +55,10 @@ export const vatSettlement: Treatment<VatSettlementInput> = {
     'Regularizarea TVA a unei perioade: TVA colectată și deductibilă închise în TVA de plată (4423) sau de recuperat (4424).',
   input: vatSettlementInput,
   agent: true,
+  summary:
+    'VAT settlement of a period: output and input VAT closed into VAT payable (4423) or recoverable (4424).',
+  toolset: 'tax',
+  dataClasses: ['books', 'tax'],
   subject: (input) => `vat.settle:${input.period}:${input.round}`,
   plan: (input) => ({
     evidence: [input.evidenceId],

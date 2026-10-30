@@ -8,7 +8,7 @@
   "type": "module",
   "scripts": {
     "clean": "rimraf ./build",
-    "build": "bun build source/index.ts --target=bun --outdir build --packages=external",
+    "build": "bun build source/index.ts source/engine/adapters/pdf-text.worker.ts --root source --target=bun --outdir build --packages=external",
     "dev": "bun --watch source/index.ts",
     "start": "bun source/index.ts",
     "db.push": "drizzle-kit push:sqlite",
@@ -31,6 +31,7 @@
     "hono": "4.13.14",
     "jwt-decode": "^4.0.0",
     "multer": "1.4.5-lts.1",
+    "pdfjs-dist": "6.4.299",
     "saxes": "6.0.0",
     "stripe": "^14.14.0",
     "typescript": "6.0.3",

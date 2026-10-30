@@ -109,6 +109,8 @@ export const generalJournal: Treatment<GeneralJournalInput> = {
     'Notă contabilă explicită: poziție de deschidere, înregistrare generală sau ajustare, cu documentul justificativ.',
   input: generalJournalInput,
   agent: true,
+  summary:
+    'Explicit journal entry (opening balance, general entry or adjustment) with its supporting document.',
   subject: (input) =>
     input.purpose === 'opening'
       ? `opening:${input.date}`
@@ -243,6 +245,7 @@ export const reversal: Treatment<ReversalInput> = {
     'Stornarea integrală a unei înregistrări contabilizate, cu motivul și documentul justificativ.',
   input: reversalInput,
   agent: true,
+  summary: 'Full reversal (storno) of a posted entry, with the reason and the supporting document.',
   subject: (input) => `reverse:${input.entryId}`,
   plan: (input) => ({
     evidence: [input.evidenceId],
@@ -263,6 +266,16 @@ export const reversal: Treatment<ReversalInput> = {
     if (input.date < entry.date)
       issues.push(
         block('REVERSAL_DATE', 'Stornarea nu poate precede înregistrarea inițială.', 'date'),
+      );
+    // A storno frees its entry's subject for a new booking; undoing it is that new booking, never
+    // a storno of the storno (the database refuses one too, `inv:reversal_of_reversal`).
+    if (entry.reverses !== undefined)
+      issues.push(
+        block(
+          'REVERSAL_OF_REVERSAL',
+          'O stornare nu se stornează: înregistrarea stornată se propune din nou, ca o propunere nouă.',
+          'entryId',
+        ),
       );
     const method = input.method ?? profileAt(loaded, 'policy.storno', input.date);
     if (method !== 'red' && method !== 'black')

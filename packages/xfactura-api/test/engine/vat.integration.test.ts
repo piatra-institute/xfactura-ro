@@ -66,7 +66,7 @@ describe('VAT settlement', () => {
     expect(await balance(s, '4427')).toEqual({ debit: '0.00', credit: '0.00' });
     expect(await balance(s, '4426')).toEqual({ debit: '0.00', credit: '0.00' });
     expect(await balance(s, '4423')).toEqual({ debit: '0.00', credit: '10.50' });
-    const [item] = await s.invoke<{ kind: string; balance: string }[]>(s.owner, 'openItems.list', {
+    const [item] = await s.list<{ kind: string; balance: string }>(s.owner, 'openItems.list', {
       kind: 'tax.payable',
     });
     expect(item).toMatchObject({ kind: 'tax.payable' });

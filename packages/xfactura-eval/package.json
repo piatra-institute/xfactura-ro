@@ -1,0 +1,17 @@
+{
+  "name": "xfactura-eval",
+  "version": "0.0.1",
+  "description": "Agent evaluation harness: synthetic worlds kept by an agent through the engine's MCP surface, scored against gold decisions",
+  "private": true,
+  "license": "MPL-2.0",
+  "type": "module",
+  "scripts": {
+    "eval": "bun run src/cli.ts",
+    "record": "bun run src/cli.ts --agent llm --llm record"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
+    "xfactura-core": "workspace:*",
+    "zod": "4.6.7"
+  }
+}

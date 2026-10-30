@@ -53,6 +53,8 @@ export const resultClosing: Treatment<ResultClosingInput> = {
     'Închiderea conturilor de cheltuieli și venituri în contul 121 la sfârșitul exercițiului.',
   input: resultClosingInput,
   agent: true,
+  summary: 'Year-end closing of the expense and revenue accounts into account 121.',
+  toolset: 'close',
   subject: (input) => `year-result:${input.yearEnd}`,
   plan: (input) => ({ evidence: [input.evidenceId], turnover: [closingQuery(input.yearEnd)] }),
   evaluate(input, loaded) {
@@ -158,6 +160,8 @@ export const legalReserve: Treatment<LegalReserveInput> = {
     'Constituirea rezervei legale din profitul exercițiului (art. 183 din Legea nr. 31/1990).',
   input: legalReserveInput,
   agent: true,
+  summary: "Legal reserve set up from the year's profit (art. 183 of Law 31/1990).",
+  toolset: 'close',
   subject: (input) => `legal-reserve:${input.yearEnd}`,
   plan: (input) => {
     const { balances, result } = reserveQueries(input.yearEnd);
@@ -256,6 +260,8 @@ export const resultTransfer: Treatment<ResultTransferInput> = {
     'Repartizarea rezultatului exercițiului încheiat, după aprobarea situațiilor financiare.',
   input: resultTransferInput,
   agent: true,
+  summary: "Distribution of the closed year's result after the financial statements are approved.",
+  toolset: 'close',
   subject: (input) => `year-transfer:${input.yearEnd}`,
   plan: (input) => ({ evidence: [input.evidenceId], turnover: [transferQuery(input)] }),
   evaluate(input, loaded) {

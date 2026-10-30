@@ -20,7 +20,8 @@ import '@/app/globals.css';
 
 
 export default function PaymentPage() {
-    const [status, setStatus] = useState(null);
+    const [status, setStatus] = useState<boolean | null>(null);
+    const [pending, setPending] = useState(false);
     const [customerEmail, setCustomerEmail] = useState('');
 
 
@@ -35,7 +36,8 @@ export default function PaymentPage() {
         })
             .then((res) => res.json())
             .then((response) => {
-                setStatus(response.status);
+                setStatus(response.status === true);
+                setPending(response.data?.pending === true);
 
                 if (response.status) {
                     setCustomerEmail(response.data.customerEmail);
@@ -43,11 +45,12 @@ export default function PaymentPage() {
             })
             .catch((error) => {
                 logger('error', error);
+                setStatus(false);
             });
     }, []);
 
 
-    if (!status) {
+    if (status === null) {
         return (
             <Spinner />
         );
@@ -68,6 +71,12 @@ export default function PaymentPage() {
                     >
                         {customerEmail}
                     </span>
+                </p>
+            ) : pending ? (
+                <p>
+                    plata este în curs de procesare
+                    <br />
+                    actele vor fi adăugate în cont după confirmarea plății
                 </p>
             ) : (
                 <p>

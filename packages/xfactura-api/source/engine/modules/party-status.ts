@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { and, asc, desc, eq, gte, inArray, lte } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireCondition } from 'xfactura-core/errors';
@@ -62,7 +61,10 @@ export const checkStatusView = z.object({
       partyId: z.string(),
       date: z.string(),
       outcome: z.enum(['checked', 'not_found', 'not_applicable', 'error']),
+      /** The standing snapshot for the date, the one a proposal reads. */
       status: statusView.nullable(),
+      /** True when this call recorded `status`; false when it stands from an earlier check. */
+      recorded: z.boolean(),
       detail: z.string().nullable(),
     }),
   ),
@@ -71,6 +73,82 @@ type Result = z.infer<typeof checkStatusView>['results'][number];
 
 /** A party on a date; `cui` is null for a party ANAF's registers do not hold. */
 type Target = { partyId: string; cui: string | null; date: LocalDate };
+type Snapshot = typeof partyStatuses.$inferSelect;
+
+/** What a snapshot says about the party: an answer saying the same changes nothing read. */
+const statusFields = [
+  'name',
+  'vatPayer',
+  'cashVat',
+  'inactive',
+  'inactiveSince',
+  'reactivatedOn',
+  'splitVat',
+  'eInvoice',
+  'struckOffOn',
+] as const satisfies readonly (keyof TaxpayerStatus)[];
+const sameStatus = (snapshot: Snapshot, cui: string, status: TaxpayerStatus) =>
+  snapshot.cui === cui &&
+  statusFields.every((field) => (snapshot[field] ?? null) === (status[field] ?? null));
+
+/** The parties' (party, date) pairs that have a snapshot, as `partyStatusKey`s. */
+async function checkedKeys(tx: Transaction, companyId: string, partyIds: string[]) {
+  if (!partyIds.length) return new Set<string>();
+  const rows = await tx
+    .selectDistinct({ partyId: partyStatuses.partyId, asOf: partyStatuses.asOf })
+    .from(partyStatuses)
+    .where(
+      and(
+        eq(partyStatuses.companyId, companyId),
+        inArray(partyStatuses.partyId, [...new Set(partyIds)]),
+      ),
+    );
+  return new Set(rows.map((row) => partyStatusKey(row.partyId, row.asOf as LocalDate)));
+}
+
+/** The latest snapshot of a party for exactly a date: the one a proposal reads. */
+async function standing(tx: Transaction, companyId: string, target: Target) {
+  const [row] = await tx
+    .select()
+    .from(partyStatuses)
+    .where(
+      and(
+        eq(partyStatuses.companyId, companyId),
+        eq(partyStatuses.partyId, target.partyId),
+        eq(partyStatuses.asOf, target.date),
+      ),
+    )
+    .orderBy(desc(partyStatuses.seq))
+    .limit(1);
+  return row;
+}
+
+/** A snapshot as a result, recorded by this call or standing from an earlier one. */
+const resultOf = (
+  target: Target,
+  snapshot: Snapshot,
+  recorded: boolean,
+  detail: string | null,
+): Result => ({
+  partyId: target.partyId,
+  date: target.date,
+  outcome: 'checked',
+  status: {
+    seq: snapshot.seq,
+    name: snapshot.name,
+    vatPayer: snapshot.vatPayer,
+    cashVat: snapshot.cashVat,
+    inactive: snapshot.inactive,
+    inactiveSince: snapshot.inactiveSince,
+    reactivatedOn: snapshot.reactivatedOn,
+    splitVat: snapshot.splitVat,
+    eInvoice: snapshot.eInvoice,
+    struckOffOn: snapshot.struckOffOn,
+    evidenceId: snapshot.evidenceId,
+  },
+  recorded,
+  detail,
+});
 
 /** The CUI of a party established in Romania, as ANAF's registers know it; null otherwise. */
 const cuiOf = (party: typeof parties.$inferSelect) =>
@@ -131,6 +209,12 @@ export class PartyStatuses {
    * does not hold (foreign, or without a CUI) are not applicable. When ANAF does not answer at
    * all nothing is recorded and the same key can be retried; when a later request fails, the
    * answers before it are recorded and the rest reported as errors.
+   *
+   * A snapshot is recorded only when ANAF's answer differs from the standing snapshot for that
+   * party and date: a newer snapshot makes the proposals reading it stale, so an answer saying
+   * the same leaves them current. ANAF's answer is kept as evidence only when a snapshot cites
+   * it. With `month`, the pairs already checked are reported from their snapshot without asking
+   * again; `partyIds` with `date` always asks.
    */
   async checkStatus(actor: Actor, key: string, input: z.infer<typeof checkStatusInput>) {
     const port = this.registry();
@@ -140,9 +224,13 @@ export class PartyStatuses {
       'STATUS_DATE',
       'Starea ANAF se verifică pentru o dată care a trecut.',
     );
-    const targets: Target[] = await this.commands.db.read(async (tx) => {
+    const [targets, checked]: [Target[], Set<string>] = await this.commands.db.read(async (tx) => {
       await this.commands.authorize(tx, actor, 'write', 'parties.checkStatus');
-      if (input.month) return monthSuppliers(tx, actor.companyId, input.month);
+      if (input.month) {
+        const suppliers = await monthSuppliers(tx, actor.companyId, input.month);
+        const partyIds = suppliers.filter((item) => item.cui).map((item) => item.partyId);
+        return [suppliers, await checkedKeys(tx, actor.companyId, partyIds)];
+      }
       const rows = await tx
         .select()
         .from(parties)
@@ -153,18 +241,24 @@ export class PartyStatuses {
         'Partenerul nu este disponibil.',
         404,
       );
-      return input.partyIds!.map((partyId) => ({
+      const named = input.partyIds!.map((partyId) => ({
         partyId,
         cui: cuiOf(rows.find((row) => row.id === partyId)!),
         date: input.date as LocalDate,
       }));
+      return [named, new Set<string>()];
     });
     const unique = [
       ...new Map(
         targets.map((target) => [partyStatusKey(target.partyId, target.date), target]),
       ).values(),
     ];
-    const asked = unique.filter((target) => target.cui && target.date <= today);
+    const asked = unique.filter(
+      (target) =>
+        target.cui &&
+        target.date <= today &&
+        !checked.has(partyStatusKey(target.partyId, target.date)),
+    );
     let answers: readonly TaxpayerAnswer[] = [];
     let failure: string | null = null;
     if (asked.length)
@@ -185,34 +279,68 @@ export class PartyStatuses {
       }
     const stamp = new Date(this.clock()).toISOString().replace(/[-:]|\.\d+/g, '');
     return this.commands.run(actor, key, 'parties.checkStatus', input, 'write', async (tx) => {
-      const recorded = new Map<string, Result>();
+      const answered = new Map<string, Result>();
       for (const [index, answer] of answers.entries()) {
-        const evidenceId = await this.keep(
-          tx,
-          actor,
-          answer.raw,
-          `anaf-registre-${stamp}-${index + 1}.json`,
-        );
+        // Kept with the first snapshot recorded from it: an answer nothing cites is not kept.
+        let evidenceId: string | null = null;
         for (const result of answer.results)
           for (const target of asked.filter(
             (item) => item.cui === result.cui && item.date === result.date,
-          ))
-            recorded.set(
-              partyStatusKey(target.partyId, target.date),
-              result.status
-                ? await this.record(tx, actor, target, result.status, evidenceId)
-                : {
-                    partyId: target.partyId,
-                    date: target.date,
-                    outcome: 'not_found',
-                    status: null,
-                    detail: `ANAF nu găsește CUI ${target.cui} în registrele sale.`,
-                  },
+          )) {
+            const id = partyStatusKey(target.partyId, target.date);
+            if (!result.status) {
+              answered.set(id, {
+                partyId: target.partyId,
+                date: target.date,
+                outcome: 'not_found',
+                status: null,
+                recorded: false,
+                detail: `ANAF nu găsește CUI ${target.cui} în registrele sale.`,
+              });
+              continue;
+            }
+            const last = await standing(tx, actor.companyId, target);
+            if (last && sameStatus(last, target.cui!, result.status)) {
+              answered.set(
+                id,
+                resultOf(
+                  target,
+                  last,
+                  false,
+                  `ANAF răspunde la fel ca la verificarea înregistrată pentru ${target.date}: starea rămâne cea înregistrată, fără o stare nouă.`,
+                ),
+              );
+              continue;
+            }
+            evidenceId ??= await this.keep(
+              tx,
+              actor,
+              answer.raw,
+              `anaf-registre-${stamp}-${index + 1}.json`,
             );
+            answered.set(id, await this.record(tx, actor, target, result.status, evidenceId));
+          }
       }
-      const results = unique.map((target): Result => {
-        const done = recorded.get(partyStatusKey(target.partyId, target.date));
-        if (done) return done;
+      const results: Result[] = [];
+      for (const target of unique) {
+        const id = partyStatusKey(target.partyId, target.date);
+        const done = answered.get(id);
+        if (done) {
+          results.push(done);
+          continue;
+        }
+        const last = target.cui && checked.has(id) && (await standing(tx, actor.companyId, target));
+        if (last) {
+          results.push(
+            resultOf(
+              target,
+              last,
+              false,
+              `Starea la ${target.date} este deja verificată; ANAF nu a fost întrebat din nou (o verificare din nou: parties.checkStatus cu partyIds și date).`,
+            ),
+          );
+          continue;
+        }
         const [outcome, detail]: [Result['outcome'], string] = !target.cui
           ? [
               'not_applicable',
@@ -221,8 +349,15 @@ export class PartyStatuses {
           : target.date > today
             ? ['error', `Starea la ${target.date} se verifică după această dată.`]
             : ['error', failure ?? 'ANAF nu a răspuns.'];
-        return { partyId: target.partyId, date: target.date, outcome, status: null, detail };
-      });
+        results.push({
+          partyId: target.partyId,
+          date: target.date,
+          outcome,
+          status: null,
+          recorded: false,
+          detail,
+        });
+      }
       return { results };
     });
   }
@@ -262,6 +397,7 @@ export class PartyStatuses {
       date: target.date,
       outcome: 'checked',
       status: { seq, ...status, evidenceId },
+      recorded: true,
       detail: null,
     };
   }
@@ -275,7 +411,7 @@ export class PartyStatuses {
       .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.hash, hash)));
     if (stored) return stored.id;
     await this.objects.put(actor.companyId, bytes, 64 * 1024 * 1024);
-    const id = randomUUID();
+    const id = this.commands.ids();
     await tx.insert(evidence).values({
       id,
       companyId: actor.companyId,
@@ -284,6 +420,7 @@ export class PartyStatuses {
       mediaType: 'application/json',
       size: bytes.length,
       createdBy: actor.actorId,
+      engineAt: this.commands.clock(),
     });
     return id;
   }
@@ -296,18 +433,10 @@ export const partyStatusChecks: CloseCheck[] = [
     async run(tx, companyId, month) {
       const purchases = (await monthSuppliers(tx, companyId, month)).filter((item) => item.cui);
       if (!purchases.length) return [];
-      const checked = new Set(
-        (
-          await tx
-            .selectDistinct({ partyId: partyStatuses.partyId, asOf: partyStatuses.asOf })
-            .from(partyStatuses)
-            .where(
-              and(
-                eq(partyStatuses.companyId, companyId),
-                inArray(partyStatuses.partyId, [...new Set(purchases.map((item) => item.partyId))]),
-              ),
-            )
-        ).map((row) => partyStatusKey(row.partyId, row.asOf as LocalDate)),
+      const checked = await checkedKeys(
+        tx,
+        companyId,
+        purchases.map((item) => item.partyId),
       );
       const unchecked = purchases.filter(
         (item) => !checked.has(partyStatusKey(item.partyId, item.date)),

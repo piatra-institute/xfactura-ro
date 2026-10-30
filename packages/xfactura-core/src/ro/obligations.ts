@@ -9,6 +9,7 @@ export const obligationKinds = [
   'D390',
   'D394',
   'D112',
+  'D112.quarterly',
   'D100.micro',
   'D100.dividends',
   'D205',
@@ -125,6 +126,14 @@ export const obligationVersions: ParameterVersion[] = [
     '2016-07-01',
   ),
   version('ro.deadline.D112', day25, ['ANAF/Cod-fiscal-consolidat:art.147(1)'], '2016-01-01'),
+  // A quarterly filer's D112 for each month of the quarter: the 25th of the month after the
+  // quarter, counted from the quarter's last month (the calendar passes the quarter as period).
+  version(
+    'ro.deadline.D112.quarterly',
+    day25,
+    ['ANAF/Cod-fiscal-consolidat:art.147(4)-(10)'],
+    '2026-01-01',
+  ),
   version(
     'ro.deadline.D100.micro',
     day25,

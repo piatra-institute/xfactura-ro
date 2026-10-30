@@ -84,9 +84,9 @@ if (archives) {
 const codes: Record<string, number> = {};
 for (const outcome of report.outcomes)
   if (outcome.code) codes[outcome.code] = (codes[outcome.code] ?? 0) + 1;
-const parties = (await engine.invoke(owner, 'parties.list', randomUUID(), {})) as {
-  kind: string;
-}[];
+const parties = (
+  (await engine.invoke(owner, 'parties.list', randomUUID(), {})) as { items: { kind: string }[] }
+).items;
 console.log(
   JSON.stringify(
     {

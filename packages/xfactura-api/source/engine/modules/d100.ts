@@ -12,6 +12,7 @@ import {
 import { counties } from 'xfactura-core/ro/geo';
 import type { Transaction } from '../db/database';
 import { companies, entries, lines, proposals, proposalVersions } from '../db/schema';
+import { entryStands } from '../kernel/ledger';
 import { loadState } from '../kernel/state';
 import { sellerDetails } from './d300';
 import type { DeclarationKind, DeclarationProblem } from './declarations';
@@ -33,7 +34,8 @@ export const d100Options = z
   })
   .strict();
 
-/** Postings of a treatment (or subject) dated in a range, with the input and effect they posted. */
+/** Postings that stand of a treatment (or subject) dated in a range, with the input and effect
+ * they posted. */
 async function posted(
   tx: Transaction,
   companyId: string,
@@ -66,6 +68,8 @@ async function posted(
         ...(where.subjectKey ? [eq(proposals.subjectKey, where.subjectKey)] : []),
         gte(entries.date, where.from),
         lte(entries.date, where.to),
+        // A reversed posting no longer counts; the subject's new booking does.
+        entryStands('"acc_entries"'),
       ),
     );
   return rows.map((row) => ({
@@ -102,20 +106,25 @@ async function obligationsOf(tx: Transaction, companyId: string, month: string) 
     from: `${month}-01`,
     to: end,
   });
+  // The tax each entry booked: on 446 when withheld, on 4418 for the micro tax.
   const taxes = new Map<string, bigint>();
-  for (const row of [...dividends, ...interest]) {
-    const [line] = await tx
-      .select({ bani: lines.bani })
-      .from(lines)
-      .where(
-        and(
-          eq(lines.companyId, companyId),
-          eq(lines.entryId, row.entryId),
-          eq(lines.account, '446'),
-        ),
-      );
-    taxes.set(row.entryId, line?.bani ?? 0n);
-  }
+  for (const [rows, account] of [
+    [micro, '4418'],
+    [[...dividends, ...interest], '446'],
+  ] as const)
+    for (const row of rows) {
+      const [line] = await tx
+        .select({ bani: lines.bani })
+        .from(lines)
+        .where(
+          and(
+            eq(lines.companyId, companyId),
+            eq(lines.entryId, row.entryId),
+            eq(lines.account, account),
+          ),
+        );
+      taxes.set(row.entryId, line?.bani ?? 0n);
+    }
   return { micro, dividends, interest, taxes };
 }
 
@@ -166,11 +175,13 @@ export function d100Declaration(): DeclarationKind {
       const obligations: D100Obligation[] = [];
       const [microTax] = micro;
       if (microTax) {
-        const base = Number(microTax.effect.explanation?.details?.base ?? NaN);
-        if (!Number.isSafeInteger(base))
+        // The tax as posted (698 = 4418): computed by `tax.micro`, in whole lei.
+        const tax = taxes.get(microTax.entryId) ?? 0n;
+        if (tax <= 0n || tax % 100n)
           problems.push({
             code: 'D100_MICRO',
-            message: 'Baza impozitului pe microîntreprinderi lipsește.',
+            message:
+              'Impozitul pe microîntreprinderi înregistrat lipsește sau are subdiviziuni de leu.',
           });
         if (december && !options.fourthQuarterDue)
           problems.push({
@@ -180,7 +191,7 @@ export function d100Declaration(): DeclarationKind {
           });
         obligations.push({
           kind: 'micro',
-          base,
+          tax: Number(tax / 100n),
           ...(december && options.fourthQuarterDue
             ? { fourthQuarterDue: options.fourthQuarterDue }
             : {}),

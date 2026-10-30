@@ -182,6 +182,28 @@ export const legalSources: readonly LegalSource[] = [
       },
     ],
   },
+  // The rounding of taxes and contributions owed to the budget, which the procedure code does
+  // not state (its ANAF edition above has no rounding article). The portal's page is dynamic
+  // (a token in the print link changes per request), so it is not refetched: the hash is the
+  // copy kept in .sources/.
+  {
+    id: 'OUG59/2005',
+    kind: 'act',
+    title:
+      'Ordonanța de urgență a Guvernului nr. 59/2005 privind unele măsuri de natură fiscală și financiară pentru punerea în aplicare a Legii nr. 348/2004 privind denominarea monedei naționale (forma consolidată pe portalul legislativ, actualizată până la 26.05.2006)',
+    issuer: 'Guvernul României',
+    publication: 'Monitorul Oficial nr. 556 din 29 iunie 2005',
+    urls: ['https://legislatie.just.ro/Public/DetaliiDocument/62685'],
+    fetch: false,
+    snapshots: [
+      {
+        url: 'https://legislatie.just.ro/Public/DetaliiDocument/62685',
+        sha256: 'ab57d921519c98304b7651461ff2a2c045688612669fafd6fa9d81e06e193fa2',
+        retrievedOn: '2026-10-30',
+        mediaType: 'text/html',
+      },
+    ],
+  },
   {
     id: 'L134/2010',
     kind: 'act',
@@ -942,6 +964,70 @@ export const clauses: readonly Clause[] = [
     status: 'located',
     summary: 'Cota redusă de TVA este 11%, pentru livrările și prestările enumerate.',
   },
+  // Clauses the review packets' readings rely on (src/ro/reviews/specs); located in the snapshot.
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.291(4)-(6)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 291 alin. (4)–(6)',
+    status: 'located',
+    summary:
+      'Cota aplicabilă este cea în vigoare la data faptului generator, cu excepția cazurilor de la art. 282 alin. (2), pentru care se aplică cota de la data exigibilității; la schimbarea cotei, acestea se regularizează la cota de la data livrării sau prestării.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.281(1)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 281 alin. (1)',
+    status: 'located',
+    summary:
+      'Faptul generator intervine la data livrării bunurilor sau la data prestării serviciilor.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.281(12)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 281 alin. (12)',
+    status: 'located',
+    summary:
+      'Prestările de servicii care nu sunt de la alin. (7)–(10) (decontări succesive, prestări continue, taxare inversă pe mai mult de un an) se consideră efectuate la data finalizării lor.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.282(1)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 282 alin. (1)',
+    status: 'located',
+    summary: 'Exigibilitatea taxei intervine la data la care are loc faptul generator.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.282(9)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 282 alin. (9) și normele, pct. 25 alin. (2)',
+    status: 'located',
+    summary:
+      'La ajustările bazei de impozitare (art. 287), taxa este exigibilă la data evenimentului, cu regimul, cotele și cursul operațiunii de bază; dacă aceasta nu poate fi determinată, cu cele de la data evenimentului.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.282(2)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 282 alin. (2)',
+    status: 'located',
+    summary:
+      'Prin excepție, exigibilitatea intervine la emiterea facturii sau la încasarea avansului înainte de faptul generator, ori la extragerea numerarului din automate.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:L141/2025.art.III',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'nota de sub art. 291 alin. (2): Legea nr. 141/2025 art. III, reprodus în textul ANAF',
+    status: 'located',
+    summary:
+      'Cota de 9% pentru o singură locuință cumpărată de o persoană fizică între 01.08.2025 și 31.07.2026, cu act de avans încheiat până la 01.08.2025, și pentru clădirile livrate primăriilor până la 01.08.2026.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.54(1)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 54 alin. (1)',
+    status: 'located',
+    summary:
+      'Limita veniturilor se verifică pe cifra de afaceri; pentru art. 52 alin. (1) se adaugă veniturile din transferul mijloacelor fixe sau al terenurilor când în cursul anului se transferă mai mult de un activ din aceeași subgrupă sau mai mult de un teren.',
+  },
   {
     id: 'ANAF/Cod-fiscal-consolidat:art.47(1)(c)',
     source: 'ANAF/Cod-fiscal-consolidat',
@@ -1648,6 +1734,14 @@ export const clauses: readonly Clause[] = [
       'Dreptul de deducere a TVA pentru vehiculele rutiere motorizate și cheltuielile legate de ele se limitează la 50% când nu sunt utilizate exclusiv în scopul activității economice; nu se limitează peste 3.500 kg sau 9 locuri, nici pentru urgențe, pază, curierat, agenți de vânzări, taxi, servicii cu plată, închiriere, leasing sau mărfuri.',
   },
   {
+    id: 'ANAF/Cod-fiscal-consolidat:norme.art.298.pct.68',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'normele metodologice, titlul VII, pct. 68 alin. (1)–(5) și (7) (aplicarea art. 298)',
+    status: 'located',
+    summary:
+      'Cheltuielile legate de vehicule sunt cele direct atribuibile unui vehicul (reparații, întreținere, lubrifianți, piese, combustibil), nu cele care nu pot fi atribuite unui anumit vehicul; vehiculul este cel de cel mult 3.500 kg și 9 scaune; folosirea exclusivă în scopul activității economice se dovedește cu foaia de parcurs (categoria vehiculului, scopul și locul deplasării, kilometrii, norma de consum); orice uz personal, ocazional, limitează deducerea la 50%, fără foaie de parcurs; pentru vehiculele de la art. 298 alin. (3) lit. b)–f) uzul personal este neglijabil, iar cele de la lit. a) se folosesc exclusiv pentru acele servicii.',
+  },
+  {
     id: 'ANAF/Cod-fiscal-consolidat:art.11(7)',
     source: 'ANAF/Cod-fiscal-consolidat',
     locator: 'art. 11 alin. (7)',
@@ -1899,12 +1993,12 @@ export const clauses: readonly Clause[] = [
       'D406 se transmite lunar sau trimestrial, după perioada fiscală de TVA (trimestrial pentru cei neînregistrați în scopuri de TVA), până în ultima zi calendaristică a lunii următoare perioadei.',
   },
   {
-    id: 'L207/2015:rounding',
-    source: 'L207/2015',
-    locator: 'rotunjirea creanțelor fiscale la leu (articolul de localizat)',
-    status: 'pending',
+    id: 'OUG59/2005:art.1(1)',
+    source: 'OUG59/2005',
+    locator: 'art. 1 alin. (1), modificat prin Legea nr. 15/2006, și nota C.T.C.E. de sub el',
+    status: 'located',
     summary:
-      'Creanțele fiscale se rotunjesc la leu: sub 50 de bani prin reducere, de la 50 de bani prin majorare.',
+      'Impozitele, taxele, contribuțiile și celelalte sume datorate bugetului general consolidat se stabilesc la nivel de leu, fără subdiviziuni: fracțiunile sub 50 de bani prin reducere, cele de 50 de bani sau mai mari prin majorare. Fraza despre sumele sub un leu, întregite la un leu, este dată de nota consolidării ca inaplicabilă după respingerea OUG nr. 181/2005.',
   },
   {
     id: 'L141/2025:rates',
@@ -2024,10 +2118,10 @@ export const clauses: readonly Clause[] = [
   {
     id: 'ANAF/Cod-fiscal-consolidat:art.281(8)',
     source: 'ANAF/Cod-fiscal-consolidat',
-    locator: 'art. 281 alin. (8) și normele, pct. 24 alin. (7)',
+    locator: 'art. 281 alin. (8) și normele, pct. 24 alin. (6)–(7)',
     status: 'located',
     summary:
-      'Serviciile de leasing, prestate continuu, se consideră efectuate la fiecare dată prevăzută în contract pentru plată sau, în lipsa ei, la emiterea facturii; avansul perceput în leasing este o rată de leasing, cu același fapt generator.',
+      'Livrările și prestările efectuate continuu (utilități, telefonie, închirieri, leasing și altele asemenea) se consideră efectuate la fiecare dată prevăzută în contract pentru plată sau, în lipsa ei, la emiterea facturii; un termen de plată înscris doar pe factură nu este fapt generator. Avansul perceput în leasing este o rată de leasing, cu același fapt generator.',
   },
   {
     id: 'OMFP1802/2014:pct.315-316',
@@ -2050,6 +2144,163 @@ export const clauses: readonly Clause[] = [
     status: 'located',
     summary:
       'De la 01.08.2025 cota standard crește de la 19% la 21%; o singură cotă redusă, 11%, înlocuiește cotele de 9% și 5% (Legea nr. 141/2025).',
+  },
+  // The yearly determinations (src/ro/determinations): micro-enterprise eligibility, the VAT
+  // period, quarterly D112, the size category, the small-enterprise threshold and VAT on
+  // collection, read in ANAF's consolidated Code (snapshot of 29.10.2026), OMF nr. 2.036/2025 and
+  // OMFP nr. 1.802/2014.
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.47(1)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 47 alin. (1) lit. d), e), h) și i) (lit. a), b) și f) abrogate)',
+    status: 'located',
+    summary:
+      'La 31 decembrie a anului fiscal precedent, microîntreprinderea: are capitalul deținut de alte persoane decât statul și unitățile administrativ-teritoriale; nu este în dizolvare urmată de lichidare; dacă are asociați cu peste 25%, este singura persoană juridică stabilită de ei să aplice titlul III; a depus în termen situațiile financiare anuale.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.47(1^1)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 47 alin. (1^1) lit. a)–d)',
+    status: 'located',
+    summary:
+      'Limita veniturilor se verifică pe veniturile persoanei juridice cumulate cu ale întreprinderilor legate (deținere directă sau indirectă de peste 25% ori dreptul de a numi administratorul, în oricare sens sau printr-o persoană comună; PFA, II sau IF ale asociaților cu peste 25%, cu veniturile ori norma lor anuală).',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.47(3)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 47 alin. (3) și (4)',
+    status: 'located',
+    summary:
+      'Nu aplică titlul III fondurile de garantare, entitățile transparente fiscal, băncile, asigurătorii și piața de capital (cu excepția intermediarilor secundari de asigurări sub 15%), jocurile de noroc și petrolul și gazele; asociații cu peste 25% în mai multe microîntreprinderi stabilesc până la 31 martie una singură.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.48(1)-(2^1)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 48 alin. (1)–(2^1) și art. 55 alin. (2)',
+    status: 'located',
+    summary:
+      'Impozitul pe veniturile microîntreprinderilor este opțional, din anul următor celui în care se îndeplinesc condițiile; microîntreprinderea nu poate opta pentru impozit pe profit în cursul anului; aplicarea se comunică până la 31 martie.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.48(3)-(3^3)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 48 alin. (3)–(3^3)',
+    status: 'located',
+    summary:
+      'Persoana juridică nou-înființată poate fi microîntreprindere din primul an dacă angajează un salariat în 90 de zile de la înregistrare; suspendarea contractului sub 30 de zile, prima dată în an, și concediul medical cumulat de cel mult 30 de zile nu încalcă condiția salariatului.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.52(2)-(3)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 52 alin. (2), (3) și (6)',
+    status: 'located',
+    summary:
+      'Microîntreprinderea datorează impozit pe profit din trimestrul în care nu a depus în termen situațiile financiare, respectiv din trimestrul următor încetării raportului de muncă, dacă unicul salariat nu este înlocuit în 30 de zile.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.52(5^1)-(5^2)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 52 alin. (5^1) și (5^2)',
+    status: 'located',
+    summary:
+      'În cursul anului, limita de 100.000 euro a microîntreprinderii cu întreprinderi legate se verifică pe veniturile ei însumate cu cifra de afaceri a celor legate; se adaugă o pătrime din norma anuală de venit a PFA, II sau IF legate impozitate pe normă.',
+  },
+  {
+    id: 'OUG156/2024:art.LXIV.pct.2-3',
+    source: 'OUG156/2024',
+    locator:
+      'art. LXIV pct. 2, 3 și 6 (art. 47 alin. (1) lit. c) și f), art. 54 alin. (3) din Codul fiscal)',
+    status: 'located',
+    summary:
+      'Limita veniturilor microîntreprinderii devine 250.000 euro, respectiv 100.000 euro de la 1 ianuarie 2026; litera f) a art. 47 alin. (1) se abrogă; condiția ponderii veniturilor din consultanță sau management la 31 decembrie 2024 nu se aplică limitei de 250.000 euro.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.80(2)-(3)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 80 alin. (2) și (3)',
+    status: 'located',
+    summary:
+      'Plătesc trimestrial impozitul pe salarii: entitățile fără scop patrimonial; persoanele juridice plătitoare de impozit pe profit cu venituri totale de până la 100.000 euro și un număr mediu de până la 3 salariați exclusiv în anul anterior; microîntreprinderile cu un număr mediu de până la 3 salariați exclusiv; PFA, II, IF și profesiile liberale cu salariați.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.147(4)-(10)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 147 alin. (4)–(11)',
+    status: 'located',
+    summary:
+      'Plătitorii de la art. 80 alin. (2) depun D112 trimestrial, câte una pentru fiecare lună, până la 25 a lunii următoare trimestrului; numărul mediu de salariați este media aritmetică a numărului de salariați din declarațiile depuse pentru fiecare lună a anului anterior, iar venitul total se ia din situațiile financiare; opțiunea pentru depunerea lunară se depune până la 31 ianuarie; în luna unui concediu medical sau a încetării calității de asigurat, declarația se depune lunar.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.322(2)-(6)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 322 alin. (2)–(8)',
+    status: 'located',
+    summary:
+      'Perioada fiscală este trimestrul pentru persoana impozabilă cu o cifră de afaceri din anul precedent (operațiuni taxabile, scutite cu drept de deducere sau cu locul în străinătate cu drept de deducere) de cel mult 100.000 euro, fără achiziții intracomunitare de bunuri; cine se înregistrează în cursul anului se încadrează după cifra de afaceri estimată; o achiziție intracomunitară de bunuri trece persoana la luna calendaristică.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:norme.art.322.pct.103(2)-(3)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'normele metodologice, titlul VII pct. 103 alin. (2) și (3)',
+    status: 'located',
+    summary:
+      'Echivalentul în lei al plafonului de 100.000 euro se determină la cursul BNR valabil pentru 31 decembrie a anului precedent; cifra de afaceri este baza de impozitare din rândurile decontului pentru livrările taxabile, scutite cu drept de deducere și cu locul în străinătate cu drept de deducere, cu regularizările; nu intră livrările din perioada fără cod de TVA.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.310(1)-(2),(6)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 310 alin. (1), (2) și (6)',
+    status: 'located',
+    summary:
+      'Persoana impozabilă stabilită în România cu o cifră de afaceri anuală de cel mult 395.000 lei poate aplica scutirea; cifra de afaceri cuprinde livrările și prestările cu locul în România, taxabile sau care ar fi taxabile, fără activele fixe corporale și necorporale; la depășire se solicită înregistrarea cel târziu la data depășirii, iar regimul normal se aplică din acea tranzacție.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.317',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 317 alin. (1)–(2)',
+    status: 'located',
+    summary:
+      'Persoana impozabilă neînregistrată după art. 316 se înregistrează în scopuri de TVA înainte de a presta servicii pentru care beneficiarul din alt stat membru datorează taxa sau de a primi servicii pentru care ea datorează taxa în România.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.282(3^1)-(5)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 282 alin. (3^1), (4) și (5)',
+    status: 'located',
+    summary:
+      'Aplică TVA la încasare persoanele înregistrate în România a căror cifră de afaceri din anul precedent nu a depășit plafonul; nu sunt eligibile cele care l-au depășit în anul precedent; la depășire în cursul anului, sistemul se aplică până la sfârșitul perioadei fiscale următoare celei în care plafonul a fost depășit.',
+  },
+  {
+    id: 'OMF2036/2025:anexa1.pct.2.1-2.3',
+    source: 'OMF2036/2025',
+    locator: 'anexa nr. 1 cap. II lit. A pct. 2.1–2.3',
+    status: 'located',
+    summary:
+      'Microentitățile nu depășesc la data bilanțului două dintre: active totale 2.250.000 lei, cifră de afaceri netă 4.500.000 lei, 10 salariați în medie; entitățile mici nu depășesc două dintre 25.000.000 lei, 50.000.000 lei și 50 de salariați; peste acestea, entități mijlocii și mari (pct. 9 din OMFP nr. 1.802/2014).',
+  },
+  {
+    id: 'OMF2036/2025:anexa1.pct.2.6',
+    source: 'OMF2036/2025',
+    locator: 'anexa nr. 1 cap. II lit. A pct. 2.6 alin. (2)–(4)',
+    status: 'located',
+    summary:
+      'Încadrarea pentru situațiile financiare se face la sfârșitul exercițiului, pe baza indicatorilor din situațiile financiare ale exercițiului precedent și a celor din balanța exercițiului curent; entitățile mijlocii și mari sunt auditate, ca și cele care depășesc două dintre 16.000.000 lei active, 32.000.000 lei cifră de afaceri și 50 de salariați în două exerciții consecutive.',
+  },
+  {
+    id: 'OMFP1802/2014:pct.12-13',
+    source: 'OMFP1802/2014',
+    locator: 'pct. 12 alin. (1), pct. 13 și pct. 14',
+    status: 'located',
+    summary:
+      'O entitate schimbă categoria doar dacă depășește sau încetează să depășească limitele a două dintre cele trei criterii în două exerciții financiare consecutive: exercițiul precedent și cel curent, pentru care se întocmesc situațiile financiare.',
+  },
+  {
+    id: 'OMFP1802/2014:pct.15',
+    source: 'OMFP1802/2014',
+    locator: 'pct. 15',
+    status: 'located',
+    summary:
+      'Totalul activelor din criteriile de mărime este valoarea totală a activelor de la literele A–C ale activului bilanțului (active imobilizate, active circulante, cheltuieli în avans).',
   },
 ];
 

@@ -142,11 +142,37 @@ export const issueView = z.object({
   details: z.unknown().optional(),
 });
 
+/**
+ * What differs between a version's own evaluation and a later one against the books: a read-set
+ * entry (`kind` and `id` as the treatment read them, `before` and `after` their versions, null
+ * when absent), or `rules` (the parameter versions or the assurance mode), `issues` (their codes),
+ * `treatment` (its version) or, when nothing narrower explains it, `effect` (the effect hashes).
+ */
+export const proposalChange = z.object({
+  kind: z.string(),
+  id: z.string(),
+  before: z.string().nullable(),
+  after: z.string().nullable(),
+});
+export type ProposalChange = z.infer<typeof proposalChange>;
+
+export const proposalStatuses = [
+  'blocked',
+  'proposed',
+  'approved',
+  'stale',
+  'posted',
+  'withdrawn',
+] as const;
+
 export const proposalView = z.object({
   id: z.string(),
   treatment: z.string(),
   subject: z.string(),
-  status: z.enum(['blocked', 'proposed', 'approved', 'posted', 'withdrawn']),
+  /** `stale`: an open proposal whose latest re-evaluation (`check`) found the books changed
+   * since the version was evaluated; revise it. It takes precedence over blocked, proposed and
+   * approved, which the `approval` and `issues` fields still show. */
+  status: z.enum(proposalStatuses),
   version: z.number(),
   effectHash: z.string(),
   rulesHash: z.string(),
@@ -157,9 +183,57 @@ export const proposalView = z.object({
   }),
   issues: z.array(issueView),
   effect: effectView.nullable(),
-  approval: z.object({ id: z.string(), approverId: z.string(), at: z.string() }).nullable(),
-  entry: z.object({ id: z.string(), number: z.number(), seq: z.number() }).nullable(),
+  /** The approval of this exact version; `batchId` names the reviewed batch it came with. */
+  approval: z
+    .object({
+      id: z.string(),
+      approverId: z.string(),
+      at: z.string(),
+      batchId: z.string().optional(),
+    })
+    .nullable(),
+  /** The posted entry: bound to the approval above or, when `policyId` is set, to a posting
+   * policy; posted by `postedBy`, through `agentId` when an agent posted it. */
+  entry: z
+    .object({
+      id: z.string(),
+      number: z.number(),
+      seq: z.number(),
+      policyId: z.string().nullable(),
+      postedBy: z.string(),
+      agentId: z.string().nullable(),
+    })
+    .nullable(),
   createdBy: z.string(),
   agentId: z.string().nullable(),
+  /** The latest re-evaluation of this version against the books, as of audit `seq`; null until
+   * one has run (the worker runs one after the books change; `proposals.get` with `recheck`). A
+   * signal only: `ledger.post` re-evaluates regardless. */
+  check: z
+    .object({ seq: z.number(), stale: z.boolean(), changed: z.array(proposalChange) })
+    .nullable(),
+  /** What the version relies on (`basis`): the answers, each as the version read it (the
+   * question, the answer then latest, its kind and value), and the template that made its input,
+   * when it cites one; null without a basis. */
+  basis: z
+    .object({
+      answers: z.array(
+        z.object({
+          questionId: z.string(),
+          answerId: z.string().nullable(),
+          kind: z.string().nullable(),
+          value: z.unknown(),
+        }),
+      ),
+      template: z.object({ id: z.string(), version: z.number() }).optional(),
+    })
+    .nullable(),
+  /** The version's input as its treatment read it, what `proposals.revise` starts from: on
+   * `proposals.get`, and on `proposals.list` with `withInput`; null when `redacted`. */
+  input: z.record(z.string(), z.unknown()).nullable().optional(),
+  /** On `proposals.get` and `proposals.list`, true when the caller may not read every data class
+   * of the treatment (payroll's: `payroll`, `personal`), as `events.since` decides: `input` and
+   * `basis` are then null. */
+  redacted: z.literal(true).optional(),
 });
 export type ProposalView = z.infer<typeof proposalView>;

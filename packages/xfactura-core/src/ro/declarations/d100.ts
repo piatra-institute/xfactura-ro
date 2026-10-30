@@ -44,8 +44,9 @@ export type D100MicroTax = {
   /** 121, art. 47–56 Cod fiscal: declared for the quarter's last month, or for any month by a
    * company dissolving. */
   kind: 'micro';
-  /** The quarter's taxable base, whole lei; suma_dat is 1% of it (cota 1), rounded half up. */
-  base: number;
+  /** suma_dat: the quarter's tax as the books hold it (698 = 4418, `tax.micro`), whole lei. The
+   * treatment computes it, at the register's rate and rounding; cota is 1. */
+  tax: number;
   /** suma_ded, "Suma deductibilă / Suma datorată anterior / Bonificație 10%": the structure
    * names no deduction for 121; absent is 0. */
   deductible?: number;
@@ -263,7 +264,7 @@ function inputProblems(model: D100): Problem[] {
     const path = `obligations.${index}`;
     switch (obligation.kind) {
       case 'micro':
-        amount(`${path}.base`, obligation.base, 'Baza impozabilă');
+        amount(`${path}.tax`, obligation.tax, 'Impozitul datorat');
         if (obligation.deductible !== undefined)
           amount(`${path}.deductible`, obligation.deductible, 'Suma deductibilă');
         if (obligation.reduction !== undefined)
@@ -355,7 +356,7 @@ function line(model: D100, obligation: D100Obligation): D100Line {
   switch (obligation.kind) {
     case 'micro': {
       // Model 9#: suma_plata = suma_dat − suma_ded − suma_redu, at least 0; suma_rest 0.
-      const due = (big(obligation.base) + 50n) / 100n;
+      const due = big(obligation.tax);
       const deductible = big(obligation.deductible);
       const reduction = obligation.reduction === undefined ? undefined : big(obligation.reduction);
       const dueDate =

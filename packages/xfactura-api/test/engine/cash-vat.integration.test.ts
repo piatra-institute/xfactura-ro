@@ -157,9 +157,7 @@ async function company(cash = true, validator?: DeclarationValidator) {
     return imported;
   };
   const item = async (number: string) =>
-    (await s.invoke<Item[]>(s.owner, 'openItems.list', {})).find(
-      (open) => open.document === number,
-    )!;
+    (await s.list<Item>(s.owner, 'openItems.list', {})).find((open) => open.document === number)!;
   /** A cash receipt or payment settling an invoice. */
   const cashDesk = async (
     direction: 'receipt' | 'payment',
@@ -195,7 +193,7 @@ async function company(cash = true, validator?: DeclarationValidator) {
       ).toString('base64'),
     });
     await s.invoke(s.owner, 'bank.import', { evidenceId: id, financialYearId: s.year.id });
-    return s.invoke<Movement[]>(s.owner, 'bank.movements', {});
+    return s.list<Movement>(s.owner, 'bank.movements', {});
   };
   return { s, fact, sell, document, item, cashDesk, statement, buyer };
 }

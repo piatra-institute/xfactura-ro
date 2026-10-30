@@ -185,12 +185,14 @@ async function year() {
   const assetPayable = item(
     await s.book('invoices.recognize', { documentId: laptop.id, account: '2131' }),
   );
+  // The fuel names no car: the reviewer confirms the half deducted (art. 298).
+  const fuelBooking = await s.propose('invoices.recognize', {
+    documentId: fuel.id,
+    account: '6022.VEH50',
+    deduction: 'limited',
+  });
   const fuelPayable = item(
-    await s.book('invoices.recognize', {
-      documentId: fuel.id,
-      account: '6022.VEH50',
-      deduction: 'limited',
-    }),
+    await s.post(await s.approve(fuelBooking, s.reviewer, ['VEHICLE_UNNAMED'])),
   );
   await s.invoke(s.owner, 'assets.register', {
     number: 'MF-1',
@@ -220,7 +222,7 @@ async function year() {
     base64: Buffer.from(statement).toString('base64'),
   });
   await s.invoke(s.owner, 'bank.import', { evidenceId: extract, financialYearId: s.year.id });
-  const movements = await s.invoke<{ id: string; amount: string }[]>(s.owner, 'bank.movements', {});
+  const movements = await s.list<{ id: string; amount: string }>(s.owner, 'bank.movements', {});
   const movement = (amount: string) =>
     movements.find((item) => item.amount.replace('-', '') === amount)!.id;
   const cash = async (input: Record<string, unknown>) =>
@@ -370,7 +372,7 @@ describe('PFA profile and income sources', () => {
       'INCOME_SOURCE_OPTION_LOCK',
     );
     expect(await next({ effectiveFrom: '2029-01-01', method: 'norma' })).toBeUndefined();
-    const sources = await s.invoke<{ sourceId: string; versions: { method: string }[] }[]>(
+    const sources = await s.list<{ sourceId: string; versions: { method: string }[] }>(
       s.owner,
       'pfa.sources.list',
     );
@@ -381,9 +383,11 @@ describe('PFA profile and income sources', () => {
 
   test('every PFA parameter is listed with its clauses; none is reviewed', async () => {
     const { s } = await pfa();
-    const parameters = await s.invoke<
-      { id: string; status: string; citations: { clause: string; status: string }[] }[]
-    >(s.viewer, 'rules.parameters');
+    const parameters = await s.list<{
+      id: string;
+      status: string;
+      citations: { clause: string; status: string }[];
+    }>(s.viewer, 'rules.parameters');
     const pit = parameters.filter(
       (item) => /^ro\.(pit|cas|cass|min_wage)\./.test(item.id) || item.id.includes('/single/'),
     );
@@ -477,7 +481,7 @@ describe('PFA profile and income sources', () => {
       }),
     );
     expect(statements?.code).toBe('SINGLE_ENTRY_EXCLUDED');
-    const calendar = await s.invoke<{ kind: string }[]>(s.owner, 'obligations.calendar', {
+    const calendar = await s.list<{ kind: string }>(s.owner, 'obligations.calendar', {
       from: '2026-12',
       to: '2026-12',
       today: '2026-12-31',
@@ -1008,7 +1012,7 @@ describe('PFA foreign currency', () => {
       base64: Buffer.from(extract).toString('base64'),
     });
     await s.invoke(s.owner, 'bank.import', { evidenceId: id, financialYearId: s.year.id });
-    const [movement] = await s.invoke<{ id: string }[]>(s.owner, 'bank.movements', {});
+    const [movement] = await s.list<{ id: string }>(s.owner, 'bank.movements', {});
     const settled = await s.book('bank.settle', {
       movementId: movement!.id,
       allocations: [{ openItem: recognized.effect!.openItems[0]!.id, amount: '1210.00' }],
@@ -1174,11 +1178,7 @@ describe('D212 from the books', () => {
       base64: Buffer.from(statement).toString('base64'),
     });
     await s.invoke(s.owner, 'bank.import', { evidenceId: extract, financialYearId: s.year.id });
-    const movements = await s.invoke<{ id: string; amount: string }[]>(
-      s.owner,
-      'bank.movements',
-      {},
-    );
+    const movements = await s.list<{ id: string; amount: string }>(s.owner, 'bank.movements', {});
     const movement = (amount: string) =>
       movements.find((entry) => entry.amount.replace('-', '') === amount)!.id;
     await s.book('bank.settle', {
@@ -1544,7 +1544,7 @@ describe('D212 from the books', () => {
 
   test('the obligations calendar lists D212 by 25 May of the next year', async () => {
     const { s } = await pfa();
-    const calendar = await s.invoke<{ kind: string; period: string; due: string | null }[]>(
+    const calendar = await s.list<{ kind: string; period: string; due: string | null }>(
       s.owner,
       'obligations.calendar',
       { from: '2026-12', to: '2026-12', today: '2026-12-31' },

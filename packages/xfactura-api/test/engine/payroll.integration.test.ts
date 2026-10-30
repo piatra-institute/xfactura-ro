@@ -164,11 +164,7 @@ describe('payroll', () => {
       base64: Buffer.from(statement).toString('base64'),
     });
     await s.invoke(s.owner, 'bank.import', { evidenceId: file, financialYearId: s.year.id });
-    const movements = await s.invoke<{ id: string; amount: string }[]>(
-      s.owner,
-      'bank.movements',
-      {},
-    );
+    const movements = await s.list<{ id: string; amount: string }>(s.owner, 'bank.movements', {});
     const item = (account: string) =>
       posted.effect!.openItems.find((open) => open.controlAccount === account)!.id;
     const movement = (amount: string) => movements.find((row) => row.amount === amount)!.id;
@@ -202,7 +198,7 @@ describe('payroll', () => {
       tx.select().from(parties).where(eq(parties.id, employee.partyId)),
     );
     expect(party!.taxId).toMatch(/^cnp:[0-9a-f]{64}$/);
-    expect(JSON.stringify(await s.invoke(s.owner, 'payroll.employees.list'))).not.toContain(code);
+    expect(JSON.stringify(await s.list(s.owner, 'payroll.employees.list'))).not.toContain(code);
     expect(
       (
         await s.refused(
@@ -296,7 +292,7 @@ describe('payroll', () => {
       ],
     });
     expect(second.issues).toBe(0);
-    const runs = await s.invoke<Run[]>(s.owner, 'payroll.runs.list');
+    const runs = await s.list<Run>(s.owner, 'payroll.runs.list');
     expect(runs.find((run) => run.id === first.id)?.state).toBe('superseded');
 
     // A proposal made from a run that is then recomputed goes stale.

@@ -42,6 +42,8 @@ export const accrual: Treatment<AccrualInput> = {
     'Furnizori - facturi nesosite (408) sau clienți - facturi de întocmit (418), fără TVA.',
   input: accrualInput,
   agent: true,
+  summary: 'Accrual for an invoice not yet received (408) or not yet issued (418), without VAT.',
+  toolset: 'close',
   subject: (input) => `accrual:${input.evidenceId}:${input.account}:${input.date}`,
   plan: (input) => ({ evidence: [input.evidenceId], parties: [input.partyId] }),
   evaluate(input, loaded) {
@@ -135,6 +137,8 @@ export const accrualSettlement: Treatment<AccrualSettlementInput> = {
   description: 'Stornarea unei facturi nesosite sau de întocmit, la sosirea facturii.',
   input: accrualSettlementInput,
   agent: true,
+  summary:
+    'Reversal of an accrual for an invoice not yet received or issued, when the invoice arrives.',
   subject: (input) => `accrual-settlement:${input.accrualId}`,
   plan: (input) => ({
     documents: [input.documentId],

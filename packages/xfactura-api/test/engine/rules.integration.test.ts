@@ -17,7 +17,7 @@ describe('rule parameters', () => {
   test('list every value with its review status and the clauses it cites', async () => {
     const s = await scenario();
     open.push(s);
-    const parameters = await s.invoke<Parameter[]>(s.viewer, 'rules.parameters');
+    const parameters = await s.list<Parameter>(s.viewer, 'rules.parameters');
     const standard = parameters.find((item) => item.id === 'ro.vat.rate/S/2025-08-01')!;
     expect(standard.status).toBe('extracted');
     expect(standard.citations).toContainEqual({
@@ -34,10 +34,25 @@ describe('rule parameters', () => {
   test('show the values whose reviewed period ends within the next days', async () => {
     const s = await scenario();
     open.push(s);
-    const expiring = await s.invoke<Parameter[]>(s.owner, 'rules.horizon', { days: 366 });
+    const expiring = await s.list<Parameter>(s.owner, 'rules.horizon', { days: 366 });
     expect(expiring.map((item) => item.id)).toEqual(
       expect.arrayContaining(['ro.vat.rate/S/2025-08-01', 'ro.vat.rate.reduced/2025-08-01']),
     );
     expect(expiring.every((item) => item.reviewedThrough !== null)).toBe(true);
+  });
+
+  test('count the days from the engine clock, not the host clock', async () => {
+    let now = Date.now();
+    const s = await scenario({ clock: () => now });
+    open.push(s);
+    const parameters = await s.list<Parameter>(s.viewer, 'rules.parameters');
+    const bounded = parameters.find((item) => item.reviewedThrough !== null)!;
+    const through = Date.parse(`${bounded.reviewedThrough}T12:00:00Z`);
+    const horizon = async () =>
+      (await s.list<Parameter>(s.viewer, 'rules.horizon', { days: 20 })).map((item) => item.id);
+    now = through - 10 * 86_400_000;
+    expect(await horizon()).toContain(bounded.id);
+    now = through - 100 * 86_400_000;
+    expect(await horizon()).not.toContain(bounded.id);
   });
 });

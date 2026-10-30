@@ -28,6 +28,13 @@ const createdAt = () =>
   text('created_at')
     .notNull()
     .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`);
+/**
+ * The engine clock's time when the row was written, in milliseconds since the epoch: what
+ * decides on time reads it, since `created_at` stays the database's wall time, an audit
+ * timestamp. Tests and the evaluation harness run the engine at another time than the wall's.
+ * Null on rows written before it was kept.
+ */
+const engineAt = () => counter('engine_at');
 const companyId = () =>
   text('company_id')
     .notNull()
@@ -145,7 +152,10 @@ export const agentGrants = sqliteTable(
     companyId: companyId(),
     name: text('name').notNull(),
     tokenHash: text('token_hash').notNull().unique(),
+    /** The operation ids the grant allows, with every named toolset expanded when issued. */
     scopes: text('scopes', { mode: 'json' }).$type<string[]>().notNull(),
+    /** The toolsets the issuer named; their operations are already in `scopes`. */
+    toolsets: text('toolsets', { mode: 'json' }).$type<string[]>().notNull().default([]),
     membershipEpoch: counter('membership_epoch').notNull(),
     expiresAt: counter('expires_at').notNull(),
     revokedAt: counter('revoked_at'),
@@ -256,6 +266,7 @@ export const profileFacts = sqliteTable(
   (t) => [
     primaryKey({ columns: [t.companyId, t.id] }),
     index('profile_axis').on(t.companyId, t.axis, t.effectiveFrom),
+    index('profile_evidence').on(t.companyId, t.evidenceId),
     foreignKey({
       columns: [t.companyId, t.evidenceId],
       foreignColumns: [evidence.companyId, evidence.id],
@@ -293,6 +304,8 @@ export const evidence = sqliteTable(
     mediaType: text('media_type').notNull(),
     size: counter('size').notNull(),
     createdBy: author(),
+    /** When the engine received the file (`evidence.unused` is of its month). */
+    engineAt: engineAt(),
     createdAt: createdAt(),
   },
   (t) => [
@@ -319,6 +332,18 @@ export const documents = sqliteTable(
     partyId: text('party_id'),
     currency: text('currency'),
     number: text('number'),
+    /** What every copy of the same document shares, whatever its source (`documentIdentity`):
+     * a later copy joins the earliest one's group (`same_as`). Null without one. */
+    identityKey: text('identity_key'),
+    /** Where the content comes from: `efactura`, `issued`, `ubl_upload`, `invoicer` or
+     * `extracted` (read by an agent from a PDF or a photo). */
+    authority: text('authority', {
+      enum: ['efactura', 'issued', 'ubl_upload', 'invoicer', 'extracted'],
+    }),
+    /** An extracted document's checks (`checkDocument`), as recorded. */
+    checks: text('checks_json'),
+    /** An extracted document's field citations with their outcomes, as recorded. */
+    citations: text('citations_json'),
     createdBy: author(),
     createdAt: createdAt(),
   },
@@ -327,6 +352,8 @@ export const documents = sqliteTable(
     uniqueIndex('document_source').on(t.companyId, t.sourceKey),
     index('document_date').on(t.companyId, t.docDate),
     index('document_number').on(t.companyId, t.number),
+    index('document_identity').on(t.companyId, t.identityKey),
+    index('document_evidence').on(t.companyId, t.evidenceId),
     foreignKey({
       columns: [t.companyId, t.evidenceId],
       foreignColumns: [evidence.companyId, evidence.id],
@@ -349,6 +376,7 @@ export const documentLinks = sqliteTable(
   },
   (t) => [
     primaryKey({ columns: [t.companyId, t.fromId, t.toId, t.kind] }),
+    index('document_link_target').on(t.companyId, t.toId),
     foreignKey({
       columns: [t.companyId, t.fromId],
       foreignColumns: [documents.companyId, documents.id],
@@ -595,6 +623,8 @@ export const spvMessages = sqliteTable(
   (t) => [
     primaryKey({ columns: [t.companyId, t.id] }),
     index('spv_message_upload').on(t.companyId, t.uploadId),
+    index('spv_message_outcome').on(t.companyId, t.outcome),
+    index('spv_message_evidence').on(t.companyId, t.evidenceId),
     foreignKey({
       columns: [t.companyId, t.evidenceId],
       foreignColumns: [evidence.companyId, evidence.id],
@@ -666,12 +696,28 @@ export const proposalVersions = sqliteTable(
     blocking: integer('blocking', { mode: 'boolean' }).notNull(),
     effectHash: text('effect_hash').notNull(),
     entryDate: text('entry_date'),
+    /** What the version relies on beyond the books: the questions whose answers it cites
+     * (`{ answers }`); null without one. Hashed into `effectHash` only when present. */
+    basis: text('basis_json'),
+    /** What the effect books without the ids it creates (`effectFingerprint`): templates'
+     * predictions and agents' first versions are compared with the posted version by it. Null
+     * without an effect. */
+    fingerprint: text('fingerprint'),
     createdBy: author(),
     agentId: text('agent_id'),
+    /** When the engine evaluated the version (`rule.expiring` counts the rules used in the
+     * last twelve months). */
+    engineAt: engineAt(),
     createdAt: createdAt(),
   },
   (t) => [
     primaryKey({ columns: [t.companyId, t.proposalId, t.version] }),
+    // The evidence a version names (every treatment that reads a file names it `evidenceId`),
+    // for the worklist's evidence used nowhere; and versions by the engine's time of evaluation,
+    // for the rules they used. (`->>`, not json_extract: drizzle-kit splits an index expression
+    // at its commas.)
+    index('proposal_version_evidence').on(t.companyId, sql`${t.input} ->> '$.evidenceId'`),
+    index('proposal_version_engine').on(t.companyId, t.engineAt),
     foreignKey({
       columns: [t.companyId, t.proposalId],
       foreignColumns: [proposals.companyId, proposals.id],
@@ -692,6 +738,12 @@ export const approvals = sqliteTable(
       .references(() => user.id),
     approverEpoch: counter('approver_epoch').notNull(),
     acknowledgements: canonicalJson('acknowledgements_json'),
+    /** The reviewed batch (`proposals.batch`) whose approved preview names this version; the
+     * approver is its decider (`inv:batch_member`). Null for a single approval. */
+    batchRequestId: text('batch_request_id'),
+    /** When the approval was given: segregation of duties is read on its day
+     * (`inv:segregation`). */
+    engineAt: engineAt(),
     createdAt: createdAt(),
   },
   (t) => [
@@ -739,6 +791,9 @@ export const postingPolicies = sqliteTable(
     approverEpoch: counter('approver_epoch').notNull(),
     validFrom: text('valid_from').notNull(),
     expiresAt: counter('expires_at').notNull(),
+    /** The reviewed request (`policies.request`, from a template's graduation report) whose
+     * execution created it; null for a policy a person created directly. */
+    requestId: text('request_id'),
     createdAt: createdAt(),
   },
   (t) => [primaryKey({ columns: [t.companyId, t.id] })],
@@ -787,6 +842,9 @@ export const entries = sqliteTable(
       .notNull()
       .references(() => user.id),
     agentId: text('agent_id'),
+    /** When the entry was posted: a policy must be unexpired then, and segregation is read on
+     * its day (`inv:binding`, `inv:segregation`). */
+    engineAt: engineAt(),
     postedAt: createdAt(),
   },
   (t) => [
@@ -1001,6 +1059,8 @@ export const bankStatements = sqliteTable(
     openingMinor: bani('opening_minor').notNull(),
     closingMinor: bani('closing_minor').notNull(),
     financialHash: text('financial_hash').notNull(),
+    /** A transcribed statement's citations (balances and rows) with their outcomes. */
+    citations: text('citations_json'),
     createdBy: author(),
     createdAt: createdAt(),
   },
@@ -1008,6 +1068,35 @@ export const bankStatements = sqliteTable(
     primaryKey({ columns: [t.companyId, t.id] }),
     uniqueIndex('bank_statement_identity').on(t.companyId, t.treasuryAccountId, t.financialHash),
     index('bank_statement_period').on(t.companyId, t.treasuryAccountId, t.to),
+    index('bank_statement_evidence').on(t.companyId, t.evidenceId),
+    foreignKey({
+      columns: [t.companyId, t.treasuryAccountId],
+      foreignColumns: [treasuryAccounts.companyId, treasuryAccounts.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.evidenceId],
+      foreignColumns: [evidence.companyId, evidence.id],
+    }),
+  ],
+);
+/** How an account's CSV exports read (`csvMappingSchema`), one version per change: the latest is
+ * used when an import names none. */
+export const bankMappings = sqliteTable(
+  'acc_bank_mappings',
+  {
+    companyId: companyId(),
+    treasuryAccountId: text('treasury_account_id').notNull(),
+    version: counter('version').notNull(),
+    format: text('format', { enum: ['csv'] }).notNull(),
+    mapping: canonicalJson('mapping_json'),
+    mappingHash: text('mapping_hash').notNull(),
+    /** The file it first read. */
+    evidenceId: text('evidence_id').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.treasuryAccountId, t.version] }),
     foreignKey({
       columns: [t.companyId, t.treasuryAccountId],
       foreignColumns: [treasuryAccounts.companyId, treasuryAccounts.id],
@@ -1143,6 +1232,8 @@ export const actionDecisions = sqliteTable(
       .references(() => user.id),
     decidedEpoch: counter('decided_epoch').notNull(),
     reason: text('reason'),
+    /** When the decision was taken: segregation of duties is read on its day. */
+    engineAt: engineAt(),
     createdAt: createdAt(),
   },
   (t) => [
@@ -1188,10 +1279,13 @@ export const fxRates = sqliteTable(
     evidenceHash: text('evidence_hash').notNull(),
     createdAt: createdAt(),
   },
-  (t) => [primaryKey({ columns: [t.source, t.currency, t.rateDate, t.revision] })],
+  (t) => [
+    primaryKey({ columns: [t.source, t.currency, t.rateDate, t.revision] }),
+    index('fx_rate_evidence').on(t.evidenceHash),
+  ],
 );
 
-// Work queues (the only mutable kernel tables)
+// Work queues, cursors and caches (the only mutable kernel tables)
 
 export const jobs = sqliteTable(
   'acc_jobs',
@@ -1238,6 +1332,70 @@ export const outbox = sqliteTable(
   (t) => [
     primaryKey({ columns: [t.companyId, t.id] }),
     index('outbox_pending').on(t.status, t.leaseUntil),
+  ],
+);
+/** Recurring work: each slot queues one job, whose id derives from the schedule and the slot. */
+export const schedules = sqliteTable(
+  'acc_schedules',
+  {
+    id: text('id').notNull(),
+    companyId: companyId(),
+    kind: text('kind').notNull(),
+    /** When it recurs (`scheduleRule` in kernel/jobs.ts). */
+    rule: text('rule', { mode: 'json' }).$type<unknown>().notNull(),
+    params: text('params', { mode: 'json' }).$type<unknown>().notNull(),
+    /** Whose authority each run uses; it is rechecked when the run executes. */
+    actorId: text('actor_id')
+      .notNull()
+      .references(() => user.id),
+    agentId: text('agent_id'),
+    /** The next slot, in epoch milliseconds. */
+    nextRunAt: counter('next_run_at').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.companyId, t.id] }), index('schedule_due').on(t.nextRunAt)],
+);
+/** How far each consumer of a company's audit log has read it. */
+export const cursors = sqliteTable(
+  'acc_cursors',
+  {
+    companyId: companyId(),
+    consumer: text('consumer').notNull(),
+    /** The last audit `seq` handled. */
+    seq: counter('seq').notNull(),
+    updatedAt: text('updated_at')
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+  },
+  (t) => [primaryKey({ columns: [t.companyId, t.consumer] })],
+);
+/** The latest re-evaluation of a proposal against the books: a cache, never a record. Posting
+ * re-evaluates regardless. */
+export const proposalChecks = sqliteTable(
+  'acc_proposal_checks',
+  {
+    companyId: companyId(),
+    proposalId: text('proposal_id').notNull(),
+    version: counter('version').notNull(),
+    /** The audit `seq` of the books the check read. */
+    checkedSeq: counter('checked_seq').notNull(),
+    stale: integer('stale', { mode: 'boolean' }).notNull(),
+    /** What differs from the version's own evaluation (`ProposalChange[]`). */
+    changed: text('changed_json').notNull(),
+    checkedAt: text('checked_at')
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.proposalId] }),
+    foreignKey({
+      columns: [t.companyId, t.proposalId, t.version],
+      foreignColumns: [
+        proposalVersions.companyId,
+        proposalVersions.proposalId,
+        proposalVersions.version,
+      ],
+    }),
   ],
 );
 
@@ -1450,6 +1608,7 @@ export const partyStatuses = sqliteTable(
   (t) => [
     primaryKey({ columns: [t.companyId, t.partyId, t.seq] }),
     index('party_status_date').on(t.companyId, t.partyId, t.asOf),
+    index('party_status_evidence').on(t.companyId, t.evidenceId),
     check('party_status_cui', sql`${t.cui} glob '[0-9]*' and length(${t.cui}) between 2 and 10`),
     foreignKey({
       columns: [t.companyId, t.partyId],
@@ -1629,6 +1788,276 @@ export const payrollLines = sqliteTable(
       columns: [t.companyId, t.contractId, t.termsSeq],
       foreignColumns: [employmentTerms.companyId, employmentTerms.contractId, employmentTerms.seq],
     }),
+  ],
+);
+
+// Questions to people and the worklist's dispositions
+
+/** A question asked of a person (`questions.ask`): a kind (`xfactura-core/questions/kinds`), what
+ * it is about and its parameters. At most one is open (unanswered, not withdrawn) per kind and
+ * subject. */
+export const questions = sqliteTable(
+  'acc_questions',
+  {
+    id: text('id').notNull(),
+    companyId: companyId(),
+    kind: text('kind').notNull(),
+    subjectKind: text('subject_kind').notNull(),
+    subjectId: text('subject_id').notNull(),
+    params: canonicalJson('params_json'),
+    /** The person in whose name it was asked, through `agentId` when an agent asked it. */
+    askedBy: text('asked_by')
+      .notNull()
+      .references(() => user.id),
+    agentId: text('agent_id'),
+    /** When the answer is needed by, if it is. */
+    due: text('due'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.id] }),
+    index('question_subject').on(t.companyId, t.kind, t.subjectKind, t.subjectId),
+  ],
+);
+/** A person's answer, kept as evidence (`application/vnd.xfactura.answer+json`). A later answer
+ * replaces an earlier one; proposals citing the question then become stale. */
+export const questionAnswers = sqliteTable(
+  'acc_question_answers',
+  {
+    id: text('id').notNull(),
+    companyId: companyId(),
+    questionId: text('question_id').notNull(),
+    /** Numbered from 1 per question; the latest holds. */
+    seq: counter('seq').notNull(),
+    value: canonicalJson('value_json'),
+    /** The answer itself, as the evidence proposals and profile facts cite. */
+    evidenceId: text('evidence_id').notNull(),
+    answeredBy: text('answered_by')
+      .notNull()
+      .references(() => user.id),
+    /** Always null: only a person answers (`inv:answer_person`). */
+    agentId: text('agent_id'),
+    /** The answerer's membership epoch when they answered. */
+    epoch: counter('epoch').notNull(),
+    /** When the engine recorded the answer: the time treatments read it as given at
+     * (`AnswerRecord.answeredAt`) and the order of answers that still hold. Null for answers
+     * recorded before the column existed. */
+    engineAt: engineAt(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.id] }),
+    uniqueIndex('question_answer_seq').on(t.companyId, t.questionId, t.seq),
+    foreignKey({
+      columns: [t.companyId, t.questionId],
+      foreignColumns: [questions.companyId, questions.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.evidenceId],
+      foreignColumns: [evidence.companyId, evidence.id],
+    }),
+  ],
+);
+/** A question no longer needed, withdrawn before anyone answered it. */
+export const questionWithdrawals = sqliteTable(
+  'acc_question_withdrawals',
+  {
+    companyId: companyId(),
+    questionId: text('question_id').notNull(),
+    reason: text('reason').notNull(),
+    createdBy: author(),
+    agentId: text('agent_id'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.questionId] }),
+    foreignKey({
+      columns: [t.companyId, t.questionId],
+      foreignColumns: [questions.companyId, questions.id],
+    }),
+  ],
+);
+/** What was decided about a worklist item that needs no other record: a document needing no
+ * booking, an SPV message dealt with. It hides the item while the item's fingerprint is the one
+ * decided on; a change brings it back. */
+export const dispositions = sqliteTable(
+  'acc_dispositions',
+  {
+    id: text('id').notNull(),
+    companyId: companyId(),
+    subjectKind: text('subject_kind').notNull(),
+    subjectId: text('subject_id').notNull(),
+    disposition: text('disposition', { enum: ['no_booking', 'dealt_with'] }).notNull(),
+    reason: text('reason').notNull(),
+    /** The fingerprint of the item as it was decided on. */
+    fingerprint: text('fingerprint').notNull(),
+    createdBy: author(),
+    agentId: text('agent_id'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.id] }),
+    index('disposition_subject').on(t.companyId, t.subjectKind, t.subjectId),
+    check('disposition_value', sql`${t.disposition} in ('no_booking', 'dealt_with')`),
+  ],
+);
+
+// Booking templates and their track record
+
+/**
+ * A booking template's versions (`templates.request`, a reviewed action): what it applies to
+ * (treatment, partner, document kind, line words) and the part of the treatment's input it fixes
+ * (`xfactura-core/templates`). A later version replaces the earlier; a revocation ends them all.
+ */
+export const templates = sqliteTable(
+  'acc_templates',
+  {
+    id: text('id').notNull(),
+    companyId: companyId(),
+    version: counter('version').notNull(),
+    name: text('name').notNull(),
+    treatmentId: text('treatment_id').notNull(),
+    partyId: text('party_id'),
+    documentKind: text('document_kind').notNull(),
+    /** The scope as `templateScope` parses it. */
+    scope: canonicalJson('scope_json'),
+    mapping: canonicalJson('mapping_json'),
+    /** The reviewed request whose execution wrote this version. */
+    requestId: text('request_id').notNull(),
+    /** The person who approved that request, under the membership epoch they decided in. */
+    approvedBy: text('approved_by')
+      .notNull()
+      .references(() => user.id),
+    approverEpoch: counter('approver_epoch').notNull(),
+    /** Who executed the request, through `agentId` when an agent did. */
+    createdBy: author(),
+    agentId: text('agent_id'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.id, t.version] }),
+    index('template_scope').on(t.companyId, t.treatmentId, t.partyId),
+    foreignKey({
+      columns: [t.companyId, t.requestId],
+      foreignColumns: [actionRequests.companyId, actionRequests.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.partyId],
+      foreignColumns: [parties.companyId, parties.id],
+    }),
+  ],
+);
+/** A template no longer used, in every version. */
+export const templateRevocations = sqliteTable(
+  'acc_template_revocations',
+  {
+    companyId: companyId(),
+    templateId: text('template_id').notNull(),
+    reason: text('reason').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.companyId, t.templateId] })],
+);
+/**
+ * What a template version would book for a document or movement, recorded by the worker before
+ * anything was posted for it: a shadow booking. Its outcome is read from what was posted for the
+ * subject (`correct`, `corrected`, `rejected`), never stored.
+ */
+export const templatePredictions = sqliteTable(
+  'acc_template_predictions',
+  {
+    companyId: companyId(),
+    templateId: text('template_id').notNull(),
+    templateVersion: counter('template_version').notNull(),
+    /** What the template read: `document:<id>` or `movement:<id>`. */
+    sourceKey: text('source_key').notNull(),
+    /** `predicted`; `not_applicable` when the template made no input of it (outside its words,
+     * no single open item); `blocked` when its treatment refused the input. */
+    status: text('status', { enum: ['predicted', 'not_applicable', 'blocked'] }).notNull(),
+    /** The proposal subject the input is for (`treatment.subject`, a document group's root). */
+    subjectKey: text('subject_key'),
+    input: text('input_json'),
+    fingerprint: text('fingerprint'),
+    /** The audit `seq` of the books the prediction read. */
+    asOfSeq: counter('as_of_seq').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.templateId, t.templateVersion, t.sourceKey] }),
+    index('template_prediction_subject').on(t.companyId, t.subjectKey),
+    foreignKey({
+      columns: [t.companyId, t.templateId, t.templateVersion],
+      foreignColumns: [templates.companyId, templates.id, templates.version],
+    }),
+    check(
+      'template_prediction_status',
+      sql`${t.status} in ('predicted', 'not_applicable', 'blocked') and (${t.status} = 'predicted') = (${t.fingerprint} is not null) and (${t.status} = 'not_applicable') = (${t.subjectKey} is null)`,
+    ),
+  ],
+);
+
+// Earned autonomy: the kill switch and the graduation criteria
+
+/**
+ * Pauses and resumes of automatic posting, for the whole company, one posting policy or one
+ * template; the latest event of a scope decides. Any member, an agent or the system (a demotion)
+ * pauses; only a person who may review resumes.
+ */
+export const automationEvents = sqliteTable(
+  'acc_automation_events',
+  {
+    companyId: companyId(),
+    /** Numbered from 1 per company, without gaps. */
+    seq: counter('seq').notNull(),
+    scope: text('scope', { enum: ['company', 'policy', 'template'] }).notNull(),
+    /** The policy or template; null for the company. */
+    scopeId: text('scope_id'),
+    kind: text('kind', { enum: ['pause', 'resume'] }).notNull(),
+    reason: text('reason').notNull(),
+    /** What made the system pause it (`reversal`, `correction`, `new_party`,
+     * `unusual_amount`, `changed_answer`); null when a person or an agent acted. */
+    trigger: text('trigger'),
+    details: text('details_json'),
+    createdBy: author(),
+    agentId: text('agent_id'),
+    /** The member's epoch when they acted; null for the system. */
+    epoch: counter('epoch'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.seq] }),
+    index('automation_scope').on(t.companyId, t.scope, t.scopeId, t.seq),
+    check(
+      'automation_event',
+      sql`${t.scope} in ('company', 'policy', 'template') and ${t.kind} in ('pause', 'resume') and (${t.scope} = 'company') = (${t.scopeId} is null)`,
+    ),
+  ],
+);
+/**
+ * The company's graduation criteria, one version per change; the latest holds. An owner or an
+ * accountant may tighten the defaults (at least 6 correct across at least 3 months, policies of
+ * at most 90 days), never loosen them.
+ */
+export const automationCriteria = sqliteTable(
+  'acc_automation_criteria',
+  {
+    companyId: companyId(),
+    seq: counter('seq').notNull(),
+    minCorrect: counter('min_correct').notNull(),
+    minMonths: counter('min_months').notNull(),
+    policyDays: counter('policy_days').notNull(),
+    reason: text('reason').notNull(),
+    createdBy: author(),
+    epoch: counter('epoch').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.seq] }),
+    check(
+      'automation_criteria_floor',
+      sql`${t.minCorrect} between 6 and 1000 and ${t.minMonths} between 3 and 120 and ${t.policyDays} between 1 and 90`,
+    ),
   ],
 );
 

@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fromJsonSchema, type JsonSchemaType } from '@modelcontextprotocol/server';
 import type { WireError } from '../../source/engine/kernel/errors';
 import { wireError } from '../../source/engine/kernel/errors';
 import type { ProposalView } from '../../source/engine/kernel/views';
@@ -12,27 +13,54 @@ import { Database } from '../../source/engine/db/database';
 import { user } from '../../source/engine/db/schema';
 import { LocalObjectStore } from '../../source/engine/adapters/object-store';
 import { Engine } from '../../source/engine/engine';
+import { outputSchema } from '../../source/engine/kernel/operations';
 import type { EFacturaPort } from '../../source/engine/adapters/efactura';
 import type { TaxpayerRegistryPort } from '../../source/engine/adapters/anaf-taxpayers';
 import type { DeclarationValidator } from '../../source/engine/adapters/declaration-validator';
 import type { DeclarationKind } from '../../source/engine/modules/declarations';
+import type { Treatment } from 'xfactura-core/kernel';
 import type { ParameterRegister } from 'xfactura-core/rules';
 
 export const secret = 'synthetic-engine-secret-at-least-32-characters';
+
+const validators = new Map<string, ReturnType<typeof fromJsonSchema>>();
+/**
+ * Fails when an operation returns what its advertised output schema refuses, validated as the
+ * MCP server and its clients validate it: the JSON the caller receives, against the JSON Schema.
+ */
+export async function checkContract(engine: Engine, operation: string, output: unknown) {
+  let validator = validators.get(operation);
+  if (!validator) {
+    validator = fromJsonSchema(outputSchema(engine.operations.get(operation)) as JsonSchemaType);
+    validators.set(operation, validator);
+  }
+  const result = await validator['~standard'].validate(JSON.parse(JSON.stringify(output)));
+  if (result.issues)
+    throw new Error(
+      `${operation} returned what its output schema refuses: ${result.issues.map((issue) => issue.message).join('; ')}`,
+    );
+}
 
 /** A company on a fresh engine, with an owner, a reviewer and a viewer. */
 export async function scenario(
   options: {
     year?: number;
+    /** The company's name; Pilot SRL unless a test needs another. */
+    name?: string;
     /** The company's CUI; 12345678 unless a test needs a valid checksum. */
     cui?: string;
     efactura?: EFacturaPort;
     taxpayers?: TaxpayerRegistryPort;
+    /** The engine's time; the wall's by default. */
     clock?: () => number;
+    /** The engine's identifiers, and its people's; random by default. */
+    ids?: () => string;
     declarations?: DeclarationKind[];
     declarationValidator?: DeclarationValidator;
     /** A rule register other than the engine's, for a year the engine's does not cover yet. */
     register?: ParameterRegister;
+    /** Treatments beyond the engine's, for kernel behaviour no real treatment exercises. */
+    treatments?: Treatment[];
     anaf?: ConstructorParameters<typeof Engine>[3] extends infer O
       ? O extends { anaf?: infer A }
         ? A
@@ -48,13 +76,15 @@ export async function scenario(
     ...(options.efactura ? { efactura: options.efactura } : {}),
     ...(options.taxpayers ? { taxpayers: options.taxpayers } : {}),
     ...(options.clock ? { clock: options.clock } : {}),
+    ...(options.ids ? { ids: options.ids } : {}),
     ...(options.declarations ? { declarations: options.declarations } : {}),
     ...(options.declarationValidator ? { declarationValidator: options.declarationValidator } : {}),
     ...(options.anaf ? { anaf: options.anaf } : {}),
     ...(options.register ? { register: options.register } : {}),
+    ...(options.treatments ? { treatments: options.treatments } : {}),
   });
   const people = async (...names: string[]) => {
-    const ids = names.map(() => randomUUID());
+    const ids = names.map(() => (options.ids ?? randomUUID)());
     const now = new Date();
     await db.write((tx) =>
       tx.insert(user).values(
@@ -71,7 +101,7 @@ export async function scenario(
   };
   const [ownerId, reviewerId, viewerId] = await people('owner', 'reviewer', 'viewer');
   const company = await engine.companies.create(ownerId!, randomUUID(), {
-    name: 'Pilot SRL',
+    name: options.name ?? 'Pilot SRL',
     cui: options.cui ?? '12345678',
     year: options.year ?? 2026,
   });
@@ -92,12 +122,17 @@ export async function scenario(
   const reviewer: Actor = { actorId: reviewerId!, companyId: company.id };
   const viewer: Actor = { actorId: viewerId!, companyId: company.id };
 
-  const invoke = <T = unknown>(
+  /** Invokes an operation as REST and MCP do, and holds its output to the advertised schema. */
+  const invoke = async <T = unknown>(
     actor: Actor,
     operation: string,
     input: unknown = {},
     key: string = randomUUID(),
-  ) => engine.invoke(actor, operation, key, input) as Promise<T>;
+  ) => {
+    const output = await engine.invoke(actor, operation, key, input);
+    await checkContract(engine, operation, output);
+    return output as T;
+  };
   /** The wire error an invocation fails with, or undefined if it succeeds. */
   const refused = async (operation: Promise<unknown>): Promise<WireError['error'] | undefined> => {
     try {
@@ -107,11 +142,19 @@ export async function scenario(
       return wireError(error).error;
     }
   };
-  const years = await invoke<{ id: string; kind: string; from: string }[]>(owner, 'years.list');
-  const year = years.find((item) => item.kind === 'financial')!;
+  const years = await invoke<{ items: { id: string; kind: string; from: string }[] }>(
+    owner,
+    'years.list',
+  );
+  const year = years.items.find((item) => item.kind === 'financial')!;
 
   const s = {
     engine,
+    /** The engine's time, which grants, invitations and policies expire on. */
+    now: options.clock ?? Date.now,
+    /** An expiry `days` after the engine's time, for grants and policies. */
+    expiresIn: (days: number) =>
+      new Date((options.clock ?? Date.now)() + days * 86_400_000).toISOString(),
     db,
     objects,
     directory,
@@ -123,6 +166,9 @@ export async function scenario(
     people,
     join: join_,
     invoke,
+    /** The items of a list operation's `{ items, next }`, for lists a test reads whole. */
+    list: async <T = unknown>(actor: Actor, operation: string, input: unknown = {}) =>
+      (await invoke<{ items: T[]; next: string | null }>(actor, operation, input)).items,
     refused,
     async evidence(filename = 'nota.pdf', content: string = randomUUID()) {
       return invoke<{ id: string }>(owner, 'evidence.record', {

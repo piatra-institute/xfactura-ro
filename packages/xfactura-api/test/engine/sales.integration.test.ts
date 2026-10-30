@@ -44,7 +44,7 @@ describe('issuing', () => {
     expect(await balance(s, '704')).toEqual({ debit: '0.00', credit: '100.00' });
     expect(await balance(s, '4427')).toEqual({ debit: '0.00', credit: '21.00' });
 
-    const [listed] = await s.invoke<{ nextNumber: string }[]>(s.owner, 'sales.series.list');
+    const [listed] = await s.list<{ nextNumber: string }>(s.owner, 'sales.series.list');
     expect(listed!.nextNumber).toBe('XF0003');
     expect(series.nextNumber).toBe('XF0001');
   });
@@ -274,7 +274,7 @@ describe('invoicer export import', () => {
       'other-seller': ['not_seller', undefined],
     });
 
-    const documents = await s.invoke<{ number: string; kind: string; totals: { gross: string } }[]>(
+    const documents = await s.list<{ number: string; kind: string; totals: { gross: string } }>(
       s.owner,
       'documents.list',
     );
@@ -282,7 +282,7 @@ describe('invoicer export import', () => {
       ['20250001', 'invoice.issued', '1210.00'],
       ['20250004', 'invoice.issued', '242.00'],
     ]);
-    const partners = await s.invoke<{ id: string; kind: string; taxId: string }[]>(
+    const partners = await s.list<{ id: string; kind: string; taxId: string }>(
       s.owner,
       'parties.list',
     );

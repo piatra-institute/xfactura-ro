@@ -162,7 +162,7 @@ describe('statutory registers', () => {
       credit: { correspondent: string; amount: string }[];
       closing: { debit: string; credit: string };
     };
-    const ledger = await s.invoke<Sheet[]>(s.owner, 'ledger.generalLedger', { month: '2026-11' });
+    const ledger = await s.list<Sheet>(s.owner, 'ledger.generalLedger', { month: '2026-11' });
     const sheet = (account: string) => ledger.find((item) => item.account === account)!;
     expect(sheet('704')).toMatchObject({
       credit: [{ correspondent: '4111', amount: '10000.00' }],
@@ -174,13 +174,11 @@ describe('statutory registers', () => {
       debit: [],
     });
 
-    const inventory = await s.invoke<
-      {
-        account: string;
-        balance: { debit: string; credit: string };
-        items: { description: string }[];
-      }[]
-    >(s.owner, 'ledger.inventoryRegister', { date: '2026-12-31' });
+    const inventory = await s.list<{
+      account: string;
+      balance: { debit: string; credit: string };
+      items: { description: string }[];
+    }>(s.owner, 'ledger.inventoryRegister', { date: '2026-12-31' });
     expect(inventory.map((row) => row.account)).toEqual([
       '1012',
       '401',

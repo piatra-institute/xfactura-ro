@@ -5,6 +5,9 @@ import { sourceXml, type XmlElement as Element } from '../xml/source-xml';
 import { Amount, dateSchema, moneySchema, signedMoneySchema, toBani } from '../values';
 
 export const invoiceParserVersion = 'ubl-invoice-1';
+/** An invoice or credit note an agent read from a PDF or a photo (`documents.record`), in the
+ * shape the UBL parser gives, so the invoice treatments read it unchanged. */
+export const extractedInvoiceVersion = 'extracted-invoice-1';
 const partySchema = z
   .object({
     name: z.string().min(1).max(500),
@@ -51,6 +54,7 @@ export const invoiceDocumentSchema = z
       'ubl-invoice-2',
       'ubl-invoice-3',
       'ubl-invoice-4',
+      extractedInvoiceVersion,
     ]),
     sourceInvoice: negativeSourceSchema.optional(),
     documentAdjustments: z
@@ -85,6 +89,17 @@ export const invoiceDocumentSchema = z
     number: z.string().min(1).max(100),
     issueDate: dateSchema,
     taxPointDate: dateSchema.nullable(),
+    /** BT-72: the date the supply was made or completed, when the document states it. */
+    deliveryDate: dateSchema.optional(),
+    /** BG-14 (BT-73, BT-74): the period the document invoices, when it states one. */
+    invoicePeriod: z
+      .object({ start: dateSchema.nullable(), end: dateSchema.nullable() })
+      .strict()
+      .optional(),
+    /** BT-9, as an extracted document states it; the UBL parser does not read it yet. */
+    dueDate: dateSchema.optional(),
+    /** The payee's accounts (BT-84), as an extracted document states them. */
+    payeeIbans: z.array(z.string().min(15).max(42)).min(1).max(5).optional(),
     currency: z.string().regex(/^[A-Z]{3}$/),
     /** BT-6 and BT-111: the VAT accounting currency and the VAT total in it, when it differs
      * from the document currency. */
@@ -337,6 +352,18 @@ export function invoiceDocumentFromXml(root: Element): InvoiceDocument {
     );
     return row;
   });
+  // BT-72 and BG-14, read only when the document states each once (UBL admits several).
+  const deliveryDates = [
+    ...new Set(
+      children(root, 'Delivery').flatMap((node) => value(node, 'ActualDeliveryDate', true) ?? []),
+    ),
+  ];
+  const periods = children(root, 'InvoicePeriod').map((node) => ({
+    start: value(node, 'StartDate', true),
+    end: value(node, 'EndDate', true),
+  }));
+  const invoicePeriod =
+    periods.length === 1 && (periods[0]!.start || periods[0]!.end) ? periods[0] : undefined;
   const references = children(root, 'BillingReference').map((billing) => {
     const original = one(billing, 'InvoiceDocumentReference')!;
     return { number: value(original, 'ID')!, issueDate: value(original, 'IssueDate', true) };
@@ -426,6 +453,8 @@ export function invoiceDocumentFromXml(root: Element): InvoiceDocument {
     number: value(root, 'ID'),
     issueDate: value(root, 'IssueDate'),
     taxPointDate: value(root, 'TaxPointDate', true),
+    ...(deliveryDates.length === 1 ? { deliveryDate: deliveryDates[0] } : {}),
+    ...(invoicePeriod ? { invoicePeriod } : {}),
     currency,
     ...(accountingTotal[0]
       ? {

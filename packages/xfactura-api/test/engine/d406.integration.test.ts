@@ -302,7 +302,7 @@ async function september(validator?: DeclarationValidator) {
     ).id,
     financialYearId: s.year.id,
   });
-  const movements = await s.invoke<{ id: string; amount: string }[]>(s.owner, 'bank.movements', {});
+  const movements = await s.list<{ id: string; amount: string }>(s.owner, 'bank.movements', {});
   const movement = (amount: string) => movements.find((item) => item.amount === amount)!.id;
   await s.book('bank.settle', {
     movementId: movement('1210.00'),
@@ -400,7 +400,7 @@ describe('D406 from the books', () => {
 
     // Partners: per account, their balances are their open items' (nothing is posted after the
     // period); the customer with an advance is listed on 4111 and on 419.
-    const items = await s.invoke<{ account: string; party: string; balance: string }[]>(
+    const items = await s.list<{ account: string; party: string; balance: string }>(
       s.owner,
       'openItems.list',
       { openOnly: false },
@@ -539,11 +539,13 @@ describe('D406 from the books', () => {
       gross: '242.00',
       lines: [{ rate: '21', net: '200.00', name: 'Motorină' }],
     });
-    await s.book('invoices.recognize', {
+    // Fuel names no car: the reviewer confirms the half deducted (art. 298).
+    const booking = await s.propose('invoices.recognize', {
       documentId: fuel.id,
       account: '6022',
       deduction: 'limited',
     });
+    await s.post(await s.approve(booking, s.reviewer, ['VEHICLE_UNNAMED']));
     const file = await fileOf(
       s,
       await prepare('2026-09', { contact, accounts: { '623': '6231' } }),
@@ -579,7 +581,8 @@ describe('D406 from the books', () => {
         documentId: (await split(number)).id,
         allocations,
       });
-      await s.post(await s.approve(proposal, s.reviewer, ['REDUCED_RATE']));
+      // A part on 6022 (fuel) names no car: the reviewer confirms it (art. 298).
+      await s.post(await s.approve(proposal, s.reviewer, ['REDUCED_RATE', 'VEHICLE_UNNAMED']));
     };
     await recognize('F-MIX', [
       { account: '628', vat: 'S-21', amount: '1000.00' },
@@ -705,11 +708,12 @@ describe('D406 from the books', () => {
         gross: '242.00',
         lines: [{ rate: '21', net: '200.00', name: 'Motorină' }],
       });
-      await s.book('invoices.recognize', {
+      const booking = await s.propose('invoices.recognize', {
         documentId: fuel.id,
         account: '6022',
         deduction: 'limited',
       });
+      await s.post(await s.approve(booking, s.reviewer, ['VEHICLE_UNNAMED']));
       const prepared = await prepare('2026-09', { contact, accounts: { '623': '6231' } });
       expect([prepared.state, prepared.steps.at(-1)?.detail ?? null]).toEqual([
         'validated_official',
@@ -739,7 +743,7 @@ describe('D406 from the books', () => {
       });
       // September already holds another customer's advance: take this invoice's.
       const held = (
-        await s.invoke<{ id: string; document: string | null }[]>(s.owner, 'openItems.list', {
+        await s.list<{ id: string; document: string | null }>(s.owner, 'openItems.list', {
           kind: 'advance.received',
         })
       ).find((item) => item.document === 'V-AV1');

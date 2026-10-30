@@ -69,7 +69,7 @@ const codes = (proposal: ProposalView) => proposal.issues.map((issue) => issue.c
 describe('cash', () => {
   test('an invoice paid in cash, an advance to an employee, an associate’s loan, in the cash register', async () => {
     const { s, invoice, person, cash } = await company();
-    const [payable] = await s.invoke<{ id: string }[]>(s.owner, 'openItems.list', {
+    const [payable] = await s.list<{ id: string }>(s.owner, 'openItems.list', {
       kind: 'payable',
     });
     const paid = await cash({
@@ -92,7 +92,7 @@ describe('cash', () => {
     await s.post(await s.approve(advance));
 
     // The advance accounted for: 220 lei of receipts, the 80 lei left returned in cash.
-    const [held] = await s.invoke<{ id: string }[]>(s.owner, 'openItems.list', {
+    const [held] = await s.list<{ id: string }>(s.owner, 'openItems.list', {
       partyId: employee.id,
     });
     const report = (expenses: unknown[]) =>
@@ -161,7 +161,7 @@ describe('cash', () => {
 
   test('Legea 70/2015: limits are acknowledged, a negative cash desk is refused', async () => {
     const { s, invoice, person, cash } = await company();
-    const [payable] = await s.invoke<{ id: string }[]>(s.owner, 'openItems.list', {
+    const [payable] = await s.list<{ id: string }>(s.owner, 'openItems.list', {
       kind: 'payable',
     });
     // More cash than the desk holds.

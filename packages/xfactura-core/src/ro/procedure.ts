@@ -10,7 +10,7 @@ export const procedureDefinitions: ParameterDefinition[] = [
     scope: [],
     value: z.enum(['half_up_leu']),
     description:
-      'Rotunjirea sumelor din declarații la leu: sub 50 de bani prin reducere, de la 50 de bani prin majorare.',
+      'Rotunjirea la leu a impozitelor, contribuțiilor și a sumelor din declarații: sub 50 de bani prin reducere, de la 50 de bani prin majorare.',
   },
 ];
 
@@ -25,6 +25,6 @@ export const procedureVersions: ParameterVersion[] = [
     reviewedThrough: date('2026-12-31'),
     knowledgeDate: null,
     status: 'extracted',
-    clauses: ['L207/2015:rounding'],
+    clauses: ['OUG59/2005:art.1(1)'],
   },
 ];

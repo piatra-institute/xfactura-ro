@@ -223,6 +223,16 @@ export class ParameterRegister {
     return definition as ParameterDefinition<T>;
   }
 
+  /** The keys of every defined parameter, in definition order. */
+  keys(): string[] {
+    return [...this.definitions.keys()];
+  }
+
+  /** The same definitions over other versions: what a register would resolve after a change. */
+  withVersions(versions: readonly ParameterVersion[]) {
+    return new ParameterRegister([...this.definitions.values()], versions);
+  }
+
   resolve<T>(key: string, query: ResolveQuery, attestations: readonly Attestation[] = []) {
     return resolveParameter<T>(this.definition<T>(key), this.versions, query, attestations);
   }

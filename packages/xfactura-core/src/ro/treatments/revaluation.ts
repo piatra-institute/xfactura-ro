@@ -45,6 +45,8 @@ export const revaluation: Treatment<RevaluationInput> = {
     'Reevaluarea la sfârșit de lună a creanțelor, datoriilor și disponibilităților în valută.',
   input: revaluationInput,
   agent: true,
+  summary: 'Month-end revaluation of foreign-currency receivables, payables and cash.',
+  toolset: 'close',
   subject: (input) => `fx.revalue:${input.date}:${input.round}`,
   plan: (input) => ({
     openItems: [{ foreign: true, openOnly: true, schedules: true }],

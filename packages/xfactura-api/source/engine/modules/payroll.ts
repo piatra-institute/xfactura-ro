@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, hkdfSync, randomBytes, randomUUID } from 'node:crypto';
+import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from 'node:crypto';
 import { and, asc, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireCondition } from 'xfactura-core/errors';
@@ -41,6 +41,7 @@ import {
   proposalVersions,
 } from '../db/schema';
 import { appendAudit, type Actor, type Commands } from '../kernel/commands';
+import { entryStands } from '../kernel/ledger';
 
 const money = z.string().regex(/^(0|[1-9]\d*)(\.\d{1,2})?$/);
 const localDate = z.iso.date();
@@ -219,7 +220,13 @@ export async function postedRun(tx: Transaction, companyId: string, month: strin
         eq(proposalVersions.version, entries.version),
       ),
     )
-    .where(and(eq(entries.companyId, companyId), eq(proposals.subjectKey, `payroll:${month}:1`)));
+    .where(
+      and(
+        eq(entries.companyId, companyId),
+        eq(proposals.subjectKey, `payroll:${month}:1`),
+        entryStands('"acc_entries"'),
+      ),
+    );
   return row ? (JSON.parse(row.input) as { runId: string }).runId : undefined;
 }
 
@@ -328,7 +335,7 @@ export class Payroll {
           .where(and(eq(employees.companyId, actor.companyId), eq(employees.partyId, existing.id)));
         requireCondition(!employee, 'EMPLOYEE_EXISTS', 'Salariatul este deja înregistrat.', 409);
       }
-      const partyId = existing?.id ?? randomUUID();
+      const partyId = existing?.id ?? this.commands.ids();
       if (!existing)
         await tx.insert(parties).values({
           id: partyId,
@@ -339,7 +346,7 @@ export class Payroll {
           name,
           createdBy: actor.actorId,
         });
-      const id = randomUUID();
+      const id = this.commands.ids();
       await tx.insert(employees).values({
         id,
         companyId: actor.companyId,
@@ -423,7 +430,7 @@ export class Payroll {
           .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.id, input.evidenceId)));
         requireCondition(file, 'EVIDENCE', 'Documentul justificativ nu este disponibil.', 404);
       }
-      const contractId = input.contractId ?? randomUUID();
+      const contractId = input.contractId ?? this.commands.ids();
       const [last] = input.contractId
         ? await tx
             .select()
@@ -522,6 +529,7 @@ export class Payroll {
           and(
             eq(entries.companyId, actor.companyId),
             eq(proposals.subjectKey, `payroll:${input.month}:${round}`),
+            entryStands('"acc_entries"'),
           ),
         );
       requireCondition(
@@ -760,7 +768,7 @@ export class Payroll {
         `Niciun contract nu este activ în ${input.month}.`,
       );
 
-      const id = randomUUID();
+      const id = this.commands.ids();
       const resultHash = hashOf(lines.map(({ companyId: _company, runId: _run, ...line }) => line));
       const issueCount = lines.filter((line) => line.issues).length;
       await tx.insert(payrollRuns).values({

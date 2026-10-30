@@ -6,7 +6,8 @@
   "workspaces": [
     "packages/xfactura-core",
     "packages/xfactura-web",
-    "packages/xfactura-api"
+    "packages/xfactura-api",
+    "packages/xfactura-eval"
   ],
   "scripts": {
     "dev": "bun run scripts/dev.ts",
@@ -17,17 +18,20 @@
     "account:create": "bun run packages/xfactura-api/source/engine/manage.ts create-user",
     "test": "bun test packages/xfactura-core/test",
     "test:integration": "bun test --timeout 120000 packages/xfactura-api/test/engine/*.integration.test.ts",
+    "test:legacy": "bun test packages/xfactura-api/test/legacy",
     "test:e2e": "bun run scripts/e2e.ts",
-    "typecheck": "tsc -p packages/xfactura-core --noEmit && tsc -p packages/xfactura-core/test --noEmit && tsc -p packages/xfactura-api --noEmit && tsc -p packages/xfactura-web --noEmit",
-    "lint": "eslint scripts packages/xfactura-core packages/xfactura-api/source/engine packages/xfactura-api/test/engine packages/xfactura-web/app/contabilitate packages/xfactura-web/components/accounting",
+    "typecheck": "tsc -p packages/xfactura-core --noEmit && tsc -p packages/xfactura-core/test --noEmit && tsc -p packages/xfactura-api --noEmit && tsc -p packages/xfactura-web --noEmit && tsc -p packages/xfactura-eval --noEmit",
+    "lint": "eslint scripts packages/xfactura-core packages/xfactura-api/source/engine packages/xfactura-api/test/engine packages/xfactura-web/app/contabilitate packages/xfactura-web/components/accounting packages/xfactura-eval",
     "build": "bun run --cwd packages/xfactura-web build",
-    "check": "bun run test && bun run typecheck && bun run lint && bun run build",
+    "check": "bun run test && bun run test:legacy && bun run typecheck && bun run lint && bun run build",
     "db:generate": "bun run --cwd packages/xfactura-api db:generate",
     "setup": "bun run scripts/setup.ts",
     "build:api": "bun run --cwd packages/xfactura-api build",
-    "format:check": "prettier --check packages/xfactura-core packages/xfactura-api/source/engine packages/xfactura-api/test/engine packages/xfactura-web/components/accounting packages/xfactura-web/app/contabilitate scripts test/e2e",
+    "format:check": "prettier --check packages/xfactura-core packages/xfactura-api/source/engine packages/xfactura-api/test/engine packages/xfactura-web/components/accounting packages/xfactura-web/app/contabilitate packages/xfactura-eval scripts test/e2e",
     "backup": "bun run packages/xfactura-api/source/engine/backup.ts backup",
     "restore": "bun run packages/xfactura-api/source/engine/backup.ts restore",
+    "eval": "bun test packages/xfactura-eval/test && bun run packages/xfactura-eval/src/cli.ts",
+    "eval:record": "bun run packages/xfactura-eval/src/cli.ts --agent llm --llm record",
     "test:perf": "bun test --timeout 600000 packages/xfactura-api/test/engine/*.perf.test.ts",
     "test:official": "bun test scripts/validators",
     "validators:fetch": "bun scripts/validators/fetch.ts",
@@ -35,10 +39,12 @@
     "sources:fetch": "bun scripts/sources/fetch.ts"
   },
   "devDependencies": {
+    "@pdf-lib/fontkit": "1.1.1",
     "@playwright/test": "1.64.1",
     "@types/bun": "1.4.4",
     "eslint": "9.39.5",
     "fast-check": "4.10.2",
+    "pdf-lib": "1.17.1",
     "prettier": "3.9.10",
     "typescript": "6.0.3",
     "typescript-eslint": "8.72.1"

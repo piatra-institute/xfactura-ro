@@ -11,16 +11,16 @@ import {
 } from '../../logic/getUser';
 
 import {
-    updateUserPayments,
+    fulfilUserCheckoutSession,
 } from '../../logic/updateUser';
+
+import {
+    isPendingSession,
+} from '../../logic/acts';
 
 import {
     logger,
 } from '../../utilities';
-
-import {
-    parseUserPayments,
-} from '../../utilities/database';
 
 
 
@@ -106,45 +106,38 @@ export default async function handler(
                 break;
             case 'GET':
                 try {
-                    const session = await stripe.checkout.sessions.retrieve(
-                        (request as any).query.sid,
-                    );
+                    const sessionID = request.query.sid;
+                    if (typeof sessionID !== 'string' || !sessionID.startsWith('cs_')) {
+                        response.status(400).json({
+                            status: false,
+                        });
+                        return;
+                    }
 
-                    const sessionMetadata = session.metadata;
-                    if (!sessionMetadata) {
+                    const session = await stripe.checkout.sessions.retrieve(sessionID);
+
+                    if (session.metadata?.userID !== databaseUser.id) {
                         response.send({
                             status: false,
                         });
                         return;
                     }
 
-                    const {
-                        userID,
-                        productType,
-                    } = sessionMetadata;
-                    if (userID !== databaseUser.id) {
-                        response.send({
-                            status: false,
-                        });
-                        return;
+                    // Fallback for the webhook: both go through the same
+                    // idempotent credit, which refuses unpaid sessions.
+                    const fulfilment = await fulfilUserCheckoutSession(session);
+                    if (fulfilment.outcome === 'credited') {
+                        logger('info', 'Checkout session credited', session.id, fulfilment.acts);
                     }
 
-                    const successfulPayment = session.status === 'complete' || session.status === 'open';
-
-                    const payments = parseUserPayments(databaseUser);
-                    const payment = payments.find((payment) => payment.sessionID === session.id);
-                    if (successfulPayment && !payment) {
-                        await updateUserPayments(
-                            databaseUser,
-                            productType as any,
-                            session.id,
-                        );
-                    }
+                    const credited = fulfilment.outcome === 'credited'
+                        || fulfilment.outcome === 'already-credited';
 
                     response.send({
-                        status: successfulPayment,
+                        status: credited,
                         data: {
-                            customerEmail: (session as any).customer_details.email,
+                            customerEmail: session.customer_details?.email ?? '',
+                            pending: isPendingSession(session),
                         },
                     });
                 } catch (error: any) {

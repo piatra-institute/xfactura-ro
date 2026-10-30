@@ -71,7 +71,7 @@ describe('fixed assets', () => {
     const may = await depreciate('2026-05');
     expect(lines(may)).toEqual(['D 6811 166.66', 'C 2814 166.66']);
     await s.post(await s.approve(may));
-    const [asset] = await s.invoke<{ depreciated: string; remaining: string }[]>(
+    const [asset] = await s.list<{ depreciated: string; remaining: string }>(
       s.owner,
       'assets.list',
     );

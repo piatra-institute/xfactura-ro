@@ -46,6 +46,9 @@ export const payrollRecognition: Treatment<PayrollInput> = {
   description: 'Statul de plată al lunii: salariile, contribuțiile și impozitul reținut.',
   input: payrollInput,
   agent: true,
+  summary: "The month's payroll: salaries, contributions and withheld income tax.",
+  toolset: 'payroll',
+  dataClasses: ['books', 'payroll', 'personal'],
   subject: (input) => `payroll:${input.month}:${input.round}`,
   plan: (input) => ({ payrollRuns: [input.runId], parties: [input.authorityId], profile: true }),
   evaluate(input, loaded, rules) {

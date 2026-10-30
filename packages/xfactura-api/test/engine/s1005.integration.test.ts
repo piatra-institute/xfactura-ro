@@ -113,11 +113,7 @@ async function firstYear(validator?: DukIntegrator, opening = false, laptop = fa
       { date: '2025-03-10', rate: '19', net: '6000.00', tax: '1140.00', gross: '7140.00' },
       '214',
     );
-    const [document] = await s.invoke<{ id: string; number: string }[]>(
-      s.owner,
-      'documents.list',
-      {},
-    );
+    const [document] = await s.list<{ id: string; number: string }>(s.owner, 'documents.list', {});
     await s.invoke(s.owner, 'assets.register', {
       number: 'MF-001',
       name: 'Laptop',

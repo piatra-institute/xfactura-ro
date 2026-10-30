@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { requireCondition } from '../errors';
 import { canonical, sha256Hex as sha256 } from '../hash';
 import { isSupportedCurrency } from '../money';
+import { addDays, parseLocalDate } from '../time';
 import { Amount, dateSchema, signedMoneySchema } from '../values';
 
 export const bankFileLimits = Object.freeze({
@@ -10,7 +11,10 @@ export const bankFileLimits = Object.freeze({
   entries: 2000,
   detailsPerEntry: 200,
 });
-export const bankFileFormat = z.enum(['mt940', 'camt.053']);
+/** Where a statement comes from: the bank's MT940 or camt.053 file, a CSV export parsed with a
+ * column mapping (`bank.importCsv`), or a statement an agent transcribed from a PDF or a photo,
+ * citing each row (`bank.recordStatement`). */
+export const bankFileFormat = z.enum(['mt940', 'camt.053', 'csv', 'transcribed']);
 export const bankFileParserVersion = 'bank-statement-1' as const;
 const optionalText = z.string().max(500).nullable();
 export const bankEntrySchema = z
@@ -86,6 +90,8 @@ export const bankStatementDocumentSchema = z
   .strict();
 export type BankEntryDocument = z.infer<typeof bankEntrySchema>;
 export type BankStatementDocument = z.infer<typeof bankStatementDocumentSchema>;
+/** A statement `checkedStatements` accepted: the only kind the engine records. */
+export type CheckedStatement = BankStatementDocument & { readonly __checked: unique symbol };
 const uuid = z.uuid();
 export const storedBankEntrySchema = bankEntrySchema
   .extend({
@@ -183,10 +189,96 @@ export function statementFinancialHash(statement: BankStatementDocument) {
     }),
   );
 }
+/** A statement's movement as a CSV row or a transcription gives it. */
+export interface StatementRow {
+  date: string;
+  valueDate: string | null;
+  /** Signed: money in is positive. */
+  amount: string;
+  description: string;
+  /** The bank's own reference of the movement, when the source has one. */
+  reference: string | null;
+  counterparty: string | null;
+  counterpartyAccount: string | null;
+}
+
+/**
+ * A statement of one account from rows a CSV export or a transcription gives, in the form the
+ * MT940 and camt.053 parsers produce, so that the same checks (`checkedStatements`) and the same
+ * recording (`recordStatements`) apply. It covers `from` to `to`; the opening balance is dated
+ * `from`.
+ */
+export function statementOf(input: {
+  format: 'csv' | 'transcribed';
+  sourceId: string;
+  bankAccount: string;
+  currency: string;
+  from: string;
+  to: string;
+  opening: string;
+  closing: string;
+  rows: StatementRow[];
+}): BankStatementDocument {
+  requireCondition(
+    input.rows.length <= bankFileLimits.entries,
+    'BANK_ENTRY_LIMIT',
+    'Extrasul conține prea multe înregistrări bancare.',
+  );
+  return bankStatementDocumentSchema.parse({
+    ordinal: 0,
+    format: input.format,
+    sourceId: input.sourceId,
+    messageId: null,
+    sequence: null,
+    bankAccount: canonicalBankAccount(input.bankAccount),
+    currency: input.currency,
+    from: input.from,
+    to: input.to,
+    openingDate: input.from,
+    closingDate: input.to,
+    opening: input.opening,
+    closing: input.closing,
+    reportedFrom: null,
+    reportedTo: null,
+    entries: input.rows.map((row, ordinal) => {
+      const incoming = !row.amount.startsWith('-');
+      return {
+        ordinal,
+        date: row.date,
+        valueDate: row.valueDate,
+        bookingDateTime: null,
+        valueDateTime: null,
+        amount: row.amount,
+        reference: row.description.slice(0, 8000),
+        bankReference: row.reference?.slice(0, 500) ?? null,
+        entryReference: null,
+        customerReference: null,
+        transactionCode: '',
+        reversal: false,
+        raw: null,
+        charges: [],
+        details: [
+          {
+            references: {},
+            amount: null,
+            remittance: row.description
+              ? (row.description.match(/[\s\S]{1,1000}/g) ?? []).slice(0, 100)
+              : [],
+            debtor: incoming ? (row.counterparty?.slice(0, 500) ?? null) : null,
+            creditor: incoming ? null : (row.counterparty?.slice(0, 500) ?? null),
+            debtorAccount: incoming ? (row.counterpartyAccount?.slice(0, 500) ?? null) : null,
+            creditorAccount: incoming ? null : (row.counterpartyAccount?.slice(0, 500) ?? null),
+          },
+        ],
+      };
+    }),
+  });
+}
+
 export function checkedStatements(
   input: BankStatementDocument[],
   year: { from: string; to: string },
-) {
+): CheckedStatement[] {
   requireCondition(
     input.length > 0 && input.length <= bankFileLimits.statements,
     'BANK_STATEMENT_LIMIT',
@@ -238,6 +330,46 @@ export function checkedStatements(
       'STATEMENT_BALANCE',
       'Soldul inițial plus înregistrările diferă de soldul contabil final.',
     );
-    return statement;
+    return statement as CheckedStatement;
   });
+}
+
+/*
+ * Statements of one account in sequence.
+ *
+ * A statement covers the days from its opening-balance date (`from`) to its closing date (`to`).
+ * Banks date the opening balance two ways: with the first day reported (a daily MT940 opening and
+ * closing on the same date, a monthly camt.053 opening on the 1st), or, as SWIFT describes field
+ * 60F, with the previous statement's closing date. In the second, consecutive statements share
+ * that date: the later one hands over from the earlier, reporting nothing on it.
+ */
+
+/** A statement's days, as the overlap and continuity rules read them. */
+export type StatementSpan = {
+  from: string;
+  to: string;
+  /** Whether it reports a movement booked on `from`. */
+  movesOnFrom: boolean;
+};
+
+/**
+ * Whether `later` takes over on the day `earlier` closes: it opens on that date, reports nothing
+ * on it and covers at least one more day. Its opening balance is then `earlier`'s closing.
+ */
+export function handsOver(earlier: StatementSpan, later: StatementSpan) {
+  return earlier.to === later.from && later.from < later.to && !later.movesOnFrom;
+}
+
+/** Whether two statements of one account report a day twice. */
+export function statementsOverlap(a: StatementSpan, b: StatementSpan) {
+  return a.from <= b.to && b.from <= a.to && !handsOver(a, b) && !handsOver(b, a);
+}
+
+/**
+ * Whether `later` follows `earlier` with no day between them, so its opening balance must be
+ * `earlier`'s closing. Otherwise days are missing between them, and so may be the movements that
+ * explain a difference.
+ */
+export function statementsAdjoin(earlier: StatementSpan, later: StatementSpan) {
+  return handsOver(earlier, later) || addDays(parseLocalDate(earlier.to), 1) === later.from;
 }

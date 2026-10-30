@@ -45,6 +45,7 @@ export const offset: Treatment<OffsetInput> = {
   description: 'Compensarea creanțelor și datoriilor față de același partener.',
   input: offsetInput,
   agent: true,
+  summary: 'Offset of receivables and payables with the same partner.',
   subject: (input) => `offset:${input.evidenceId}`,
   plan: (input) => ({
     evidence: [input.evidenceId],

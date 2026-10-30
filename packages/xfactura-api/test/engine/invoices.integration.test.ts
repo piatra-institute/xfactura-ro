@@ -105,6 +105,42 @@ describe('recognition', () => {
     expect(await balance(s, '4427')).toEqual({ debit: '0.00', credit: '21.00' });
   });
 
+  test('a July supply invoiced in August with its date (BT-72) takes 19%, with VAT in July', async () => {
+    // Codul fiscal art. 282 alin. (1) and 291 alin. (4): the supply's date gives the rate and the
+    // exigibility; without it the issue date stands for it, and 19% is no longer in force.
+    const s = await scenario({ year: 2025 });
+    open.push(s);
+    await s.invoke(s.owner, 'profile.record', {
+      axis: 'vat.status',
+      value: 'normal_vat',
+      effectiveFrom: '2025-01-01',
+      evidenceId: (await s.evidence('certificat-tva.pdf')).id,
+    });
+    const nineteen = {
+      direction: 'sale' as const,
+      date: '2025-08-05',
+      rate: '19',
+      tax: '19.00',
+      gross: '119.00',
+    };
+    const dated = await importInvoice(s, {
+      ...nineteen,
+      number: 'V-07',
+      deliveryDate: '2025-07-28',
+    });
+    const proposal = await s.propose('invoices.recognize', {
+      documentId: dated.id,
+      account: '704',
+    });
+    expect(codes(proposal)).toEqual([]);
+    expect(proposal.effect?.taxEntries[0]).toMatchObject({ code: 'S-19', taxPeriod: '2025-07' });
+    expect(proposal.rules.used).toEqual([{ id: 'ro.vat.rate/S/2024-01-01', status: 'extracted' }]);
+    const undated = await importInvoice(s, { ...nineteen, number: 'V-08' });
+    expect(
+      codes(await s.propose('invoices.recognize', { documentId: undated.id, account: '704' })),
+    ).toEqual(['VAT_RATE', 'SUPPLY_DATE_ASSUMED']);
+  });
+
   test('VAT must match the rate in force and the company registration', async () => {
     const s = await company();
     const nineteen = await importInvoice(s, {
@@ -253,7 +289,9 @@ describe('invoices on several accounts and rates', () => {
       'vat:S-21 S-21 1000.00/210.00 deducted 210.00 line 3',
       'vat:S-11 S-11 200.00/22.00 deducted 0.00 line -',
     ]);
-    await s.post(await s.approve(proposal, s.reviewer, ['REDUCED_RATE']));
+    // The part on 6022 (fuel) names no car: the reviewer confirms it (art. 298).
+    expect(proposal.issues.map((issue) => issue.code)).toContain('VEHICLE_UNNAMED');
+    await s.post(await s.approve(proposal, s.reviewer, ['REDUCED_RATE', 'VEHICLE_UNNAMED']));
     expect(await balance(s, '401')).toEqual({ debit: '0.00', credit: '1432.00' });
   });
 
@@ -415,7 +453,7 @@ describe('invoices on several accounts and rates', () => {
 
 describe('advances (419, 4091, 4092)', () => {
   const advanceOf = async (s: Scenario, kind: string) => {
-    const [item] = await s.invoke<{ id: string; balance: string }[]>(s.owner, 'openItems.list', {
+    const [item] = await s.list<{ id: string; balance: string }>(s.owner, 'openItems.list', {
       kind,
     });
     return item!;
@@ -636,6 +674,72 @@ describe('credit notes', () => {
       account: '704',
     });
     expect(codes(proposal)).toEqual(['REFERENCE']);
+  });
+});
+
+describe('corrections', () => {
+  test('a reversed invoice is free for a new booking, which its credit note then reads', async () => {
+    const s = await company();
+    const sale = await importInvoice(s, { number: 'V-20', direction: 'sale' });
+    const first = await s.book('invoices.recognize', { documentId: sale.id, account: '704' });
+    const other = { documentId: sale.id, account: '706' };
+    // While the booking stands, the document is taken.
+    expect((await s.refused(s.propose('invoices.recognize', other)))?.code).toBe('SUBJECT_EXISTS');
+    // Booked on the wrong revenue account: the correction is a reversal and a new proposal.
+    const { id: note } = await s.evidence('nota-storno.pdf');
+    const reversal = {
+      date: '2026-10-20',
+      reason: 'Venitul a fost înregistrat pe alt cont decât cel al serviciului.',
+      evidenceId: note,
+      method: 'red' as const,
+    };
+    const reversed = await s.book('ledger.reverse', { entryId: first.entry!.id, ...reversal });
+    // The document waits for a booking again, and the worklist says how to propose it.
+    const work = await s.invoke<{
+      items: { subject: { id: string }; next: { operation: string; inputHint: unknown }[] }[];
+    }>(s.owner, 'work.list', { kinds: ['document.unproposed'] });
+    expect(work.items.find((item) => item.subject.id === sale.id)?.next[0]).toEqual(
+      expect.objectContaining({
+        operation: 'proposals.propose',
+        inputHint: { treatment: 'invoices.recognize', input: { documentId: sale.id } },
+      }),
+    );
+    const again = await s.book('invoices.recognize', other);
+    expect(again).toMatchObject({ status: 'posted', subject: first.subject });
+    expect(again.id).not.toBe(first.id);
+    // Booked otherwise once more only after this one is reversed too.
+    expect(
+      (await s.refused(s.propose('invoices.recognize', { ...other, account: '704' })))?.code,
+    ).toBe('SUBJECT_EXISTS');
+    // The first booking's receivable was cleared by its reversal; the new one's stays open.
+    expect(await balance(s, '4111')).toEqual({ debit: '121.00', credit: '0.00' });
+    expect(await balance(s, '704')).toEqual({ debit: '0.00', credit: '0.00' });
+    expect(await balance(s, '706')).toEqual({ debit: '0.00', credit: '100.00' });
+    // A credit note reduces the new booking's receivable, never the reversed one's.
+    const credit = await importInvoice(s, {
+      number: 'CN-20',
+      direction: 'sale',
+      credit: true,
+      originalNumber: 'V-20',
+      date: '2026-11-05',
+      net: '50.00',
+      tax: '10.50',
+      gross: '60.50',
+    });
+    const credited = await s.book('invoices.credit', {
+      documentId: credit.id,
+      originalDocumentId: sale.id,
+      account: '706',
+    });
+    expect(credited.effect?.lines[0]).toMatchObject({
+      account: '4111',
+      amount: '-60.50',
+      openItem: again.effect!.openItems[0]!.id,
+    });
+    expect(await balance(s, '4111')).toEqual({ debit: '60.50', credit: '0.00' });
+    // A reversal is never reversed: the subject it freed is booked again instead.
+    const undo = await s.propose('ledger.reverse', { entryId: reversed.entry!.id, ...reversal });
+    expect(codes(undo)).toContain('REVERSAL_OF_REVERSAL');
   });
 });
 

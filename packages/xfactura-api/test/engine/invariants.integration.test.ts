@@ -3,20 +3,30 @@ import { randomUUID } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import { canonical, derivedId } from 'xfactura-core/hash';
 import type { Effect } from 'xfactura-core/kernel';
-import { guardedTables, invariantRules, mutableTables } from '../../source/engine/db/invariants';
+import {
+  answerMediaType,
+  guardedTables,
+  invariantRules,
+  mutableTables,
+} from '../../source/engine/db/invariants';
 import {
   actionDecisions,
   actionExecutions,
   actionRequests,
   agentGrants,
   anafConnections,
+  approvals,
+  automationCriteria,
+  automationEvents,
   artifactEvents,
   assetEvents,
   assets,
   audit,
+  bankMappings,
   bankMovements,
   bankStatements,
   commands,
+  dispositions,
   documentLinks,
   documents,
   employees,
@@ -44,12 +54,18 @@ import {
   postingPolicies,
   profileFacts,
   proposals,
+  questionAnswers,
+  questions,
+  questionWithdrawals,
   series,
   spvMessages,
   spvSyncWindows,
   submissionEvents,
   submissions,
   taxPeriodEvents,
+  templatePredictions,
+  templateRevocations,
+  templates,
   treasuryAccounts,
   withdrawals,
 } from '../../source/engine/db/schema';
@@ -68,6 +84,7 @@ import {
   receivable,
   refusal,
   sale,
+  type Proposed,
   type World,
 } from './world';
 
@@ -79,7 +96,7 @@ type Attack = {
 };
 
 const later = Date.now() + 86_400_000;
-async function policy(world: World, approver = world.reviewer) {
+async function policy(world: World, approver = world.reviewer, preconditions: unknown[] = []) {
   const id = randomUUID();
   await world.db.write(async (tx) =>
     tx.insert(postingPolicies).values({
@@ -88,7 +105,7 @@ async function policy(world: World, approver = world.reviewer) {
       name: 'Facturi emise',
       treatments: canonical(['test.treatment']),
       rulesHashes: canonical(['rules-1']),
-      preconditions: '[]',
+      preconditions: canonical(preconditions),
       approvedBy: approver,
       approverEpoch: await epoch(world, approver),
       validFrom: '2026-01-01',
@@ -97,6 +114,75 @@ async function policy(world: World, approver = world.reviewer) {
   );
   return id;
 }
+/** Records the company's segregation of duties from 2026-01-01; returns the fact's id. */
+async function segregate(world: World, value: 'off' | 'on' | 'strict', supersedesId?: string) {
+  const evidenceId = randomUUID();
+  const id = randomUUID();
+  await world.db.write(async (tx) => {
+    await tx.insert(evidence).values({
+      id: evidenceId,
+      companyId: world.company,
+      hash: evidenceId.replaceAll('-', '').padEnd(64, '0'),
+      filename: 'decizie-administrator.pdf',
+      mediaType: 'application/pdf',
+      size: 1,
+      createdBy: world.owner,
+    });
+    await tx.insert(profileFacts).values({
+      id,
+      companyId: world.company,
+      axis: 'controls.segregation',
+      value,
+      effectiveFrom: '2026-01-01',
+      evidenceId,
+      supersedesId: supersedesId ?? null,
+      createdBy: world.owner,
+    });
+  });
+  return id;
+}
+/** An action requested in the owner's name (through `agentId`, if given); returns its id. */
+async function actionRequest(world: World, agentId?: string) {
+  const id = randomUUID();
+  await world.db.write((tx) =>
+    tx.insert(actionRequests).values({
+      id,
+      companyId: world.company,
+      operation: 'periods.close',
+      input: '{}',
+      preview: '{}',
+      previewHash: 'preview',
+      createdBy: world.owner,
+      agentId: agentId ?? null,
+    }),
+  );
+  return id;
+}
+const decide = async (
+  world: World,
+  requestId: string,
+  decidedBy: string,
+  decision: 'approve' | 'reject' = 'approve',
+) =>
+  world.db.write(async (tx) =>
+    tx.insert(actionDecisions).values({
+      companyId: world.company,
+      requestId,
+      decision,
+      previewHash: 'preview',
+      decidedBy,
+      decidedEpoch: await epoch(world, decidedBy),
+      ...(decision === 'reject' ? { reason: 'Nu este cazul' } : {}),
+    }),
+  );
+const demote = (world: World, userId: string) =>
+  world.db.write((tx) =>
+    tx
+      .update(memberships)
+      .set({ role: 'viewer', epoch: sql`${memberships.epoch} + 1` })
+      .where(and(eq(memberships.companyId, world.company), eq(memberships.userId, userId))),
+  );
+const warning = { code: 'VAT_FX', severity: 'ack' as const, message: 'TVA diferă de curs.' };
 const withdraw = (world: World, proposalId: string) =>
   world.db.write((tx) =>
     tx
@@ -238,6 +324,7 @@ async function issuing(world: World) {
         bodyHash: id,
         sourceKey: id,
         origin: 'issued',
+        authority: 'issued',
         docDate: date,
         partyId: world.client,
         number: text,
@@ -299,6 +386,7 @@ async function submittable(world: World) {
       sourceKey: documentId,
       evidenceId,
       origin: 'issued',
+      authority: 'issued',
       docDate: '2026-03-10',
       number: 'XF0001',
       createdBy: world.owner,
@@ -650,10 +738,443 @@ async function payrollRecords(world: World) {
   return { runId, terms, line };
 }
 
+/** A bank account in lei, with ways to record its statements and movements directly. */
+async function bankRecords(world: World) {
+  const accountId = randomUUID();
+  const evidenceId = randomUUID();
+  await world.db.write(async (tx) => {
+    await tx.insert(evidence).values({
+      id: evidenceId,
+      companyId: world.company,
+      hash: 'e'.repeat(64),
+      filename: 'extras.xml',
+      mediaType: 'application/xml',
+      size: 1,
+      createdBy: world.owner,
+    });
+    await tx.insert(treasuryAccounts).values({
+      id: accountId,
+      companyId: world.company,
+      kind: 'bank',
+      name: 'Cont curent',
+      iban: 'RO49AAAA1B31007593840000',
+      currency: 'RON',
+      ledgerAccount: '5121',
+      openedOn: '2026-01-01',
+      createdBy: world.owner,
+    });
+  });
+  const statement = async (from: string, to: string, opening: bigint, closing: bigint) => {
+    const id = randomUUID();
+    await world.db.write((tx) =>
+      tx.insert(bankStatements).values({
+        id,
+        companyId: world.company,
+        treasuryAccountId: accountId,
+        evidenceId,
+        format: 'camt.053',
+        sourceId: `EXTRAS-${from}`,
+        from,
+        to,
+        openingMinor: opening,
+        closingMinor: closing,
+        financialHash: id.replace(/-/g, '').padEnd(64, '0'),
+        createdBy: world.owner,
+      }),
+    );
+    return id;
+  };
+  const movement = (statementId: string, bookingDate: string) =>
+    world.db.write((tx) =>
+      tx.insert(bankMovements).values({
+        id: randomUUID(),
+        companyId: world.company,
+        treasuryAccountId: accountId,
+        statementId,
+        sourceId: `entry:${randomUUID()}`,
+        bookingDate,
+        amountMinor: 100n,
+        currency: 'RON',
+        reference: 'Plată',
+        details: '{}',
+      }),
+    );
+  return { statement, movement };
+}
+
+/** A question asked in the owner's name about a vehicle: `answer` and `withdraw` it, `ask`
+ * another about the same vehicle, `dispose` of a subject. */
+async function questionRecords(world: World, vehicle = 'B123ABC') {
+  const id = randomUUID();
+  const ask = (questionId = randomUUID()) =>
+    world.db.write((tx) =>
+      tx.insert(questions).values({
+        id: questionId,
+        companyId: world.company,
+        kind: 'vehicle.use',
+        subjectKind: 'vehicle',
+        subjectId: vehicle,
+        params: '{}',
+        askedBy: world.owner,
+      }),
+    );
+  await ask(id);
+  const kept = async (mediaType = answerMediaType) => {
+    const evidenceId = randomUUID();
+    await world.db.write((tx) =>
+      tx.insert(evidence).values({
+        id: evidenceId,
+        companyId: world.company,
+        hash: evidenceId.replaceAll('-', '').padEnd(64, 'e'),
+        filename: 'raspuns.json',
+        mediaType,
+        size: 1,
+        createdBy: world.owner,
+      }),
+    );
+    return evidenceId;
+  };
+  const answer = async (
+    seq: number,
+    overrides: Partial<typeof questionAnswers.$inferInsert> = {},
+    mediaType?: string,
+  ) => {
+    const answerId = randomUUID();
+    const evidenceId = await kept(mediaType);
+    const answerEpoch = await epoch(world, overrides.answeredBy ?? world.reviewer);
+    await world.db.write((tx) =>
+      tx.insert(questionAnswers).values({
+        id: answerId,
+        companyId: world.company,
+        questionId: id,
+        seq,
+        value: '{"use":"mixed"}',
+        evidenceId,
+        answeredBy: world.reviewer,
+        epoch: answerEpoch,
+        ...overrides,
+      }),
+    );
+    return answerId;
+  };
+  const withdraw = () =>
+    world.db.write((tx) =>
+      tx.insert(questionWithdrawals).values({
+        companyId: world.company,
+        questionId: id,
+        reason: 'Nu mai este necesară',
+        createdBy: world.owner,
+      }),
+    );
+  const dispose = (subjectKind: string, agentId?: string) =>
+    world.db.write((tx) =>
+      tx.insert(dispositions).values({
+        id: randomUUID(),
+        companyId: world.company,
+        subjectKind,
+        subjectId: randomUUID(),
+        disposition: 'no_booking',
+        reason: 'Nu se înregistrează',
+        fingerprint: 'f'.repeat(64),
+        createdBy: world.owner,
+        agentId: agentId ?? null,
+      }),
+    );
+  return { id, ask, answer, withdraw, dispose };
+}
+
 const entry = 'inv_entry_guard';
 const numbering = 'inv_issued_number_guard';
 const submission = 'inv_submission_event_guard';
+/** Documents written directly: `add` records one (an extracted one cites its evidence), `link`
+ * joins two, `proposal` opens a proposal recognizing one. */
+async function documentRecords(world: World) {
+  const evidenceId = randomUUID();
+  const hash = 'f'.repeat(64);
+  await world.db.write((tx) =>
+    tx.insert(evidence).values({
+      id: evidenceId,
+      companyId: world.company,
+      hash,
+      filename: 'factura.pdf',
+      mediaType: 'application/pdf',
+      size: 1,
+      createdBy: world.owner,
+    }),
+  );
+  let parts = 0;
+  const add = async (
+    options: {
+      authority?: (typeof documents.$inferInsert)['authority'] | null;
+      identityKey?: string | null;
+      sourceKey?: string;
+    } = {},
+  ) => {
+    const id = randomUUID();
+    const authority = options.authority === undefined ? 'extracted' : options.authority;
+    await world.db.write((tx) =>
+      tx.insert(documents).values({
+        id,
+        companyId: world.company,
+        kind: 'invoice.received',
+        schema: 'test',
+        body: '{}',
+        bodyHash: id,
+        sourceKey:
+          options.sourceKey ?? (authority === 'extracted' ? `extract:${hash}:${++parts}` : id),
+        evidenceId,
+        origin: 'test',
+        docDate: '2026-03-10',
+        partyId: world.supplier,
+        number: 'F-1',
+        identityKey: options.identityKey === undefined ? 'identity-1' : options.identityKey,
+        authority,
+        createdBy: world.owner,
+      }),
+    );
+    return id;
+  };
+  const link = (fromId: string, toId: string, kind: string) =>
+    world.db.write((tx) =>
+      tx
+        .insert(documentLinks)
+        .values({ companyId: world.company, fromId, toId, kind, createdBy: world.owner }),
+    );
+  const proposal = (documentId: string) =>
+    propose(world, sale(world), { subjectKey: `document:${documentId}` });
+  return { add, link, proposal };
+}
+
+/**
+ * Earned autonomy's records written directly: reviewed requests approved by a decider, a
+ * batch's approvals, a template version written by its request, its revocation and predictions,
+ * pauses and resumes, and graduation criteria.
+ */
+async function autonomyRecords(world: World) {
+  const reviewed = async (
+    operation: string,
+    preview: unknown,
+    decider: string | null = world.reviewer,
+  ) => {
+    const id = randomUUID();
+    await world.db.write(async (tx) => {
+      await tx.insert(actionRequests).values({
+        id,
+        companyId: world.company,
+        operation,
+        input: '{}',
+        preview: canonical(preview),
+        previewHash: 'preview',
+        createdBy: world.owner,
+      });
+      if (decider)
+        await tx.insert(actionDecisions).values({
+          companyId: world.company,
+          requestId: id,
+          decision: 'approve',
+          previewHash: 'preview',
+          decidedBy: decider,
+          decidedEpoch: await epoch(world, decider),
+        });
+    });
+    return id;
+  };
+  /** A batch whose approved preview lists these versions as ready. */
+  const batch = (listed: Proposed[]) =>
+    reviewed('proposals.batch', {
+      members: listed.map((item) => ({
+        proposalId: item.proposalId,
+        version: item.version,
+        effectHash: item.effectHash,
+        state: 'ready',
+      })),
+    });
+  const batchApproval = async (
+    proposed: Proposed,
+    requestId: string,
+    approver = world.reviewer,
+  ) => {
+    const id = randomUUID();
+    const approverEpoch = await epoch(world, approver);
+    await world.db.write((tx) =>
+      tx.insert(approvals).values({
+        id,
+        companyId: world.company,
+        proposalId: proposed.proposalId,
+        version: proposed.version,
+        effectHash: proposed.effectHash,
+        approverId: approver,
+        approverEpoch,
+        acknowledgements: '[]',
+        batchRequestId: requestId,
+      }),
+    );
+    return id;
+  };
+  const templateId = randomUUID();
+  const template = async (
+    version = 1,
+    options: { requestId?: string; approvedBy?: string } = {},
+  ) => {
+    const requestId = options.requestId ?? (await reviewed('templates.request', {}));
+    const approvedBy = options.approvedBy ?? world.reviewer;
+    const approverEpoch = await epoch(world, approvedBy);
+    await world.db.write((tx) =>
+      tx.insert(templates).values({
+        id: templateId,
+        companyId: world.company,
+        version,
+        name: 'Abonament',
+        treatmentId: 'test.treatment',
+        documentKind: 'invoice.received',
+        scope: '{}',
+        mapping: '{}',
+        requestId,
+        approvedBy,
+        approverEpoch,
+        createdBy: world.owner,
+      }),
+    );
+    return templateId;
+  };
+  const revoke = (id = templateId) =>
+    world.db.write((tx) =>
+      tx.insert(templateRevocations).values({
+        companyId: world.company,
+        templateId: id,
+        reason: 'Nu mai este folosit',
+        createdBy: world.owner,
+      }),
+    );
+  const predict = (subjectKey: string) =>
+    world.db.write((tx) =>
+      tx.insert(templatePredictions).values({
+        companyId: world.company,
+        templateId,
+        templateVersion: 1,
+        sourceKey: subjectKey,
+        status: 'predicted',
+        subjectKey,
+        input: '{}',
+        fingerprint: 'f'.repeat(64),
+        asOfSeq: 0,
+      }),
+    );
+  const automation = async (
+    seq: number,
+    overrides: Partial<typeof automationEvents.$inferInsert> = {},
+  ) => {
+    const by = overrides.createdBy ?? world.owner;
+    const memberEpoch = by === 'system' ? null : await epoch(world, by);
+    await world.db.write((tx) =>
+      tx.insert(automationEvents).values({
+        companyId: world.company,
+        seq,
+        scope: 'company',
+        scopeId: null,
+        kind: 'pause',
+        reason: 'Oprim contabilizarea automată',
+        createdBy: by,
+        epoch: memberEpoch,
+        ...overrides,
+      }),
+    );
+  };
+  const criteria = async (seq: number, createdBy = world.owner) => {
+    const memberEpoch = await epoch(world, createdBy);
+    await world.db.write((tx) =>
+      tx.insert(automationCriteria).values({
+        companyId: world.company,
+        seq,
+        minCorrect: 8,
+        minMonths: 4,
+        policyDays: 60,
+        reason: 'Criterii mai stricte',
+        createdBy,
+        epoch: memberEpoch,
+      }),
+    );
+  };
+  return { reviewed, batch, batchApproval, template, revoke, predict, automation, criteria };
+}
+
 const attacks: Attack[] = [
+  {
+    trigger: 'inv_question_guard',
+    code: 'question_open',
+    name: 'asking about a vehicle while the same question about it awaits an answer',
+    run: async (world) => (await questionRecords(world)).ask(),
+  },
+  {
+    trigger: 'inv_question_answer_guard',
+    code: 'answer_sequence',
+    name: "an answer numbered past the question's answers",
+    run: async (world) => (await questionRecords(world)).answer(2),
+  },
+  {
+    trigger: 'inv_question_answer_guard',
+    code: 'answer_person',
+    name: 'an answer given through an agent grant',
+    run: async (world) => (await questionRecords(world)).answer(1, { agentId: randomUUID() }),
+  },
+  {
+    trigger: 'inv_question_answer_guard',
+    code: 'answerer',
+    name: 'an answer by a viewer',
+    run: async (world) => (await questionRecords(world)).answer(1, { answeredBy: world.viewer }),
+  },
+  {
+    trigger: 'inv_question_answer_guard',
+    code: 'question_withdrawn',
+    name: 'answering a withdrawn question',
+    run: async (world) => {
+      const records = await questionRecords(world);
+      await records.withdraw();
+      return records.answer(1);
+    },
+  },
+  {
+    trigger: 'inv_question_answer_guard',
+    code: 'answer_evidence',
+    name: 'an answer citing a file that is not an answer kept as evidence',
+    run: async (world) => (await questionRecords(world)).answer(1, {}, 'application/pdf'),
+  },
+  {
+    trigger: 'inv_question_withdrawal_guard',
+    code: 'question_answered',
+    name: 'withdrawing a question already answered',
+    run: async (world) => {
+      const records = await questionRecords(world);
+      await records.answer(1);
+      return records.withdraw();
+    },
+  },
+  {
+    trigger: 'inv_disposition_guard',
+    code: 'disposition_subject',
+    name: 'disposing of a proposal instead of withdrawing it',
+    run: async (world) => (await questionRecords(world)).dispose('proposal'),
+  },
+  {
+    trigger: 'inv_disposition_guard',
+    code: 'disposition_person',
+    name: 'an agent deciding that a document needs no booking',
+    run: async (world) => (await questionRecords(world)).dispose('document', randomUUID()),
+  },
+  {
+    trigger: 'inv_entry_guard',
+    code: 'stale_read',
+    name: 'posting after a later answer replaced the one the proposal relied on',
+    run: async (world) => {
+      const records = await questionRecords(world);
+      const first = await records.answer(1);
+      const { proposed, approvalId } = await approved(world, sale(world), {
+        readSet: [{ kind: 'answer', id: records.id, version: first }],
+      });
+      await records.answer(2);
+      return post(world, proposed, { approvalId });
+    },
+  },
   {
     trigger: 'inv_submission_guard',
     code: 'submission_document',
@@ -926,6 +1447,31 @@ const attacks: Attack[] = [
   },
   {
     trigger: entry,
+    code: 'subject_posted',
+    name: 'posting a subject again while its entry stands, its reversal only proposed',
+    run: async (world) => {
+      const first = await approved(world, sale(world), { subjectKey: 'document:reversing' });
+      await withdraw(world, first.proposed.proposalId);
+      const posted = await book(world, sale(world), { subjectKey: 'document:reversing' });
+      // A reversal proposed, not posted, frees nothing: the entry still stands.
+      await propose(world, sale(world), { subjectKey: `reverse:${posted.entry.id}` });
+      return post(world, first.proposed, { approvalId: first.approvalId });
+    },
+  },
+  {
+    trigger: entry,
+    code: 'reversal_of_reversal',
+    name: 'reversing a reversal instead of booking its subject again',
+    run: async (world) => {
+      const original = await book(world, sale(world), { subjectKey: 'document:storno' });
+      const reversal = await book(world, sale(world), {
+        subjectKey: `reverse:${original.entry.id}`,
+      });
+      return book(world, sale(world), { subjectKey: `reverse:${reversal.entry.id}` });
+    },
+  },
+  {
+    trigger: entry,
     code: 'proposal_version_missing',
     name: 'posting a version that was never proposed',
     run: async (world) => {
@@ -1016,6 +1562,51 @@ const attacks: Attack[] = [
         }),
       );
       return post(world, proposed, { policyId });
+    },
+  },
+  {
+    trigger: entry,
+    code: 'binding',
+    name: 'auto-posting a warning the policy does not acknowledge',
+    run: async (world) => {
+      const proposed = await propose(world, sale(world), { issues: [warning] });
+      const policyId = await policy(world, world.reviewer, [
+        { kind: 'acknowledges', codes: ['PARTY_INACTIVE'] },
+      ]);
+      return post(world, proposed, { policyId });
+    },
+  },
+  {
+    trigger: entry,
+    code: 'binding',
+    name: 'auto-posting an acknowledged warning under a policy that refuses warnings',
+    run: async (world) => {
+      const proposed = await propose(world, sale(world), { issues: [warning] });
+      const policyId = await policy(world, world.reviewer, [
+        { kind: 'noWarnings' },
+        { kind: 'acknowledges', codes: ['VAT_FX'] },
+      ]);
+      return post(world, proposed, { policyId });
+    },
+  },
+  {
+    trigger: entry,
+    code: 'segregation',
+    name: "auto-posting one's own proposal under one's own policy, segregation on",
+    run: async (world) => {
+      await segregate(world, 'on');
+      const proposed = await propose(world, sale(world));
+      return post(world, proposed, { policyId: await policy(world, world.owner) });
+    },
+  },
+  {
+    trigger: entry,
+    code: 'segregation',
+    name: "auto-posting one's agent's proposal under one's own policy, segregation strict",
+    run: async (world) => {
+      await segregate(world, 'strict');
+      const proposed = await propose(world, sale(world), { agentId: randomUUID() });
+      return post(world, proposed, { policyId: await policy(world, world.owner) });
     },
   },
   {
@@ -1370,6 +1961,25 @@ const attacks: Attack[] = [
     },
   },
   {
+    trigger: 'inv_approval_guard',
+    code: 'segregation',
+    name: "approving one's own version, segregation on",
+    run: async (world) => {
+      await segregate(world, 'on');
+      return approve(world, await propose(world, sale(world)), world.owner);
+    },
+  },
+  {
+    trigger: 'inv_approval_guard',
+    code: 'segregation',
+    name: "approving one's agent's version, segregation strict",
+    run: async (world) => {
+      await segregate(world, 'strict');
+      const proposed = await propose(world, sale(world), { agentId: randomUUID() });
+      return approve(world, proposed, world.owner);
+    },
+  },
+  {
     trigger: 'inv_proposal_version_guard',
     code: 'proposal_version',
     name: 'skipping a proposal version',
@@ -1399,6 +2009,123 @@ const attacks: Attack[] = [
   },
   {
     trigger: 'inv_proposal_subject',
+    code: 'identity_taken',
+    name: 'recognizing a copy of a document whose identity another copy’s open proposal holds',
+    run: async (world) => {
+      const records = await documentRecords(world);
+      const extracted = await records.add();
+      const efactura = await records.add({ authority: 'efactura' });
+      await records.proposal(extracted);
+      return records.proposal(efactura);
+    },
+  },
+  {
+    trigger: 'inv_proposal_subject',
+    code: 'identity_taken',
+    name: 'recognizing a member of a group whose posted root a person matched',
+    run: async (world) => {
+      const records = await documentRecords(world);
+      const root = await records.add({ identityKey: 'identity-1' });
+      const near = await records.add({ identityKey: 'identity-2' });
+      await records.link(near, root, 'same_as_confirmed');
+      await book(world, sale(world), { subjectKey: `document:${root}` });
+      return records.proposal(near);
+    },
+  },
+  {
+    trigger: 'inv_proposal_subject',
+    code: 'identity_taken',
+    name: 'recognizing a copy of a document whose booking a reversal only proposed',
+    run: async (world) => {
+      const records = await documentRecords(world);
+      const extracted = await records.add();
+      const efactura = await records.add({ authority: 'efactura' });
+      const posted = await book(world, sale(world), { subjectKey: `document:${extracted}` });
+      await propose(world, sale(world), { subjectKey: `reverse:${posted.entry.id}` });
+      return records.proposal(efactura);
+    },
+  },
+  {
+    trigger: 'inv_document_guard',
+    code: 'document_authority',
+    name: 'a document that does not say where its content comes from',
+    run: async (world) => (await documentRecords(world)).add({ authority: null }),
+  },
+  {
+    trigger: 'inv_document_guard',
+    code: 'extracted_source',
+    name: 'an extracted document under a source key that is not its file’s',
+    run: async (world) =>
+      (await documentRecords(world)).add({ sourceKey: `extract:${'0'.repeat(64)}:1` }),
+  },
+  {
+    trigger: 'inv_document_guard',
+    code: 'extracted_source',
+    name: 'an e-Factura document taking an extraction’s source key',
+    run: async (world) =>
+      (await documentRecords(world)).add({
+        authority: 'efactura',
+        sourceKey: `extract:${'f'.repeat(64)}:1`,
+      }),
+  },
+  {
+    trigger: 'inv_document_link_guard',
+    code: 'same_as_root',
+    name: 'a same_as link between documents of different identities',
+    run: async (world) => {
+      const records = await documentRecords(world);
+      const first = await records.add({ identityKey: 'identity-1' });
+      const second = await records.add({ identityKey: 'identity-2' });
+      return records.link(second, first, 'same_as');
+    },
+  },
+  {
+    trigger: 'inv_document_link_guard',
+    code: 'same_as_root',
+    name: 'a document joining a group through a member rather than its root',
+    run: async (world) => {
+      const records = await documentRecords(world);
+      const root = await records.add();
+      const member = await records.add();
+      await records.link(member, root, 'same_as');
+      return records.link(await records.add(), member, 'same_as');
+    },
+  },
+  {
+    trigger: 'inv_document_link_guard',
+    code: 'supersede',
+    name: 'superseding an extraction a posted entry recognizes',
+    run: async (world) => {
+      const records = await documentRecords(world);
+      const posted = await records.add();
+      await book(world, sale(world), { subjectKey: `document:${posted}` });
+      return records.link(await records.add({ identityKey: null }), posted, 'supersedes');
+    },
+  },
+  {
+    trigger: 'inv_document_link_guard',
+    code: 'supersede',
+    name: 'superseding an extraction whose booking a reversal only proposed',
+    run: async (world) => {
+      const records = await documentRecords(world);
+      const posted = await records.add();
+      const booked = await book(world, sale(world), { subjectKey: `document:${posted}` });
+      await propose(world, sale(world), { subjectKey: `reverse:${booked.entry.id}` });
+      return records.link(await records.add({ identityKey: null }), posted, 'supersedes');
+    },
+  },
+  {
+    trigger: 'inv_document_link_guard',
+    code: 'supersede',
+    name: 'superseding an e-Factura document, which is the source itself',
+    run: async (world) => {
+      const records = await documentRecords(world);
+      const efactura = await records.add({ authority: 'efactura' });
+      return records.link(await records.add(), efactura, 'supersedes');
+    },
+  },
+  {
+    trigger: 'inv_proposal_subject',
     code: 'subject_taken',
     name: 'opening a second proposal for the same subject',
     run: async (world) =>
@@ -1413,6 +2140,17 @@ const attacks: Attack[] = [
           })),
         ),
       ),
+  },
+  {
+    trigger: 'inv_proposal_subject',
+    code: 'subject_taken',
+    name: 'proposing a subject again while its posted entry stands',
+    run: async (world) => {
+      const posted = await book(world, sale(world), { subjectKey: 'movement:taken' });
+      // Its reversal only proposed: the entry stands, and holds the subject.
+      await propose(world, sale(world), { subjectKey: `reverse:${posted.entry.id}` });
+      return propose(world, sale(world), { subjectKey: 'movement:taken' });
+    },
   },
   {
     trigger: 'inv_withdrawal_guard',
@@ -1485,6 +2223,24 @@ const attacks: Attack[] = [
     },
   },
   {
+    trigger: 'inv_action_decision_guard',
+    code: 'segregation',
+    name: "approving one's own action request, segregation on",
+    run: async (world) => {
+      await segregate(world, 'on');
+      return decide(world, await actionRequest(world), world.owner);
+    },
+  },
+  {
+    trigger: 'inv_action_decision_guard',
+    code: 'segregation',
+    name: "approving one's agent's action request, segregation strict",
+    run: async (world) => {
+      await segregate(world, 'strict');
+      return decide(world, await actionRequest(world, randomUUID()), world.owner);
+    },
+  },
+  {
     trigger: 'inv_action_execution_guard',
     code: 'not_approved',
     name: 'executing a rejected action',
@@ -1510,6 +2266,23 @@ const attacks: Attack[] = [
           reason: 'test',
         });
       });
+      return world.db.write((tx) =>
+        tx.insert(actionExecutions).values({
+          companyId: world.company,
+          requestId: id,
+          result: '{}',
+          executedBy: world.owner,
+        }),
+      );
+    },
+  },
+  {
+    trigger: 'inv_action_execution_guard',
+    code: 'decider',
+    name: "executing after the approver's role changed",
+    run: async (world) => {
+      const id = await approvedAction(world);
+      await demote(world, world.reviewer);
       return world.db.write((tx) =>
         tx.insert(actionExecutions).values({
           companyId: world.company,
@@ -1840,6 +2613,33 @@ const attacks: Attack[] = [
     },
   },
   {
+    trigger: 'inv_grant_update',
+    code: 'immutable_record',
+    name: 'adding a toolset to a grant when revoking it',
+    run: async (world) => {
+      const id = randomUUID();
+      await world.db.write((tx) =>
+        tx.insert(agentGrants).values({
+          id,
+          companyId: world.company,
+          name: 'Agent',
+          tokenHash: randomUUID(),
+          scopes: ['proposals.get'],
+          toolsets: [],
+          membershipEpoch: 1,
+          expiresAt: later,
+          createdBy: world.reviewer,
+        }),
+      );
+      return world.db.write((tx) =>
+        tx
+          .update(agentGrants)
+          .set({ toolsets: ['review'], revokedAt: Date.now() })
+          .where(eq(agentGrants.id, id)),
+      );
+    },
+  },
+  {
     trigger: 'inv_invitation_update',
     code: 'immutable_record',
     name: 'retargeting an invitation',
@@ -1908,6 +2708,59 @@ const attacks: Attack[] = [
       ),
   },
   {
+    trigger: 'inv_bank_statement_guard',
+    code: 'statement_overlap',
+    name: 'a second statement for days another already reports',
+    run: async (world) => {
+      const bank = await bankRecords(world);
+      await bank.statement('2026-10-01', '2026-10-31', 0n, 100n);
+      return bank.statement('2026-10-15', '2026-11-15', 50n, 200n);
+    },
+  },
+  {
+    trigger: 'inv_bank_statement_guard',
+    code: 'statement_overlap',
+    name: 'a statement opening on the day another closes, at another balance',
+    run: async (world) => {
+      const bank = await bankRecords(world);
+      await bank.statement('2026-10-01', '2026-10-31', 0n, 100n);
+      return bank.statement('2026-10-31', '2026-11-30', 90n, 200n);
+    },
+  },
+  {
+    trigger: 'inv_bank_statement_guard',
+    code: 'statement_overlap',
+    name: 'an earlier statement closing on a day the later one reports movements on',
+    run: async (world) => {
+      const bank = await bankRecords(world);
+      const november = await bank.statement('2026-10-31', '2026-11-30', 100n, 200n);
+      await bank.movement(november, '2026-10-31');
+      return bank.statement('2026-10-01', '2026-10-31', 0n, 100n);
+    },
+  },
+  {
+    trigger: 'inv_bank_movement_guard',
+    code: 'statement_overlap',
+    name: 'a movement on the day its statement takes over from the previous one',
+    run: async (world) => {
+      const bank = await bankRecords(world);
+      const october = await bank.statement('2026-10-01', '2026-10-31', 0n, 100n);
+      await bank.movement(october, '2026-10-31');
+      const november = await bank.statement('2026-10-31', '2026-11-30', 100n, 200n);
+      return bank.movement(november, '2026-10-31');
+    },
+  },
+  {
+    trigger: 'inv_bank_movement_guard',
+    code: 'statement_overlap',
+    name: 'a movement outside the days of its statement',
+    run: async (world) => {
+      const bank = await bankRecords(world);
+      const october = await bank.statement('2026-10-01', '2026-10-31', 0n, 100n);
+      return bank.movement(october, '2026-11-05');
+    },
+  },
+  {
     trigger: 'inv_audit_chain',
     code: 'audit_chain',
     name: 'inserting an audit row out of sequence',
@@ -1923,6 +2776,220 @@ const attacks: Attack[] = [
           hash: 'h',
         }),
       ),
+  },
+  {
+    trigger: 'inv_approval_guard',
+    code: 'batch_member',
+    name: "approving in a batch's name a version its preview does not list",
+    run: async (world) => {
+      const records = await autonomyRecords(world);
+      const listed = await propose(world, sale(world));
+      const other = await propose(world, sale(world));
+      return records.batchApproval(other, await records.batch([listed]));
+    },
+  },
+  {
+    trigger: 'inv_approval_guard',
+    code: 'batch_member',
+    name: "approving in a batch's name as someone other than its decider",
+    run: async (world) => {
+      const records = await autonomyRecords(world);
+      const listed = await propose(world, sale(world));
+      return records.batchApproval(listed, await records.batch([listed]), world.owner);
+    },
+  },
+  {
+    trigger: 'inv_approval_guard',
+    code: 'batch_member',
+    name: 'approving in a batch a version with a warning to acknowledge',
+    run: async (world) => {
+      const records = await autonomyRecords(world);
+      const warned = await propose(world, sale(world), { issues: [warning] });
+      return records.batchApproval(warned, await records.batch([warned]));
+    },
+  },
+  {
+    trigger: entry,
+    code: 'binding',
+    name: 'a policy posting while the company paused automation',
+    run: async (world) => {
+      const policyId = await policy(world);
+      await (await autonomyRecords(world)).automation(1);
+      return post(world, await propose(world, sale(world)), { policyId });
+    },
+  },
+  {
+    trigger: entry,
+    code: 'binding',
+    name: 'a policy posting while it is paused',
+    run: async (world) => {
+      const policyId = await policy(world);
+      await (await autonomyRecords(world)).automation(1, { scope: 'policy', scopeId: policyId });
+      return post(world, await propose(world, sale(world)), { policyId });
+    },
+  },
+  {
+    trigger: entry,
+    code: 'binding',
+    name: 'a policy posting while the template it is bound to is paused',
+    run: async (world) => {
+      const records = await autonomyRecords(world);
+      const templateId = await records.template();
+      const policyId = await policy(world, world.reviewer, [
+        { kind: 'template', id: templateId, version: 1 },
+      ]);
+      await records.automation(1, { scope: 'template', scopeId: templateId });
+      return post(world, await propose(world, sale(world)), { policyId });
+    },
+  },
+  {
+    trigger: entry,
+    code: 'binding',
+    name: 'a policy posting an extracted document without allowing extracted sources',
+    run: async (world) => {
+      const documentId = await (await documentRecords(world)).add();
+      const policyId = await policy(world);
+      const proposed = await propose(world, sale(world), {
+        readSet: [{ kind: 'document', id: documentId, version: 'v' }],
+      });
+      return post(world, proposed, { policyId });
+    },
+  },
+  {
+    trigger: 'inv_membership_insert',
+    code: 'system_member',
+    name: 'admitting the system principal as a member',
+    run: async (world) =>
+      world.db.write((tx) =>
+        tx
+          .insert(memberships)
+          .values({ companyId: world.company, userId: 'system', role: 'reviewer' }),
+      ),
+  },
+  {
+    trigger: 'inv_policy_guard',
+    code: 'policy_scope',
+    name: 'a policy posting SPV submissions',
+    run: async (world) =>
+      world.db.write(async (tx) =>
+        tx.insert(postingPolicies).values({
+          id: randomUUID(),
+          companyId: world.company,
+          name: 'Transmiteri',
+          treatments: canonical(['spv.submit']),
+          rulesHashes: canonical(['rules-1']),
+          preconditions: '[]',
+          approvedBy: world.reviewer,
+          approverEpoch: await epoch(world, world.reviewer),
+          validFrom: '2026-01-01',
+          expiresAt: later,
+        }),
+      ),
+  },
+  {
+    trigger: 'inv_template_guard',
+    code: 'template_version',
+    name: "skipping a template's first version",
+    run: async (world) => (await autonomyRecords(world)).template(2),
+  },
+  {
+    trigger: 'inv_template_guard',
+    code: 'template_request',
+    name: 'writing a template no person approved',
+    run: async (world) => {
+      const records = await autonomyRecords(world);
+      return records.template(1, {
+        requestId: await records.reviewed('templates.request', {}, null),
+      });
+    },
+  },
+  {
+    trigger: 'inv_template_guard',
+    code: 'template_request',
+    name: 'writing a template in the name of someone other than its decider',
+    run: async (world) => (await autonomyRecords(world)).template(1, { approvedBy: world.owner }),
+  },
+  {
+    trigger: 'inv_template_revocation_guard',
+    code: 'template_missing',
+    name: 'revoking a template that does not exist',
+    run: async (world) => (await autonomyRecords(world)).revoke(randomUUID()),
+  },
+  {
+    trigger: 'inv_template_prediction_guard',
+    code: 'prediction_posted',
+    name: 'recording a prediction after its subject was posted',
+    run: async (world) => {
+      const records = await autonomyRecords(world);
+      await records.template();
+      await book(world, sale(world), { subjectKey: 'document:posted' });
+      return records.predict('document:posted');
+    },
+  },
+  {
+    trigger: 'inv_template_prediction_guard',
+    code: 'prediction_posted',
+    name: 'recording a prediction for a subject posted and reversed, so after the fact',
+    run: async (world) => {
+      const records = await autonomyRecords(world);
+      await records.template();
+      const posted = await book(world, sale(world), { subjectKey: 'document:rebooked' });
+      await book(world, sale(world), { subjectKey: `reverse:${posted.entry.id}` });
+      return records.predict('document:rebooked');
+    },
+  },
+  {
+    trigger: 'inv_automation_event_guard',
+    code: 'automation_sequence',
+    name: 'a pause numbered past the company’s events',
+    run: async (world) => (await autonomyRecords(world)).automation(2),
+  },
+  {
+    trigger: 'inv_automation_event_guard',
+    code: 'automation_actor',
+    name: 'a pause by a member under an epoch that ended',
+    run: async (world) =>
+      (await autonomyRecords(world)).automation(1, { createdBy: world.viewer, epoch: 99 }),
+  },
+  {
+    trigger: 'inv_automation_event_guard',
+    code: 'automation_resume',
+    name: 'a viewer resuming automation',
+    run: async (world) =>
+      (await autonomyRecords(world)).automation(1, { kind: 'resume', createdBy: world.viewer }),
+  },
+  {
+    trigger: 'inv_automation_event_guard',
+    code: 'automation_resume',
+    name: 'the system resuming what it paused',
+    run: async (world) =>
+      (await autonomyRecords(world)).automation(1, { kind: 'resume', createdBy: 'system' }),
+  },
+  {
+    trigger: 'inv_automation_event_guard',
+    code: 'automation_resume',
+    name: 'an agent resuming automation',
+    run: async (world) =>
+      (await autonomyRecords(world)).automation(1, { kind: 'resume', agentId: randomUUID() }),
+  },
+  {
+    trigger: 'inv_automation_event_guard',
+    code: 'automation_scope',
+    name: 'pausing a policy the company does not have',
+    run: async (world) =>
+      (await autonomyRecords(world)).automation(1, { scope: 'policy', scopeId: randomUUID() }),
+  },
+  {
+    trigger: 'inv_automation_criteria_guard',
+    code: 'criteria_sequence',
+    name: 'criteria numbered past the company’s',
+    run: async (world) => (await autonomyRecords(world)).criteria(2),
+  },
+  {
+    trigger: 'inv_automation_criteria_guard',
+    code: 'criteria_person',
+    name: 'a viewer setting the graduation criteria',
+    run: async (world) => (await autonomyRecords(world)).criteria(1, world.viewer),
   },
 ];
 
@@ -2031,6 +3098,78 @@ describe('ledger writer', () => {
   });
 });
 
+describe('approval controls', () => {
+  test('a policy posts the warnings it acknowledges, and notes under noWarnings', async () => {
+    const world = await fresh();
+    const warned = await propose(world, sale(world), { issues: [warning] });
+    const acknowledging = await policy(world, world.reviewer, [
+      { kind: 'acknowledges', codes: ['VAT_FX'] },
+    ]);
+    expect(await refusal(post(world, warned, { policyId: acknowledging }))).toBeUndefined();
+    const noted = await propose(world, sale(world), {
+      issues: [{ code: 'NOTE', severity: 'info', message: 'Informativ.' }],
+    });
+    const strict = await policy(world, world.reviewer, [{ kind: 'noWarnings' }]);
+    expect(await refusal(post(world, noted, { policyId: strict }))).toBeUndefined();
+  });
+
+  test('without a segregation fact, a person approves their own work', async () => {
+    const world = await fresh();
+    expect(await refusal(approve(world, await propose(world, sale(world)), world.owner))).toBe(
+      undefined,
+    );
+    expect(await refusal(decide(world, await actionRequest(world), world.owner))).toBeUndefined();
+    const own = await propose(world, sale(world));
+    expect(await refusal(post(world, own, { policyId: await policy(world, world.owner) }))).toBe(
+      undefined,
+    );
+  });
+
+  test('segregation on leaves others, the grant issuer for agents, and rejections free', async () => {
+    const world = await fresh();
+    await segregate(world, 'on');
+    expect(await refusal(approve(world, await propose(world, sale(world))))).toBeUndefined();
+    const agents = await propose(world, sale(world), { agentId: randomUUID() });
+    expect(await refusal(approve(world, agents, world.owner))).toBeUndefined();
+    expect(await refusal(decide(world, await actionRequest(world), world.reviewer))).toBe(
+      undefined,
+    );
+    expect(await refusal(decide(world, await actionRequest(world), world.owner, 'reject'))).toBe(
+      undefined,
+    );
+    const viaAgent = await actionRequest(world, randomUUID());
+    expect(await refusal(decide(world, viaAgent, world.owner))).toBeUndefined();
+    const own = await propose(world, sale(world));
+    expect(await refusal(post(world, own, { policyId: await policy(world) }))).toBeUndefined();
+  });
+
+  test("a batch's decider approves each version it lists; the system pauses and posts", async () => {
+    const world = await fresh();
+    const records = await autonomyRecords(world);
+    const listed = await propose(world, sale(world));
+    const approvalId = await records.batchApproval(listed, await records.batch([listed]));
+    expect(await refusal(post(world, listed, { approvalId }))).toBeUndefined();
+    // The system pauses and its pause stops a policy; a person resumes it.
+    const policyId = await policy(world);
+    await records.automation(1, { scope: 'policy', scopeId: policyId, createdBy: 'system' });
+    expect(await refusal(post(world, await propose(world, sale(world)), { policyId }))).toBe(
+      'binding',
+    );
+    await records.automation(2, { scope: 'policy', scopeId: policyId, kind: 'resume' });
+    expect(
+      await refusal(post(world, await propose(world, sale(world)), { policyId })),
+    ).toBeUndefined();
+  });
+
+  test('a segregation fact superseded by off no longer applies', async () => {
+    const world = await fresh();
+    await segregate(world, 'off', await segregate(world, 'strict'));
+    expect(await refusal(approve(world, await propose(world, sale(world)), world.owner))).toBe(
+      undefined,
+    );
+  });
+});
+
 describe('database invariants', () => {
   for (const attack of attacks)
     test(`refuses ${attack.name} (${attack.code})`, async () => {
@@ -2063,6 +3202,22 @@ describe('database invariants', () => {
       ).rows.map((row) => String(row.name)),
     );
     expect(guardedTables.filter((table) => !triggers.has(`inv_${table}_no_delete`))).toEqual([]);
+  });
+
+  test('a reversed entry frees its subject: proposed, posted and superseded again', async () => {
+    const world = await fresh();
+    const records = await documentRecords(world);
+    const extracted = await records.add();
+    const efactura = await records.add({ authority: 'efactura' });
+    const first = await book(world, sale(world), { subjectKey: `document:${extracted}` });
+    await book(world, sale(world), { subjectKey: `reverse:${first.entry.id}` });
+    // The same subject, another copy of the document and a corrected extraction: all free.
+    const again = await book(world, sale(world), { subjectKey: `document:${extracted}` });
+    expect(again.entry.id).toEqual(expect.any(String));
+    expect(await refusal(records.proposal(efactura))).toBe('identity_taken');
+    await book(world, sale(world), { subjectKey: `reverse:${again.entry.id}` });
+    await records.proposal(efactura);
+    await records.link(await records.add({ identityKey: null }), extracted, 'supersedes');
   });
 
   test('installation is idempotent and restores a dropped invariant', async () => {
@@ -2183,6 +3338,7 @@ describe('append-only records', () => {
           bodyHash: id,
           sourceKey: id,
           origin: 'test',
+          authority: 'issued' as const,
           docDate: '2026-03-10',
           createdBy: world.owner,
         })),
@@ -2261,6 +3417,16 @@ describe('append-only records', () => {
         reference: 'Încasare',
         details: '{}',
       });
+      await tx.insert(bankMappings).values({
+        companyId: world.company,
+        treasuryAccountId: treasuryId,
+        version: 1,
+        format: 'csv',
+        mapping: '{}',
+        mappingHash: 'd'.repeat(64),
+        evidenceId,
+        createdBy: world.owner,
+      });
       await tx.insert(fxRates).values({
         source: 'BNR',
         currency: 'EUR',
@@ -2293,6 +3459,10 @@ describe('append-only records', () => {
         createdBy: world.owner,
       });
     });
+    const asked = await questionRecords(world);
+    await asked.answer(1);
+    await asked.dispose('evidence', randomUUID());
+    await (await questionRecords(world, 'CJ01XYZ')).withdraw();
     const proposed = await propose(world, sale(world));
     await withdraw(world, proposed.proposalId);
     const policyId = await policy(world);
@@ -2301,6 +3471,12 @@ describe('append-only records', () => {
         .insert(policyRevocations)
         .values({ companyId: world.company, policyId, reason: 'x', createdBy: world.owner }),
     );
+    const autonomy = await autonomyRecords(world);
+    await autonomy.template();
+    await autonomy.revoke();
+    await autonomy.predict('document:predicted');
+    await autonomy.automation(1);
+    await autonomy.criteria(1);
     const actionId = await approvedAction(world);
     await world.db.write((tx) =>
       tx.insert(actionExecutions).values({

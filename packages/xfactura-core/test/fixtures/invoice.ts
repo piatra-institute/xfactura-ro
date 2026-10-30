@@ -2,6 +2,9 @@ export type XmlInput = {
   direction?: 'purchase' | 'sale';
   date?: string;
   taxPointDate?: string;
+  /** BT-72 and BG-14. */
+  deliveryDate?: string;
+  period?: { start: string; end: string };
   category?: string;
   rate?: string;
   tax?: string;
@@ -33,8 +36,10 @@ export function invoiceXml(input: XmlInput = {}) {
 <cbc:CustomizationID>urn:cen.eu:en16931:2017#compliant#urn:efactura.mfinante.ro:CIUS-RO:1.0.1</cbc:CustomizationID>
 <cbc:ID>${input.number ?? 'INV-1'}</cbc:ID><cbc:IssueDate>${date}</cbc:IssueDate><cbc:${input.credit ? 'CreditNoteTypeCode' : 'InvoiceTypeCode'}>${input.credit ? '381' : '380'}</cbc:${input.credit ? 'CreditNoteTypeCode' : 'InvoiceTypeCode'}><cbc:DocumentCurrencyCode>${currency}</cbc:DocumentCurrencyCode>
 ${input.taxPointDate ? `<cbc:TaxPointDate>${input.taxPointDate}</cbc:TaxPointDate>` : ''}
+${input.period ? `<cac:InvoicePeriod><cbc:StartDate>${input.period.start}</cbc:StartDate><cbc:EndDate>${input.period.end}</cbc:EndDate></cac:InvoicePeriod>` : ''}
 ${input.credit ? `<cac:BillingReference><cac:InvoiceDocumentReference><cbc:ID>${input.originalNumber ?? 'INV-ORIGINAL'}</cbc:ID></cac:InvoiceDocumentReference></cac:BillingReference>` : ''}
 ${party('AccountingSupplierParty', supplierId, input.country)}${party('AccountingCustomerParty', customerId)}
+${input.deliveryDate ? `<cac:Delivery><cbc:ActualDeliveryDate>${input.deliveryDate}</cbc:ActualDeliveryDate></cac:Delivery>` : ''}
 <cac:TaxTotal><cbc:TaxAmount currencyID="${currency}">${tax}</cbc:TaxAmount><cac:TaxSubtotal><cbc:TaxableAmount currencyID="${currency}">${net}</cbc:TaxableAmount><cbc:TaxAmount currencyID="${currency}">${tax}</cbc:TaxAmount><cac:TaxCategory><cbc:ID>${category}</cbc:ID>${category === 'O' ? '<cbc:TaxExemptionReasonCode>VATEX-EU-O</cbc:TaxExemptionReasonCode>' : `<cbc:Percent>${rate}</cbc:Percent>`}<cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme></cac:TaxCategory></cac:TaxSubtotal></cac:TaxTotal>
 <cac:LegalMonetaryTotal><cbc:LineExtensionAmount currencyID="${currency}">${net}</cbc:LineExtensionAmount><cbc:TaxExclusiveAmount currencyID="${currency}">${net}</cbc:TaxExclusiveAmount><cbc:TaxInclusiveAmount currencyID="${currency}">${gross}</cbc:TaxInclusiveAmount><cbc:PayableAmount currencyID="${currency}">${gross}</cbc:PayableAmount></cac:LegalMonetaryTotal>
 <cac:${line}><cbc:ID>1</cbc:ID><cbc:${input.credit ? 'CreditedQuantity' : 'InvoicedQuantity'} unitCode="HUR">1</cbc:${input.credit ? 'CreditedQuantity' : 'InvoicedQuantity'}><cbc:LineExtensionAmount currencyID="${currency}">${net}</cbc:LineExtensionAmount><cac:Item><cbc:Name>Servicii documentate</cbc:Name><cac:ClassifiedTaxCategory><cbc:ID>${category}</cbc:ID>${category === 'O' ? '' : `<cbc:Percent>${rate}</cbc:Percent>`}<cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme></cac:ClassifiedTaxCategory></cac:Item><cac:Price><cbc:PriceAmount currencyID="${currency}">${net}</cbc:PriceAmount></cac:Price></cac:${line}>

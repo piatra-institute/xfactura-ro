@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { DomainError, requireCondition } from 'xfactura-core/errors';
@@ -214,7 +213,7 @@ export class Spv {
             { submissionId: earlier.id },
           );
         }
-        const id = randomUUID();
+        const id = this.commands.ids();
         await tx.insert(submissions).values({
           id,
           companyId: actor.companyId,
@@ -456,7 +455,7 @@ export class Spv {
         .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.hash, hash)));
       if (stored) return { id: stored.id, hash };
       await this.objects.put(actor.companyId, bytes, 64 * 1024 * 1024);
-      const id = randomUUID();
+      const id = this.commands.ids();
       await tx.insert(evidence).values({
         id,
         companyId: actor.companyId,
@@ -465,6 +464,7 @@ export class Spv {
         mediaType,
         size: bytes.length,
         createdBy: actor.actorId,
+        engineAt: this.commands.clock(),
       });
       return { id, hash };
     };
@@ -541,7 +541,14 @@ export class Spv {
     if (!member) throw new DomainError('ARCHIVE_INVOICE', 'Arhiva nu conține factura.');
     const kept = await keep(member.bytes, member.filename, 'application/xml');
     if (message.kind === 'received') {
-      const recorded = await recordInvoice(tx, actor, kept.id, member.bytes, 'spv');
+      const recorded = await recordInvoice(
+        tx,
+        actor,
+        kept.id,
+        member.bytes,
+        'spv',
+        this.commands.ids,
+      );
       return {
         outcome: recorded.created ? ('created' as const) : ('matched' as const),
         documentId: recorded.row.id,
@@ -585,7 +592,14 @@ export class Spv {
         ),
       );
     if (!known) {
-      const recorded = await recordInvoice(tx, actor, kept.id, member.bytes, 'spv');
+      const recorded = await recordInvoice(
+        tx,
+        actor,
+        kept.id,
+        member.bytes,
+        'spv',
+        this.commands.ids,
+      );
       return { outcome: 'created' as const, documentId: recorded.row.id };
     }
     const differences = compareSale(JSON.parse(known.body) as InvoiceDocument, body);

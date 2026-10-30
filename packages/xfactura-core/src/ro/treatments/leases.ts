@@ -82,6 +82,8 @@ export const leaseCommencement: Treatment<CommencementInput> = {
     'Leasing financiar la utilizator: imobilizarea primită (21x) și datoria față de finanțator (167), cu graficul de rate.',
   input: commencementInput,
   agent: true,
+  summary:
+    'Start of a finance lease for the lessee: the asset received (21x) and the debt to the lessor (167), with the instalment schedule.',
   subject: (input) => `lease:${input.assetId}`,
   plan: (input) => ({
     evidence: [input.evidenceId],

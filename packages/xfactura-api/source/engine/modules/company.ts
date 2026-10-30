@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from 'node:crypto';
+import { createHmac } from 'node:crypto';
 import { and, asc, eq, gt, gte, lte, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireCondition } from 'xfactura-core/errors';
@@ -26,7 +26,7 @@ import {
   profileFacts,
   user,
 } from '../db/schema';
-import { appendAudit, commandKey, type Actor, type Commands } from '../kernel/commands';
+import { appendAudit, commandKey, type Actor, type Commands, type Ids } from '../kernel/commands';
 import { loadState } from '../kernel/state';
 import { sha256 } from '../adapters/object-store';
 
@@ -89,8 +89,17 @@ export const profileAxes = {
   'vat.eu': ['none', 'special'],
   income_tax: ['micro', 'profit'],
   employer: ['no', 'yes'],
+  // Yearly determinations (core ro/determinations): each year's fact, confirmed from the
+  // computation or stated with its document; and what decides the product's scope.
+  'payroll.period': ['monthly', 'quarterly'],
+  'size.category': ['micro', 'small', 'medium_large'],
+  'vat.threshold': ['under', 'exceeded'],
+  'activity.goods': ['no', 'yes'],
+  'regime.excluded': ['none', 'excise', 'fiscal_group', 'ifrs'],
   'books.assurance': ['preview', 'shadow', 'live'],
-  'controls.segregation': ['off', 'on'],
+  // Segregation of duties (kernel/controls.ts): without a fact, off, as a company of one person
+  // needs; on, nobody approves their own work; strict, nor what their agents did.
+  'controls.segregation': ['off', 'on', 'strict'],
   // Accounting policies (OMFP 1802/2014 requires them in writing): dated, with their evidence.
   'policy.storno': ['red', 'black'],
   // Where contributions borne in an employee's name (the part-time minimum) are expensed.
@@ -135,10 +144,11 @@ async function initializeCompany(
   companyId: string,
   year: number,
   createdBy: string,
+  ids: Ids,
 ) {
   await tx.insert(fiscalYears).values(
     (['financial', 'fiscal'] as const).map((kind) => ({
-      id: randomUUID(),
+      id: ids(),
       companyId,
       kind,
       label: String(year),
@@ -171,6 +181,40 @@ async function initializeCompany(
   );
   for (let index = 0; index < rows.length; index += 50)
     await tx.insert(ledgerAccounts).values(rows.slice(index, index + 50));
+}
+
+/** Records a dated company fact inside the caller's command, after the checks `profile.record`
+ * makes; a person's answer to a `profile.fact` question records its fact through here. */
+export async function writeProfileFact(
+  tx: Transaction,
+  actor: Actor,
+  input: z.infer<typeof profileInput>,
+  ids: Ids,
+) {
+  const [source] = await tx
+    .select({ id: evidence.id })
+    .from(evidence)
+    .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.id, input.evidenceId)));
+  requireCondition(source, 'EVIDENCE', 'Documentul justificativ nu este disponibil.', 404);
+  await checkForm(tx, actor.companyId, input);
+  if (input.supersedesId) {
+    const [superseded] = await tx
+      .select()
+      .from(profileFacts)
+      .where(
+        and(eq(profileFacts.companyId, actor.companyId), eq(profileFacts.id, input.supersedesId)),
+      );
+    requireCondition(
+      superseded?.axis === input.axis,
+      'SUPERSEDES',
+      'Faptul înlocuit aparține altei axe.',
+    );
+  }
+  const id = ids();
+  await tx
+    .insert(profileFacts)
+    .values({ id, companyId: actor.companyId, ...input, createdBy: actor.actorId });
+  return { id, ...input };
 }
 
 /**
@@ -276,12 +320,12 @@ export class Companies {
         );
         return previous.result as z.infer<typeof companyView>;
       }
-      const id = randomUUID();
+      const id = this.commands.ids();
       await tx
         .insert(companies)
         .values({ id, name: input.name, cui: input.cui, createdBy: actorId });
       await tx.insert(memberships).values({ companyId: id, userId: actorId, role: 'owner' });
-      await initializeCompany(tx, id, input.year, actorId);
+      await initializeCompany(tx, id, input.year, actorId, this.commands.ids);
       const result = { id, name: input.name, cui: input.cui };
       await tx
         .insert(commands)
@@ -310,14 +354,14 @@ export class Companies {
       input,
       'manage',
       async (tx) => {
-        const id = randomUUID();
+        const id = this.commands.ids();
         await tx.insert(invitations).values({
           id,
           companyId: actor.companyId,
           email: input.email.toLowerCase(),
           role: input.role,
           tokenHash: sha256(token),
-          expiresAt: Date.now() + 48 * 3_600_000,
+          expiresAt: this.commands.clock() + 48 * 3_600_000,
           createdBy: actor.actorId,
         });
         return { id, expiresInHours: 48 };
@@ -354,7 +398,7 @@ export class Companies {
         return { id: invitation.companyId };
       }
       requireCondition(
-        invitation.expiresAt > Date.now(),
+        invitation.expiresAt > this.commands.clock(),
         'INVITATION',
         'Invitația a expirat.',
         404,
@@ -381,7 +425,7 @@ export class Companies {
           .where(member);
       await tx
         .update(invitations)
-        .set({ acceptedAt: Date.now() })
+        .set({ acceptedAt: this.commands.clock() })
         .where(eq(invitations.id, invitation.id));
       await appendAudit(tx, {
         companyId: invitation.companyId,
@@ -454,7 +498,7 @@ export class Configuration {
 
   createYear(actor: Actor, key: string, input: z.infer<typeof yearInput>) {
     return this.commands.run(actor, key, 'years.create', input, 'manage', async (tx) => {
-      const id = randomUUID();
+      const id = this.commands.ids();
       await tx
         .insert(fiscalYears)
         .values({ id, companyId: actor.companyId, ...input, createdBy: actor.actorId });
@@ -553,35 +597,9 @@ export class Configuration {
   }
 
   recordProfile(actor: Actor, key: string, input: z.infer<typeof profileInput>) {
-    return this.commands.run(actor, key, 'profile.record', input, 'review', async (tx) => {
-      const [source] = await tx
-        .select({ id: evidence.id })
-        .from(evidence)
-        .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.id, input.evidenceId)));
-      requireCondition(source, 'EVIDENCE', 'Documentul justificativ nu este disponibil.', 404);
-      await checkForm(tx, actor.companyId, input);
-      if (input.supersedesId) {
-        const [superseded] = await tx
-          .select()
-          .from(profileFacts)
-          .where(
-            and(
-              eq(profileFacts.companyId, actor.companyId),
-              eq(profileFacts.id, input.supersedesId),
-            ),
-          );
-        requireCondition(
-          superseded?.axis === input.axis,
-          'SUPERSEDES',
-          'Faptul înlocuit aparține altei axe.',
-        );
-      }
-      const id = randomUUID();
-      await tx
-        .insert(profileFacts)
-        .values({ id, companyId: actor.companyId, ...input, createdBy: actor.actorId });
-      return { id, ...input };
-    });
+    return this.commands.run(actor, key, 'profile.record', input, 'review', (tx) =>
+      writeProfileFact(tx, actor, input, this.commands.ids),
+    );
   }
 
   parties(actor: Actor) {
@@ -603,7 +621,7 @@ export class Configuration {
   createParty(actor: Actor, key: string, input: z.infer<typeof partyInput>) {
     return this.commands.run(actor, key, 'parties.create', input, 'write', async (tx) => {
       const taxId = input.taxId?.replace(/^RO/i, '').replace(/\s+/g, '') ?? null;
-      const id = randomUUID();
+      const id = this.commands.ids();
       await tx
         .insert(parties)
         .values({ id, companyId: actor.companyId, ...input, taxId, createdBy: actor.actorId });

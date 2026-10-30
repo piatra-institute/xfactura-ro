@@ -154,6 +154,8 @@ export const cashMovement: Treatment<CashInput> = {
     'Încasare sau plată în numerar, cu chitanța sau dispoziția ei, în registrul de casă.',
   input: cashInput,
   agent: true,
+  summary: 'Cash receipt or payment with its receipt or voucher, in the cash register.',
+  toolset: 'bank',
   subject: (input) => `cash:${input.account}:${input.direction}:${input.number}`,
   plan: (input) => ({
     evidence: [input.evidenceId],
@@ -366,6 +368,8 @@ export const expenseReport: Treatment<ExpenseReportInput> = {
   description: 'Decontul unui avans spre decontare (542): cheltuielile justificate cu documente.',
   input: expenseReportInput,
   agent: true,
+  summary: 'Expense report settling a cash advance (542) with the documented expenses.',
+  toolset: 'bank',
   subject: (input) => `expense-report:${input.evidenceId}`,
   plan: (input) => ({ evidence: [input.evidenceId], openItems: [{ ids: [input.advanceId] }] }),
   evaluate(input, loaded) {

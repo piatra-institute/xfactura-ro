@@ -156,6 +156,9 @@ export const settlement: Treatment<SettlementInput> = {
     'Explicarea completă a unei mișcări bancare: decontări de facturi, comisioane, dobânzi, transferuri.',
   input: settlementInput,
   agent: true,
+  summary:
+    'Full explanation of a bank movement: invoice settlements, fees, interest and transfers.',
+  toolset: 'bank',
   subject: (input) => `movement:${input.movementId}`,
   plan: (input) => ({
     movements: [input.movementId],

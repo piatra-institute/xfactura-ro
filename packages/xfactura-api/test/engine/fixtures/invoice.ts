@@ -4,6 +4,8 @@ export type XmlInput = {
   direction?: 'purchase' | 'sale';
   date?: string;
   taxPointDate?: string;
+  /** BT-72, the date of the supply. */
+  deliveryDate?: string;
   category?: string;
   rate?: string;
   tax?: string;
@@ -50,6 +52,7 @@ export function invoiceXml(input: XmlInput = {}) {
 ${input.taxPointDate ? `<cbc:TaxPointDate>${input.taxPointDate}</cbc:TaxPointDate>` : ''}
 ${input.credit ? `<cac:BillingReference><cac:InvoiceDocumentReference><cbc:ID>${input.originalNumber ?? 'INV-ORIGINAL'}</cbc:ID></cac:InvoiceDocumentReference></cac:BillingReference>` : ''}
 ${party('AccountingSupplierParty', supplierId, sale ? 'RO' : input.country)}${party('AccountingCustomerParty', customerId, sale ? input.country : 'RO')}
+${input.deliveryDate ? `<cac:Delivery><cbc:ActualDeliveryDate>${input.deliveryDate}</cbc:ActualDeliveryDate></cac:Delivery>` : ''}
 <cac:TaxTotal><cbc:TaxAmount currencyID="${currency}">${tax}</cbc:TaxAmount>${categories.map((item) => `<cac:TaxSubtotal><cbc:TaxableAmount currencyID="${currency}">${item.net}</cbc:TaxableAmount><cbc:TaxAmount currencyID="${currency}">${item.tax}</cbc:TaxAmount><cac:TaxCategory><cbc:ID>${category}</cbc:ID>${category === 'O' ? '<cbc:TaxExemptionReasonCode>VATEX-EU-O</cbc:TaxExemptionReasonCode>' : `<cbc:Percent>${item.rate}</cbc:Percent>`}<cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme></cac:TaxCategory></cac:TaxSubtotal>`).join('')}</cac:TaxTotal>
 <cac:LegalMonetaryTotal><cbc:LineExtensionAmount currencyID="${currency}">${net}</cbc:LineExtensionAmount><cbc:TaxExclusiveAmount currencyID="${currency}">${net}</cbc:TaxExclusiveAmount><cbc:TaxInclusiveAmount currencyID="${currency}">${gross}</cbc:TaxInclusiveAmount><cbc:PayableAmount currencyID="${currency}">${gross}</cbc:PayableAmount></cac:LegalMonetaryTotal>
 ${(input.lines ?? categories).map((item, index) => `<cac:${line}><cbc:ID>${index + 1}</cbc:ID><cbc:${input.credit ? 'CreditedQuantity' : 'InvoicedQuantity'} unitCode="HUR">${item.net.startsWith('-') ? '-1' : '1'}</cbc:${input.credit ? 'CreditedQuantity' : 'InvoicedQuantity'}><cbc:LineExtensionAmount currencyID="${currency}">${item.net}</cbc:LineExtensionAmount><cac:Item><cbc:Name>${'name' in item && item.name ? item.name : 'Servicii documentate'}</cbc:Name><cac:ClassifiedTaxCategory><cbc:ID>${category}</cbc:ID>${category === 'O' ? '' : `<cbc:Percent>${item.rate}</cbc:Percent>`}<cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme></cac:ClassifiedTaxCategory></cac:Item><cac:Price><cbc:PriceAmount currencyID="${currency}">${item.net.replace(/^-/, '')}</cbc:PriceAmount></cac:Price></cac:${line}>`).join('')}

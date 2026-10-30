@@ -27,8 +27,8 @@ const declaration = (obligations: D100['obligations'], extra: Partial<D100> = {}
 });
 
 const declarations: Record<string, D100> = {
-  // Q3 2026: 1% of a 120,000 lei base, declared for September.
-  'micro-q3': declaration([{ kind: 'micro', base: 120_000 }]),
+  // Q3 2026: 1% of a 120,000 lei base (1,200 lei), declared for September.
+  'micro-q3': declaration([{ kind: 'micro', tax: 1200 }]),
   // June 2026: dividend tax withheld from individuals (604) and a Romanian company (150).
   dividends: declaration(
     [
@@ -39,7 +39,7 @@ const declarations: Record<string, D100> = {
   ),
   // The Q3 declaration filed again after the reserve of subsequent verification was cancelled:
   // the only correction a D100 carries; any other is the D710.
-  'micro-q3-after-reserve-cancellation': declaration([{ kind: 'micro', base: 120_000 }], {
+  'micro-q3-after-reserve-cancellation': declaration([{ kind: 'micro', tax: 1200 }], {
     afterReserveCancellation: true,
   }),
   // December 2026: tax on dividends paid in December and on those still unpaid at year end.
@@ -56,14 +56,14 @@ const declarations: Record<string, D100> = {
     { period: { year: 2026, month: 10 } },
   ),
   // Q4 2026 dated as the validator requires, 25 June of the next year.
-  'micro-q4-june': declaration([{ kind: 'micro', base: 90_000, fourthQuarterDue: 'june' }], {
+  'micro-q4-june': declaration([{ kind: 'micro', tax: 900, fourthQuarterDue: 'june' }], {
     period: { year: 2026, month: 12 },
   }),
   // The micro tax with a reduction, the tax withheld on interest paid to individuals, the
   // successor, dissolution and the representative.
   'micro-dissolution': declaration(
     [
-      { kind: 'micro', base: 40_000, deductible: 100, reduction: 60 },
+      { kind: 'micro', tax: 400, deductible: 100, reduction: 60 },
       { kind: 'interest', withheld: 150 },
     ],
     {
@@ -128,7 +128,7 @@ describe('official D100 validation', () => {
         expect(xml).toContain(from);
         return xml.replace(from, to);
       };
-      const january = declaration([{ kind: 'micro', base: 90_000, fourthQuarterDue: 'january' }], {
+      const january = declaration([{ kind: 'micro', tax: 900, fourthQuarterDue: 'january' }], {
         period: { year: 2026, month: 12 },
       });
       expect(checkD100(january).map((check) => `${check.severity}:${check.code}`)).toEqual([

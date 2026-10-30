@@ -1,23 +1,26 @@
-import { config } from './config';
-import { Database } from './db/database';
-import { LocalObjectStore } from './adapters/object-store';
-import { Engine } from './engine';
-import { Exports } from './modules/exports';
+import { createEngine } from './runtime';
 
-const options = config();
-const db = new Database(options.databaseUrl, options.authToken);
-const objects = new LocalObjectStore(options.objectDir);
-await db.initialize();
-const engine = new Engine(db, objects, options.authSecret);
+/*
+ * The accounting worker: one loop that queues due schedules, runs one job of a known kind
+ * (`export`, …) and gives each consumer of the audit log (`project`: the proposals' staleness)
+ * the companies it is behind on. Any number of workers may run: leases, slot-derived job ids
+ * and forward-only cursors keep them from doing the same work twice.
+ */
+const { db, engine } = await createEngine();
 let stop = false;
 process.on('SIGINT', () => (stop = true));
 process.on('SIGTERM', () => (stop = true));
-console.log('Accounting export worker ready.');
+console.log('Accounting worker ready.');
 while (!stop) {
   try {
-    if (!(await Exports.runOne(db, engine.commands, objects))) await Bun.sleep(1000);
-  } catch {
-    console.error('Export queue unavailable; retrying.');
+    await engine.jobs.enqueueDue();
+    const ran = await engine.jobs.runOne();
+    const projected = await engine.consumers.runOnce();
+    if (!ran && !projected) await Bun.sleep(1000);
+  } catch (error) {
+    console.error(
+      `Accounting worker: ${error instanceof Error ? error.message : 'unavailable'}; retrying.`,
+    );
     await Bun.sleep(3000);
   }
 }

@@ -1,0 +1,1 @@
+ALTER TABLE `acc_agent_grants` ADD `toolsets` text DEFAULT '[]' NOT NULL;

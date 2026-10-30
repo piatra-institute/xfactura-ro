@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { and, asc, eq, gte, inArray, isNotNull, lte } from 'drizzle-orm';
 import { z } from 'zod';
 import { DomainError, requireCondition } from 'xfactura-core/errors';
@@ -143,7 +142,7 @@ export class IncomeSources {
         .from(evidence)
         .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.id, input.evidenceId)));
       requireCondition(file, 'EVIDENCE', 'Documentul justificativ nu este disponibil.', 404);
-      const sourceId = input.sourceId ?? randomUUID();
+      const sourceId = input.sourceId ?? this.commands.ids();
       const previous = input.sourceId
         ? ((await sourceVersions(tx, actor.companyId)).get(input.sourceId) ?? [])
         : [];

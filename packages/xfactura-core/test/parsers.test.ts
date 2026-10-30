@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { checkedStatements, entrySourceId } from '../src/bank/statement-document';
+import {
+  checkedStatements,
+  entrySourceId,
+  statementsAdjoin,
+  statementsOverlap,
+} from '../src/bank/statement-document';
 import { parseCamt } from '../src/bank/camt';
 import { parseMt940 } from '../src/bank/mt940';
 import { parseInvoiceXml } from '../src/ubl/invoice-document';
@@ -89,5 +94,36 @@ describe('bank statements', () => {
     expect(() =>
       checkedStatements(parseCamt(bytes(camt({ entries: entry, closing: '1024.00' }))), year),
     ).toThrow();
+  });
+
+  test('statements of one account overlap, hand over or adjoin', () => {
+    const span = (from: string, to: string, movesOnFrom = false) => ({ from, to, movesOnFrom });
+    const october = span('2026-10-01', '2026-10-31');
+    const followers = {
+      nextDay: span('2026-11-01', '2026-11-30'),
+      handOver: span('2026-10-31', '2026-11-30'),
+      handOverReporting: span('2026-10-31', '2026-11-30', true),
+      sameDayOnly: span('2026-10-31', '2026-10-31'),
+      partial: span('2026-10-15', '2026-11-15'),
+      afterGap: span('2026-11-02', '2026-11-30'),
+    };
+    expect(
+      Object.entries(followers).map(([name, later]) => [
+        name,
+        statementsOverlap(october, later),
+        !statementsOverlap(october, later) && statementsAdjoin(october, later),
+      ]),
+    ).toEqual([
+      ['nextDay', false, true],
+      ['handOver', false, true],
+      ['handOverReporting', true, false],
+      ['sameDayOnly', true, false],
+      ['partial', true, false],
+      ['afterGap', false, false],
+    ]);
+    expect(statementsOverlap(span('2026-10-05', '2026-10-05', true), october)).toBe(true);
+    expect(
+      statementsAdjoin(span('2026-12-01', '2026-12-31'), span('2027-01-01', '2027-01-31')),
+    ).toBe(true);
   });
 });
