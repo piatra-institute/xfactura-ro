@@ -720,6 +720,65 @@ describe('D406 from the books', () => {
   );
 
   official(
+    "a customer's advance invoiced, then deducted on the final invoice, passes ANAF's SAF-T validator",
+    async () => {
+      const { s, document, prepare } = await september(kits());
+      const sale = (input: Record<string, unknown>) =>
+        document({ direction: 'sale', counterparty: '14399840', ...input });
+      const advance = await sale({
+        number: 'V-AV1',
+        date: '2026-09-03',
+        net: '3000.00',
+        tax: '630.00',
+        gross: '3630.00',
+        lines: [{ rate: '21', net: '3000.00', name: 'Avans servicii de consultanță' }],
+      });
+      await s.book('invoices.recognize', {
+        documentId: advance.id,
+        allocations: [{ account: '419', vat: 'S-21', amount: '3000.00' }],
+      });
+      // September already holds another customer's advance: take this invoice's.
+      const held = (
+        await s.invoke<{ id: string; document: string | null }[]>(s.owner, 'openItems.list', {
+          kind: 'advance.received',
+        })
+      ).find((item) => item.document === 'V-AV1');
+      const final = await sale({
+        number: 'V-FIN1',
+        date: '2026-09-25',
+        net: '7000.00',
+        tax: '1470.00',
+        gross: '8470.00',
+        lines: [
+          { rate: '21', net: '10000.00', name: 'Servicii de consultanță septembrie' },
+          { rate: '21', net: '-3000.00', name: 'Storno avans V-AV1' },
+        ],
+      });
+      await s.book('invoices.recognize', {
+        documentId: final.id,
+        allocations: [
+          { account: '704', vat: 'S-21', amount: '10000.00' },
+          { account: '419', vat: 'S-21', amount: '-3000.00', advance: held!.id },
+        ],
+      });
+      const options = { contact, accounts: { '623': '6231' } };
+      expect(
+        (
+          (await s.refused(prepare('2026-09', options)))?.details as {
+            problems: { code: string }[];
+          }
+        ).problems.map((item) => item.code),
+      ).toEqual(['D406_PRODUCT_KIND']);
+      const prepared = await prepare('2026-09', { ...options, advances: 'services' });
+      expect([prepared.state, prepared.steps.at(-1)?.detail ?? null]).toEqual([
+        'validated_official',
+        null,
+      ]);
+    },
+    120_000,
+  );
+
+  official(
     "a month passes ANAF's SAF-T validator",
     async () => {
       const { s, prepare } = await september(kits());

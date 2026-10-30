@@ -184,6 +184,34 @@ describe('settlement', () => {
     expect(codes(proposal)).toContain('CONTROL_ACCOUNT');
   });
 
+  test('money from an associate opens their account (4551); an advance is opened by a payment', async () => {
+    const { s, receipt } = await books();
+    const associate = await s.invoke<{ id: string }>(s.owner, 'parties.create', {
+      kind: 'ro_individual',
+      country: 'RO',
+      name: 'Popescu Ana',
+    });
+    const wrong = await s.propose('bank.settle', {
+      movementId: receipt.id,
+      opens: [{ account: '542', partyId: associate.id, amount: receipt.amount }],
+    });
+    expect(codes(wrong)).toEqual(['DIRECTION']);
+    const loan = await s.revise('bank.settle', wrong, {
+      movementId: receipt.id,
+      opens: [{ account: '4551', partyId: associate.id, amount: receipt.amount }],
+    });
+    expect(loan.issues).toEqual([]);
+    expect(loan.effect?.lines.map((line) => `${line.side} ${line.account}`)).toEqual([
+      'D 5121',
+      'C 4551',
+    ]);
+    await s.post(await s.approve(loan));
+    const [item] = await s.invoke<{ account: string; kind: string }[]>(s.owner, 'openItems.list', {
+      partyId: associate.id,
+    });
+    expect([item?.account, item?.kind]).toEqual(['4551', 'payable']);
+  });
+
   test('a receipt cannot settle more than the receivable', async () => {
     const { s, receipt } = await books();
     const { id: evidenceId } = await s.evidence();

@@ -124,7 +124,11 @@ The chart is OMFP 1802/2014 as published, plus the accounts later orders added, 
 
 ### `bank.settle`: explanation of a bank movement
 
-- **Input:** the movement, allocations to open items (amount in the movement currency) and lines to accounts without partners (fees 627, interest, own transfers 581, …).
+- **Input:**
+  - the movement;
+  - allocations to open items (amount in the movement currency);
+  - lines to accounts without partners (fees 627, interest, own transfers 581, …);
+  - new items of a person in lei (`opens`): an advance paid on 542 or another debtor (461) by a payment; an associate's money on 4551 or another creditor (462) by a receipt.
 - **Rules:**
   - The explained total must equal the movement exactly.
   - Allocations must be in the open item's currency.
@@ -342,10 +346,11 @@ Services across the border are not in it (D390 and D300 report them); acquisitio
   - the invoices from the retained UBL, with the booked account;
   - products from the invoice lines;
   - the bank entries settling partners, as payments.
+- **Advances:** an advance invoice's lines are reported on 419 (or 4091/4092) and the final invoice's deduction as its negative line, with negative base and VAT. Advances paid count as goods (4091) or services (4092); what customers' advances (419) are for is the option `advances`.
 - **VAT codes** go on the base line, through a mapping table (`saft/tax-codes.ts`) in which each row quotes ANAF's description. A purchase with half its VAT deducted (vehicles) takes ANAF's 50% codes (34xxxx). A code with no certain SAF-T code (`O`, 9%, 5%, other partial deductions) is a problem, never a guess.
 - **Validation:** ANAF's D406 validator runs only in ANAF's SAF-T kit, pinned separately (`anaf-saft`). The engine sends D406 there and every other return to the general DUKIntegrator, and records which kit ran.
 - **The validator doesn't check** that entries balance, the control totals, or currency conversion. Those are the writer's own checks (`checkD406`).
-- **Not produced yet:** payroll TaxTypes (their lines carry 000), the annual assets file, the stock file, invoices with document-level allowances, a VAT rate's lines booked on several accounts (`D406_SPLIT`; an invoice split by rate is reported, each line on its rate's account and with its rate's VAT), advance invoices and their deduction (`D406_ADVANCE`), and invoices without UBL XML.
+- **Not produced yet:** payroll TaxTypes (their lines carry 000), the annual assets file, the stock file, invoices with document-level allowances, a VAT rate's lines booked on several accounts (`D406_SPLIT`; an invoice split by rate is reported, each line on its rate's account and with its rate's VAT), and invoices without UBL XML.
 
 **Obligations calendar.** `obligations.calendar` lists the returns whose periods end in a range of months, with their deadlines and where each one stands: due, overdue, prepared, authorized, filed, accepted, rejected, or blocked when its deadline isn't sourced for the period.
 - **Which returns apply** is read from the profile and the books:

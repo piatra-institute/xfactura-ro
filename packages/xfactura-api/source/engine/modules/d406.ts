@@ -5,6 +5,7 @@ import { hashOf } from 'xfactura-core/hash';
 import { profileAt, vatPeriodOf, type ReadSetEntry } from 'xfactura-core/kernel';
 import {
   allocate,
+  divRound,
   formatMoney,
   formatScaled,
   parseDecimal,
@@ -77,6 +78,9 @@ export const d406Options = z
     /** The standard account chosen for each synthetic ANAF subdivides (605, 612, 623, 635, 646),
      * by its synthetic: `{ "646": "6461" }`. */
     accounts: z.record(z.string().regex(/^\d{3,4}$/), z.string().regex(/^\d{3,4}$/)).default({}),
+    /** What the customers' advances (419) are for: the advance invoices' lines are reported as
+     * goods or services. */
+    advances: z.enum(['goods', 'services']).optional(),
   })
   .strict();
 
@@ -104,6 +108,25 @@ const partnerOf = (account: string) => partnerAccounts[syntheticOf(account)];
 /** The VAT category of a tax entry as invoice allocations name it: S-21, S-11, O. */
 const categoryOf = (tax: { key: string; code: string }) =>
   tax.key.startsWith('vat:') ? tax.key.slice(4) : tax.code;
+/** `total` in proportion to signed weights, half away from zero, the residue on the largest: a
+ * deducted advance (a negative line) takes its negative share of the VAT. */
+function prorate(total: bigint, weights: readonly bigint[]): bigint[] {
+  const sum = weights.reduce((a, b) => a + b, 0n);
+  if (sum === 0n)
+    return allocate(
+      total,
+      weights.map(() => 1n),
+    );
+  const parts = weights.map((weight) => divRound(total * weight, sum, 'halfAwayFromZero'));
+  const residue = total - parts.reduce((a, b) => a + b, 0n);
+  const size = (value: bigint) => (value < 0n ? -value : value);
+  const largest = weights.reduce(
+    (best, weight, index) => (size(weight) > size(weights[best]!) ? index : best),
+    0,
+  );
+  parts[largest]! += residue;
+  return parts;
+}
 
 /** The engine's journals, as the file describes and groups them (Type, up to nine characters). */
 const journals: Readonly<Record<string, { description: string; type: string }>> = {
@@ -129,6 +152,9 @@ const journals: Readonly<Record<string, { description: string; type: string }>> 
  * a problem. The classification awaits the expert's review.
  */
 const productKinds: readonly [RegExp, 'goods' | 'services'][] = [
+  // Advances paid for services (4092) and for stocks (4091).
+  [/^4092/, 'services'],
+  [/^4091/, 'goods'],
   [/^70[4-6]/, 'services'],
   [/^6[12]/, 'services'],
   [/^70[1-37]/, 'goods'],
@@ -747,6 +773,15 @@ export function d406Declaration(
         return found;
       };
 
+      // The partner's receivable or payable of an entry, and its other lines that are not VAT: an
+      // invoice's revenue, expense or advance (419, 409x) lines carry its VAT.
+      const isCounterparty = (line: (typeof books.periodLines)[number]) => {
+        const item = line.openItemId ? books.items.get(line.openItemId) : undefined;
+        return item?.kind === 'receivable' || item?.kind === 'payable';
+      };
+      const isBase = (line: (typeof books.periodLines)[number]) =>
+        !/^442/.test(line.account) && !isCounterparty(line);
+
       // Journals: one per journal code, each entry a transaction, its VAT on its base's line.
       const linesOf = Map.groupBy(books.periodLines, (line) => line.entryId);
       const journalMap = new Map<string, D406Journal>();
@@ -775,7 +810,7 @@ export function d406Declaration(
         const vat = await vatOf(header.id, header.number);
         entryVat.set(header.id, vat);
         // The base of an entry's VAT is its first line that is neither a partner's nor VAT.
-        const base = own.findIndex((line) => !line.openItemId && !/^442/.test(line.account));
+        const base = own.findIndex(isBase);
         if (vat.length && base < 0)
           problem(
             'D406_TAX_LINE',
@@ -783,9 +818,7 @@ export function d406Declaration(
           );
         // An invoice split over accounts or rates has a base line per part, in the parts' order:
         // each VAT goes to the lines of its category, shared by their amounts.
-        const bases = own.flatMap((line, index) =>
-          !line.openItemId && !/^442/.test(line.account) ? [index] : [],
-        );
+        const bases = own.flatMap((line, index) => (isBase(line) ? [index] : []));
         const taxFor = new Map<number, D406Tax[]>();
         if (vat.length && bases.length > 1) {
           const parts = books.allocations.get(header.id);
@@ -808,16 +841,11 @@ export function d406Declaration(
                 continue;
               }
               const weights = members.map(({ index, j }) => {
-                const amount = parts
-                  ? parseMoney(parts[j]!.amount.replace(/^-/, ''), 'RON')
-                  : own[index]!.bani;
-                return amount < 0n ? -amount : amount;
+                const amount = parts ? parseMoney(parts[j]!.amount, 'RON') : own[index]!.bani;
+                return amount;
               });
-              const even = weights.every((weight) => weight === 0n)
-                ? weights.map(() => 1n)
-                : weights;
-              const shares = allocate(tax.baseBani, even);
-              const amounts = allocate(tax.taxBani, even);
+              const shares = prorate(tax.baseBani, weights);
+              const amounts = prorate(tax.taxBani, weights);
               members.forEach(({ index }, k) =>
                 taxFor.set(index, [
                   ...(taxFor.get(index) ?? []),
@@ -826,13 +854,6 @@ export function d406Declaration(
               );
             }
         }
-        // Advance invoices and the final invoices deducting them: their lines on 419 or 409x are
-        // not attributed yet.
-        if (vat.length && own.some((line) => /^(419|409[12])/.test(line.account)))
-          problem(
-            'D406_ADVANCE',
-            `Nota ${header.number} înregistrează sau regularizează un avans: liniile ei nu se raportează încă în D406.`,
-          );
         const transactionLines = own.map((line, index): D406Line => {
           const currency =
             line.currency && line.currencyMinor
@@ -924,8 +945,8 @@ export function d406Declaration(
           continue;
         }
         const own = linesOf.get(header.id) ?? [];
-        const partnerLine = own.find((line) => line.openItemId && partnerOf(line.account));
-        const baseLine = own.find((line) => !line.openItemId && !/^442/.test(line.account));
+        const partnerLine = own.find((line) => isCounterparty(line) && partnerOf(line.account));
+        const baseLine = own.find(isBase);
         const item = partnerLine ? books.items.get(partnerLine.openItemId!) : undefined;
         const party = item ? ids.get(item.partyId) : undefined;
         if (!partnerLine || !baseLine || !party) continue;
@@ -942,7 +963,7 @@ export function d406Declaration(
         // advance deducted) when they all share one account.
         const norm = (key: string) =>
           key.replace(/^S-(.+)$/, (_, rate: string) => `S-${Number(rate)}`);
-        const bases = own.filter((line) => !line.openItemId && !/^442/.test(line.account));
+        const bases = own.filter(isBase);
         const parts = books.allocations.get(header.id);
         const keys = (parts?.map((part) => part.vat) ?? vat.map(({ tax }) => categoryOf(tax))).map(
           norm,
@@ -968,14 +989,18 @@ export function d406Declaration(
           );
           continue;
         }
-        const kinds = lineAccounts.map(
-          (account) => productKinds.find(([pattern]) => pattern.test(account!))?.[1],
+        const kinds = lineAccounts.map((account) =>
+          /^419/.test(account!)
+            ? options.advances
+            : productKinds.find(([pattern]) => pattern.test(account!))?.[1],
         );
         const unknown = lineAccounts.find((_, index) => !kinds[index]);
         if (unknown) {
           problem(
             'D406_PRODUCT_KIND',
-            `Liniile facturilor înregistrate în contul ${unknown} nu se pot încadra ca bunuri sau servicii.`,
+            /^419/.test(unknown)
+              ? 'Indicați dacă avansurile clienților (419) sunt pentru bunuri sau servicii (advances).'
+              : `Liniile facturilor înregistrate în contul ${unknown} nu se pot încadra ca bunuri sau servicii.`,
           );
           continue;
         }
@@ -1012,17 +1037,16 @@ export function d406Declaration(
           continue;
         }
         const lineLei = amounts.map(converted);
-        const weights = (values: bigint[]) => {
-          const absolute = values.map((value) => (value < 0n ? -value : value));
-          return absolute.some((value) => value > 0n) ? absolute : absolute.map(() => 1n);
-        };
         // Each VAT is shared among the lines of its category in proportion to their amounts.
         const shares = vat.map(({ tax, code }) => {
           const members = invoice.lines.flatMap((line, index) =>
             bases.length === 1 || lineKey(line) === norm(categoryOf(tax)) ? [index] : [],
           );
           const spread = (total: bigint, values: bigint[]) => {
-            const parts = allocate(total, weights(members.map((index) => values[index]!)));
+            const parts = prorate(
+              total,
+              members.map((index) => values[index]!),
+            );
             return invoice.lines.map((_, index) =>
               members.includes(index) ? parts[members.indexOf(index)]! : 0n,
             );

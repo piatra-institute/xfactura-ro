@@ -42,11 +42,25 @@ export const settlementInput = z
       )
       .max(50)
       .default([]),
+    /** A new open item of a person, in lei: an advance paid on 542, other debtors (461), an
+     * associate's money received on 4551, other creditors (462). */
+    opens: z
+      .array(
+        z
+          .object({
+            account: z.enum(['542', '461', '4551', '462']),
+            partyId: z.uuid(),
+            amount,
+          })
+          .strict(),
+      )
+      .max(5)
+      .default([]),
     description: z.string().trim().min(3).max(500).optional(),
   })
   .strict()
   .refine(
-    (input) => input.allocations.length + input.lines.length > 0,
+    (input) => input.allocations.length + input.lines.length + input.opens.length > 0,
     'Explicați mișcarea bancară.',
   );
 export type SettlementInput = z.infer<typeof settlementInput>;
@@ -67,6 +81,7 @@ export const settlement: Treatment<SettlementInput> = {
   plan: (input) => ({
     movements: [input.movementId],
     openItems: [{ ids: input.allocations.map((allocation) => allocation.openItem) }],
+    ...(input.opens.length ? { parties: input.opens.map((open) => open.partyId) } : {}),
   }),
   followUp(input, loaded) {
     const movement = loaded.movements.get(input.movementId);
@@ -170,6 +185,44 @@ export const settlement: Treatment<SettlementInput> = {
         ),
       );
     });
+    const openItems: Effect['openItems'] = [];
+    input.opens.forEach((open, index) => {
+      const path = `opens.${index}`;
+      const minor = parseMoney(open.amount, currency);
+      explained += minor;
+      settledBani += minor;
+      // A payment starts what the person owes back (542, 461); a receipt what the company owes.
+      const debtor = open.account === '542' || open.account === '461';
+      if (debtor === received)
+        issues.push(
+          block(
+            'DIRECTION',
+            `Contul ${open.account} se deschide printr-o ${debtor ? 'plată' : 'încasare'}.`,
+            path,
+          ),
+        );
+      if (foreign)
+        issues.push(block('CURRENCY', 'Pozițiile noi se deschid din mișcări în lei.', path));
+      if (!loaded.parties.has(open.partyId))
+        issues.push(block('PARTY', 'Partenerul nu există.', path));
+      const ref = `opened-${index}`;
+      openItems.push({
+        ref,
+        kind: debtor ? 'receivable' : 'payable',
+        controlAccount: open.account,
+        partyId: open.partyId,
+        currency: LEDGER_CURRENCY,
+        normalSide: debtor ? 'D' : 'C',
+        mayReverse: false,
+      });
+      lines.push({
+        account: open.account,
+        side,
+        bani: minor,
+        openItem: ref,
+        partyId: open.partyId,
+      });
+    });
     if (explained !== total)
       issues.push(
         block(
@@ -198,7 +251,7 @@ export const settlement: Treatment<SettlementInput> = {
         input.description ??
         `${received ? 'Încasare' : 'Plată'} ${movement.reference}`.slice(0, 500),
       lines: lines.filter((line) => line.bani !== 0n),
-      openItems: [],
+      openItems,
       taxEntries: [],
       schedules: [],
       explanation: {
