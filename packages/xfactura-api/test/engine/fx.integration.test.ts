@@ -206,6 +206,13 @@ describe('revaluation and settlement', () => {
       'C 4111 6037.90 [EUR 1210.00]',
       'C 7651 12.10',
     ]);
+    // The receivable leaves at the rate it is carried at, March's closing 4.9900 (1,210.00 ×
+    // 4.9900 = 6,037.90): each line's lei are its euro at its rate; the difference in lei only.
+    expect(settled.effect!.lines.map((line) => line.currency?.rate ?? null)).toEqual([
+      '5.0000',
+      '4.9900',
+      null,
+    ]);
     const balance = await s.trialBalance();
     expect(balance.rows.find((row) => row.account === '4111')?.closing).toEqual({
       debit: '0.00',
@@ -226,11 +233,13 @@ describe('revaluation and settlement', () => {
       movementId,
       allocations: [{ openItem: receivable, amount: '605.00' }],
     });
-    // Half of 6,037.90 is released; 605.00 × 5 = 3,025.00 is received.
+    // Half of 6,037.90 is released, 605.00 at the carrying 4.9900; 605.00 × 5 = 3,025.00 is
+    // received.
     expect(lines(settled)).toEqual([
       'D 5124 3025.00 [EUR 605.00]',
       'C 4111 3018.95 [EUR 605.00]',
       'C 7651 6.05',
     ]);
+    expect(settled.effect!.lines[1]!.currency?.rate).toBe('4.9900');
   });
 });

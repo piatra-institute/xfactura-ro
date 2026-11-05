@@ -4,7 +4,12 @@ import { requireCondition } from 'xfactura-core/errors';
 import { accountCodePattern, formatQuantity, isStockAccount } from 'xfactura-core/kernel';
 import { formatMoney } from 'xfactura-core/money';
 import { units } from 'xfactura-core/ro/saft/data/codes';
-import { supportedItemAccount } from 'xfactura-core/ro/stock';
+import {
+  periodCostOf,
+  productionStockAccounts,
+  supportedItemAccount,
+} from 'xfactura-core/ro/stock';
+import type { LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
 import {
   entries,
@@ -21,6 +26,8 @@ import {
 } from '../db/schema';
 import { appendAudit, type Actor, type Commands } from '../kernel/commands';
 import type { CloseCheck } from '../kernel/periods';
+import { entryStands } from '../kernel/ledger';
+import { loadStock } from '../kernel/state';
 
 /*
  * The stock register (G1): the item catalogue and the warehouses, kept as recorded, and what the
@@ -344,51 +351,49 @@ export const stockChecks: CloseCheck[] = [
             },
           ]
         : [];
-      // A periodic average pool with exits of the month not yet valued (`stock.periodCost`).
+      // A periodic average pool whose exits of the month are not yet at the month's average
+      // (`stock.periodCost`), read as the costing reads them: a receipt reversed in the month, or
+      // exits already at the average, leave nothing to cost.
       const [periodic] = await tx
         .select({ id: stockLayers.id })
         .from(stockLayers)
         .where(and(eq(stockLayers.companyId, companyId), eq(stockLayers.method, 'periodic')))
         .limit(1);
       if (!periodic) return findings;
-      const [pending] = await tx
-        .select({ count: sql<number>`count(*)`.mapWith(Number) })
-        .from(stockMoves)
-        .innerJoin(
-          stockLayers,
-          and(
-            eq(stockLayers.companyId, stockMoves.companyId),
-            eq(stockLayers.id, stockMoves.layerId),
-          ),
-        )
+      const [costed] = await tx
+        .select({ id: entries.id })
+        .from(proposals)
         .innerJoin(
           entries,
-          and(eq(entries.companyId, stockMoves.companyId), eq(entries.id, stockMoves.entryId)),
-        )
-        .innerJoin(
-          proposals,
-          and(eq(proposals.companyId, entries.companyId), eq(proposals.id, entries.proposalId)),
+          and(eq(entries.companyId, proposals.companyId), eq(entries.proposalId, proposals.id)),
         )
         .where(
           and(
-            eq(stockMoves.companyId, companyId),
-            eq(stockLayers.method, 'periodic'),
-            eq(entries.period, month),
-            sql`${stockMoves.quantity} < 0`,
-            sql`NOT EXISTS (
-              SELECT 1 FROM ${proposals} c JOIN ${entries} ce
-                ON ce.company_id = c.company_id AND ce.proposal_id = c.id
-              WHERE c.company_id = ${stockMoves.companyId} AND c.subject_key = 'stock:periodCost:' || ${month}
-                AND NOT EXISTS (SELECT 1 FROM ${proposals} rv JOIN ${entries} re
-                  ON re.company_id = rv.company_id AND re.proposal_id = rv.id
-                  WHERE rv.company_id = ce.company_id AND rv.subject_key = 'reverse:' || ce.id))`,
+            eq(proposals.companyId, companyId),
+            eq(proposals.subjectKey, `stock:periodCost:${month}`),
+            entryStands('"acc_entries"'),
           ),
-        );
-      if (pending?.count)
+        )
+        .limit(1);
+      if (costed) return findings;
+      const { positions } = await loadStock(tx, companyId, {
+        all: true,
+        flows: { from: `${month}-01` as LocalDate, to: end as LocalDate },
+      });
+      const pending = {
+        count: [...positions.values()]
+          .flatMap((position) => position.layers)
+          .filter((layer) => {
+            if (layer.method !== 'periodic' || !layer.flows) return false;
+            const costing = periodCostOf(layer.flows);
+            return costing === 'empty' || (costing !== null && costing.difference !== 0n);
+          }).length,
+      };
+      if (pending.count)
         findings.push({
           code: 'STOCK_PERIOD_COST_MISSING',
           severity: 'block' as const,
-          message: `${pending.count} ieșiri din gestiune ale lunii ${month} sunt evaluate provizoriu, la costul mediu curent: cu costul mediu ponderat calculat lunar, costul lor se stabilește la sfârșitul lunii (stock.periodCost).`,
+          message: `Ieșirile lunii ${month} din ${pending.count} poziții de stoc sunt evaluate provizoriu, la costul mediu curent: cu costul mediu ponderat calculat lunar, costul lor se stabilește la sfârșitul lunii (stock.periodCost).`,
           count: pending.count,
           items: [month],
         });
@@ -406,9 +411,10 @@ export class Stock {
       requireCondition(
         isStockAccount(input.account),
         'STOCK_ACCOUNT',
-        `Contul ${input.account} nu este un cont de stocuri ținut pe cantități (30x, 371, 381 și analiticele lor).`,
+        `Contul ${input.account} nu este un cont de stocuri ținut pe cantități (30x, 331, 34x, 371, 381 și analiticele lor).`,
       );
-      const unsupported = supportedItemAccount(input.account);
+      // Products and work in progress (G4) are catalogued too; production's treatments move them.
+      const unsupported = supportedItemAccount(input.account, productionStockAccounts);
       requireCondition(!unsupported, 'UNSUPPORTED', unsupported ?? '', 422);
       const [account] = await tx
         .select({ postable: ledgerAccounts.postable })

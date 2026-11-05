@@ -198,6 +198,16 @@ export async function companyRecords(tx: Tx, companyId: string) {
       .select()
       .from(s.cashRegisterEvents)
       .where(eq(s.cashRegisterEvents.companyId, companyId)),
+    acc_boms: await tx.select().from(s.boms).where(eq(s.boms.companyId, companyId)),
+    acc_bom_lines: await tx.select().from(s.bomLines).where(eq(s.bomLines.companyId, companyId)),
+    acc_work_orders: await tx
+      .select()
+      .from(s.workOrders)
+      .where(eq(s.workOrders.companyId, companyId)),
+    acc_work_order_events: await tx
+      .select()
+      .from(s.workOrderEvents)
+      .where(eq(s.workOrderEvents.companyId, companyId)),
     acc_employees: await tx.select().from(s.employees).where(eq(s.employees.companyId, companyId)),
     acc_employment_terms: await tx
       .select()
@@ -362,13 +372,27 @@ export class Exports {
     });
   }
 
+  /**
+   * An export's status, for whoever may download it: an export holds every record and file, so it
+   * is bound to its requester. The person who requested it reads it, and so does an agent of
+   * theirs only if it requested it itself (the same grant); an owner reads every export of the
+   * company. Anyone else is told it does not exist.
+   */
   get(actor: Actor, id: string) {
-    return this.commands.read(actor, 'exports.get', async (tx) => {
+    return this.commands.read(actor, 'exports.get', async (tx, access) => {
       const [job] = await tx
         .select()
         .from(jobs)
         .where(and(eq(jobs.companyId, actor.companyId), eq(jobs.id, id), eq(jobs.kind, 'export')));
-      requireCondition(job, 'NOT_FOUND', 'Exportul nu este disponibil.', 404);
+      requireCondition(
+        job &&
+          (actor.agentId
+            ? job.actorId === actor.actorId && job.agentId === actor.agentId
+            : job.actorId === actor.actorId || access.role === 'owner'),
+        'NOT_FOUND',
+        'Exportul nu este disponibil.',
+        404,
+      );
       return view(job);
     });
   }

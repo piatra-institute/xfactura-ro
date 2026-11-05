@@ -492,6 +492,39 @@ describe('settlement', () => {
     expect(codes(proposal)).toContain('CONTROL_ACCOUNT');
   });
 
+  test('a payment is not allocated to an amount for later months (471): its schedule releases it', async () => {
+    const { s, payable, payment } = await books();
+    const items = await s.list<{ id: string; partyId: string; kind: string }>(
+      s.owner,
+      'openItems.list',
+      {},
+    );
+    const supplier = items.find((item) => item.id === payable)!.partyId;
+    await s.book('deferrals.defer', {
+      date: '2026-10-01',
+      account: '628',
+      amount: '100.00',
+      from: '2026-10',
+      months: 2,
+      partyId: supplier,
+      evidenceId: (await s.evidence('contract-abonament.pdf')).id,
+    });
+    const deferral = (
+      await s.list<{ id: string; kind: string }>(s.owner, 'openItems.list', {})
+    ).find((item) => item.kind === 'deferral.expense')!;
+    // Allocated there, the payment would expense the amount twice and leave INV-1 unpaid.
+    const wrong = await s.propose('bank.settle', {
+      movementId: payment.id,
+      allocations: [{ openItem: deferral.id, amount: '100.00' }],
+    });
+    expect(codes(wrong)).toEqual(['OPEN_ITEM_KIND']);
+    const right = await s.revise('bank.settle', wrong, {
+      movementId: payment.id,
+      allocations: [{ openItem: payable, amount: '100.00' }],
+    });
+    expect(lines(right)).toEqual(['C 5121 100.00', 'D 401 100.00']);
+  });
+
   test('money from an associate opens their account (4551); an advance is opened by a payment', async () => {
     const { s, receipt } = await books();
     const associate = await s.invoke<{ id: string }>(s.owner, 'parties.create', {

@@ -335,12 +335,14 @@ describe('payments to the single account', () => {
       evidenceId: xml,
     });
     await s.book('invoices.recognize', { documentId: document.id, account: '704' });
-    await s.book('vat.settle', {
+    const settled = await s.book('vat.settle', {
       period: '2026-10',
       date: '2026-10-31',
       authorityId: anaf,
       evidenceId: (await s.evidence('decont.pdf')).id,
     });
+    // The item carries the D300 deadline, the due date the tax account reads.
+    expect(settled.effect!.openItems.map((item) => item.dueDate)).toEqual(['2026-11-25']);
     // Into the single account, VAT stays owed: the money is not distributed.
     const single = await s.propose('tax.pay', {
       movementId: movement('TAX-UNIC').id,

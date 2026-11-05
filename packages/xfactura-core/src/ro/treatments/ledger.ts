@@ -132,6 +132,21 @@ export const generalJournal: Treatment<GeneralJournalInput> = {
           'date',
         ),
       );
+    // The ledger is continuous: a year after the first opens with its previous year's balances,
+    // and an opening entry there would count them twice. The books open once, with their first
+    // year (the database refuses it too, `inv:opening_first_year`).
+    const earlier = loaded.years
+      .filter((year) => year.kind === 'financial' && year.to < input.date)
+      .sort((a, b) => (a.from < b.from ? -1 : 1))
+      .at(-1);
+    if (input.purpose === 'opening' && earlier)
+      issues.push(
+        block(
+          'OPENING_EARLIER_YEAR',
+          `Registrele țin exercițiul ${earlier.from} – ${earlier.to}: soldurile lui se preiau fără notă de deschidere. Nota de deschidere (DESCHIDERE) se înregistrează doar la începutul primului exercițiu al registrelor.`,
+          'date',
+        ),
+      );
 
     const declared = new Map(input.newItems.map((item) => [item.ref, item]));
     const created = new Map<string, OpenItemSpec>();
@@ -234,6 +249,67 @@ export type ReversalInput = z.infer<typeof reversalInput>;
 const opposite = (side: Side): Side => (side === 'D' ? 'C' : 'D');
 
 /**
+ * The tax-entry attributes that hold an amount or a count of their entry. They carry the entry's
+ * sign, as its base and tax do: a credit note writes them negative, and a storno negates them, so
+ * a reader sums them as written. `prorataTax`, `prorataDeducted`: a purchase's VAT under the
+ * pro-rata and what it deducted (`invoices.recognize`, `invoices.credit`); `price`, `cost`,
+ * `margin`: an item sold under the margin scheme (`margin.sale`); `sales`, `costs`, `margin`,
+ * `trips`: a travel agency's period (`margin.travel`); `baseMinor`, `taxMinor`: a sale under the
+ * Union scheme in its currency (`invoices.euConsumer`); `receipts`: a Z report's receipts.
+ */
+export const signedAttributes: ReadonlySet<string> = new Set([
+  'prorataTax',
+  'prorataDeducted',
+  'price',
+  'cost',
+  'margin',
+  'sales',
+  'costs',
+  'trips',
+  'baseMinor',
+  'taxMinor',
+  'receipts',
+]);
+
+/** A signed attribute's value negated: a decimal number changes its sign; zero stays. */
+const negatedAttribute = (value: string) =>
+  !/^-?\d+(\.\d+)?$/.test(value) || /^-?0+(\.0+)?$/.test(value)
+    ? value
+    : value.startsWith('-')
+      ? value.slice(1)
+      : `-${value}`;
+
+/** Whether a tax entry is a storno's mirror of another (`ledger.reverse` keys it so). */
+export const isReversalTaxEntry = (entry: { key: string }) => entry.key.startsWith('reversal:');
+
+/**
+ * The tax entries of a ledger that stand within it: a storno's mirror entries left out, and the
+ * entries they mirror (`originTaxEntry` is `<entry>:<key>`). Read for an entry that states a fact
+ * rather than an amount (the definitive pro-rata of an ADJ-300), which its storno withdraws.
+ */
+export function standingTaxEntries<
+  T extends { entryId: string; key: string; originTaxEntry: string | null },
+>(entries: readonly T[]): T[] {
+  const reversed = new Set(
+    entries.flatMap((entry) =>
+      isReversalTaxEntry(entry) && entry.originTaxEntry ? [entry.originTaxEntry] : [],
+    ),
+  );
+  return entries.filter(
+    (entry) => !isReversalTaxEntry(entry) && !reversed.has(`${entry.entryId}:${entry.key}`),
+  );
+}
+
+/** A tax entry's attributes as its storno records them: the signed ones negated. */
+export const reversedAttributes = (attributes: Readonly<Record<string, string>>) =>
+  Object.fromEntries(
+    Object.entries(attributes).map(([name, value]) => [
+      name,
+      signedAttributes.has(name) ? negatedAttribute(value) : value,
+    ]),
+  );
+
+/**
  * Reverses a posted entry in full by storno. The original stays untouched; each line and tax
  * entry is mirrored, linked to its origin and reported in the period of the reversal. A
  * reversal that would push an already-settled open item past zero is refused.
@@ -316,8 +392,9 @@ export const reversal: Treatment<ReversalInput> = {
       taxPoint: input.date,
       exigibility: tax.exigibility === null ? null : input.date,
       taxPeriod: tax.taxPeriod === null ? null : taxPeriod,
+      // Amounts and counts among its attributes carry its sign (`signedAttributes`).
       attributes: {
-        ...tax.attributes,
+        ...reversedAttributes(tax.attributes),
         ...(tax.taxPeriod ? { correctsTaxPeriod: tax.taxPeriod } : {}),
       },
       originTaxEntry: `${entry.id}:${tax.key}`,

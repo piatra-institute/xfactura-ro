@@ -42,22 +42,12 @@ async function latestEvent(tx: Transaction, companyId: string, month: string) {
   return event;
 }
 
-/** Months with entries before `month` whose latest event is not a close. */
-async function openMonths(
-  tx: Transaction,
-  companyId: string,
-  where: 'before' | 'after',
-  month: string,
-) {
+/** Months with entries before `month`, each with whether its latest event is a close. */
+async function monthsWithEntries(tx: Transaction, companyId: string, month: string) {
   const months = await tx
     .selectDistinct({ period: entries.period })
     .from(entries)
-    .where(
-      and(
-        eq(entries.companyId, companyId),
-        where === 'before' ? lt(entries.period, month) : gt(entries.period, month),
-      ),
-    );
+    .where(and(eq(entries.companyId, companyId), lt(entries.period, month)));
   const result: { month: string; closed: boolean }[] = [];
   for (const { period } of months.sort((a, b) => (a.period < b.period ? -1 : 1)))
     result.push({
@@ -65,6 +55,32 @@ async function openMonths(
       closed: (await latestEvent(tx, companyId, period))?.kind === 'close',
     });
   return result;
+}
+
+/**
+ * The months whose latest event is a close, with that close's sequence, in month order; only
+ * those after `after` or before `before` when given. A close covers every earlier month, empty
+ * ones included: nothing is posted on or before the last of them (`inv:later_period_closed`).
+ */
+export async function closedMonths(
+  tx: Transaction,
+  companyId: string,
+  range: { after?: string; before?: string } = {},
+) {
+  return tx
+    .select({ month: periodEvents.month, seq: periodEvents.seq })
+    .from(periodEvents)
+    .where(
+      and(
+        eq(periodEvents.companyId, companyId),
+        range.after ? gt(periodEvents.month, range.after) : undefined,
+        range.before ? lt(periodEvents.month, range.before) : undefined,
+        eq(periodEvents.kind, 'close'),
+        sql`${periodEvents.seq} = (select max(q.seq) from ${periodEvents} q
+          where q.company_id = ${periodEvents.companyId} and q.month = ${periodEvents.month})`,
+      ),
+    )
+    .orderBy(periodEvents.month);
 }
 
 const kernelChecks: CloseCheck[] = [
@@ -78,9 +94,8 @@ const kernelChecks: CloseCheck[] = [
           severity: 'block',
           message: 'Luna este deja închisă.',
         });
-      const open = (await openMonths(tx, companyId, 'before', month)).filter(
-        (item) => !item.closed,
-      );
+      // Earlier months without entries need no close of their own: this one covers them.
+      const open = (await monthsWithEntries(tx, companyId, month)).filter((item) => !item.closed);
       if (open.length)
         findings.push({
           code: 'EARLIER_OPEN',
@@ -159,20 +174,13 @@ const kernelChecks: CloseCheck[] = [
   },
 ];
 
-/** Closing balances after `month`: the previous snapshot plus the turnover since it. */
+/**
+ * Closing balances after `month`: the snapshot of the latest earlier month still closed plus the
+ * turnover since it. That snapshot holds every line up to its month, and no line is added there
+ * while it stays closed; a reopened month's old snapshot may lack what was posted since.
+ */
 async function closingBalances(tx: Transaction, companyId: string, month: string) {
-  const [previous] = await tx
-    .select({ month: periodEvents.month, seq: periodEvents.seq })
-    .from(periodEvents)
-    .where(
-      and(
-        eq(periodEvents.companyId, companyId),
-        lt(periodEvents.month, month),
-        eq(periodEvents.kind, 'close'),
-      ),
-    )
-    .orderBy(desc(periodEvents.month), desc(periodEvents.seq))
-    .limit(1);
+  const previous = (await closedMonths(tx, companyId, { before: month })).at(-1);
   const balances = new Map<
     string,
     {
@@ -350,7 +358,9 @@ export const reopenHandler: ActionHandler<z.infer<typeof reopenInput>> = {
         severity: 'block',
         message: 'Exercițiul lunii este închis: redeschideți întâi exercițiul (years.reopen).',
       });
-    const later = (await openMonths(tx, companyId, 'after', month)).filter((item) => item.closed);
+    // Every later closed month, empty ones included: while one is closed nothing is posted here,
+    // and its snapshot would no longer follow from this month's next close.
+    const later = await closedMonths(tx, companyId, { after: month });
     if (later.length)
       findings.push({
         code: 'LATER_CLOSED',

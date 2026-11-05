@@ -345,4 +345,47 @@ describe('PDF statements transcribed by an agent', () => {
       unverified: ['opening', 'closing', 'entries.0', 'entries.1'],
     });
   });
+
+  // A movement an agent transcribed from a scan is as unchecked as an extracted document: a
+  // policy posting bank.settle does not post it unless it allows extracted sources (the
+  // database refuses it too, inv:binding).
+  test('a policy posts a scan’s movements only where it allows extracted sources', async () => {
+    const settle = async (pdf: Uint8Array, allow?: string[]) => {
+      const { s, agent, account, file } = await setup();
+      const { id } = await file('extras.pdf', 'application/pdf', pdf);
+      await s.invoke(agent, 'bank.recordStatement', {
+        evidenceId: id,
+        accountId: account,
+        statement: transcription(),
+      });
+      const [payment, receipt] = await s.list<Movement & { id: string }>(
+        s.owner,
+        'bank.movements',
+        {},
+      );
+      const first = await s.propose('bank.settle', {
+        movementId: payment!.id,
+        lines: [{ account: '628', amount: '150.00' }],
+      });
+      await s.invoke(s.reviewer, 'policies.create', {
+        name: 'Încasări diverse',
+        treatments: ['bank.settle'],
+        rulesHashes: [first.rulesHash],
+        preconditions: allow ? [{ kind: 'sourceAuthority', allow }] : [],
+        validFrom: '2026-01-01',
+        expiresAt: s.expiresIn(30),
+      });
+      const second = await s.propose(
+        'bank.settle',
+        { movementId: receipt!.id, lines: [{ account: '7588', amount: '2000.00' }] },
+        agent,
+      );
+      return second.entry?.policyId ? 'posted' : second.status;
+    };
+    const scan = pdfDocument([{ content: '' }]);
+    expect(await settle(statementPdf)).toBe('posted');
+    expect(await settle(scan)).toBe('proposed');
+    expect(await settle(scan, ['efactura'])).toBe('proposed');
+    expect(await settle(scan, ['efactura', 'extracted'])).toBe('posted');
+  });
 });

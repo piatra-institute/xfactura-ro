@@ -4,6 +4,7 @@ import { openItemKinds } from 'xfactura-core/kernel';
 import { formatMoney } from 'xfactura-core/money';
 import { documents, openItems, parties } from '../db/schema';
 import type { Actor, Commands } from '../kernel/commands';
+import { payClasses, personnelAccount } from '../kernel/personal';
 import { loadOpenItems } from '../kernel/state';
 
 export const positionQuery = z
@@ -14,7 +15,9 @@ export const positionQuery = z
   })
   .strict();
 
-/** Open items (receivables, payables, advances, …) with their balances and documents. */
+/** Open items (receivables, payables, advances, …) with their balances and documents. An agent
+ * whose reads do not cover `payroll` and `personal` gets none on personnel accounts (class 42):
+ * each is one person's pay, withholding or debt. */
 export class Positions {
   constructor(private readonly commands: Commands) {}
 
@@ -23,8 +26,11 @@ export class Positions {
       const where: SQL[] = [];
       if (input.partyId) where.push(eq(openItems.partyId, input.partyId));
       if (input.kind) where.push(eq(openItems.kind, input.kind));
+      const pay = (await this.commands.readable(tx, actor))(payClasses);
       const items = (await loadOpenItems(tx, actor.companyId, where)).filter(
-        (item) => !input.openOnly || item.balanceBani !== 0n || item.balanceMinor !== 0n,
+        (item) =>
+          (!input.openOnly || item.balanceBani !== 0n || item.balanceMinor !== 0n) &&
+          (pay || !personnelAccount(item.controlAccount)),
       );
       const partyNames = new Map(
         items.length

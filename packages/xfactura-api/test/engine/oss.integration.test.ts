@@ -8,7 +8,7 @@ import type { ActionView } from '../../source/engine/kernel/actions';
 import { workKinds } from '../../source/engine/kernel/work';
 import type { ProposalView } from '../../source/engine/kernel/views';
 import { invoiceXml, type XmlInput } from './fixtures/invoice';
-import { scenario, type Scenario } from './scenario';
+import { journal, scenario, type Scenario } from './scenario';
 
 // A synthetic e-commerce SRL selling online courses and e-newspaper subscriptions to consumers in
 // Germany, France and Italy, registered for VAT, quarterly. Amounts computed by hand from the
@@ -342,6 +342,9 @@ describe('an e-commerce SRL selling to consumers in other Member States', () => 
       },
     ]);
     expect(summary.declared).toEqual({ DE: '8300', FR: '20000', IT: '11000' });
+    // Due by the last day of the month after the quarter (art. 315 alin. (6^1)), not on its own
+    // last day.
+    expect((summary as unknown as { due: string }).due).toBe('2026-10-31');
     await authorize(q3.id);
 
     // The calendar: due on 31 October 2026, a Saturday, not moved (art. 315 alin. (6^1)).
@@ -394,8 +397,16 @@ describe('an e-commerce SRL selling to consumers in other Member States', () => 
         (party) => party.kind === 'ro_public_institution',
       )!.id,
     });
-    // 600 EUR at 5.0900: the receivable and the VAT owed reduced by red storno.
-    expect(lines(refund)).toEqual(['D 4111 -3054.00', 'C 704 -2545.00', 'C 4423 -509.00']);
+    // 600 EUR at 5.0900 by red storno: the revenue and the VAT owed 3.054 lei; the receivable
+    // leaves at the rate it is carried at, EB-4's 5.0700 (600 × 5.0700 = 3.042), the 12 lei of
+    // the euro's rise since gained (OMFP 1802/2014 pct. 322).
+    expect(lines(refund)).toEqual([
+      'D 4111 -3042.00',
+      'C 704 -2545.00',
+      'C 4423 -509.00',
+      'C 7651 12.00',
+    ]);
+    expect(refund.effect!.lines[0]!.currency).toMatchObject({ amount: '-600.00', rate: '5.0700' });
     expect(refund.issues.filter((issue) => issue.severity === 'block')).toEqual([]);
     expect(refund.effect?.explanation.details).toMatchObject({
       corrects: '2026-Q3',
@@ -435,6 +446,126 @@ describe('an e-commerce SRL selling to consumers in other Member States', () => 
       ['2026-Q4', 'applies'],
     ]);
   }, 120_000);
+
+  test('a credit note in euro leaves the receivable at its carrying amount, and owes the consumer what was collected beyond it', async () => {
+    const { s, record, propose, post, file, anaf } = await company();
+    await record('vat.distance', 'destination', '2026-01-01');
+    await record('vat.oss', 'union', '2026-01-01');
+    const note = async (number: string, originalNumber: string, date: string, net: string) =>
+      (
+        await s.invoke<{ id: string }>(s.owner, 'invoices.import', {
+          evidenceId: await file(
+            `${number}.xml`,
+            invoiceXml({
+              company: cui,
+              direction: 'sale',
+              counterparty: consumer,
+              currency: 'EUR',
+              credit: true,
+              number,
+              originalNumber,
+              date,
+              country: 'FR',
+              net,
+              rate: '20',
+              tax: (Number(net) / 5).toFixed(2),
+              gross: ((Number(net) * 6) / 5).toFixed(2),
+            }),
+          ),
+        })
+      ).id;
+    const credit = (documentId: string, originalDocumentId: string) =>
+      s.propose('invoices.euConsumer', {
+        documentId,
+        account: '704',
+        supply: 'electronic',
+        originalDocumentId,
+        authorityId: anaf.id,
+      });
+
+    // EB-R: 100 € + 20 € of French VAT at 5.0700 (7 August) = 608,40 lei.
+    const sold = await propose(sale('EB-R', '2026-08-10', 'FR', '100.00', '20', '20.00'));
+    expect(sold.proposal.issues.filter((issue) => issue.severity === 'block')).toEqual([]);
+    expect(lines(sold.proposal)).toEqual(['D 4111 608.40', 'C 704 507.00', 'C 4423 101.40']);
+    await post(sold.proposal);
+    // September's end at 5.0800: the receivable 120 € = 609,60 (+1,20), the VAT owed in euro
+    // (4423, a monetary item) 20 € = 101,60 (−0,20).
+    await s.invoke(s.owner, 'fx.importBnr', {
+      evidenceId: await file(
+        'nbrfxrates-0930.xml',
+        bnr.replace(
+          /<Cube date="2026-02-09">.*?<\/Cube>/,
+          '<Cube date="2026-09-30"><Rate currency="EUR">5.0800</Rate></Cube>',
+        ),
+      ),
+    });
+    const revaluation = await s.propose('fx.revalue', { date: '2026-09-30' });
+    expect(revaluation.issues.filter((issue) => issue.severity === 'block')).toEqual([]);
+    const revalued = await s.post(await s.approve(revaluation));
+    expect(lines(revalued)?.sort()).toEqual([
+      'C 4423 0.20',
+      'C 7651 1.20',
+      'D 4111 1.20',
+      'D 6651 0.20',
+    ]);
+    // The whole invoice credited on 12 October at 5.0900: 120 € = 610,80 lei reverse the
+    // revenue and the VAT; the receivable leaves at its carrying 609,60, at September's rate,
+    // and closes in both currencies; 1,20 gained.
+    const full = await credit(await note('CN-R', 'EB-R', '2026-10-12', '100.00'), sold.documentId);
+    expect(full.issues.filter((issue) => issue.severity === 'block')).toEqual([]);
+    expect(lines(full)).toEqual([
+      'D 4111 -609.60',
+      'C 704 -509.00',
+      'C 4423 -101.80',
+      'C 7651 1.20',
+    ]);
+    expect(full.effect!.lines[0]!.currency).toMatchObject({ amount: '-120.00', rate: '5.0800' });
+    await post(full);
+
+    // EB-P: 120 € at 5.0900 (9 October) = 610,80 lei, collected in full on 15 October.
+    const paid = await propose(sale('EB-P', '2026-10-12', 'FR', '100.00', '20', '20.00'));
+    await post(paid.proposal);
+    const receivable = (
+      await s.list<{ id: string; account: string; document: string | null }>(
+        s.owner,
+        'openItems.list',
+        {},
+      )
+    ).find((item) => item.account === '4111' && item.document === 'EB-P')!;
+    const rate = { code: 'EUR', amount: '120.00', rate: '5.0900', rateId: 'BNR/EUR/2026-10-09' };
+    await s.book(
+      'ledger.general',
+      journal(
+        (await s.evidence('stripe.pdf')).id,
+        [
+          { account: '5124', side: 'D', amount: '610.80', currency: rate },
+          {
+            account: '4111',
+            side: 'C',
+            amount: '610.80',
+            openItem: receivable.id,
+            currency: rate,
+          },
+        ],
+        { date: '2026-10-15' },
+      ),
+    );
+    // Half of it credited on 20 October at 5.1000: 60 € = 306 lei, nothing left to reduce: the
+    // consumer is owed 60 € (462, OMFP 1802/2014's function of 462), at the note's lei.
+    const half = await credit(await note('CN-P', 'EB-P', '2026-10-20', '50.00'), paid.documentId);
+    expect(half.issues.map((issue) => issue.code)).toContain('CREDIT_REFUND');
+    expect(lines(half)).toEqual(['C 462 306.00', 'C 704 -255.00', 'C 4423 -51.00']);
+    expect(half.effect!.lines[0]!.currency).toMatchObject({ amount: '60.00', rate: '5.1000' });
+    await post(half);
+    const refund = (
+      await s.list<{ id: string; account: string; balance: string; currency: string }>(
+        s.owner,
+        'openItems.list',
+        {},
+      )
+    ).find((item) => item.account === '462')!;
+    expect(refund).toMatchObject({ currency: 'EUR' });
+  });
 
   test('an unbooked invoice to an EU consumer is proposed as invoices.euConsumer', async () => {
     const { s, file } = await company();

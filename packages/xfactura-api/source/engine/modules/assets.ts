@@ -14,6 +14,7 @@ import {
 } from '../db/schema';
 import { appendAudit, type Actor, type Commands } from '../kernel/commands';
 import { loadState } from '../kernel/state';
+import { lockedThrough } from './yearend';
 
 export const disposalInput = z
   .object({
@@ -135,6 +136,14 @@ export class Assets {
         .from(assets)
         .where(and(eq(assets.companyId, actor.companyId), eq(assets.number, input.number)));
       requireCondition(!existing, 'ASSET_NUMBER', 'Numărul de inventar este deja folosit.', 409);
+      // A card in use by the end of a locked year changes that year's register and its closing.
+      const locked = await lockedThrough(tx, actor.companyId, input.commissionedOn);
+      requireCondition(
+        !locked,
+        'YEAR_CLOSED',
+        `Exercițiul ${locked?.from} – ${locked?.to} este închis, cu registrul imobilizărilor din închiderea lui: un mijloc fix pus în funcțiune până la ${locked?.to} se înregistrează după redeschiderea exercițiului (years.reopen.request), iar unul găsit la inventar, ca plus de inventar, la data inventarului.`,
+        409,
+      );
       const id = this.commands.ids();
       await tx.insert(assets).values({
         id,
@@ -177,6 +186,14 @@ export class Assets {
         'DISPOSAL_DATE',
         'Scoaterea din funcțiune nu poate preceda punerea în funcțiune.',
       );
+      // A disposal by the end of a locked year changes that year's register and its closing.
+      const locked = await lockedThrough(tx, actor.companyId, input.date);
+      requireCondition(
+        !locked,
+        'YEAR_CLOSED',
+        `Exercițiul ${locked?.from} – ${locked?.to} este închis, cu mijlocul fix în funcțiune la închiderea lui: o scoatere din funcțiune până la ${locked?.to} se înregistrează după redeschiderea exercițiului (years.reopen.request).`,
+        409,
+      );
       const [file] = await tx
         .select({ id: evidence.id })
         .from(evidence)
@@ -210,7 +227,8 @@ export class Assets {
   }
 
   /** Records an asset's fiscal basis (art. 28): a new version replaces the earlier from the next
-   * computation of the profit tax. */
+   * computation of the profit tax. A locked year's computations are done, so a version recorded
+   * after its close changes none of them, nor its closing (`years.opening` does not compare it). */
   recordFiscal(actor: Actor, key: string, input: z.infer<typeof fiscalInput>) {
     return this.commands.run(actor, key, 'assets.recordFiscal', input, 'write', async (tx) => {
       const [card] = await tx

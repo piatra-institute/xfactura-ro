@@ -96,7 +96,7 @@ export const payrollSources: readonly LegalSource[] = [
       {
         url: 'https://xfactura.invalid/owner-download/HOTARARE_A_295_27_03_2025.pdf',
         sha256: '4a8b0b28973042320b527cd3ede75cf063df9303c0e4438f4c9ecd46d7a06821',
-        retrievedOn: '2026-11-06',
+        retrievedOn: '2026-11-05',
         mediaType: 'application/pdf',
       },
     ],
@@ -114,7 +114,7 @@ export const payrollSources: readonly LegalSource[] = [
       {
         url: 'https://xfactura.invalid/owner-download/LEGE_A_165_10_07_2018.pdf',
         sha256: '1c317221d4a9f56cb6a5b73ec8f2c6d237388aa0d7eb74a8ed123d0d6d856199',
-        retrievedOn: '2026-11-06',
+        retrievedOn: '2026-11-05',
         mediaType: 'application/pdf',
       },
     ],
@@ -132,7 +132,7 @@ export const payrollSources: readonly LegalSource[] = [
       {
         url: 'https://xfactura.invalid/owner-download/LEGE_A_346_05_06_2002.pdf',
         sha256: '5fa17ae3fa5af8ac17e8f04086db594a7ac46d4c933ac05fcdfeaf38d3353686',
-        retrievedOn: '2026-11-06',
+        retrievedOn: '2026-11-05',
         mediaType: 'application/pdf',
       },
     ],
@@ -361,6 +361,12 @@ export const payrollClauses: readonly Clause[] = [
     CF,
     'normele metodologice, titlul V, pct. 41 alin. (1)',
     'Prestațiile suportate din bugetul asigurărilor sociale de stat, exceptate de la CAS potrivit art. 141 lit. a), cuprind și indemnizațiile pentru incapacitate temporară de muncă acordate în baza Legii nr. 346/2002.',
+  ),
+  located(
+    'ANAF/D112-0726:rotunjiri',
+    'ANAF/D112-0726',
+    'p. 5: Rotunjirile',
+    'Contribuțiile se rotunjesc aritmetic (de la 0,5 se adaugă 1 la partea întreagă), cu excepția valorilor subunitare ale contribuției, care se întregesc la 1 leu; câmpurile calculate cu parametri sunt întregi pozitive, cele subunitare rotunjite la 1.',
   ),
   located(
     'ANAF/D112-0726:accidente',

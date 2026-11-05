@@ -11,7 +11,7 @@ import type { Clause, LegalSource } from './index';
  * functions of accounts 446 and 442 (OMFP nr. 1.802/2014), ANAF's SAF-T codes of the acquisitions
  * and imports, INS's Intrastat orders, norms, deadline and XML guide (www.intrastat.ro), OUG nr.
  * 41/2022 on RO e-Transport as ANAF publishes its 2022 text, and the Commission's VIES REST
- * contract. Read on 5 and 6 November 2026.
+ * contract. Read on 5 November 2026.
  */
 
 const intrastat = 'http://www.intrastat.ro';

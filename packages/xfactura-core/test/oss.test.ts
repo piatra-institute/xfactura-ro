@@ -594,6 +594,9 @@ describe('invoices.euConsumer', () => {
           currency: 'EUR',
           documentId: ORIGINAL,
           balanceBani: 59500n,
+          // EB-1: 119.00 € at 5.0000.
+          balanceMinor: 11900n,
+          normalSide: 'D',
         });
         (item.fxRates as Map<string, unknown>).set('EUR', [
           {

@@ -1,10 +1,14 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import path from 'node:path';
 import { DukIntegrator } from '../../source/engine/adapters/declaration-validator';
+import { readViesAnswer } from '../../source/engine/adapters/vies';
+import type { TaxLedgerEntry } from 'xfactura-core/kernel';
+import { reversedAttributes } from 'xfactura-core/ro/treatments/ledger';
+import { cashRegisterSections } from '../../source/engine/modules/retail';
 import type { ProposalView } from '../../source/engine/kernel/views';
 import { invoiceXml } from './fixtures/invoice';
 import { service, type Issued } from './fixtures/sales';
-import { scenario, type Scenario } from './scenario';
+import { journal, scenario, type Scenario } from './scenario';
 
 const open: Scenario[] = [];
 afterAll(async () => {
@@ -301,5 +305,218 @@ describe('D394 from the books', () => {
         ),
       ),
     ).toContain('VAT_PERIOD');
+  });
+});
+
+describe('D394 with intra-community acquisitions', () => {
+  const d394Options = {
+    caen: '4779',
+    phone: '0236123456',
+    representative: {
+      name: 'Popescu Ana',
+      role: 'Administrator',
+      address: 'Galați, Str. Lungă 10',
+    },
+    preparer: {
+      kind: 'company',
+      cui: '14399840',
+      name: 'Contabil Exemplu SRL',
+      capacity: 'Împuternicit',
+    },
+    consultation: true,
+    affiliates: false,
+  };
+  const summary = (artifact: Artifact) => JSON.parse(artifact.steps[0]!.detail!);
+
+  // An intra-community acquisition of goods (AIC-…) is D390's (type A), not a domestic
+  // operation: D394 leaves it out and is prepared.
+  test('an intra-community acquisition in the period leaves D394 preparable', async () => {
+    const vies = {
+      async check(query: { countryCode: string; vatNumber: string }) {
+        const raw = new TextEncoder().encode(
+          JSON.stringify({
+            countryCode: query.countryCode,
+            vatNumber: query.vatNumber,
+            requestDate: '2026-10-08T10:00:00.000Z',
+            valid: true,
+            requestIdentifier: 'WAPIAAAAX4X2K9L',
+            name: 'Companie DE123456788',
+            address: 'Hauptstraße 1, Berlin',
+          }),
+        );
+        return { raw, result: readViesAnswer(raw, query as never) };
+      },
+    };
+    const s = await scenario({
+      cui,
+      clock: () => Date.parse('2026-11-05T09:00:00Z'),
+      vies: vies as never,
+    });
+    open.push(s);
+    const file = async (filename: string, text: string) =>
+      (
+        await s.invoke<{ id: string }>(s.owner, 'evidence.record', {
+          filename,
+          mediaType: 'application/xml',
+          base64: Buffer.from(text).toString('base64'),
+        })
+      ).id;
+    for (const [axis, value] of Object.entries({
+      'vat.status': 'normal_vat',
+      'vat.period': 'monthly',
+      'policy.stock.valuation': 'fifo',
+      'policy.stock.inventory': 'permanent',
+      'policy.stock.negative': 'refuse',
+    }))
+      await s.invoke(s.owner, 'profile.record', {
+        axis,
+        value,
+        effectiveFrom: '2026-01-01',
+        evidenceId: (await s.evidence(`${axis}.pdf`)).id,
+      });
+    await s.invoke(s.owner, 'fx.importBnr', {
+      evidenceId: await file(
+        'nbr.xml',
+        `<?xml version="1.0" encoding="utf-8"?>
+  <DataSet xmlns="http://www.bnr.ro/xsd"><Header><Publisher>National Bank of Romania</Publisher><PublishingDate>2026-10-15</PublishingDate><MessageType>DR</MessageType></Header>
+  <Body><Subject>Reference rates</Subject><OrigCurrency>RON</OrigCurrency>
+  <Cube date="2026-10-07"><Rate currency="EUR">5.0800</Rate></Cube>
+  </Body></DataSet>`,
+      ),
+    });
+    await s.invoke(s.owner, 'sales.seller.record', {
+      details: {
+        name: 'Exemplu Comerț SRL',
+        vatId: `RO${cui}`,
+        address: {
+          lines: ['Str. Portului 3'],
+          city: 'Galați',
+          subdivision: 'RO-GL',
+          country: 'RO',
+        },
+      },
+    });
+    await s.book(
+      'ledger.general',
+      journal(
+        (await s.evidence('deschidere.pdf')).id,
+        [
+          { account: '5121', side: 'D', amount: '20000.00' },
+          { account: '1012', side: 'C', amount: '20000.00' },
+        ],
+        { date: '2026-01-01', purpose: 'opening' },
+      ),
+    );
+    const warehouse = await s.invoke<{ id: string }>(s.owner, 'stock.warehouses.create', {
+      code: 'D1',
+      name: 'Depozit',
+      keeper: 'Ionescu Maria',
+    });
+    const coffee = await s.invoke<{ id: string }>(s.owner, 'stock.items.create', {
+      code: 'CAF-1',
+      name: 'Cafea verde',
+      unit: 'KGM',
+      account: '371',
+      nc8: '09011100',
+    });
+    const xml = invoiceXml({
+      company: cui,
+      number: 'DE-77',
+      date: '2026-10-07',
+      deliveryDate: '2026-10-05',
+      direction: 'purchase',
+      currency: 'EUR',
+      category: 'K',
+      country: 'DE',
+      counterparty: 'DE123456788',
+      rate: '0',
+      tax: '0.00',
+      gross: '1000.00',
+      net: '1000.00',
+      lines: [{ rate: '0', net: '1000.00', name: 'Cafea verde' }],
+    }).replace(
+      /(<cac:TaxSubtotal>.*?<cac:TaxCategory><cbc:ID>[EKG]<\/cbc:ID><cbc:Percent>0<\/cbc:Percent>)/,
+      `$1<cbc:TaxExemptionReasonCode>VATEX-EU-IC</cbc:TaxExemptionReasonCode>`,
+    );
+    const bought = await s.invoke<{ id: string }>(s.owner, 'invoices.import', {
+      evidenceId: await file('DE-77.xml', xml),
+    });
+    const acquisition = await s.propose('goods.euAcquisition', {
+      documentId: bought.id,
+      account: '371',
+      arrangement: 'standard',
+      rate: 'standard',
+      deduction: 'full',
+      stock: {
+        warehouseId: warehouse.id,
+        lines: [{ line: '1', itemId: coffee.id, quantity: '10' }],
+      },
+    });
+    expect(acquisition.issues.filter((issue) => issue.severity === 'block')).toEqual([]);
+    await s.post(
+      await s.approve(
+        acquisition,
+        s.reviewer,
+        acquisition.issues.filter((i) => i.severity === 'ack').map((i) => i.code),
+      ),
+    );
+    const d394 = await s.invoke<Artifact>(s.owner, 'declarations.prepare', {
+      kind: 'D394',
+      period: '2026-10',
+      options: d394Options,
+    });
+    expect(summary(d394).operations).toEqual([]);
+  });
+});
+
+describe('D394 op2 after a storno of a Z report', () => {
+  // A Z report's tax entries share its count of receipts; a storno mirrors them with the count
+  // negated (`signedAttributes`), as ledger.reverse writes them.
+  const report = (
+    entryId: string,
+    documentId: string,
+    register: string,
+    receipts: string,
+    base: bigint,
+    tax: bigint,
+  ): TaxLedgerEntry => ({
+    entryId,
+    seq: 1,
+    taxNo: 1,
+    key: 'vat',
+    direction: 'output',
+    code: 'S-21',
+    baseBani: base,
+    taxBani: tax,
+    deductibleBani: 0n,
+    ledgerBani: tax,
+    taxPoint: '2026-10-05' as TaxLedgerEntry['taxPoint'],
+    exigibility: '2026-10-05' as TaxLedgerEntry['taxPoint'],
+    documentId,
+    partyId: null,
+    originTaxEntry: null,
+    attributes: { documentType: 'zreport', register, number: '1', receipts },
+  });
+  const storno = (entry: TaxLedgerEntry, entryId: string): TaxLedgerEntry => ({
+    ...entry,
+    entryId,
+    key: `reversal:${entry.key}`,
+    baseBani: -entry.baseBani,
+    taxBani: -entry.taxBani,
+    ledgerBani: -entry.ledgerBani,
+    originTaxEntry: `${entry.entryId}:${entry.key}`,
+    attributes: reversedAttributes(entry.attributes),
+  });
+  const leu = (bani: bigint) => bani / 100n;
+
+  test('a reversed report counts neither its receipts nor its register', () => {
+    const first = report('e1', 'z1', '4400000001', '3', 100000n, 21000n);
+    const second = report('e2', 'z2', '4400000002', '5', 50000n, 10500n);
+    const months = cashRegisterSections([first, second, storno(first, 'e3')], leu, []);
+    expect(months).toEqual([
+      expect.objectContaining({ month: 10, registers: 1, receipts: 5, total: 605 }),
+    ]);
+    // Reversed alone, the month holds nothing to declare.
+    expect(cashRegisterSections([first, storno(first, 'e3')], leu, [])).toEqual([]);
   });
 });

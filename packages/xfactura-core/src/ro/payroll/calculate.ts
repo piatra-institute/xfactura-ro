@@ -210,9 +210,15 @@ function compute(input: PayInput, rules: RuleContext) {
   const at = monthStart(input.month);
   const param = <T>(key: string) => rules.param<T>(key, 'payroll_month_start', at);
   const amountRounding = param<'leu_half_up'>('ro.payroll.amount_rounding');
-  const contribution = (amount: bigint, percent: string) => {
+  const rounded = (amount: bigint, percent: string) => {
     const { numerator, denominator } = ofPercent(amount, percent);
     return toLeu(numerator, denominator, amountRounding);
+  };
+  // A contribution is whole lei, rounded arithmetically, and one below a leu is a leu, as D112
+  // declares it (its structure: "valorile subunitare ale contribuției se întregesc la 1 leu").
+  const contribution = (amount: bigint, percent: string) => {
+    const lei = rounded(amount, percent);
+    return lei === 0n && ofPercent(amount, percent).numerator > 0n ? 100n : lei;
   };
   const minimumWage = BigInt(param<string>('ro.payroll.minimum_wage')) * 100n;
   const steps: PayStep[] = [];
@@ -388,7 +394,7 @@ function compute(input: PayInput, rules: RuleContext) {
     ),
     [code(deducts ? 'art.78(2)(a)' : 'art.78(2)(b)'), code('norme.art.64.pct.4')],
   );
-  const tax = step('tax', contribution(taxBase, param<string>('ro.payroll.income_tax.rate')), [
+  const tax = step('tax', rounded(taxBase, param<string>('ro.payroll.income_tax.rate')), [
     code('art.64(1)(b)'),
   ]);
   const net = step('net', cash - cas - cass - tax - input.unionDues, []);

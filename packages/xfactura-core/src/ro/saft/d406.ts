@@ -36,8 +36,8 @@ import { whtTaxCodes } from '../withholding/codes';
  * Where ANAF's documents differ, this module follows the validator: AccountID is an integer
  * (analytical accounts are written as digits, 4111.01 as 411101); BaseRate is a fraction of 1;
  * UOMStandard repeats UOMBase with the factor 1, the structure's 0 not being in the validator's
- * unit list; a periodic file has at least one account, customer, supplier, VAT code, unit and
- * product; SalesInvoices, PurchaseInvoices and Payments have at least one document when written
+ * unit list; a periodic file has at least one account and VAT code, and its Customers,
+ * Suppliers, UOMTable and Products sections, possibly empty (a shop's month on Z reports alone); SalesInvoices, PurchaseInvoices and Payments have at least one document when written
  * (the XSD requires the sections, possibly empty). GeneralLedgerEntries/NumberOfEntries counts
  * transaction lines, as ANAF's guide says (the XSD's annotation counts transactions). Payment
  * lines are D for collections and C for payments, as the guide and ANAF's answers say.
@@ -111,7 +111,11 @@ export type D406PartyIdentity =
   /** 02: an entity of a non-EU state by its tax code. */
   | { kind: 'foreign'; country: string; code: string }
   /** 03: an individual by CNP, or a non-resident individual by NIF. */
-  | { kind: 'person'; cnp: string };
+  | { kind: 'person'; cnp: string }
+  /** A code the company assigns uniquely to a partner that declares none: 04 for an individual
+   * (an online consumer), 05 with its country for an economic operator of another Member State
+   * not registered for VAT, 06 for one outside the Union (S.C.1). Letters and digits only. */
+  | { kind: 'internal'; code: string; country?: string; eu?: boolean };
 
 /** Foreign-currency side of an amount: CurrencyCode, CurrencyAmount and ExchangeRate. */
 export type D406Currency = { code: string; amount: string; rate: string };
@@ -322,6 +326,10 @@ export function d406PartyId(identity: D406PartyIdentity): string {
       return `02${identity.country}${identity.code}`;
     case 'person':
       return `03${identity.cnp}`;
+    case 'internal':
+      return identity.country
+        ? `${identity.eu ? '05' : '06'}${identity.country}${identity.code}`
+        : `04${identity.code}`;
   }
 }
 
@@ -1449,13 +1457,13 @@ export function checkD406(model: D406): D406Check[] {
       );
   });
 
-  // Partners.
+  // Partners. The sections are mandatory, their entries 0..* (ANAF's definitions, MF.C.1 and
+  // MF.S.1; the schema's minOccurs="0"): a shop selling only on Z reports has no customer in a
+  // month, and ANAF's validator accepts its file with Customers empty.
   for (const [kind, label, customer] of [
     ['customers', 'client', true],
     ['suppliers', 'furnizor', false],
   ] as const) {
-    if (!model[kind].length)
-      error('D406_PARTIES', kind, `Fișierul periodic cuprinde cel puțin un ${label}.`);
     const seen = new Set<string>();
     model[kind].forEach((entry, index) => {
       const path = `${kind}.${index}`;
@@ -1553,13 +1561,9 @@ export function checkD406(model: D406): D406Check[] {
   });
 
   // Invoices and payments.
+  // Products are 0..* (ANAF's definitions, MF.P.1): a month with no invoice, a shop's on Z
+  // reports alone, has none, and ANAF's validator accepts its file with Products empty.
   const products = new Map(model.products.map((product) => [product.code, product]));
-  if (!model.products.length)
-    error(
-      'D406_PRODUCTS',
-      'products',
-      'Fișierul periodic cuprinde cel puțin un produs sau serviciu (Products).',
-    );
   model.products.forEach((product, index) => {
     const path = `products.${index}`;
     textField(`${path}.code`, product.code, 'codul produsului', 70, true);

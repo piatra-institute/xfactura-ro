@@ -20,9 +20,9 @@ import { adjustmentCodes } from '../exempt/codes';
 import { inventoryDocumentKind, inventoryListSchema } from '../yearend/documents';
 import type { InventoryAccounts } from '../yearend/parameters';
 import { compareStock, nextDay, registerAt, type StockDifference } from './count';
-import { expenseFor } from './parameters';
+import { expenseFor, productionStockAccounts } from './parameters';
 import { stockAccountsAt } from './treatments';
-import { StockBook, stockPolicyAt } from './valuation';
+import { retailMethodAt, StockBook, stockPolicyAt } from './valuation';
 
 /*
  * The stock differences of a count (OMF nr. 2.861/2009 pct. 39–41; OMFP nr. 1.802/2014 pct. 95
@@ -168,6 +168,8 @@ export const stockCount: Treatment<StockCountInput> = {
       all: true,
       catalogue: true,
       flows: { from: nextDay(input.date), to: '9999-12-31' as LocalDate },
+      // A shortage leaves at what its position held on the count's date.
+      dated: true,
     },
   }),
   evaluate(input, loaded, rules) {
@@ -202,7 +204,18 @@ export const stockCount: Treatment<StockCountInput> = {
         );
       rows.push({ row: parsed.data.stock });
     });
-    const policy = stockPolicyAt(loaded, input.date);
+    const warehouses = new Map(
+      [...loaded.warehouses.values()].map((store) => [store.code, store.id]),
+    );
+    // The warehouses the lists count by quantity are kept at cost (one at retail price is counted
+    // by `retail.count`).
+    const counted = rows.flatMap((list) =>
+      (list.row ?? []).flatMap((row) => {
+        const id = row.warehouse ? warehouses.get(row.warehouse) : undefined;
+        return id ? [id] : [];
+      }),
+    );
+    const policy = stockPolicyAt(loaded, input.date, counted);
     if (Array.isArray(policy)) issues.push(...policy);
     if (issues.length || Array.isArray(policy)) return { effect: null, issues };
     const accounts = stockAccountsAt(rules, input.date);
@@ -217,9 +230,6 @@ export const stockCount: Treatment<StockCountInput> = {
       input.date,
     );
     const items = new Map([...loaded.stockItems.values()].map((item) => [item.code, item]));
-    const warehouses = new Map(
-      [...loaded.warehouses.values()].map((store) => [store.code, store.id]),
-    );
     const comparison = compareStock(
       rows.flatMap((list) => list.row ?? []),
       registerAt(loaded),
@@ -289,6 +299,7 @@ export const stockCount: Treatment<StockCountInput> = {
             difference.value,
             lines.length - 1,
             policy,
+            expense,
           ),
         );
         lines.push({
@@ -356,6 +367,15 @@ export const stockCount: Treatment<StockCountInput> = {
             ),
           );
       } else if (payer) {
+        // A product or work in progress (G4) was not bought: the VAT deducted on what it was
+        // made of is adjusted on its production cost, at its sale category's rate.
+        if (productionStockAccounts.some((account) => item.account.startsWith(account)))
+          issues.push(
+            ack(
+              'PRODUCT_SHORTAGE_VAT',
+              `Lipsa la ${item.code} este un produs al companiei: TVA dedusă pentru materialele și serviciile încorporate se ajustează pe costul lui de producție, la cota categoriei lui (${item.vatCategory ?? 'necunoscută'}); cotele intrărilor nu sunt urmărite. Confirmați.`,
+            ),
+          );
         // Its deducted VAT is adjusted at the acquisition's rate: the lot's date, or, for an
         // average pool whose acquisition cannot be told, the count's (pct. 78 alin. (13)).
         for (const move of book.moves.slice(before)) {
@@ -585,7 +605,12 @@ export const stockIntermittent: Treatment<IntermittentInput> = {
           `Politica contabilă la ${input.date} nu este inventarul intermitent (policy.stock.inventory).`,
         ),
       );
-    if (profileAt(loaded, 'policy.stock.retail', input.date) === 'retail')
+    if (
+      profileAt(loaded, 'policy.stock.retail', input.date) === 'retail' ||
+      [...loaded.warehouses.keys()].some(
+        (id) => retailMethodAt(loaded, id, input.date) === 'retail',
+      )
+    )
       issues.push(
         block(
           'STOCK_INTERMITTENT_RETAIL',

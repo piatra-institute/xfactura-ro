@@ -133,7 +133,10 @@ const rateOf = (code: string) => {
 /** Codes reported elsewhere (D390, D300 rows 3 and 7): services across the border. Services
  * bought from outside the Union, whose VAT the company owes (art. 307 alin. (2)), are not in D390:
  * D394 lists them with partners of type 4 (`abroad`). */
-const crossBorder = /^(RC|EXP)-/;
+/** Services across the border (RC, EXP), and goods across it (G3): intra-community acquisitions
+ * (AIC, in D390) and imports (IMP, IMP-DEF, the customs declaration's), none an operation on the
+ * national territory D394 lists (OPANAF nr. 3.769/2015 art. 1). */
+const crossBorder = /^(RC|EXP|AIC|IMP)-/;
 /** Exempt operations and adjustments: D394 lists the taxable operations on the national
  * territory and the acquisitions from persons not registered for VAT (OPANAF nr. 3.769/2015,
  * anexa nr. 2, secțiunea a 2-a), not exempt supplies nor the regularizations of rd. 34. */

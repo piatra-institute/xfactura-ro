@@ -10,6 +10,7 @@ import {
   type D398Correction,
   type D398Supply,
 } from 'xfactura-core/ro/declarations/d398';
+import { obligationDue } from 'xfactura-core/ro/obligations';
 import { ossCode, quarterRange, type OssReturnRule } from 'xfactura-core/ro/oss';
 import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
 import type { LocalDate } from 'xfactura-core/time';
@@ -104,13 +105,9 @@ async function ossEntries(tx: Transaction, companyId: string, end: string) {
       rateType: attributes.rateType === 'reduced' ? 'reduced' : 'standard',
       rate: attributes.rate!,
       currency: attributes.currency ?? 'RON',
-      // A reversal mirrors the entry's lei with the opposite sign: so do its euro.
-      baseMinor:
-        BigInt(attributes.baseMinor ?? '0') *
-        (tax.baseBani < 0n === BigInt(attributes.baseMinor ?? '0') < 0n ? 1n : -1n),
-      taxMinor:
-        BigInt(attributes.taxMinor ?? '0') *
-        (tax.taxBani < 0n === BigInt(attributes.taxMinor ?? '0') < 0n ? 1n : -1n),
+      // Signed as the entry is: a credit note's and a storno's negative (`signedAttributes`).
+      baseMinor: BigInt(attributes.baseMinor ?? '0'),
+      taxMinor: BigInt(attributes.taxMinor ?? '0'),
     };
   });
   return {
@@ -236,12 +233,22 @@ export function d398Declaration(
       const { oss, returns, facts, seller, inputs } = await inputsOf(tx, companyId, period);
       const { start, end } = quarterRange(period);
       let rule: OssReturnRule | null = null;
+      const context = await rules(tx, companyId);
       try {
-        rule = (await rules(tx, companyId)).param<OssReturnRule>(
-          'ro.vat.oss.return',
-          'reporting_period_start',
-          start,
-        );
+        rule = context.param<OssReturnRule>('ro.vat.oss.return', 'reporting_period_start', start);
+      } catch (error) {
+        if (!(error instanceof RuleGapError)) throw error;
+        problems.push({ code: 'RULE_GAP', message: error.message });
+      }
+      // The filing deadline: the last calendar day of the month after the quarter, not moved
+      // (art. 315 alin. (6^1), `ro.deadline.D398`).
+      let due: LocalDate | null = null;
+      try {
+        due = obligationDue(
+          'D398',
+          { start: start as LocalDate, end: end as LocalDate },
+          context,
+        ).due;
       } catch (error) {
         if (!(error instanceof RuleGapError)) throw error;
         problems.push({ code: 'RULE_GAP', message: error.message });
@@ -453,7 +460,7 @@ export function d398Declaration(
           rates: [...rates]
             .filter(([, found]) => found)
             .map(([key, found]) => ({ key, rate: found!.rate, date: found!.date })),
-          due: quarterRange(period).end as LocalDate,
+          due,
         },
       };
     },

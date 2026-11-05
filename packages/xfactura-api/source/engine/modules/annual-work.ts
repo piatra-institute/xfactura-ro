@@ -3,9 +3,10 @@ import type { z } from 'zod';
 import type { JsonValue } from 'xfactura-core/kernel';
 import type { DraftFacts } from 'xfactura-core/ro/annual/documents';
 import { recordedAt } from 'xfactura-core/ro/determinations';
+import { obligationDue } from 'xfactura-core/ro/obligations';
 import type { QuestionRequest } from 'xfactura-core/questions/kinds';
-import type { RuleContext } from 'xfactura-core/rules';
-import type { LocalDate } from 'xfactura-core/time';
+import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
+import { addDays, type LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
 import { artifactEvents, artifacts, fiscalYears, profileFacts } from '../db/schema';
 import type { Actor, Commands } from '../kernel/commands';
@@ -100,23 +101,29 @@ export function annualAsk(
 /** A worklist item of the annual statements, before the worklist adds its id. */
 export type AnnualWork = {
   subjectId: string;
-  severity: 'block' | 'warn';
+  severity: 'block' | 'warn' | 'info';
   year: number;
   kind: string;
   message: string;
   details: { [key: string]: JsonValue };
 };
 
+/** How many days before the statements' deadline their missing answers block the worklist. */
+const blockingDays = 30;
+
 /**
  * The annual statements' worklist (core `ro/annual/agent.ts`): for each financial year ended in
- * the last fifteen months, the statement its size category gives and what it waits on. The
- * half-year report is the obligation closure's (`SF.halfyear`), on the calendar.
+ * the last fifteen months, the statement its size category gives and what it waits on. While
+ * ANAF has published no format for the year (a FORMAT_GAP), the answers are information: the
+ * statement cannot be prepared yet. With the format, they warn, and block from 30 days before
+ * the deadline (`ro.deadline.S1005`, `ro.deadline.S1003`), or when the deadline is not sourced.
+ * The half-year report is the obligation closure's (`SF.halfyear`), on the calendar.
  */
 export async function annualWork(
   tx: Transaction,
   companyId: string,
   today: LocalDate,
-  _rules: RuleContext,
+  rules: RuleContext,
 ): Promise<AnnualWork[]> {
   const items: AnnualWork[] = [];
   const since = `${Number(today.slice(0, 4)) - 2}-01-01`;
@@ -157,18 +164,47 @@ export async function annualWork(
     const { wanted, prepared } = await wantedOf(tx, companyId, kind, year);
     if (prepared && ['submitted', 'accepted'].includes(prepared.state)) continue;
     if (!wanted.length) continue;
+    let format = true;
+    try {
+      statementConfigs[kind].format(year);
+    } catch {
+      format = false;
+    }
+    let due: string | null = null;
+    try {
+      due = obligationDue(
+        kind,
+        { start: `${year}-01-01` as LocalDate, end: `${year}-12-31` as LocalDate },
+        rules,
+      ).due;
+    } catch (error) {
+      if (!(error instanceof RuleGapError)) throw error;
+    }
+    const severity = !format
+      ? 'info'
+      : due && addDays(today, blockingDays) < due
+        ? 'warn'
+        : 'block';
     items.push({
       subjectId: `${kind}|${year}`,
-      severity: 'block',
+      severity,
       year,
       kind,
       message: `${kind} ${year} așteaptă ${wanted.length} răspunsuri: ${wanted
         .map((request) => `${request.kind} ${request.subject.id}`)
-        .join(', ')}.`,
+        .join(', ')}.${
+        !format
+          ? ` ANAF nu a publicat formatul situațiilor pentru ${year}: ele se întocmesc după publicarea lui.`
+          : due
+            ? ` Termenul de depunere: ${due}.`
+            : ''
+      }`,
       details: {
         kind,
         year,
         wanted: wanted.map((request) => ({ kind: request.kind, subject: request.subject.id })),
+        format,
+        due,
       },
     });
   }

@@ -178,7 +178,7 @@ export const retailCoefficientSpec: ReviewSpec = {
   minutes: 15,
   readings: {
     engine:
-      'Coeficientul lunii se calculează din soldul de la începutul exercițiului al adaosului (378) și al mărfurilor (371) plus intrările cumulate de la începutul exercițiului până la sfârșitul lunii, fără TVA neexigibilă, și se aplică ieșirilor lunii fără TVA.',
+      'Coeficientul lunii se calculează din soldul de la începutul exercițiului al adaosului (378) și al mărfurilor (371) plus intrările cumulate de la începutul exercițiului până la sfârșitul lunii, fără TVA neexigibilă, și se aplică ieșirilor cumulate de la începutul exercițiului fără TVA, minus adaosul descărcat în lunile anterioare, astfel încât adaosul rămas să fie coeficientul înmulțit cu stocul (alin. (7)).',
     alternative:
       'Coeficientul lunii se calculează din soldurile de la începutul lunii și intrările lunii (practica obișnuită), fără TVA neexigibilă, și se aplică ieșirilor lunii fără TVA.',
   },

@@ -37,6 +37,7 @@ import {
 import { recoverLosses, type LossVintage } from '../profit/losses';
 import type { InterestCeiling, MinimumTax } from '../profit/parameters';
 import { vehicleAnswer, vehicleDeduction } from '../vehicles';
+import { taxDue } from './due';
 
 /*
  * The profit tax of a Romanian legal person (Codul fiscal title II) under the quarterly system
@@ -262,6 +263,24 @@ const euroInLei = (euro: string, rate: FxRate) =>
     'halfAwayFromZero',
   );
 
+/**
+ * The turnover of a year the books do not keep, as the latest cited answer about its figures
+ * states it (`year.figures`: its `turnover`, else its `netTurnover`), in bani; null without one.
+ */
+function statedTurnover(loaded: Loaded, year: number): bigint | null {
+  const stated = [...loaded.answers.values()]
+    .filter((record) => record.kind === 'year.figures' && record.subject.id === String(year))
+    .sort((a, b) => (`${a.answeredAt}|${a.answerId}` < `${b.answeredAt}|${b.answerId}` ? -1 : 1))
+    .flatMap((record) => {
+      const values = (record.value as { values?: Record<string, JsonValue> } | null)?.values ?? {};
+      const figure = values.turnover ?? values.netTurnover;
+      return typeof figure === 'string' && /^(0|[1-9]\d{0,15})(\.\d{1,2})?$/.test(figure)
+        ? [parseMoney(figure, 'RON')]
+        : [];
+    });
+  return stated.at(-1) ?? null;
+}
+
 /** The scope checks the bridge does not make: the minimum turnover tax and the interest limit. */
 function scopeIssues(
   loaded: Loaded,
@@ -280,17 +299,21 @@ function scopeIssues(
     period.yearStart,
   );
   const kept = loaded.years.some((year) => year.kind === 'financial' && year.to === period.before);
-  if (!kept)
+  // The previous year's turnover: the books' gross 70x credits when they keep the year, else what
+  // a cited answer about it states (`year.figures`).
+  const gross = kept
+    ? (loaded.turnover.get(turnoverKey(queries.previous)) ?? [])
+        .filter((row) => !row.account.startsWith('709'))
+        .reduce((sum, row) => sum + row.credit, 0n)
+    : statedTurnover(loaded, period.year - 1);
+  if (gross === null)
     issues.push({
       code: 'PROFIT_MINIMUM_TAX',
       severity: 'ack',
-      message: `Impozitul minim pe cifra de afaceri (art. 18^1) se aplică celor cu o cifră de afaceri în anul precedent de peste ${minimum.turnoverEur} euro; registrele nu cuprind anul ${period.year - 1}: confirmați că cifra lui de afaceri nu a depășit pragul.`,
+      message: `Impozitul minim pe cifra de afaceri (art. 18^1) se aplică celor cu o cifră de afaceri în anul precedent de peste ${minimum.turnoverEur} euro; registrele nu cuprind anul ${period.year - 1}: confirmați că cifra lui de afaceri nu a depășit pragul, sau citați răspunsul despre cifrele anului (year.figures, turnover).`,
       details: { clause: `${CODE}:art.18^1(1),(17)` },
     });
   else {
-    const gross = (loaded.turnover.get(turnoverKey(queries.previous)) ?? [])
-      .filter((row) => !row.account.startsWith('709'))
-      .reduce((sum, row) => sum + row.credit, 0n);
     const rate = eurOn(rates, period.before);
     if (gross > 0n && !rate)
       issues.push(
@@ -508,11 +531,14 @@ export const profitTax: Treatment<ProfitTaxInput> = {
       let losses: LossVintage[] | null = earlier ? vintagesOf(earlier.losses.after) : null;
       if (!losses) {
         const stated = answersOf<ProfitLossesAnswer>(loaded, 'profit.losses').get('losses');
+        // In whole lei, as D101 declares them, rounded as its rows are (half up), never cut.
+        const wholeLei = (amount: string) =>
+          divRound(parseMoney(amount, 'RON'), 100n, 'halfAwayFromZero');
         if (stated)
           losses = stated.value.vintages.map((item) => ({
             year: item.year,
-            amount: parseMoney(item.amount, 'RON') / 100n,
-            remaining: parseMoney(item.remaining, 'RON') / 100n,
+            amount: wholeLei(item.amount),
+            remaining: wholeLei(item.remaining),
           }));
         else
           issues.push(
@@ -584,7 +610,9 @@ export const profitTax: Treatment<ProfitTaxInput> = {
               severity: 'ack',
               message: `Trimestrul ${quarter} nu are impozitul pe profit calculat: confirmați că se calculează cumulat acum.`,
             });
-      if (!input.legalReserve && books.capital > 0n && bridge.bases.profitBeforeTax > 0n)
+      // Asked only while the reserve has room: once it reached a fifth of the capital at the
+      // year's start, nothing is set aside and nothing is deducted (art. 183, art. 26 alin. (1)).
+      if (!input.legalReserve && bridge.bases.reserveRoom > 0n && bridge.bases.profitBeforeTax > 0n)
         issues.push({
           code: 'LEGAL_RESERVE',
           severity: 'ack',
@@ -592,7 +620,7 @@ export const profitTax: Treatment<ProfitTaxInput> = {
         });
       if (issues.some((issue) => issue.severity === 'block')) return { effect: null, issues };
       return {
-        effect: booking(input, period, regime, bridge, declared, losses ?? []),
+        effect: booking(input, period, regime, bridge, declared, losses ?? [], rules),
         issues,
       };
     } catch (error) {
@@ -610,6 +638,7 @@ function booking(
   bridge: BridgeResult,
   declared: bigint,
   before: readonly LossVintage[],
+  rules: RuleContext,
 ): Effect {
   const rows = bridge.rows;
   const annual = period.quarter === null;
@@ -651,6 +680,7 @@ function booking(
     annual ? due : due > 0n ? due : 0n,
     '691',
     bridge,
+    rules,
   );
 }
 
@@ -673,6 +703,7 @@ function effectOf(
   amount: bigint,
   counter: '691' | '1174',
   bridge: BridgeResult | null,
+  rules: RuleContext,
 ): Effect {
   const bani = amount * 100n;
   const label =
@@ -755,6 +786,16 @@ function effectOf(
         currency: 'RON',
         normalSide: owed ? 'C' : 'D',
         mayReverse: false,
+        // Due with its return: a quarter's D100 (art. 41 alin. (1)), the year's (and its
+        // rectification's) D101.
+        ...(period.quarter === null
+          ? taxDue('D101', `${period.year}-01`, `${period.year}-12`, rules)
+          : taxDue(
+              'D100.profit',
+              `${period.year}-${pad(period.quarter * 3 - 2)}`,
+              `${period.year}-${pad(period.quarter * 3)}`,
+              rules,
+            )),
       },
     ],
   };
@@ -889,7 +930,7 @@ function rectify(
       message: `Rectificarea anului ${period.year} schimbă pierderile reportate ale anilor următori${derived.P40a !== BigInt(latest.rows.P40a ?? '0') ? '' : ' doar dacă pierderea s-a schimbat'}: verificați calculele anilor de după el.`,
     });
     return {
-      effect: effectOf(input, period, position, lines, derived.P48 - previous, '1174', null),
+      effect: effectOf(input, period, position, lines, derived.P48 - previous, '1174', null, rules),
       issues,
     };
   } catch (error) {

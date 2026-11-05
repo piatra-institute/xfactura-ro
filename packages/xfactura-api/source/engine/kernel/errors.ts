@@ -11,6 +11,10 @@ export type WireError = {
 // Others surface as ACCOUNTING_INVARIANT with the code in the details.
 const invariants: Record<string, [code: string, message: string]> = {
   closed_period: ['PERIOD_CLOSED', 'Perioada este închisă.'],
+  later_period_closed: [
+    'LATER_CLOSED',
+    'O lună ulterioară este închisă: înregistrarea se datează după ultima lună închisă.',
+  ],
   tax_period_locked: ['TAX_PERIOD_LOCKED', 'Perioada fiscală a fost declarată și este blocată.'],
   binding: ['APPROVAL_REQUIRED', 'Aprobați versiunea exactă înainte de contabilizare.'],
   stale_version: ['STALE', 'Propunerea s-a schimbat. Reîncărcați datele.'],
@@ -27,6 +31,22 @@ const invariants: Record<string, [code: string, message: string]> = {
   ],
   segregation: ['SEGREGATION', 'Separarea atribuțiilor cere aprobarea altei persoane.'],
   year_overlap: ['YEAR_OVERLAP', 'Exercițiul se suprapune cu unul existent.'],
+  year_contiguous: [
+    'YEAR_GAP',
+    'Exercițiul începe a doua zi după un exercițiu existent sau se încheie în ajunul unuia.',
+  ],
+  year_before_opening: [
+    'YEAR_BEFORE_OPENING',
+    'Registrele se deschid cu nota de deschidere a primului exercițiu: stornați-o înainte de a adăuga un exercițiu anterior.',
+  ],
+  opening_first_year: [
+    'OPENING_EARLIER_YEAR',
+    'Nota de deschidere se înregistrează doar la începutul primului exercițiu al registrelor.',
+  ],
+  asset_locked_year: [
+    'YEAR_CLOSED',
+    'Exercițiul este închis: registrul mijloacelor fixe al lui nu se mai modifică.',
+  ],
   identity_taken: [
     'DOCUMENT_BOOKED',
     'Același document, din altă sursă, are deja o propunere deschisă sau contabilizată.',

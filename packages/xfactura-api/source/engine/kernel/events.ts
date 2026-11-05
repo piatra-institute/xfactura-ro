@@ -48,6 +48,8 @@ export const refKinds = [
   'stockItem',
   'warehouse',
   'cashRegister',
+  'bom',
+  'workOrder',
 ] as const;
 export type RefKind = (typeof refKinds)[number];
 export type Ref = { kind: RefKind; id: string };
@@ -94,6 +96,9 @@ const resultIds: Partial<Record<string, RefKind>> = {
   'stock.items.create': 'stockItem',
   'stock.warehouses.create': 'warehouse',
   'retail.registers.record': 'cashRegister',
+  'production.boms.record': 'bom',
+  'production.orders.open': 'workOrder',
+  'production.orders.close': 'workOrder',
   'payroll.employees.record': 'employee',
   'payroll.runs.prepare': 'payrollRun',
   'payroll.garnishments.record': 'garnishment',

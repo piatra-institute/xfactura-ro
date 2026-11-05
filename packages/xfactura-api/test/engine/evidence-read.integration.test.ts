@@ -413,4 +413,69 @@ describe('evidence for agents', () => {
       risk: 'low',
     });
   });
+
+  // A file holds what the records that use it hold: an employment contract a payroll record
+  // cites is payroll and personal data, which evidence.read gave any agent granted it.
+  test('a file the payroll cites reaches only those who may read payroll and personal data', async () => {
+    await s.invoke(s.owner, 'profile.record', {
+      axis: 'employer',
+      value: 'yes',
+      effectiveFrom: '2026-01-01',
+      evidenceId: (await record('angajator.txt', 'text/plain', 'Decizie angajator')).id,
+    });
+    const contract = await record('cim-popescu.txt', 'text/plain', 'Contract individual de muncă');
+    const employee = await s.invoke<{ id: string }>(s.owner, 'payroll.employees.record', {
+      lastName: 'Popescu',
+      firstName: 'Ana',
+      cnp: '2900501170024',
+      healthFund: 'RO-GL',
+    });
+    const reader = await s.engine.agents.authenticate(
+      (await issue(['evidence.read', 'evidence.list'])).token,
+      s.company.id,
+    );
+    // Before the payroll cites it, the file is an ordinary one.
+    expect((await read({ id: contract.id, mode: 'meta' }, reader)).filename).toBe(
+      'cim-popescu.txt',
+    );
+    await s.invoke(s.owner, 'payroll.contracts.record', {
+      employeeId: employee.id,
+      number: 'CIM-1',
+      startDate: '2026-01-05',
+      effectiveFrom: '2026-01-05',
+      dailyHours: 8,
+      mainJob: true,
+      occupation: '251201',
+      baseSalary: '6000',
+      evidenceId: contract.id,
+    });
+    expect(await s.refused(read({ id: contract.id, mode: 'meta' }, reader))).toMatchObject({
+      code: 'EVIDENCE_CLASS',
+      details: { dataClasses: ['evidence', 'payroll', 'personal'] },
+    });
+    const listed = await s.list<{
+      id: string;
+      hash: string;
+      filename: string | null;
+      mediaType: string;
+      size: number;
+      dataClasses: string[];
+      redacted?: true;
+    }>(reader, 'evidence.list');
+    expect(listed.find((item) => item.id === contract.id)).toEqual({
+      id: contract.id,
+      hash: contract.hash,
+      filename: null,
+      mediaType: 'text/plain',
+      size: expect.any(Number),
+      dataClasses: ['evidence', 'payroll', 'personal'],
+      redacted: true,
+    });
+    expect(listed.filter((item) => item.dataClasses.length === 1).length).toBeGreaterThan(0);
+    // People who record payroll read it; a viewer does not.
+    expect((await read({ id: contract.id, mode: 'meta' })).filename).toBe('cim-popescu.txt');
+    expect((await s.refused(s.invoke(s.viewer, 'evidence.get', { id: contract.id })))?.code).toBe(
+      'EVIDENCE_CLASS',
+    );
+  });
 });

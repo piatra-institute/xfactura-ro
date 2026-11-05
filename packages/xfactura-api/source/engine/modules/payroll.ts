@@ -40,14 +40,15 @@ import {
 import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
 import {
   addDays,
+  addMonths,
   bucharestDate,
   monthEnd,
   monthStart,
   type LocalDate,
   type Month,
 } from 'xfactura-core/time';
-import { sha256 } from '../adapters/object-store';
 import type { Transaction } from '../db/database';
+import { PartyIdentities } from '../db/identity';
 import {
   artifactEvents,
   artifacts,
@@ -501,6 +502,8 @@ export type StoredBenefit = ReturnType<typeof benefitRecord>[number];
 
 export class Payroll {
   private readonly sealer: Sealer;
+  /** Individuals' party identifiers: a keyed hash of the CNP, never the CNP. */
+  private readonly identities: PartyIdentities;
 
   constructor(
     private readonly commands: Commands,
@@ -508,10 +511,11 @@ export class Payroll {
     private readonly rules: (tx: Transaction, companyId: string) => Promise<RuleContext>,
   ) {
     this.sealer = new Sealer(secret);
+    this.identities = new PartyIdentities(secret);
   }
 
-  /** An employee, as a party (the same identity as a buyer who is this person) with the CNP
-   * sealed. */
+  /** An employee, as a party (the same identity as a buyer who is this person: the keyed hash of
+   * the CNP) with the CNP sealed. */
   recordEmployee(actor: Actor, key: string, input: z.infer<typeof employeeInput>) {
     return this.commands.run(actor, key, 'payroll.employees.record', input, 'write', async (tx) => {
       requireCondition(isValidCnp(input.cnp), 'CNP', 'CNP-ul nu este valid.');
@@ -521,7 +525,7 @@ export class Payroll {
         'BIRTH_DATE',
         'Pentru acest CNP, data nașterii se completează explicit.',
       );
-      const taxId = `cnp:${sha256(new TextEncoder().encode(input.cnp))}`;
+      const taxId = this.identities.ofCnp(actor.companyId, input.cnp);
       const name = `${input.lastName} ${input.firstName}`;
       const [existing] = await tx
         .select()
@@ -587,7 +591,7 @@ export class Payroll {
           'Partenerul trebuie să fie o persoană fizică.',
         );
         requireCondition(
-          !party.taxId || party.taxId === `cnp:${sha256(new TextEncoder().encode(input.cnp))}`,
+          !party.taxId || party.taxId === this.identities.ofCnp(actor.companyId, input.cnp),
           'CNP_MISMATCH',
           'CNP-ul nu corespunde partenerului.',
         );
@@ -1959,19 +1963,24 @@ export class Payroll {
   }
 
   /** The REGES-ONLINE events of the contracts, those since the register replaced Revisal (the
-   * `since` of `ro.deadline.reges.start` on `today`; earlier events were Revisal's). */
+   * `since` of `ro.deadline.reges.start` on `today`; earlier events were Revisal's). Past the
+   * rules' review horizon (a new year before its rollover), `since` is read in the latest month
+   * the register reviews: the day the register started is past, and a contract begun before it
+   * stays Revisal's whatever the new year's rules say. */
   async regesDue(tx: Transaction, companyId: string, today: LocalDate) {
     const rules = await this.rules(tx, companyId);
     let since: string | null = null;
-    try {
-      since = rules.param<{ since: string }>(
-        'ro.deadline.reges.start',
-        'payroll_month_start',
-        monthStart(today.slice(0, 7) as Month),
-      ).since;
-    } catch (error) {
-      if (!(error instanceof RuleGapError)) throw error;
-    }
+    for (let back = 0; back <= 24 && since === null; back++)
+      try {
+        since = rules.param<{ since: string }>(
+          'ro.deadline.reges.start',
+          'payroll_month_start',
+          monthStart(addMonths(today.slice(0, 7) as Month, -back)),
+        ).since;
+      } catch (error) {
+        if (!(error instanceof RuleGapError)) throw error;
+        if (error.gap.reason !== 'BEYOND_HORIZON') break;
+      }
     const rows = await tx
       .select()
       .from(employmentTerms)

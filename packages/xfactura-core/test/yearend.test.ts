@@ -590,4 +590,17 @@ describe('the closing snapshot', () => {
       ).map((item) => `${item.section}:${item.id}`),
     ).toEqual(['items:i1', 'carried:losses']);
   });
+
+  test('a fiscal basis recorded after the close is no difference; the depreciation held is', () => {
+    const asset = snapshot().assets[0]!;
+    expect(
+      snapshotDifferences(snapshot(), snapshot({ assets: [{ ...asset, fiscal: 2 }] })),
+    ).toEqual([]);
+    expect(
+      snapshotDifferences(
+        snapshot(),
+        snapshot({ assets: [{ ...asset, fiscal: 2, depreciated: '120' }] }),
+      ).map((item) => `${item.section}:${item.id}`),
+    ).toEqual(['assets:a']);
+  });
 });

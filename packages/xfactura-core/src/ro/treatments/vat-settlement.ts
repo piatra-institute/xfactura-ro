@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { vatPeriodOf, type Effect, type Issue, type LineSpec, type Treatment } from '../../kernel';
 import { formatMoney } from '../../money';
-import { monthEnd, parseLocalDate, type LocalDate, type Month } from '../../time';
+import { monthEnd, monthStart, parseLocalDate, type LocalDate, type Month } from '../../time';
+import { taxDue } from './due';
 
 const block = (code: string, message: string, path?: string): Issue => ({
   code,
@@ -32,6 +33,16 @@ export const vatSettlementInput = z
   })
   .strict();
 export type VatSettlementInput = z.infer<typeof vatSettlementInput>;
+
+/** The first day of a VAT period. */
+function vatPeriodStart(period: string): LocalDate {
+  const quarter = /^(\d{4})-Q([1-4])$/.exec(period);
+  if (quarter)
+    return monthStart(
+      `${quarter[1]}-${String(Number(quarter[2]) * 3 - 2).padStart(2, '0')}` as Month,
+    );
+  return monthStart(period as Month);
+}
 
 /** The last day of a VAT period. */
 export function vatPeriodEnd(period: string): LocalDate {
@@ -73,7 +84,7 @@ export const vatSettlement: Treatment<VatSettlementInput> = {
         }
       : {}),
   }),
-  evaluate(input, loaded) {
+  evaluate(input, loaded, rules) {
     const issues: Issue[] = [];
     const end = vatPeriodEnd(input.period);
     if (!loaded.evidence.has(input.evidenceId))
@@ -137,6 +148,10 @@ export const vatSettlement: Treatment<VatSettlementInput> = {
       currency: 'RON',
       normalSide: payable ? ('C' as const) : ('D' as const),
       mayReverse: false,
+      // VAT payable is due with the period's return (art. 323 alin. (1)); a refund has no due date.
+      ...(payable
+        ? taxDue('D300', vatPeriodStart(input.period).slice(0, 7), end.slice(0, 7), rules)
+        : {}),
     };
     let remaining = payable ? balance : -balance;
     if (payable && input.offsetCarried)

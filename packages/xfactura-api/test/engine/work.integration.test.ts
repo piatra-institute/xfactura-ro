@@ -152,6 +152,7 @@ describe('the worklist', () => {
     expect(kinds(page.items)).toEqual([
       'bank.unexplained',
       'close.finding',
+      'closure.need',
       'determination.missing',
       'document.unproposed',
       'evidence.unused',
@@ -221,7 +222,8 @@ describe('the worklist', () => {
     ).toEqual(movements.map((movement) => movement.id).sort());
     expect(of(page.items, 'evidence.unused').map((item) => item.subject.id)).toEqual([unread.id]);
     expect(find('spv.message', '4100')).toMatchObject({ severity: 'info' });
-    // Returns not filed: overdue ones block.
+    // Returns not filed: overdue ones block, prepared in the engine or recorded as filed
+    // outside it (obligation.filed).
     expect(find('obligation.due', 'D300|2026-09')).toMatchObject({
       severity: 'block',
       due: '2026-10-26',
@@ -232,6 +234,16 @@ describe('the worklist', () => {
           by: 'agent',
           inputHint: { kind: 'D300', period: '2026-09' },
         },
+        {
+          operation: 'questions.ask',
+          by: 'agent',
+          inputHint: {
+            kind: 'obligation.filed',
+            subject: { kind: 'obligation', id: 'D300/2026-09' },
+            params: { kind: 'D300', period: '2026-09' },
+          },
+        },
+        { operation: 'questions.answer', by: 'human' },
       ],
     });
     expect(find('obligation.due', 'D300|2026-10')).toMatchObject({ severity: 'info' });
@@ -286,6 +298,8 @@ describe('the worklist', () => {
     });
     expect(steps(all, 'obligation.due', 'D300|2026-09')).toEqual({
       'declarations.prepare/agent': false,
+      'questions.ask/agent': true,
+      'questions.answer/human': false,
     });
     // by agent: only items with a step it may take; by human: the rest of what waits on a person.
     const forAgent = await items(s, bot, { by: 'agent' });
@@ -296,7 +310,8 @@ describe('the worklist', () => {
     expect(of(forAgent, 'proposal.blocked')).toHaveLength(1);
     for (const kind of ['document.unproposed', 'bank.unexplained', 'proposal.awaitingApproval'])
       expect(of(forAgent, kind)).toEqual([]);
-    expect(forAgent.map((item) => item.subject.id)).not.toContain('D300|2026-09');
+    // It may not prepare the overdue return, but may ask a person whether it was filed outside.
+    expect(forAgent.map((item) => item.subject.id)).toContain('D300|2026-09');
     const forPeople = await items(s, bot, { by: 'human' });
     expect(forPeople.map((item) => item.subject.id)).toContain('D300|2026-09');
     expect(of(forPeople, 'bank.unexplained').length).toBe(of(all, 'bank.unexplained').length);
@@ -765,5 +780,255 @@ describe('the close and the worklist', () => {
       after.filter((item) => item.period === '2026-09' && item.kind === 'close.finding'),
     ).toEqual([]);
     expect((await period()).map((item) => item.subject.id)).toEqual(['2026-10']);
+  });
+});
+
+describe('returns, the closure and the months on the worklist', () => {
+  /** A company whose engine time the test moves, with the facts given from 1 January 2026. */
+  async function moving(facts: Record<string, string>, options: { year?: number } = {}) {
+    const time = { now: Date.UTC(2026, 10, 10, 10) };
+    const s = await scenario({ clock: () => time.now, ...options });
+    open.push(s);
+    for (const [axis, value] of Object.entries(facts))
+      await s.invoke(s.owner, 'profile.record', {
+        axis,
+        value,
+        effectiveFrom: `${options.year ?? 2026}-01-01`,
+        evidenceId: (await s.evidence(`${axis}.pdf`)).id,
+      });
+    const at = (date: string) => {
+      time.now = Date.parse(`${date}T10:00:00Z`);
+    };
+    return { s, at };
+  }
+  const payer = { 'vat.status': 'normal_vat', 'vat.period': 'monthly' };
+
+  test('an overdue return stays until it is filed, in the engine or recorded as filed outside it', async () => {
+    const { s } = await moving(payer);
+    const returns = async () =>
+      of(await items(s, s.owner, { kinds: ['obligation.due'] }), 'obligation.due');
+    // January's D300, overdue since 25 February: nine months on, it still blocks (the worklist
+    // read only the last three months' returns, and dropped it in June).
+    const january = (await returns()).find((item) => item.subject.id === 'D300|2026-01');
+    expect(january).toMatchObject({ severity: 'block', details: { status: 'overdue' } });
+    // It was filed through ANAF's portal: a person records it with the receipt, and it leaves
+    // the worklist; the calendar shows it filed. Any return the calendar lists may be.
+    const ask = january!.next.find((step) => step.operation === 'questions.ask')!;
+    const asked = await s.invoke<{ id: string }>(s.owner, 'questions.ask', ask.inputHint);
+    await s.invoke(s.reviewer, 'questions.answer', {
+      questionId: asked.id,
+      value: {
+        registrationNumber: 'INTERNT-412345678-2026',
+        submittedOn: '2026-02-24',
+        evidenceId: (await s.evidence('recipisa-d300-2026-01.pdf')).id,
+      },
+    });
+    expect((await returns()).map((item) => item.subject.id)).not.toContain('D300|2026-01');
+    expect((await returns()).map((item) => item.subject.id)).toContain('D394|2026-01');
+    const calendar = await s.list<{ kind: string; status: string; artifactId: string | null }>(
+      s.owner,
+      'obligations.calendar',
+      { from: '2026-01', to: '2026-01' },
+    );
+    expect(calendar.find((item) => item.kind === 'D300')).toMatchObject({
+      status: 'filed',
+      artifactId: null,
+    });
+    // The record takes any return of the calendar, never another kind.
+    for (const params of [
+      { kind: 'D112', period: '2026-03' },
+      { kind: 'S1005', period: '2026' },
+      { kind: 'D406', period: '2026-Q1' },
+    ])
+      await s.invoke(s.owner, 'questions.ask', {
+        kind: 'obligation.filed',
+        subject: { kind: 'obligation', id: `${params.kind}/${params.period}` },
+        params,
+      });
+    expect(
+      (
+        await s.refused(
+          s.invoke(s.owner, 'questions.ask', {
+            kind: 'obligation.filed',
+            subject: { kind: 'obligation', id: 'X1/2026' },
+            params: { kind: 'X1', period: '2026' },
+          }),
+        )
+      )?.code,
+    ).toBeDefined();
+  });
+
+  test('next year’s returns block no close of this year: information, a warning once begun, blocking once ended', async () => {
+    const { s, at } = await moving({ ...payer, 'entity.form': 'srl', employer: 'no' });
+    const of2027 = async () =>
+      (await items(s, s.owner, { kinds: ['obligation.due'] }))
+        .filter((item) => item.subject.id.startsWith('D300|2027'))
+        .map((item) => `${item.subject.id} ${item.severity}`);
+    // From November the worklist reaches January 2027, whose VAT period and deadline wait on the
+    // rules of 2027 (beyond the register's horizon until the rollover): nothing to do yet.
+    const [january] = (await items(s, s.owner, { kinds: ['obligation.due'] })).filter(
+      (item) => item.subject.id === 'D300|2027-01',
+    );
+    expect(january).toMatchObject({
+      severity: 'info',
+      details: { status: 'blocked', waiting: 2027 },
+      next: [],
+    });
+    expect(january!.message).toContain('așteaptă regulile pentru 2027');
+    // The year's returns ending later wait the same; none of 2027's blocks December's close.
+    at('2027-01-05');
+    expect(await of2027()).toEqual(['D300|2027-01 warn', 'D300|2027-02 info', 'D300|2027-03 info']);
+    expect(
+      (await items(s, s.owner, { severity: 'block' })).filter((item) =>
+        item.subject.id.includes('|2027'),
+      ),
+    ).toEqual([]);
+    // January ended without the rules of 2027: its return blocks January's close.
+    at('2027-02-03');
+    expect((await of2027())[0]).toBe('D300|2027-01 block');
+  });
+
+  test('the month in progress is checked once it ends, as its close is', async () => {
+    const { s, at } = await moving({});
+    const { id: note } = await s.evidence('factura-abonament.pdf');
+    await s.book(
+      'ledger.general',
+      journal(
+        note,
+        [
+          { account: '628', side: 'D', amount: '200.00' },
+          { account: '1012', side: 'C', amount: '200.00' },
+        ],
+        { date: '2026-10-20' },
+      ),
+    );
+    // A subscription for November and December, its first half released at November's end.
+    await s.book('deferrals.defer', {
+      date: '2026-10-31',
+      account: '628',
+      amount: '200.00',
+      from: '2026-11',
+      months: 2,
+      partyId: (await s.party('Furnizor SRL')).id,
+      evidenceId: note,
+    });
+    const findings = async () =>
+      (await items(s, s.owner, { kinds: ['close.finding', 'period.unclosed'] })).map(
+        (item) => `${item.kind} ${item.subject.id} ${item.severity}`,
+      );
+    // On 10 November: October is to close; November's release is not due before its end.
+    expect((await findings()).filter((item) => item.includes('2026-11'))).toEqual([]);
+    expect(await findings()).toContain('period.unclosed 2026-10 warn');
+    at('2026-12-02');
+    expect(await findings()).toContain(
+      'close.finding 2026-11/deferrals.release/DEFERRAL_DUE block',
+    );
+  });
+
+  test('the closure’s needs reach the worklist, each with its question', async () => {
+    const { s, at } = await moving(payer);
+    const needs = async () =>
+      of(await items(s, s.owner, { kinds: ['closure.need'] }), 'closure.need');
+    const closure = await s.invoke<{ status: string; needs: { id: string }[] }>(
+      s.owner,
+      'closure.evaluate',
+      { from: '2026-01', to: '2026-12' },
+    );
+    expect(closure.status).toBe('NEEDS_EVIDENCE');
+    const found = await needs();
+    for (const need of closure.needs)
+      expect(found.map((item) => item.subject.id)).toContain(need.id);
+    // A scope fact no single return depends on: a warning, its question the next step.
+    expect(
+      found.find((item) => item.subject.id === 'profile.fact|profile:activity.goods'),
+    ).toMatchObject({
+      severity: 'warn',
+      details: { fact: 'activity.goods', blocks: [] },
+      next: [
+        {
+          operation: 'questions.ask',
+          by: 'agent',
+          inputHint: { kind: 'profile.fact', subject: { kind: 'profile', id: 'activity.goods' } },
+        },
+      ],
+    });
+    // One that decides returns names them.
+    expect(
+      found.find((item) => item.subject.id === 'profile.fact|profile:employer')?.details.blocks,
+    ).toContain('D112|2026-01');
+    // Next year's VAT period: nobody can answer it before 2027.
+    expect(
+      found.find((item) => item.subject.id === 'profile.fact|profile:vat.period/2027'),
+    ).toMatchObject({
+      severity: 'info',
+      next: [],
+    });
+    // Answered, the need leaves.
+    await s.invoke(s.owner, 'profile.record', {
+      axis: 'activity.goods',
+      value: 'no',
+      effectiveFrom: '2026-01-01',
+      evidenceId: (await s.evidence('activitate.pdf')).id,
+    });
+    expect((await needs()).map((item) => item.subject.id)).not.toContain(
+      'profile.fact|profile:activity.goods',
+    );
+    void at;
+  });
+
+  test('the annual statements’ answers: information while ANAF has no format, a warning, blocking near the deadline', async () => {
+    const { s, at } = await moving(
+      { 'entity.form': 'srl', 'size.category': 'micro' },
+      { year: 2025 },
+    );
+    for (const kind of ['financial', 'fiscal'])
+      await s.invoke(s.owner, 'years.create', {
+        kind,
+        label: '2026',
+        from: '2026-01-01',
+        to: '2026-12-31',
+      });
+    const annual = async () =>
+      of(await items(s, s.owner, { kinds: ['annual.input'] }), 'annual.input').map(
+        (item) => `${item.subject.id} ${item.severity} ${item.details.format} ${item.details.due}`,
+      );
+    // FY2025's statements (S1005, J14.0.3), due on 2 June 2026 (30 May a Saturday, 1 June a holiday).
+    at('2026-03-10');
+    expect(await annual()).toEqual(['S1005|2025 warn true 2026-06-02']);
+    at('2026-05-15');
+    expect(await annual()).toEqual(['S1005|2025 block true 2026-06-02']);
+    // FY2026's: ANAF has published no package (FORMAT_GAP), so its answers do not block.
+    at('2027-01-05');
+    expect(await annual()).toEqual([
+      'S1005|2025 block true 2026-06-02',
+      'S1005|2026 info false 2027-05-31',
+    ]);
+  });
+
+  test('a contract begun under Revisal stays off the worklist once 2027 began, before its rules are read', async () => {
+    const { s, at } = await moving({ employer: 'yes' });
+    const person = await s.invoke<{ id: string }>(s.owner, 'payroll.employees.record', {
+      lastName: 'Marin',
+      firstName: 'Elena',
+      cnp: '2950301123457',
+      healthFund: 'RO-CJ',
+    });
+    await s.invoke(s.owner, 'payroll.contracts.record', {
+      employeeId: person.id,
+      number: 'CIM-3',
+      startDate: '2025-03-01',
+      effectiveFrom: '2025-03-01',
+      dailyHours: 8,
+      mainJob: true,
+      occupation: '251201',
+      baseSalary: '6000',
+    });
+    const reges = async () =>
+      of(await items(s, s.owner, { kinds: ['payroll.due'] }), 'payroll.due');
+    // Begun in 2025, before REGES-ONLINE replaced Revisal on 1 January 2026: nothing to send.
+    expect(await reges()).toEqual([]);
+    // In 2027 the register's start date is past its review horizon, yet the day is past.
+    at('2027-01-05');
+    expect(await reges()).toEqual([]);
   });
 });

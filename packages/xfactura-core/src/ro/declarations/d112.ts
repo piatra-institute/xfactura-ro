@@ -9,13 +9,19 @@ import { minimumExemptions, type MinimumExemption } from '../payroll/calculate';
 /**
  * The monthly return of social contributions, income tax and the nominal record of insured
  * persons (D112, "Declarația privind obligațiile de plată a contribuțiilor sociale, impozitului pe
- * venit și evidența nominală a persoanelor asigurate") for reporting months 07/2026–12/2026, after
- * ANAF's XML structure D112_A7.2.6 v7 of 07.09.2026 (structura_D112_0726_070926).
+ * venit și evidența nominală a persoanelor asigurate") for reporting months 01/2026–12/2026, after
+ * ANAF's XML structure D112_A7.2.6 v7: of 07.09.2026 (structura_D112_0726_070926) from 07/2026,
+ * and of 30.03.2026 (structura_D112_0126_300326) for 01–06/2026, which differs only in its
+ * parameters and in the medical-leave fields 07/2026 added.
  *
- * The structure's parameters are those of 07–12/2026: the minimum wage of 4325 lei, the 200 lei
- * OUG 89/2025 leaves out of the bases, and the working days (NZL) of 2026. Earlier months have their
- * own structures (4050 lei, 300 lei); ANAF's validator (DUKIntegrator, D112Validator J27.0.7 of
- * 09.10.2026) applies this one's table to months after 12/2026 too, for which none is published.
+ * The structures' parameters are their months': the minimum wage of 4050 lei and the 300 lei OUG
+ * 156/2024 leaves out of the bases in 01–06/2026, 4325 lei and 200 lei (OUG 89/2025) in 07–12/2026,
+ * and the working days (NZL) of 2026. The payroll's own (`ro.payroll.minimum_wage`,
+ * `ro.payroll.minimum_wage_relief`) are given with the model and must be the structure's. ANAF's
+ * validator (DUKIntegrator, D112Validator J27.0.8 of 03.11.2026) applies the 07/2026 table to
+ * months after 12/2026 too, for which none is published; J26.0.3 of 22.04.2026 validates 01–06/2026
+ * as ANAF published it for them. Medical leave and work accidents in 01–06/2026 are refused: their
+ * fields there (without D_9a–D_21a, B3_7D, C2_155–C2_156) are not written.
  * Where the XSD of 14.08.2026 and the validator differ, this module follows the validator: the
  * XSD types A_1, A_sal1 and A_sal2 as 1–30, lacks obligations 458 and 459, and allows asigExc only
  * 0–1.
@@ -347,6 +353,10 @@ export type D112 = {
     healthFund: D112HealthFund;
   };
   insured: D112Insured[];
+  /** The payroll's minimum wage and the relief of the minimum wage for the month, whole lei, from
+   * the rule register: they must be the structure's (salMin, Suma300 or Suma200). The structure's
+   * own when absent. */
+  parameters?: { minimumWage: number; relief: number };
 };
 
 /** The structure's computed fields of one insured person. */
@@ -480,39 +490,68 @@ export type D112Calculation = {
 };
 
 const maxAmount = 999_999_999_999_999n; // N(15)
-// Structure parameters for 07–12/2026: salMin, Suma200 (OUG 89/2025), pCAM, Cipens, Cisan.
-const minimumWage = 4325n;
-const reliefLimit = 200n;
+// pCAM, Cipens, Cisan: the same in both structures of 2026.
 const camRate = 225n; // basis points
 const casRate = 2500n;
 const cassRate = 1000n;
-/** NZL of the months covered, as the structure and the validator count them. */
-const workingDaysByMonth: Readonly<Record<number, number>> = {
-  7: 23,
-  8: 21,
-  9: 22,
-  10: 22,
-  11: 20,
-  12: 21,
-};
 
 const periodIndex = (year: number, month: number) => year * 12 + month - 1;
-const firstPeriod = periodIndex(2026, 7);
-const lastPeriod = periodIndex(2026, 12);
 
-function isPeriod(period: D112['period']): boolean {
-  if (!Number.isInteger(period.year) || !Number.isInteger(period.month)) return false;
-  if (period.month < 1 || period.month > 12) return false;
+/** A structure of ANAF's for a range of reporting months: its salMin, the relief it leaves out of
+ * the bases (Suma300, Suma200) and the NZL of its months, as the structure and the validator
+ * count them. */
+type Structure = {
+  first: number;
+  last: number;
+  /** Months, for the messages. */
+  label: string;
+  minimumWage: bigint;
+  relief: bigint;
+  /** The text granting the relief. */
+  reliefText: string;
+  workingDays: Readonly<Record<number, number>>;
+  /** The medical-leave fields 07/2026 added are written. */
+  sickLeave: boolean;
+};
+const structures: readonly Structure[] = [
+  // structura_D112_0126_300326: salMin 4050, Suma300 (OUG 156/2024 as OUG 89/2025 kept it).
+  {
+    first: periodIndex(2026, 1),
+    last: periodIndex(2026, 6),
+    label: 'ianuarie–iunie 2026',
+    minimumWage: 4050n,
+    relief: 300n,
+    reliefText: 'OUG nr. 156/2024',
+    workingDays: { 1: 18, 2: 20, 3: 22, 4: 20, 5: 20, 6: 21 },
+    sickLeave: false,
+  },
+  // structura_D112_0726_070926: salMin 4325, Suma200 (OUG 89/2025).
+  {
+    first: periodIndex(2026, 7),
+    last: periodIndex(2026, 12),
+    label: 'iulie–decembrie 2026',
+    minimumWage: 4325n,
+    relief: 200n,
+    reliefText: 'OUG nr. 89/2025',
+    workingDays: { 7: 23, 8: 21, 9: 22, 10: 22, 11: 20, 12: 21 },
+    sickLeave: true,
+  },
+];
+
+/** The structure of a reporting month, or undefined outside 01/2026–12/2026. */
+function structureOf(period: D112['period']): Structure | undefined {
+  if (!Number.isInteger(period.year) || !Number.isInteger(period.month)) return undefined;
+  if (period.month < 1 || period.month > 12) return undefined;
   const index = periodIndex(period.year, period.month);
-  return index >= firstPeriod && index <= lastPeriod;
+  return structures.find((item) => item.first <= index && index <= item.last);
 }
 
 const periodMessage =
-  'Declarația D112 în această structură se depune pentru lunile iulie–decembrie 2026.';
+  'Declarația D112 se scrie pentru lunile ianuarie–decembrie 2026, în structurile ANAF publicate pentru ele.';
 
-/** The structure's namespace for a reporting month of 07/2026–12/2026. */
+/** The structure's namespace for a reporting month of 01/2026–12/2026. */
 export function d112Namespace(period: D112['period']): string {
-  if (!isPeriod(period)) throw new DomainError('D112_PERIOD', periodMessage);
+  if (!structureOf(period)) throw new DomainError('D112_PERIOD', periodMessage);
   return 'mfp:anaf:dgti:declaratie_unica:declaratie:v7';
 }
 
@@ -531,9 +570,10 @@ function contribution(base: bigint, rate: bigint): bigint {
   return rounded === 0n && product > 0n ? 1n : rounded;
 }
 
-/** The structure's limit sum: (salMin − Suma200) × A_8 / NZL, rounded; the validator truncates. */
-function structureLimit(daysWorked: number, workingDays: number) {
-  const product = (minimumWage - reliefLimit) * BigInt(daysWorked);
+/** The structure's limit sum: (salMin − Suma300 or Suma200) × A_8 / NZL, rounded; the validator
+ * truncates. */
+function structureLimit(structure: Structure, daysWorked: number, workingDays: number) {
+  const product = (structure.minimumWage - structure.relief) * BigInt(daysWorked);
   const days = BigInt(workingDays);
   const floor = product / days;
   return { rounded: 2n * (product % days) >= days ? floor + 1n : floor, floor };
@@ -858,7 +898,7 @@ export function calculateD112(model: D112): D112Calculation {
   const leave = medicalLeave(people);
   return {
     namespace,
-    workingDays: workingDaysByMonth[model.period.month]!,
+    workingDays: structureOf(model.period)!.workingDays[model.period.month]!,
     insured,
     obligations,
     counts: {
@@ -1399,8 +1439,29 @@ export function checkD112(model: D112): D112Check[] {
       error('D112_TEXT', path, `Câmpul ${label} are cel mult ${max} caractere.`);
   };
   const { period, declarant, employer } = model;
-  const validPeriod = isPeriod(period);
-  if (!validPeriod) error('D112_PERIOD', 'period', periodMessage);
+  const structure = structureOf(period);
+  const validPeriod = structure !== undefined;
+  if (!structure) error('D112_PERIOD', 'period', periodMessage);
+  else if (
+    model.parameters &&
+    (BigInt(model.parameters.minimumWage) !== structure.minimumWage ||
+      BigInt(model.parameters.relief) !== structure.relief)
+  )
+    error(
+      'D112_PARAMETERS',
+      'parameters',
+      `Salariul minim (${model.parameters.minimumWage} lei) și suma neimpozabilă (${model.parameters.relief} lei) din registrul de reguli diferă de cele ale structurii ANAF pentru ${structure.label} (${structure.minimumWage} lei, ${structure.relief} lei).`,
+    );
+  if (
+    structure &&
+    !structure.sickLeave &&
+    model.insured.some((insured) => insured.sickLeave?.length || insured.accidents?.cases)
+  )
+    error(
+      'D112_SICK_PERIOD',
+      'insured',
+      `Concediile medicale și accidentele de muncă din ${structure.label} nu sunt acoperite: câmpurile lor în structura acelor luni nu se scriu.`,
+    );
 
   // d_rec and tip_rec.
   if (model.reason !== undefined) {
@@ -1470,7 +1531,7 @@ export function checkD112(model: D112): D112Check[] {
   for (const problem of problems) error(problem.code, problem.path, problem.message);
   const invalid = new Set(problems.map((problem) => problem.path.split('.').slice(0, 2).join('.')));
 
-  const workingDays = validPeriod ? workingDaysByMonth[period.month]! : undefined;
+  const workingDays = structure ? structure.workingDays[period.month]! : undefined;
   const lastDay = validPeriod ? lastDayOf(period) : undefined;
   const seen = new Set<string>();
   const certificates = new Set<string>();
@@ -1613,15 +1674,16 @@ export function checkD112(model: D112): D112Check[] {
         `${at}.relief`,
         'Suma neimpozabilă din salariul minim se declară doar pentru tipul 51.',
       );
-    else if (big(work.relief) > reliefLimit)
+    else if (big(work.relief) > structure!.relief)
       warning(
         'D112_RELIEF',
         `${at}.relief`,
-        `Suma neimpozabilă este de cel mult ${reliefLimit} lei în iulie–decembrie 2026 (OUG nr. 89/2025).`,
+        `Suma neimpozabilă este de cel mult ${structure!.relief} lei în ${structure!.label} (${structure!.reliefText}).`,
       );
 
     // asigExc, motivExc and the limit sums (S9c1.1, SP1A.3, SP3A).
-    const limit = structureLimit(work.daysWorked, workingDays);
+    const limit = structureLimit(structure!, work.daysWorked, workingDays);
+    const formula = `(${structure!.minimumWage} − ${structure!.relief}) lei × ${work.daysWorked} / ${workingDays} zile`;
     if (
       !minimum &&
       work.contract !== 'N' &&
@@ -1645,13 +1707,13 @@ export function checkD112(model: D112): D112Check[] {
         error(
           'D112_MINIMUM',
           `${path}.minimum.base`,
-          `Suma limită (${minimum.base}) este sub (4325 − 200) lei × ${work.daysWorked} / ${workingDays} zile = ${limit.floor} lei.`,
+          `Suma limită (${minimum.base}) este sub ${formula} = ${limit.floor} lei.`,
         );
       else if (base !== limit.rounded)
         warning(
           'D112_MINIMUM_BASE',
           `${path}.minimum.base`,
-          `Structura ANAF calculează suma limită ca (4325 − 200) lei × ${work.daysWorked} / ${workingDays} zile = ${limit.rounded} lei, nu ${minimum.base}; validatorul acceptă orice sumă de cel puțin ${limit.floor - 1n} lei.`,
+          `Structura ANAF calculează suma limită ca ${formula} = ${limit.rounded} lei, nu ${minimum.base}; validatorul acceptă orice sumă de cel puțin ${limit.floor - 1n} lei.`,
         );
     }
 
@@ -1673,7 +1735,12 @@ export function checkD112(model: D112): D112Check[] {
       warning('D112_TAX', `${tax}.taxBase`, 'Baza de calcul a impozitului depășește venitul brut.');
 
     if (insured.sickLeave?.length)
-      sickLeaveChecks(insured, path, { period, workingDays, certificates }, add);
+      sickLeaveChecks(
+        insured,
+        path,
+        { period, workingDays, certificates, minimumWage: structure!.minimumWage },
+        add,
+      );
   });
 
   if (problems.length || !validPeriod || model.insured.length === 0) return checks;
@@ -1690,9 +1757,9 @@ export function checkD112(model: D112): D112Check[] {
   return checks;
 }
 
-/** D_17's ceiling for an initial certificate in 07–12/2026: 12 minimum wages for each of the six
- * months of the base (p. 4, the validator's S106 on 12 × 6 × 4325). */
-const sickBaseCeiling = 12n * 6n * minimumWage;
+/** D_17's ceiling for an initial certificate: 12 minimum wages of the reporting month for each of
+ * the six months of the base (p. 4, the validator's S106 on 12 × 6 × 4325 in 07–12/2026). */
+const sickBaseCeiling = (minimumWage: bigint) => 12n * 6n * minimumWage;
 
 /** The percentage of C2's rows for a certificate of `days` calendar days (p. 16–20). */
 const tierOf = (days: number): D112SickPercent => (days <= 7 ? '55' : days <= 14 ? '65' : '75');
@@ -1707,7 +1774,12 @@ const calendarDays = (from: string, to: string) =>
 function sickLeaveChecks(
   insured: D112Insured,
   path: string,
-  context: { period: D112['period']; workingDays: number; certificates: Set<string> },
+  context: {
+    period: D112['period'];
+    workingDays: number;
+    certificates: Set<string>;
+    minimumWage: bigint;
+  },
   add: (severity: D112Check['severity'], code: string, path: string, message: string) => void,
 ) {
   const error = (code: string, at: string, message: string) => add('error', code, at, message);
@@ -1903,11 +1975,11 @@ function sickLeaveChecks(
         `${at}.base`,
         'Veniturile și zilele bazei de calcul sunt amândouă zero sau amândouă pozitive.',
       );
-    if (!continues && big(income) > sickBaseCeiling)
+    if (!continues && big(income) > sickBaseCeiling(context.minimumWage))
       error(
         'D112_SICK_BASE',
         `${at}.base.income`,
-        `Veniturile bazei de calcul (${income} lei) depășesc 12 salarii minime pe 6 luni, ${sickBaseCeiling} lei.`,
+        `Veniturile bazei de calcul (${income} lei) depășesc 12 salarii minime pe 6 luni, ${sickBaseCeiling(context.minimumWage)} lei.`,
       );
     if (certificate.employer > 0 && certificate.employerDays === 0)
       error(

@@ -39,6 +39,7 @@ import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
 import { bucharestDate, daysBetween, type LocalDate } from 'xfactura-core/time';
 import type { InvoiceDocument } from 'xfactura-core/ubl/invoice-document';
 import type { Transaction } from '../db/database';
+import { maskCnps } from '../kernel/personal';
 import {
   companies,
   documentLinks,
@@ -315,14 +316,16 @@ export class Documents {
     private readonly clock: () => number = Date.now,
   ) {}
 
-  /** The evidence a command reads, before its transaction: its text layer may take seconds. */
+  /** The evidence a command reads, before its transaction: its text layer may take seconds. Its
+   * citations are checked against the file, so the caller must be one who may read it. */
   private async source(actor: Actor, operation: string, evidenceId: string) {
-    return this.commands.read(actor, operation, async (tx) => {
+    return this.commands.read(actor, operation, async (tx, access) => {
       const [row] = await tx
         .select()
         .from(evidence)
         .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.id, evidenceId)));
       requireCondition(row, 'EVIDENCE', 'Documentul justificativ nu este disponibil.', 404);
+      await this.evidence.requireReadable(tx, actor, access.role, row.id);
       return row;
     });
   }
@@ -654,14 +657,20 @@ export class Documents {
     });
   }
 
+  /** A document with its body and citations; an individual's CNP (a B2C buyer's, BT-47; a
+   * supplier's) is masked for a caller who may not read personal data. */
   get(actor: Actor, id: string) {
-    return this.commands.read(actor, 'documents.get', async (tx) => {
+    return this.commands.read(actor, 'documents.get', async (tx, access) => {
       const [row] = await tx
         .select()
         .from(documents)
         .where(and(eq(documents.companyId, actor.companyId), eq(documents.id, id)));
       requireCondition(row, 'NOT_FOUND', 'Documentul nu este disponibil.', 404);
-      return this.detail(tx, row);
+      const detail = await this.detail(tx, row);
+      const disclosable = await this.commands.disclosable(tx, actor, access.role);
+      return disclosable(['personal'])
+        ? detail
+        : { ...detail, body: maskCnps(detail.body), citations: maskCnps(detail.citations) };
     });
   }
 

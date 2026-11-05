@@ -2,7 +2,7 @@ import { and, asc, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireCondition } from 'xfactura-core/errors';
 import { hashOf } from 'xfactura-core/hash';
-import type { JsonValue, ReadSetEntry } from 'xfactura-core/kernel';
+import type { DataClass, JsonValue, ReadSetEntry } from 'xfactura-core/kernel';
 import type { Transaction } from '../db/database';
 import {
   artifactEvents,
@@ -16,9 +16,32 @@ import { pdfAttachments, pdfHasSignature } from '../adapters/pdf-attachments';
 import { sha256, type ObjectStore } from '../adapters/object-store';
 import type { ActionHandler } from '../kernel/actions';
 import { appendAudit, type Actor, type Commands } from '../kernel/commands';
+import { maskCnpText } from '../kernel/personal';
 
 type State = (typeof artifactStates)[number];
 export type DeclarationProblem = { code: string; message: string };
+
+/** The returns whose files carry individuals' identifying data: the CNPs they open from their
+ * seals (D112's insured, D204's members, D205's beneficiaries, D212's taxpayer, D394's and
+ * D406's individuals) or a non-resident's identification (D207); D112 also each insured's pay and
+ * the diagnosis codes of their medical certificates. */
+const personalReturns: Record<string, DataClass[]> = {
+  D112: ['payroll', 'personal'],
+  D204: ['personal'],
+  D205: ['personal'],
+  D207: ['personal'],
+  D212: ['personal'],
+  D394: ['personal'],
+  D406: ['personal'],
+};
+
+/** The data classes of a return's files beyond `evidence`: its XML, ANAF's PDF of it, the signed
+ * copy and ANAF's answers are `tax`, and some `personal` and `payroll` too (`personalReturns`).
+ * `evidence.read`, `.list` and `.get` give them only to a caller who may read every one. */
+export const declarationClasses = (kind: string): DataClass[] => [
+  'tax',
+  ...(personalReturns[kind] ?? []),
+];
 
 /**
  * One kind of return the books produce. `prepare` reads what the return is computed from and
@@ -370,7 +393,8 @@ export class Declarations {
     requireCondition(
       result.ok && result.pdf,
       'PDF',
-      result.messages.join('\n') || 'PDF-ul nu a putut fi produs.',
+      // An error may be logged: ANAF's tool may quote a record, CNP included.
+      maskCnpText(result.messages.join('\n'), true) || 'PDF-ul nu a putut fi produs.',
     );
     const bytes = result.pdf;
     await this.commands.db.write(async (tx) => {
@@ -655,28 +679,34 @@ export class Declarations {
   }
 
   view(actor: Actor, artifactId: string) {
-    return this.commands.read(actor, 'declarations.list', async (tx) => {
+    return this.commands.read(actor, 'declarations.list', async (tx, access) => {
       const [row] = await tx
         .select()
         .from(artifacts)
         .where(and(eq(artifacts.companyId, actor.companyId), eq(artifacts.id, artifactId)));
       requireCondition(row, 'NOT_FOUND', 'Declarația nu există.', 404);
-      return this.describe(tx, row);
+      const disclosable = await this.commands.disclosable(tx, actor, access.role);
+      return this.describe(tx, row, !disclosable(declarationClasses(row.kind)));
     });
   }
 
   list(actor: Actor) {
-    return this.commands.read(actor, 'declarations.list', async (tx) => {
+    return this.commands.read(actor, 'declarations.list', async (tx, access) => {
       const rows = await tx
         .select()
         .from(artifacts)
         .where(eq(artifacts.companyId, actor.companyId))
         .orderBy(asc(artifacts.kind), asc(artifacts.period), asc(artifacts.createdAt));
-      return Promise.all(rows.map((row) => this.describe(tx, row)));
+      const disclosable = await this.commands.disclosable(tx, actor, access.role);
+      return Promise.all(
+        rows.map((row) => this.describe(tx, row, !disclosable(declarationClasses(row.kind)))),
+      );
     });
   }
 
-  private async describe(tx: Transaction, row: typeof artifacts.$inferSelect) {
+  /** A return with its steps. `mask`: for a caller who may not read the return's classes, the
+   * steps' details carry no CNP (ANAF's validator may quote the records it refuses). */
+  private async describe(tx: Transaction, row: typeof artifacts.$inferSelect, mask = false) {
     const steps = await tx
       .select()
       .from(artifactEvents)
@@ -696,7 +726,7 @@ export class Declarations {
       steps: steps.map((step) => ({
         state: step.state,
         actor: step.actor,
-        detail: step.detail,
+        detail: mask && step.detail ? maskCnpText(step.detail, true) : step.detail,
         evidenceId: step.evidenceId,
         at: step.createdAt,
       })),

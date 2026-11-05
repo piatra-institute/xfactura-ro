@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import type { ProposalView } from '../../source/engine/kernel/views';
 import { lockTaxPeriod } from './fixtures/locks';
 import { invoiceXml, type XmlInput } from './fixtures/invoice';
-import { scenario, type Scenario } from './scenario';
+import { journal, scenario, type Scenario } from './scenario';
 
 const open: Scenario[] = [];
 afterAll(async () => {
@@ -648,8 +648,12 @@ describe('credit notes', () => {
     expect(await balance(s, '4111')).toEqual({ debit: '60.50', credit: '0.00' });
   });
 
-  test('cannot credit more than remains open', async () => {
+  // OMFP 1802/2014: 4111 is an asset account and 419 holds advances; what is owed back to a
+  // customer is a creditor (462, "sumele încasate și necuvenite"), what a supplier owes back a
+  // debtor (461, "alte creanțe").
+  test('a credit note beyond what remains open owes the customer a refund on 462, never a negative receivable', async () => {
     const s = await company();
+    // V-10: 100 + 21 = 121 lei; the credit note: 200 + 42 = 242 lei.
     const { original, credit } = await saleWithCredit(s, {
       net: '200.00',
       tax: '42.00',
@@ -660,7 +664,97 @@ describe('credit notes', () => {
       originalDocumentId: original.id,
       account: '704',
     });
-    expect(codes(proposal)).toEqual(['OPEN_ITEM_REVERSED']);
+    expect(codes(proposal)).toEqual(['CREDIT_REFUND']);
+    // 121 lei off the receivable, which closes; the other 121 owed to the customer.
+    expect(lines(proposal)).toEqual([
+      'D 4111 -121.00',
+      'C 462 121.00',
+      'C 704 -200.00',
+      'C 4427 -42.00',
+    ]);
+    await s.post(await s.approve(proposal, s.reviewer, ['CREDIT_REFUND']));
+    expect(await balance(s, '4111')).toEqual({ debit: '0.00', credit: '0.00' });
+    expect(await balance(s, '462')).toEqual({ debit: '0.00', credit: '121.00' });
+  });
+
+  test('a credit note on an invoice already collected is a refund to the customer, paid back from its item', async () => {
+    const s = await company();
+    const { original, credit } = await saleWithCredit(s, {
+      net: '50.00',
+      tax: '10.50',
+      gross: '60.50',
+    });
+    const evidence = async (name: string) => (await s.evidence(name)).id;
+    const itemOf = async (account: string) =>
+      (await s.list<{ id: string; account: string }>(s.owner, 'openItems.list', {})).find(
+        (item) => item.account === account,
+      )!;
+    // V-10 (121 lei) collected in cash before the credit note.
+    const receivable = await itemOf('4111');
+    await s.book(
+      'ledger.general',
+      journal(await evidence('chitanta.pdf'), [
+        { account: '5311', side: 'D', amount: '121.00' },
+        { account: '4111', side: 'C', amount: '121.00', openItem: receivable.id },
+      ]),
+    );
+    const proposal = await s.propose('invoices.credit', {
+      documentId: credit.id,
+      originalDocumentId: original.id,
+      account: '704',
+    });
+    expect(codes(proposal)).toEqual(['CREDIT_REFUND']);
+    // Nothing is left on the receivable: the whole 60.50 is owed back.
+    expect(lines(proposal)).toEqual(['C 462 60.50', 'C 704 -50.00', 'C 4427 -10.50']);
+    expect(proposal.effect?.taxEntries[0]).toMatchObject({ amount: '-10.50' });
+    await s.post(await s.approve(proposal, s.reviewer, ['CREDIT_REFUND']));
+    // The refund paid back: the item on 462 settles.
+    const refund = await itemOf('462');
+    await s.book(
+      'ledger.general',
+      journal(await evidence('plata-retur.pdf'), [
+        { account: '462', side: 'D', amount: '60.50', openItem: refund.id },
+        { account: '5311', side: 'C', amount: '60.50' },
+      ]),
+    );
+    for (const account of ['462', '4111'])
+      expect(await balance(s, account)).toEqual({ debit: '0.00', credit: '0.00' });
+  });
+
+  test('a supplier’s credit note on a purchase already paid is owed back by the supplier, on 461', async () => {
+    const s = await company();
+    const original = await importInvoice(s, { number: 'F-10' });
+    await s.book('invoices.recognize', { documentId: original.id, account: '628' });
+    const payable = (
+      await s.list<{ id: string; account: string }>(s.owner, 'openItems.list', {})
+    ).find((item) => item.account === '401')!;
+    // F-10 (121 lei) paid; the supplier then credits 50 + 10.50.
+    await s.book(
+      'ledger.general',
+      journal((await s.evidence('plata.pdf')).id, [
+        { account: '401', side: 'D', amount: '121.00', openItem: payable.id },
+        { account: '5311', side: 'C', amount: '121.00' },
+      ]),
+    );
+    const credit = await importInvoice(s, {
+      number: 'CN-F10',
+      credit: true,
+      originalNumber: 'F-10',
+      date: '2026-11-05',
+      net: '50.00',
+      tax: '10.50',
+      gross: '60.50',
+    });
+    const proposal = await s.propose('invoices.credit', {
+      documentId: credit.id,
+      originalDocumentId: original.id,
+      account: '628',
+    });
+    expect(codes(proposal)).toEqual(['CREDIT_REFUND']);
+    expect(lines(proposal)).toEqual(['D 628 -50.00', 'D 4426 -10.50', 'D 461 60.50']);
+    await s.post(await s.approve(proposal, s.reviewer, ['CREDIT_REFUND']));
+    expect(await balance(s, '461')).toEqual({ debit: '60.50', credit: '0.00' });
+    expect(await balance(s, '401')).toEqual({ debit: '0.00', credit: '0.00' });
   });
 
   test('must name the invoice it credits', async () => {

@@ -90,6 +90,10 @@ const appendOnly = [
   'acc_stock_moves',
   'acc_cash_registers',
   'acc_cash_register_events',
+  'acc_boms',
+  'acc_bom_lines',
+  'acc_work_orders',
+  'acc_work_order_events',
   'ref_fx_rates',
 ];
 // Tables with narrowly guarded updates (below) that are never deleted from.
@@ -153,6 +157,14 @@ const views: Record<string, string> = {
 type Check = { code: string; rule: string; violation: string };
 
 const raise = (code: string) => `RAISE(ABORT, 'inv:${code}')`;
+
+/** A statement an agent transcribed from a PDF or a photo (`bank.recordStatement`) with a
+ * citation no text layer verified: its movements are read from an image, as an extracted
+ * document is, and a policy posts them only where `extracted` is allowed. */
+const unverifiedTranscription = (s: string) => `(${s}.format = 'transcribed' AND (
+  json_type(${s}.citations_json, '$.items') IS NOT 'array'
+  OR EXISTS (SELECT 1 FROM json_each(${s}.citations_json, '$.items') c
+    WHERE json_extract(c.value, '$.status') IS NOT 'verified')))`;
 
 /** The approved proposal version an entry or approval refers to. */
 const version = (column: string) => `(
@@ -241,15 +253,25 @@ const partyStatusVersion = (id: string) => `CAST(COALESCE((
           AND s.as_of = substr(${id}, instr(${id}, '|') + 1)), 0) AS TEXT)`;
 /** Whether `date` falls in a financial year whose latest executed reviewed action of the year
  * (`years.close` or `years.reopen`, kernel actions) is a close. */
+/** The financial year `y` is locked: its latest year close or reopening executed is a close. */
+const closedYear = `(SELECT r.operation FROM acc_action_requests r
+          JOIN acc_action_executions x ON x.company_id = r.company_id AND x.request_id = r.id
+          WHERE r.company_id = y.company_id AND r.operation IN ('years.close', 'years.reopen')
+            AND json_extract(r.input_json, '$.financialYearId') = y.id
+          ORDER BY x.rowid DESC LIMIT 1) = 'years.close'`;
 const lockedYear = (date: string) => `EXISTS (
       SELECT 1 FROM acc_fiscal_years y
       WHERE y.company_id = NEW.company_id AND y.kind = 'financial'
         AND ${date} BETWEEN y.date_from AND y.date_to
-        AND (SELECT r.operation FROM acc_action_requests r
-          JOIN acc_action_executions x ON x.company_id = r.company_id AND x.request_id = r.id
-          WHERE r.company_id = y.company_id AND r.operation IN ('years.close', 'years.reopen')
-            AND json_extract(r.input_json, '$.financialYearId') = y.id
-          ORDER BY x.rowid DESC LIMIT 1) = 'years.close')`;
+        AND ${closedYear})`;
+/** A locked financial year ends on or after `date`: a date in it, or before it. */
+const lockedThrough = (date: string) => `EXISTS (
+      SELECT 1 FROM acc_fiscal_years y
+      WHERE y.company_id = NEW.company_id AND y.kind = 'financial' AND ${date} <= y.date_to
+        AND ${closedYear})`;
+/** A proposal's subject reverses an entry: its entry is a storno, journal and all. */
+const isStorno = (proposal: string) => `(SELECT subject_key FROM acc_proposals
+        WHERE company_id = NEW.company_id AND id = ${proposal}) LIKE 'reverse:%'`;
 const latest = (table: string, scope: string) =>
   `(SELECT kind FROM ${table} WHERE company_id = NEW.company_id AND ${scope} ORDER BY seq DESC LIMIT 1)`;
 /** The id of a question's latest answer, NULL while it has none. */
@@ -460,7 +482,7 @@ const entryChecks: Check[] = [
   },
   {
     code: 'binding',
-    rule: "An entry is bound either to an approval of exactly this effect by a current reviewer, or to an active posting policy, approved by a current reviewer, that covers this treatment and rule set, acknowledges each of the version's warnings (an `acknowledges` condition names its code and no `noWarnings` condition refuses it), is not paused (nor the company, nor a template it is bound to) and posts an extracted document only when a `sourceAuthority` condition allows it.",
+    rule: "An entry is bound either to an approval of exactly this effect by a current reviewer, or to an active posting policy, approved by a current reviewer, that covers this treatment and rule set, acknowledges each of the version's warnings (an `acknowledges` condition names its code and no `noWarnings` condition refuses it), is not paused (nor the company, nor a template it is bound to) and posts an extracted document, or a bank movement an agent transcribed with citations no text layer verified, only when a `sourceAuthority` condition allows `extracted`.",
     // The read set's documents are found by their key (CROSS JOIN keeps json_each outermost),
     // not by scanning the company's documents for each of them.
     violation: `NOT (
@@ -506,6 +528,14 @@ const entryChecks: Check[] = [
             WHERE json_extract(r.value, '$.kind') = 'document' AND d.authority = 'extracted'
               AND NOT EXISTS (
                 SELECT 1 FROM json_each(p.preconditions_json) c, json_each(c.value, '$.allow') k
+                WHERE json_extract(c.value, '$.kind') = 'sourceAuthority' AND k.value = 'extracted'))
+          AND NOT EXISTS (
+            SELECT 1 FROM json_each(${version('read_set_json')}) r
+            CROSS JOIN acc_bank_movements v ON v.company_id = NEW.company_id AND v.id = json_extract(r.value, '$.id')
+            JOIN acc_bank_statements s ON s.company_id = v.company_id AND s.id = v.statement_id
+            WHERE json_extract(r.value, '$.kind') = 'movement' AND ${unverifiedTranscription('s')}
+              AND NOT EXISTS (
+                SELECT 1 FROM json_each(p.preconditions_json) c, json_each(c.value, '$.allow') k
                 WHERE json_extract(c.value, '$.kind') = 'sourceAuthority' AND k.value = 'extracted')))))`,
   },
   {
@@ -523,9 +553,26 @@ const entryChecks: Check[] = [
     violation: `${latest('acc_period_events', 'month = NEW.period')} = 'close'`,
   },
   {
+    code: 'later_period_closed',
+    rule: "Nothing is posted into a month before a closed one: a close covers every earlier month, empty ones included, so its closing balances (and every later close's, built on them) hold every line up to its month's end.",
+    violation: `EXISTS (
+      SELECT 1 FROM acc_period_events p
+      WHERE p.company_id = NEW.company_id AND p.month > NEW.period AND p.kind = 'close'
+        AND p.seq = (
+          SELECT max(seq) FROM acc_period_events WHERE company_id = p.company_id AND month = p.month))`,
+  },
+  {
     code: 'closed_year',
     rule: 'Nothing is posted into a financial year a reviewed year close locked, until a reviewed reopening.',
     violation: lockedYear('NEW.date'),
+  },
+  {
+    code: 'opening_first_year',
+    rule: 'An opening entry (DESCHIDERE) opens the books: none is posted after a financial year they keep, whose balances the ledger carries already (a storno of one keeps its journal and is no opening).',
+    violation: `NEW.journal_code = 'DESCHIDERE' AND NOT ${isStorno('NEW.proposal_id')}
+      AND EXISTS (
+        SELECT 1 FROM acc_fiscal_years y
+        WHERE y.company_id = NEW.company_id AND y.kind = 'financial' AND y.date_to < NEW.date)`,
   },
   {
     code: 'entry_number',
@@ -808,6 +855,11 @@ const approvalChecks: Check[] = [
     code: 'approver',
     rule: 'The approver is a current owner or reviewer.',
     violation: `NOT ${isReviewer('NEW.approver_id', 'NEW.approver_epoch')}`,
+  },
+  {
+    code: 'approval_person',
+    rule: "Only a person approves, never an agent: an approval records the agent that gave it, which is none (a batch's are its decider's).",
+    violation: 'NEW.agent_id IS NOT NULL',
   },
   {
     code: 'segregation',
@@ -1254,6 +1306,11 @@ const assetChecks: Record<'cards' | 'events' | 'fiscal', Check[]> = {
           AND NEW.expense_account GLOB '68*' AND NEW.value_bani > 0
           AND NEW.life_months > 0 AND NEW.fiscal_life_months > 0)`,
     },
+    {
+      code: 'asset_locked_year',
+      rule: "No fixed asset is registered as commissioned on or before the end of a locked financial year: that year's register and its closing do not hold it.",
+      violation: lockedThrough('NEW.commissioned_on'),
+    },
   ],
   events: [
     {
@@ -1264,6 +1321,11 @@ const assetChecks: Record<'cards' | 'events' | 'fiscal', Check[]> = {
         OR EXISTS (
           SELECT 1 FROM acc_asset_events WHERE company_id = NEW.company_id AND asset_id = NEW.asset_id AND kind = 'disposed')
         OR NEW.date < (SELECT commissioned_on FROM acc_assets WHERE company_id = NEW.company_id AND id = NEW.asset_id)`,
+    },
+    {
+      code: 'asset_locked_year',
+      rule: "No fixed asset leaves use on or before the end of a locked financial year: that year's register and its closing hold it in use.",
+      violation: lockedThrough('NEW.date'),
     },
   ],
   fiscal: [
@@ -1459,6 +1521,11 @@ const triggers: Trigger[] = [
         violation: `NOT ${isReviewer('NEW.approved_by', 'NEW.approver_epoch')}`,
       },
       {
+        code: 'policy_person',
+        rule: "Only a person grants a posting policy, never an agent: a policy records the agent that created it, which is none (one from a graduation is its decider's).",
+        violation: 'NEW.agent_id IS NOT NULL',
+      },
+      {
         code: 'policy_scope',
         rule: 'A posting policy never posts a return or an SPV submission: it names no `declarations.*` or `spv.*` operation.',
         violation: `EXISTS (
@@ -1580,6 +1647,11 @@ const triggers: Trigger[] = [
         code: 'approver',
         rule: 'Actions are decided by a current owner or reviewer.',
         violation: `NOT ${isReviewer('NEW.decided_by', 'NEW.decided_epoch')}`,
+      },
+      {
+        code: 'decision_person',
+        rule: 'Only a person approves or rejects an action, never an agent: a decision records the agent that took it, which is none.',
+        violation: 'NEW.agent_id IS NOT NULL',
       },
       {
         code: 'segregation',
@@ -1741,6 +1813,36 @@ const triggers: Trigger[] = [
           SELECT 1 FROM acc_fiscal_years y
           WHERE y.company_id = NEW.company_id AND y.kind = NEW.kind
             AND y.date_from <= NEW.date_to AND NEW.date_from <= y.date_to)`,
+      },
+      {
+        code: 'year_contiguous',
+        rule: "A company's years of a kind follow one another without a gap: a new one starts the day after one ends, or ends the day before one starts.",
+        violation: `EXISTS (
+            SELECT 1 FROM acc_fiscal_years y WHERE y.company_id = NEW.company_id AND y.kind = NEW.kind)
+          AND NOT EXISTS (
+            SELECT 1 FROM acc_fiscal_years y
+            WHERE y.company_id = NEW.company_id AND y.kind = NEW.kind
+              AND (y.date_to = date(NEW.date_from, '-1 day') OR y.date_from = date(NEW.date_to, '+1 day')))`,
+      },
+      {
+        code: 'year_before_opening',
+        rule: 'No financial year is added before an opening entry (DESCHIDERE) that stands: the books open with their first year, and the earlier one would count its balances twice.',
+        violation: `NEW.kind = 'financial' AND EXISTS (
+          SELECT 1 FROM acc_entries e
+          WHERE e.company_id = NEW.company_id AND e.journal_code = 'DESCHIDERE'
+            AND e.date > NEW.date_to AND ${stands('e')} AND NOT ${isStorno('e.proposal_id')})`,
+      },
+    ],
+  },
+  {
+    name: 'inv_party_guard',
+    on: 'BEFORE INSERT ON acc_parties',
+    checks: [
+      {
+        code: 'party_identity',
+        rule: "An individual's identifier is the keyed hash of their CNP (`cnp:k1:` and an HMAC under the installation's secret), never the CNP itself nor an unkeyed hash of it, which a birth date makes easy to find.",
+        violation: `NEW.tax_id IS NOT NULL AND (NEW.kind = 'ro_individual' OR NEW.tax_id GLOB 'cnp:*')
+          AND NOT (NEW.tax_id GLOB 'cnp:k1:*' AND length(NEW.tax_id) = 71)`,
       },
     ],
   },
@@ -1924,6 +2026,98 @@ const triggers: Trigger[] = [
           OR EXISTS (
             SELECT 1 FROM acc_cash_register_events e
             WHERE e.company_id = NEW.company_id AND e.register_id = NEW.register_id AND e.kind = 'closed')`,
+      },
+    ],
+  },
+  // Production (G4): a product's bill of materials, versioned and dated, never changed once a work
+  // order is costed on it; a work order on the version valid when it opened; its closing, final.
+  {
+    name: 'inv_bom_guard',
+    on: 'BEFORE INSERT ON acc_boms',
+    checks: [
+      {
+        code: 'bom_product',
+        rule: 'A bill of materials describes a product of the catalogue: a semi-finished (341) or a finished product (345).',
+        violation: `NOT EXISTS (
+          SELECT 1 FROM acc_stock_items i
+          WHERE i.company_id = NEW.company_id AND i.id = NEW.item_id
+            AND (i.account LIKE '341%' OR i.account LIKE '345%'))`,
+      },
+      {
+        code: 'bom_version',
+        rule: "A product's bill of materials is numbered from 1 without gaps, each version valid after the one before, for a positive output quantity, its standard cost and hours not negative.",
+        violation: `NEW.version <> 1 + COALESCE((
+            SELECT max(b.version) FROM acc_boms b
+            WHERE b.company_id = NEW.company_id AND b.item_id = NEW.item_id), 0)
+          OR NEW.valid_from <= COALESCE((
+            SELECT max(b.valid_from) FROM acc_boms b
+            WHERE b.company_id = NEW.company_id AND b.item_id = NEW.item_id), '')
+          OR NEW.output_quantity <= 0 OR NEW.standard_cost < 0
+          OR NEW.labour_hours < 0 OR NEW.machine_hours < 0`,
+      },
+    ],
+  },
+  {
+    name: 'inv_bom_line_guard',
+    on: 'BEFORE INSERT ON acc_bom_lines',
+    checks: [
+      {
+        code: 'bom_line',
+        rule: "A bill of materials' lines are numbered from 1 without gaps, each a positive quantity of a material (301, 302, 303, 381).",
+        violation: `NEW.line_no <> 1 + COALESCE((
+            SELECT max(l.line_no) FROM acc_bom_lines l
+            WHERE l.company_id = NEW.company_id AND l.bom_id = NEW.bom_id), 0)
+          OR NEW.quantity <= 0
+          OR NOT EXISTS (
+            SELECT 1 FROM acc_stock_items i
+            WHERE i.company_id = NEW.company_id AND i.id = NEW.item_id
+              AND (i.account LIKE '301%' OR i.account LIKE '302%' OR i.account LIKE '303%'
+                OR i.account LIKE '381%'))`,
+      },
+      {
+        code: 'bom_sealed',
+        rule: 'A bill of materials takes no line once a work order is costed on it.',
+        violation: `EXISTS (
+          SELECT 1 FROM acc_work_orders o
+          WHERE o.company_id = NEW.company_id AND o.bom_id = NEW.bom_id)`,
+      },
+    ],
+  },
+  {
+    name: 'inv_work_order_guard',
+    on: 'BEFORE INSERT ON acc_work_orders',
+    checks: [
+      {
+        code: 'work_order_bom',
+        rule: "A work order has a number and a positive quantity, and is costed on its product's bill of materials valid on its opening day (the latest version from on or before it).",
+        violation: `trim(NEW.number) = '' OR NEW.quantity <= 0
+          OR NOT EXISTS (
+            SELECT 1 FROM acc_boms b
+            WHERE b.company_id = NEW.company_id AND b.id = NEW.bom_id AND b.item_id = NEW.item_id
+              AND b.valid_from <= NEW.opened_on
+              AND NOT EXISTS (
+                SELECT 1 FROM acc_boms c
+                WHERE c.company_id = b.company_id AND c.item_id = b.item_id
+                  AND c.valid_from <= NEW.opened_on AND c.version > b.version))`,
+      },
+    ],
+  },
+  {
+    name: 'inv_work_order_event_guard',
+    on: 'BEFORE INSERT ON acc_work_order_events',
+    checks: [
+      {
+        code: 'work_order_event',
+        rule: 'A work order’s events are of a known kind, numbered from 1 without gaps, dated from its opening, and none follows its closing.',
+        violation: `NEW.kind NOT IN ('closed')
+          OR NEW.seq <> 1 + COALESCE((
+            SELECT max(e.seq) FROM acc_work_order_events e
+            WHERE e.company_id = NEW.company_id AND e.order_id = NEW.order_id), 0)
+          OR NEW.date < (SELECT o.opened_on FROM acc_work_orders o
+            WHERE o.company_id = NEW.company_id AND o.id = NEW.order_id)
+          OR EXISTS (
+            SELECT 1 FROM acc_work_order_events e
+            WHERE e.company_id = NEW.company_id AND e.order_id = NEW.order_id AND e.kind = 'closed')`,
       },
     ],
   },

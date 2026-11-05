@@ -4,6 +4,7 @@ import { microEvaluation, microLoaded, type MicroQuarter } from '../src/ro/revie
 import { roRegister } from '../src/ro/register';
 import { microQuarterRange, microTax, microTaxInput } from '../src/ro/treatments/micro-tax';
 import { RuleContext } from '../src/rules';
+import type { LocalDate } from '../src/time';
 
 // Synthetic quarters of 2026, with a hypothetical BNR rate of 5.0800 lei for 31.12.2025
 // (100,000 euro = 508,000.00 lei). Expected amounts by hand from Codul fiscal art. 51, 53 and
@@ -45,6 +46,11 @@ describe('micro tax rounding', () => {
   test('the rounding is the cited parameter, bound to the proposal', () => {
     const { rules } = microEvaluation(register, quarter());
     expect([...rules.used.keys()]).toContain('ro.declaration.rounding/2016-01-01');
+  });
+
+  test('the tax is due with the quarter’s D100, the date the tax account reads', () => {
+    // Q2: 25 July 2026 is a Saturday, so the next working day.
+    expect(evaluate(quarter()).effect?.openItems[0]?.dueDate).toBe('2026-07-27' as LocalDate);
   });
 });
 

@@ -394,6 +394,30 @@ describe('a non-payer crossing the small-enterprise threshold', () => {
     expect(summary(first).rows).not.toHaveProperty('R28_2');
     validated(nil);
     validated(first);
+    // D406 of November has a code for the regularization (REG-310) on its lines: only this
+    // test's partner, without a valid CUI or an address, stops it (the codes by rate are core's
+    // tests, the file validated in the full year's).
+    await c.s.invoke(c.s.owner, 'treasury.createAccount', {
+      kind: 'bank',
+      name: 'Cont curent',
+      iban: 'RO49AAAA1B31007593840000',
+      currency: 'RON',
+      ledgerAccount: '5121',
+      openedOn: '2026-01-01',
+    });
+    const saft = await c.s.refused(
+      c.s.invoke(c.s.owner, 'declarations.prepare', {
+        kind: 'D406',
+        period: '2026-11',
+        options: {
+          contact: { firstName: 'Ana', lastName: 'Popescu', phone: '0236000000' },
+          accounts: { '635': '635' },
+        },
+      }),
+    );
+    expect(
+      (saft?.details as { problems: { code: string }[] }).problems.map((item) => item.code),
+    ).toEqual(['D406_PARTY_CODE', 'D406_PARTY_ADDRESS']);
   });
 });
 

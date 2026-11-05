@@ -232,7 +232,7 @@ export const payrollDefinitions: ParameterDefinition[] = [
     scope: [],
     value: z.enum(['leu_half_up']),
     description:
-      'Rotunjirea contribuțiilor și a impozitului la leu (de la 50 de bani prin majorare).',
+      'Rotunjirea contribuțiilor și a impozitului la leu (de la 50 de bani prin majorare); o contribuție sub un leu se întregește la un leu, ca în D112.',
   },
 ];
 
@@ -444,5 +444,8 @@ export const payrollVersions: ParameterVersion[] = [
     'HG295/2025-A:art.4(2)',
   ]),
   version('ro.payroll.tax_base_rounding', 'leu_half_down', [code('norme.art.64.pct.4')]),
-  version('ro.payroll.amount_rounding', 'leu_half_up', ['OUG59/2005:art.1(1)']),
+  version('ro.payroll.amount_rounding', 'leu_half_up', [
+    'OUG59/2005:art.1(1)',
+    'ANAF/D112-0726:rotunjiri',
+  ]),
 ];

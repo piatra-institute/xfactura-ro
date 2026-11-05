@@ -19,6 +19,7 @@ import { questionIssue } from '../../questions/kinds';
 import { RuleGapError, type RuleContext } from '../../rules';
 import { addDays, type LocalDate } from '../../time';
 import { adjustmentCodes } from '../exempt/codes';
+import { retailMethodAt, warehouseRetailAxis } from '../stock/valuation';
 import {
   rateSegment,
   retailAccountsOf,
@@ -47,7 +48,11 @@ import type { CoefficientRule } from './parameters';
  *   note *2)): Dr 378 / Cr 607, Dr 4428 / Cr 607, so that 607 holds the cost of the goods sold;
  * - the count at sale price (`retail.count`), its shortage's deducted VAT adjusted (art. 304).
  * Exits are the credits of the goods' accounts; entries are their debits, a lower price a red
- * storno of the debit, so the month's exits are the credit turnover of its goods' accounts.
+ * storno of the debit, so the month's exits are the credit turnover of its goods' accounts. A
+ * reversal counts on the side of what it reverses (`TurnoverQuery.sides`), a black storno as its
+ * red one: a reception reversed is a negative entry, never an exit.
+ * The method is a warehouse's (`retailMethodAt`): a shop's warehouse at retail price, a depot at
+ * cost in the stock register, as the policies record them.
  */
 
 const OMFPA = 'OMFP1802/2014-A';
@@ -85,9 +90,10 @@ const signedMoney = z.string().regex(/^-?(0|[1-9]\d{0,15})(\.\d{1,2})?$/);
 const rate = z.string().regex(/^\d{1,2}$/);
 const always = '1900-01-01' as LocalDate;
 
-/** The retail policy and the perpetual inventory it needs, or the issues asking for them. */
-function retailPolicyIssues(loaded: Loaded, date: LocalDate): Issue[] {
-  const retail = profileAt(loaded, 'policy.stock.retail', date);
+/** The warehouse's retail policy and the perpetual inventory it needs, or the issues asking for
+ * them. */
+function retailPolicyIssues(loaded: Loaded, date: LocalDate, warehouseId: string): Issue[] {
+  const retail = retailMethodAt(loaded, warehouseId, date);
   const inventory = profileAt(loaded, 'policy.stock.inventory', date);
   const issues: Issue[] = [];
   if (retail !== 'retail')
@@ -95,7 +101,7 @@ function retailPolicyIssues(loaded: Loaded, date: LocalDate): Issue[] {
       retail
         ? block(
             'RETAIL_POLICY',
-            'Politicile contabile țin mărfurile la cost (policy.stock.retail cost): metoda prețului cu amănuntul nu se aplică.',
+            `Politicile contabile țin mărfurile gestiunii ${loaded.warehouses.get(warehouseId)?.code ?? warehouseId} la cost (${warehouseRetailAxis(warehouseId)} sau policy.stock.retail cost): metoda prețului cu amănuntul nu se aplică.`,
           )
         : questionIssue(
             'POLICY_MISSING',
@@ -189,11 +195,13 @@ function coefficientQueries(
   const year = financialYearOf(loaded, end);
   if (!year) return null;
   const prefixes = prefixesOf(defaultSynthetics, code);
+  // What entered and what left, a reversal on the side of what it reverses.
+  const sides = 'original' as const;
   return {
-    beforeYear: { prefixes, from: always, to: addDays(year.from, -1) },
-    year: { prefixes, from: year.from, to: end },
-    beforePeriod: { prefixes, from: always, to: addDays(periodStart, -1) },
-    period: { prefixes, from: periodStart, to: end },
+    beforeYear: { prefixes, from: always, to: addDays(year.from, -1), sides },
+    year: { prefixes, from: year.from, to: end, sides },
+    beforePeriod: { prefixes, from: always, to: addDays(periodStart, -1), sides },
+    period: { prefixes, from: periodStart, to: end, sides },
   };
 }
 
@@ -323,7 +331,7 @@ export function receiveRetail(args: {
   lines: LineSpec[];
 }): { issues: Issue[]; details: Issue['details'] } {
   const { retail, loaded, rules, date, lines } = args;
-  const issues: Issue[] = [...retailPolicyIssues(loaded, date)];
+  const issues: Issue[] = [...retailPolicyIssues(loaded, date, retail.warehouseId)];
   if (!loaded.evidence.has(retail.evidenceId))
     issues.push(
       block(
@@ -478,7 +486,7 @@ export const retailOpening: Treatment<RetailOpeningInput> = {
     turnover: [{ prefixes: [input.from], from: always, to: input.date }],
   }),
   evaluate(input, loaded, rules) {
-    const issues: Issue[] = [...retailPolicyIssues(loaded, input.date)];
+    const issues: Issue[] = [...retailPolicyIssues(loaded, input.date, input.warehouseId)];
     if (!loaded.evidence.has(input.evidenceId))
       issues.push(block('EVIDENCE', 'Lista de inventariere nu este disponibilă.', 'evidenceId'));
     const warehouse = warehouseFor(loaded, input.warehouseId, 'warehouseId', issues);
@@ -555,7 +563,7 @@ export const retailOpening: Treatment<RetailOpeningInput> = {
         schema: 'effect@1',
         date: input.date,
         journalClass: 'general',
-        journalCode: 'GENERAL',
+        journalCode: 'DIVERSE',
         description: `Preluarea gestiunii ${warehouse.code} la preț cu amănuntul`,
         lines,
         openItems: [],
@@ -610,7 +618,7 @@ export const retailReprice: Treatment<RetailRepriceInput> = {
     return warehouse ? { turnover: [balanceQuery(warehouse.code, input.date)] } : null;
   },
   evaluate(input, loaded, rules) {
-    const issues: Issue[] = [...retailPolicyIssues(loaded, input.date)];
+    const issues: Issue[] = [...retailPolicyIssues(loaded, input.date, input.warehouseId)];
     if (!loaded.evidence.has(input.evidenceId))
       issues.push(
         block(
@@ -688,7 +696,7 @@ export const retailReprice: Treatment<RetailRepriceInput> = {
         schema: 'effect@1',
         date: input.date,
         journalClass: 'general',
-        journalCode: 'GENERAL',
+        journalCode: 'DIVERSE',
         description: `Modificare de prețuri, gestiunea ${warehouse.code}`,
         lines,
         openItems: [],
@@ -717,8 +725,14 @@ export const retailDischargeInput = z
   .strict();
 export type RetailDischargeInput = z.infer<typeof retailDischargeInput>;
 
-/** What a month's discharge computes: the exits at sale price by rate, the VAT they include, the
- * coefficient and the markup. */
+/**
+ * What a month's discharge computes: the exits at sale price by rate, the VAT they include, the
+ * coefficient and the markup. Cumulated from the year's start (`year`), the coefficient applies
+ * to the year's exits to the month's end, less the markup the year's earlier months discharged
+ * (pct. 286 alin. (4), (7): the markup is spread over the goods sold and those held alike, so
+ * 378 keeps K × the stock without VAT), as `production.differences` applies it; the month's own
+ * coefficient applies to the month's exits.
+ */
 export function retailDischargeFigures(
   loaded: Loaded,
   code: string,
@@ -731,17 +745,28 @@ export function retailDischargeFigures(
   const period = balancesOf(loaded, queries.period, defaultSynthetics, code);
   const exits = [...period.goods].map(([rate, row]) => ({ rate, gross: row.credit }));
   const payer = profileAt(loaded, 'vat.status', end) === 'normal_vat';
-  const vat = exits.map((row) => ({
-    rate: row.rate,
-    vat: payer ? includedVat(row.gross, row.rate) : 0n,
-  }));
+  const included = (gross: bigint, rate: string) => (payer ? includedVat(gross, rate) : 0n);
+  const vat = exits.map((row) => ({ rate: row.rate, vat: included(row.gross, row.rate) }));
   const net = exits.reduce((total, row, index) => total + row.gross - vat[index]!.vat, 0n);
   const fraction = coefficient(loaded, queries, code, basis);
+  const year = basis === 'year' ? balancesOf(loaded, queries.year, defaultSynthetics, code) : null;
+  /** The exits without VAT the coefficient applies to, and the markup already discharged. */
+  const cumulated = year
+    ? [...year.goods].reduce(
+        (total, [rate, row]) => total + row.credit - included(row.credit, rate),
+        0n,
+      )
+    : net;
+  const taken = year ? year.markup.debit - period.markup.debit : 0n;
+  // Without exits to apply it to (a reception reversed, nothing sold), the coefficient is not
+  // needed: what earlier months discharged is given back, if anything.
   const markup =
     fraction.denominator > 0n
-      ? divRound(net * fraction.numerator, fraction.denominator, 'halfAwayFromZero')
-      : null;
-  return { end, exits, vat, net, fraction, markup, period };
+      ? divRound(cumulated * fraction.numerator, fraction.denominator, 'halfAwayFromZero') - taken
+      : cumulated === 0n
+        ? -taken
+        : null;
+  return { end, exits, vat, net, cumulated, taken, fraction, markup, period, queries };
 }
 
 /** The month's discharge of the markup and the VAT included of a warehouse's exits. */
@@ -770,7 +795,7 @@ export const retailDischarge: Treatment<RetailDischargeInput> = {
   },
   evaluate(input, loaded, rules) {
     const end = monthEnd(input.month);
-    const issues: Issue[] = [...retailPolicyIssues(loaded, end)];
+    const issues: Issue[] = [...retailPolicyIssues(loaded, end, input.warehouseId)];
     const warehouse = warehouseFor(loaded, input.warehouseId, 'warehouseId', issues);
     const synthetics = syntheticsFor(rules, end, issues);
     const rule = param<CoefficientRule>(rules, 'ro.stock.retail.coefficient', end, issues);
@@ -837,11 +862,7 @@ export const retailDischarge: Treatment<RetailDischargeInput> = {
     const markupAfter = figures.period.markup.credit - figures.period.markup.debit - figures.markup;
     const before = balancesOf(
       loaded,
-      {
-        prefixes: prefixesOf(defaultSynthetics, warehouse.code),
-        from: always,
-        to: addDays(`${input.month}-01` as LocalDate, -1),
-      },
+      figures.queries.beforePeriod,
       defaultSynthetics,
       warehouse.code,
     );
@@ -857,18 +878,20 @@ export const retailDischarge: Treatment<RetailDischargeInput> = {
         schema: 'effect@1',
         date: end,
         journalClass: 'general',
-        journalCode: 'GENERAL',
+        journalCode: 'DIVERSE',
         description: `Descărcarea adaosului și a TVA neexigibile, gestiunea ${warehouse.code}, ${input.month}`,
         lines,
         openItems: [],
         taxEntries: [],
         schedules: [],
         explanation: {
-          summary: `Ieșiri la preț de vânzare ${lei(figures.exits.reduce((total, row) => total + row.gross, 0n))} lei, fără TVA ${lei(figures.net)} lei; coeficient ${percent(figures.fraction)} (${rule.basis === 'year' ? 'de la începutul exercițiului' : 'al lunii'}): adaos ${lei(figures.markup)} lei, TVA ${lei(figures.vat.reduce((total, row) => total + row.vat, 0n))} lei.`,
+          summary: `Ieșiri la preț de vânzare ${lei(figures.exits.reduce((total, row) => total + row.gross, 0n))} lei, fără TVA ${lei(figures.net)} lei; coeficient ${percent(figures.fraction)} (${rule.basis === 'year' ? `de la începutul exercițiului, aplicat ieșirilor cumulate fără TVA ${lei(figures.cumulated)} lei, minus adaosul descărcat în lunile anterioare ${lei(figures.taken)} lei` : 'al lunii'}): adaos ${lei(figures.markup)} lei, TVA ${lei(figures.vat.reduce((total, row) => total + row.vat, 0n))} lei.`,
           details: {
             warehouseId: warehouse.id,
             month: input.month,
             basis: rule.basis,
+            cumulated: lei(figures.cumulated),
+            taken: lei(figures.taken),
             coefficient: {
               numerator: lei(figures.fraction.numerator),
               denominator: lei(figures.fraction.denominator),
@@ -952,7 +975,7 @@ export const retailCount: Treatment<RetailCountInput> = {
     };
   },
   evaluate(input, loaded, rules) {
-    const issues: Issue[] = [...retailPolicyIssues(loaded, input.date)];
+    const issues: Issue[] = [...retailPolicyIssues(loaded, input.date, input.warehouseId)];
     if (!loaded.evidence.has(input.evidenceId))
       issues.push(block('EVIDENCE', 'Lista de inventariere nu este disponibilă.', 'evidenceId'));
     const warehouse = warehouseFor(loaded, input.warehouseId, 'warehouseId', issues);
@@ -1142,7 +1165,7 @@ export const retailCount: Treatment<RetailCountInput> = {
       schema: 'effect@1',
       date: input.date,
       journalClass: lines.length ? 'general' : 'memo',
-      journalCode: 'GENERAL',
+      journalCode: 'DIVERSE',
       description: `Inventarierea gestiunii ${warehouse.code} la preț cu amănuntul, ${input.date}`,
       lines,
       openItems: [],

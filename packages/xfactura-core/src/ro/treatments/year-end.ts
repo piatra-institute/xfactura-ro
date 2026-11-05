@@ -139,9 +139,12 @@ const reserveQueries = (yearEnd: string) => ({
     from: always,
     to: yearEnd as LocalDate,
   } satisfies TurnoverQuery,
+  // The year's own result: what its closing (INCHIDERE, on the year's last day) brought into 121.
+  // The year's other 121 entries are the previous year's result, moved out once its statements
+  // were approved (`year.transferResult`, dated after that year's end, within this one).
   result: {
     prefixes: ['121'],
-    from: `${yearEnd.slice(0, 4)}-01-01` as LocalDate,
+    from: yearEnd as LocalDate,
     to: yearEnd as LocalDate,
   } satisfies TurnoverQuery,
 });
@@ -150,8 +153,8 @@ const reserveQueries = (yearEnd: string) => ({
  * The legal reserve set aside from the year's profit on its last day (Dr 129 / Cr 1061): at least
  * 5% of the profit each year until the reserve reaches a fifth of the share capital (Legea nr.
  * 31/1990 art. 183 alin. (1)). The law does not say whether the profit is before or after income
- * tax, so the amount is the company's; a share below 5% of the result in 121 asks the reviewer
- * to confirm it.
+ * tax, so the amount is the company's; a share below 5% of the year's result (what its closing
+ * brought into 121) asks the reviewer to confirm it.
  */
 export const legalReserve: Treatment<LegalReserveInput> = {
   id: 'year.legalReserve',

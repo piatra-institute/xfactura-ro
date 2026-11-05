@@ -87,16 +87,25 @@ export async function stockInputs(tx: Transaction, companyId: string, period: st
   return inputs;
 }
 
+/** ProductType, at most 18 characters (ANAF's validator). */
 const productType = (account: string) =>
-  account.startsWith('371')
-    ? 'Marfuri'
-    : account.startsWith('381')
-      ? 'Ambalaje'
-      : account.startsWith('301')
-        ? 'Materii prime'
-        : account.startsWith('303')
-          ? 'Obiecte inventar'
-          : 'Materiale';
+  account.startsWith('331')
+    ? 'Productie in curs'
+    : account.startsWith('341')
+      ? 'Semifabricate'
+      : account.startsWith('345')
+        ? 'Produse finite'
+        : account.startsWith('346')
+          ? 'Produse reziduale'
+          : account.startsWith('371')
+            ? 'Marfuri'
+            : account.startsWith('381')
+              ? 'Ambalaje'
+              : account.startsWith('301')
+                ? 'Materii prime'
+                : account.startsWith('303')
+                  ? 'Obiecte inventar'
+                  : 'Materiale';
 
 /** The nomenclator's movement type of a move, by the treatment that posted it. */
 function movementType(treatment: string, direction: 'in' | 'out' | 'value', subject: string) {
@@ -114,6 +123,14 @@ function movementType(treatment: string, direction: 'in' | 'out' | 'value', subj
       return direction === 'in' ? '110' : '120';
     case 'stock.periodCost':
       return direction === 'value' ? '101' : '180';
+    // Production (G4): materials given to an order are consumed (70); products handed over, and
+    // the work in progress the costing counts, are production (20); the work in progress taken
+    // back at the month's start is another transaction (180).
+    case 'production.consume':
+      return '70';
+    case 'production.output':
+    case 'production.cost':
+      return '20';
     default:
       void subject;
       return '180';

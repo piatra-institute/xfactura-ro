@@ -6,6 +6,7 @@ import {
   type JsonValue,
   type LineSpec,
   type Loaded,
+  type StockDay,
   type StockLayerMethod,
   type StockLayerSpec,
   type StockMoveSpec,
@@ -38,13 +39,42 @@ const block = (code: string, message: string, details?: JsonValue): Issue => ({
   ...(details === undefined ? {} : { details }),
 });
 
+/** The axis of a warehouse's own method, at cost or at retail price, in place of the company's
+ * `policy.stock.retail` for that warehouse. */
+export const warehouseRetailAxis = (warehouseId: string) => `policy.stock.retail.${warehouseId}`;
+
+/**
+ * Whether a warehouse's goods are kept at cost or at their retail price on a date (OMFP nr.
+ * 1.802/2014 pct. 286 alin. (8): the retail price method in retail trade, for numerous,
+ * fast-moving articles of similar margins): the warehouse's own dated fact, else the company's
+ * (`policy.stock.retail`); null when neither is recorded. A shop's warehouse can then be kept at
+ * retail price beside a depot at cost, stocks of a different use (pct. 287 alin. (3); a different
+ * place alone does not justify it, alin. (4), which the person recording the fact states).
+ */
+export function retailMethodAt(
+  loaded: Loaded,
+  warehouseId: string,
+  date: LocalDate,
+): 'cost' | 'retail' | null {
+  const value =
+    profileAt(loaded, warehouseRetailAxis(warehouseId), date) ??
+    profileAt(loaded, 'policy.stock.retail', date);
+  return value === 'cost' || value === 'retail' ? value : null;
+}
+
 /**
  * The stock policy recorded for `date`, or the issues asking for it: the output method
  * (`policy.stock.valuation`), the inventory method (`policy.stock.inventory`, which must be the
  * perpetual one for the register), and whether stock may go negative (`policy.stock.negative`).
- * None is assumed.
+ * None is assumed. The `warehouses` a treatment moves goods in must be kept at cost: one at
+ * retail price is refused (`retailMethodAt`); a treatment over the register as a whole names
+ * none, the register holding no warehouse at retail price.
  */
-export function stockPolicyAt(loaded: Loaded, date: LocalDate): StockPolicy | Issue[] {
+export function stockPolicyAt(
+  loaded: Loaded,
+  date: LocalDate,
+  warehouses: readonly string[] = [],
+): StockPolicy | Issue[] {
   const issues: Issue[] = [];
   const ask = (axis: string, message: string) =>
     issues.push(
@@ -75,15 +105,17 @@ export function stockPolicyAt(loaded: Loaded, date: LocalDate): StockPolicy | Is
       ),
     );
   // The retail price method (pct. 286 alin. (8): goods at their sale price with VAT, the markup
-  // on 378 and the VAT on 4428) keeps goods by value, without quantities (core ro/retail, G2):
-  // the register's treatments, by quantity at cost, do not apply to it.
-  if (profileAt(loaded, 'policy.stock.retail', date) === 'retail')
-    issues.push(
-      block(
-        'STOCK_RETAIL_METHOD',
-        'Mărfurile se țin la preț cu amănuntul (OMFP 1802/2014 pct. 286 alin. (8)), global-valoric: gestiunea pe articole la cost nu se aplică; folosiți recepția cu retail, rapoartele Z cu goods și retail.discharge, retail.count.',
-      ),
-    );
+  // on 378 and the VAT on 4428) keeps a warehouse's goods by value, without quantities (core
+  // ro/retail, G2): the register's treatments, by quantity at cost, do not apply to it.
+  for (const warehouse of new Set(warehouses))
+    if (retailMethodAt(loaded, warehouse, date) === 'retail')
+      issues.push(
+        block(
+          'STOCK_RETAIL_METHOD',
+          `Gestiunea ${loaded.warehouses.get(warehouse)?.code ?? warehouse} ține mărfurile la preț cu amănuntul (OMFP 1802/2014 pct. 286 alin. (8)), global-valoric: gestiunea pe articole la cost nu se aplică; folosiți recepția cu retail, rapoartele Z cu goods și retail.discharge, retail.count.`,
+          { warehouse },
+        ),
+      );
   if (negative !== 'allow' && negative !== 'refuse')
     ask(
       'policy.stock.negative',
@@ -116,6 +148,30 @@ interface WorkingLayer {
   mayGoNegative: boolean;
   quantity: bigint;
   bani: bigint;
+  /** Its posted moves per day of the months still open, when read (`StockQuery.dated`). */
+  days?: readonly StockDay[];
+}
+
+/**
+ * What a layer holds at the end of `date`, its moves dated later taken off (the effect's own are
+ * on its date), and the least it holds from that day on, as its moves dated later leave it. Its
+ * whole quantity and value when its days were not read.
+ */
+function onDate(layer: WorkingLayer, date: LocalDate) {
+  const later = (layer.days ?? []).filter((day) => day.date > date);
+  let quantity = layer.quantity;
+  let bani = layer.bani;
+  for (const day of later) {
+    quantity -= day.quantity;
+    bani -= day.bani;
+  }
+  let least = quantity;
+  let running = quantity;
+  for (const day of later) {
+    running += day.quantity;
+    if (running < least) least = running;
+  }
+  return { quantity, bani, least };
 }
 
 /** What a receipt or an exit concerns. */
@@ -218,9 +274,10 @@ export class StockBook {
   /**
    * Goods entering a position at their cost (`bani`, the part of `line` they are): a new lot
    * under FIFO, else into the item's pool (created at its first receipt). A pool that was below
-   * zero and comes back to exactly zero is left with no value: the difference between what its
-   * exits were valued at and what the receipt cost is corrected against `expense`, on two new
-   * lines. Returns the issues; none when it was recorded.
+   * zero and comes back to zero or above holds what is left of the receipt at the receipt's unit
+   * cost: the units its exits took beyond the stock were valued at an estimate, and they cost what
+   * the receipt cost, so the difference is corrected against `expense`, on two new lines. Returns
+   * the issues; none when it was recorded.
    */
   receive(
     target: StockTarget,
@@ -243,19 +300,26 @@ export class StockBook {
     const pool =
       layers.find((layer) => layer.method === policy.method && layer.account === target.account) ??
       this.newLayer(target, policy.method, policy.negative);
-    const before = { quantity: pool.quantity, bani: pool.bani };
+    const before = pool.quantity;
     this.move(pool, target.quantity, bani, line);
-    // A pool that went negative and is filled exactly: its exits' value was an estimate, which
-    // the receipt's cost now corrects so that no value stays without a quantity.
-    if (before.quantity < 0n && pool.quantity === 0n && pool.bani !== 0n) {
+    // A pool that went negative and is filled again: its exits beyond the stock were valued at an
+    // estimate, which the receipt's cost now corrects, so that what is left holds the receipt's
+    // unit cost (no value without a quantity, when nothing is left).
+    const held =
+      before < 0n && pool.quantity >= 0n
+        ? pool.quantity === 0n
+          ? 0n
+          : prorate(bani, pool.quantity, target.quantity)
+        : pool.bani;
+    if (held !== pool.bani) {
       if (!expense)
         return [
           block(
             'STOCK_CORRECTION',
-            'Recepția readuce la zero un stoc negativ, iar corecția valorii lui nu are un cont de cheltuieli.',
+            'Recepția acoperă un stoc negativ, iar corecția valorii ieșirilor lui nu are un cont de cheltuieli.',
           ),
         ];
-      const correction = -pool.bani;
+      const correction = held - pool.bani;
       const debit = correction > 0n;
       const amount = debit ? correction : -correction;
       this.lines.push(
@@ -279,9 +343,12 @@ export class StockBook {
 
   /**
    * Goods leaving a position, valued by the policy: FIFO from the oldest lot received on or
-   * before the date, LIFO from the newest, or at the pool's average (under the periodic
-   * average, the running one until the month's costing). Returns the value taken (positive) or
-   * the issues.
+   * before the date, LIFO from the newest, or at the pool's average on the date (under the
+   * periodic average, the running one until the month's costing). An exit dated before moves
+   * already posted (an invoice booked after a later receipt) takes what the position held on its
+   * date, at that date's average, and no more than it holds on every later day, so that none
+   * goes below zero; a pool `policy.stock.negative` allows below zero takes the rest at the
+   * average it holds now. Returns the value taken (positive) or the issues.
    */
   issue(
     target: StockTarget,
@@ -299,9 +366,24 @@ export class StockBook {
       (layer) => layer.method !== policy.method && (layer.quantity !== 0n || layer.bani !== 0n),
     );
     if (conflicting) return { issues: [methodChanged(target, conflicting.method, policy.method)] };
-    const available = layers
-      .filter((layer) => layer.method === policy.method && layer.date <= target.date)
-      .reduce((sum, layer) => sum + layer.quantity, 0n);
+    const lots = policy.method === 'fifo' || policy.method === 'lifo';
+    const pool = lots
+      ? undefined
+      : layers.find((layer) => layer.method === policy.method && layer.account === target.account);
+    // What can leave each lot on the date: the least it holds from then on.
+    const room = (layer: WorkingLayer) => {
+      if (layer.date > target.date) return 0n;
+      const least = onDate(layer, target.date).least;
+      return least > 0n ? least : 0n;
+    };
+    const at = pool && pool.date <= target.date ? onDate(pool, target.date) : null;
+    const available = lots
+      ? layers
+          .filter((layer) => layer.method === policy.method)
+          .reduce((sum, layer) => sum + room(layer), 0n)
+      : at && at.least > 0n
+        ? at.least
+        : 0n;
     const short = () =>
       block(
         'STOCK_INSUFFICIENT',
@@ -313,16 +395,17 @@ export class StockBook {
           requested: formatQuantity(target.quantity),
         },
       );
-    if (policy.method === 'fifo' || policy.method === 'lifo') {
+    if (lots) {
       if (available < target.quantity) return { issues: [short()] };
       let remaining = target.quantity;
       let total = 0n;
       // FIFO from the first lot, LIFO from the last one received on or before the date.
-      const lots = policy.method === 'fifo' ? layers : [...layers].reverse();
-      for (const lot of lots) {
+      for (const lot of policy.method === 'fifo' ? layers : [...layers].reverse()) {
         if (remaining === 0n) break;
-        if (lot.method !== policy.method || lot.date > target.date || lot.quantity <= 0n) continue;
-        const taken = remaining < lot.quantity ? remaining : lot.quantity;
+        if (lot.method !== policy.method) continue;
+        const free = room(lot);
+        if (free === 0n) continue;
+        const taken = remaining < free ? remaining : free;
         const value = taken === lot.quantity ? lot.bani : prorate(lot.bani, taken, lot.quantity);
         this.move(lot, -taken, -value, line);
         total += value;
@@ -330,13 +413,14 @@ export class StockBook {
       }
       return { bani: total };
     }
-    const pool = layers.find(
-      (layer) => layer.method === policy.method && layer.account === target.account,
-    );
-    if (!pool || (available < target.quantity && !pool.mayGoNegative)) return { issues: [short()] };
-    // The periodic average values an exit at the running average until the month's costing
+    const covered = at !== null && at.least >= target.quantity;
+    if (!pool || (!covered && !pool.mayGoNegative)) return { issues: [short()] };
+    // Covered on its date, at that date's average; beyond the stock (a pool allowed below zero),
+    // at the average the pool holds now, which the receipts dated after the exit make. The
+    // periodic average values an exit at the running average until the month's costing
     // (`stock.periodCost`) brings the month's exits to its weighted average.
-    if (pool.quantity <= 0n)
+    const basis = covered ? at : { quantity: pool.quantity, bani: pool.bani };
+    if (basis.quantity <= 0n)
       return {
         issues: [
           block(
@@ -347,9 +431,9 @@ export class StockBook {
         ],
       };
     const value =
-      target.quantity === pool.quantity
-        ? pool.bani
-        : prorate(pool.bani, target.quantity, pool.quantity);
+      target.quantity === basis.quantity
+        ? basis.bani
+        : prorate(basis.bani, target.quantity, basis.quantity);
     this.move(pool, -target.quantity, -value, line);
     return { bani: value };
   }

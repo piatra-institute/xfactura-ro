@@ -30,7 +30,7 @@ import {
  * gap, never a pass. Each item records the rule and the slots, with their basis, it came from.
  */
 
-export const CLOSURE_VERSION = 'ro-closure@7';
+export const CLOSURE_VERSION = 'ro-closure@8';
 
 export type ClosureStatus = 'ELIGIBLE' | 'NEEDS_EVIDENCE' | 'UNSUPPORTED';
 
@@ -73,10 +73,16 @@ export interface ClosureBooks {
   /** Months with lines on stock accounts (class 3), a dealer's items under the margin scheme
    * (on 371, each its purchase document) left out. */
   stockMonths: readonly string[];
+  /** Months with production postings (G4): lines tagged by a work order, its work in progress or
+   * its price differences. */
+  productionMonths?: readonly string[];
   /** The special VAT schemes the books show (V4), by month: a travel agency's margins and sales
    * (`travel`), a dealer's items bought or sold under the margin scheme (`goods`), purchases
    * under the agricultural flat rate (`flat_rate`). */
   schemes?: readonly { month: string; scheme: 'travel' | 'goods' | 'flat_rate' }[];
+  /** Months with sales declared in the Union scheme (EXP-OSS, V4), by tax point: their SAF-T
+   * code (310340) has the consumer state's rate, which the D406 writer does not write. */
+  ossMonths?: readonly string[];
   /** Months with sponsorship expenses (6582). */
   sponsorshipMonths: readonly string[];
   /** Months with payroll taxes booked (444, 431x, 436) and no employment contract running. */
@@ -869,6 +875,29 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
           return;
         }
         if (form.state === 'known' && !individualForms.includes(form.value as EntityForm)) {
+          // Sales in the Union scheme (V4) are D398's, and in D406 under 310340 at the consumer
+          // state's rate, which is not the one rate the TaxTable gives a code: the writer does
+          // not produce a D406 holding them (D406_TAX_CODE), so the period is not covered.
+          const quarter = /^(\d{4})-Q([1-4])$/.exec(due.period);
+          const covered = quarter
+            ? [0, 1, 2].map(
+                (offset) =>
+                  `${quarter[1]}-${String(Number(quarter[2]) * 3 - 2 + offset).padStart(2, '0')}`,
+              )
+            : [due.period];
+          const oss = covered.filter((item) => (books.ossMonths ?? []).includes(item));
+          if (oss.length) {
+            const trigger = emit.unsupported({
+              trigger: 'OSS_D406',
+              message: `Vânzări în regimul special Uniune (OSS) în ${oss.join(', ')}: în D406 se raportează cu codul 310340, la cota statului de consum, pe care fișierul nu o scrie încă; D406 al perioadei nu se întocmește din aplicație.`,
+              missingCapabilities: ['D406_OSS_TAX_CODE'],
+              evidenceIds: [],
+              resolution:
+                'D406 al perioadei întocmit în afara aplicației, atribuit explicit, până când fișierul scrie cotele statelor de consum.',
+            });
+            emit.obligation({ ...item, ...due, state: 'unsupported', blockers: [trigger] });
+            return;
+          }
           emit.obligation({ ...item, ...due });
           return;
         }
@@ -1833,6 +1862,24 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
             missingCapabilities: ['RETAIL_INTERMITTENT'],
             evidenceIds: [],
             resolution: 'Inventarul permanent, sau mărfurile ținute la cost.',
+          });
+      }
+      // Production (G4): products costed under a written method (OMFP 1802/2014 pct. 8 pct. 7,
+      // 286), kept on the perpetual inventory; the intermittent one is not built for products.
+      if (books.productionMonths?.length) {
+        if (!recordedAt(facts, 'policy.production.cost', last))
+          factNeed(
+            emit,
+            'policy.production.cost',
+            'Nu este înregistrată metoda de calcul al costului produselor (policy.production.cost: costul standard sau costul de producție efectiv).',
+          );
+        if (recordedAt(facts, 'policy.stock.inventory', last) === 'intermittent')
+          emit.unsupported({
+            trigger: 'PRODUCTION_INTERMITTENT',
+            message: `Firma are producție (${books.productionMonths.join(', ')}) cu inventarul intermitent: produsele stabilite doar prin inventar la sfârșitul perioadei nu sunt construite (funcțiunile conturilor 345 și 711 descriu inventarul permanent).`,
+            missingCapabilities: ['PRODUCTION_INTERMITTENT'],
+            evidenceIds: [],
+            resolution: 'Inventarul permanent pentru produse.',
           });
       }
       const regime = recordedAt(facts, 'regime.excluded', last);

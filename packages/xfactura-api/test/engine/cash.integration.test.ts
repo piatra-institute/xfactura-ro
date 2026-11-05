@@ -159,6 +159,30 @@ describe('cash', () => {
     ]);
   });
 
+  test('cash is not allocated to an amount for later months (471): its schedule releases it', async () => {
+    const { s, invoice, cash } = await company();
+    await s.book('deferrals.defer', {
+      date: '2026-10-02',
+      account: '628',
+      amount: '100.00',
+      from: '2026-10',
+      months: 2,
+      partyId: invoice.partyId,
+      documentId: invoice.id,
+      evidenceId: (await s.evidence('contract-abonament.pdf')).id,
+    });
+    const [deferral] = await s.list<{ id: string }>(s.owner, 'openItems.list', {
+      kind: 'deferral.expense',
+    });
+    const paid = await cash({
+      direction: 'payment',
+      number: 'DP-9',
+      partyId: invoice.partyId,
+      allocations: [{ openItem: deferral!.id, amount: '100.00' }],
+    });
+    expect(codes(paid)).toEqual(['OPEN_ITEM_KIND']);
+  });
+
   test('Legea 70/2015: limits are acknowledged, a negative cash desk is refused', async () => {
     const { s, invoice, person, cash } = await company();
     const [payable] = await s.list<{ id: string }>(s.owner, 'openItems.list', {

@@ -761,6 +761,358 @@ describe('a shop at retail price (OMFP 1802/2014 pct. 286 alin. (8))', () => {
       markup: '403.20',
       cost: '672.01',
     });
+
+    // The month's D406: the reception's VAT on its cost's line, not on the VAT included and the
+    // markup added on top; the count's adjustment on 635; the discharge in the general journal;
+    // the warehouse's analytics numbered as the company's chart numbers them; no customer.
+    await s.invoke(s.owner, 'parties.recordDetails', {
+      partyId: (await s.invoke<{ partyId: string }>(s.owner, 'documents.get', { id: invoice.id }))
+        .partyId,
+      details: {
+        name: 'Furnizor Exemplu SRL',
+        vatId: 'RO13548146',
+        address: {
+          lines: ['Str. Portului 3'],
+          city: 'Brăila',
+          subdivision: 'RO-BR',
+          country: 'RO',
+        },
+      },
+    });
+    const saft = await s.invoke<{ state: string; evidenceId: string }>(
+      s.owner,
+      'declarations.prepare',
+      {
+        kind: 'D406',
+        period: '2026-10',
+        options: {
+          contact: { firstName: 'Ana', lastName: 'Popescu', phone: '0236000000' },
+          accounts: { '635': '635' },
+          accountIds: { '371.M2-21': '3712021', '378.M2': '37802', '4428.M2-21': '44282021' },
+        },
+      },
+    );
+    expect(saft.state).toBe('prepared');
+    const written = Buffer.from(
+      (await s.invoke<{ base64: string }>(s.owner, 'evidence.get', { id: saft.evidenceId })).base64,
+      'base64',
+    ).toString('utf8');
+    expect(written).toContain('<nsSAFT:AccountID>3712021</nsSAFT:AccountID>');
+    expect(written).toContain('<nsSAFT:Customers/>');
+  });
+});
+
+/** A shop's warehouse M2 at retail price (21%): received at sale price, sold on Z reports. */
+async function retailShop(
+  policies: Record<string, string> = {
+    'policy.stock.retail': 'retail',
+    'policy.stock.inventory': 'permanent',
+  },
+) {
+  const c = await company(policies);
+  const { s, file, post } = c;
+  const store = await s.invoke<{ id: string }>(s.owner, 'stock.warehouses.create', {
+    code: 'M2',
+    name: 'Magazin centru',
+    keeper: 'Ionescu Maria',
+  });
+  await s.invoke(s.owner, 'retail.setup', { warehouseId: store.id, rates: ['21'] });
+  /** A purchase of 1.000 + 210 VAT received at a sale price with VAT. */
+  const receive = async (number: string, date: string, sale: string) => {
+    const invoice = await s.invoke<{ id: string }>(s.owner, 'invoices.import', {
+      evidenceId: await file(
+        `${number}.xml`,
+        'application/xml',
+        invoiceXml({
+          company: cui,
+          number,
+          date,
+          counterparty: 'RO13548146',
+          net: '1000.00',
+          tax: '210.00',
+          gross: '1210.00',
+        }),
+      ),
+    });
+    return post(
+      await s.propose('invoices.recognize', {
+        documentId: invoice.id,
+        account: '371.M2-21',
+        retail: {
+          warehouseId: store.id,
+          evidenceId: await file(`nir-${number}.pdf`, 'application/pdf', number),
+          prices: [{ account: '371.M2-21', sale }],
+        },
+      }),
+    );
+  };
+  /** A Z report of the shop's register selling goods at 21%, paid in cash. */
+  const zReport = async (number: number, date: string, gross: string, tax: string) =>
+    s.invoke<{ id: string }>(s.owner, 'documents.record', {
+      evidenceId: await file(`z-m2-${number}.png`, 'image/png', `z-m2-${number}`),
+      kind: 'zreport',
+      body: {
+        seller: { name: 'Magazin Exemplu SRL', taxId: `RO${cui}`, country: 'RO' },
+        register: '4400099999',
+        number: String(number),
+        issueDate: date,
+        receipts: 3,
+        currency: 'RON',
+        taxes: [{ rate: '21', gross, tax }],
+        totals: { gross, tax },
+        payments: [{ method: 'cash', amount: gross, currency: 'RON' }],
+      },
+    });
+  const sell = async (number: number, date: string, gross: string, tax: string) =>
+    post(
+      await s.propose('retail.zReport', {
+        documentId: (await zReport(number, date, gross, tax)).id,
+        cash: '5311',
+        account: '707',
+        goods: { warehouseId: store.id },
+      }),
+    );
+  return { ...c, store, receive, zReport, sell };
+}
+
+// The review of November 2026 (review-findings.integration.test.ts), fixed.
+describe('the retail price method’s discharge (pct. 286 alin. (4))', () => {
+  // The year basis applied the coefficient cumulated from the year's start to the month's exits
+  // alone, without taking off what earlier months discharged.
+  test('the year basis discharges what a warehouse emptied each month holds', async () => {
+    const { s, store, receive, sell, post } = await retailShop();
+    // September: cost 1.000, sale 1.100 + 231 VAT (markup 100), all sold.
+    await receive('F-9', '2026-09-05', '1331.00');
+    await sell(1, '2026-09-20', '1331.00', '231.00');
+    const september = await post(
+      await s.propose('retail.discharge', { month: '2026-09', warehouseId: store.id }),
+    );
+    expect(lines(september)).toEqual([
+      'D 378.M2 100.00',
+      'C 607 100.00',
+      'D 4428.M2-21 231.00',
+      'C 607 231.00',
+    ]);
+    // October: cost 1.000, sale 1.500 + 315 VAT (markup 500), all sold: nothing is left, so the
+    // whole 500 is discharged and 607 holds the two costs.
+    await receive('F-10', '2026-10-05', '1815.00');
+    await sell(2, '2026-10-20', '1815.00', '315.00');
+    const october = await s.propose('retail.discharge', {
+      month: '2026-10',
+      warehouseId: store.id,
+    });
+    expect(lines(october)).toEqual([
+      'D 378.M2 500.00',
+      'C 607 500.00',
+      'D 4428.M2-21 315.00',
+      'C 607 315.00',
+    ]);
+  });
+
+  // Exits were read as the credit turnover of 371 and entries as its debits: a black storno swaps
+  // the sides, so a reversed reception read as goods sold, its markup and VAT discharged onto 607
+  // (D 378 500 / C 607 500, D 4428 315 / C 607 315).
+  test('a reception reversed by black storno is not an exit', async () => {
+    const { s, store, receive, findings } = await retailShop();
+    const received = await receive('F-1', '2026-10-05', '1815.00');
+    await s.book('ledger.reverse', {
+      entryId: received.entry!.id,
+      date: '2026-10-10',
+      reason: 'Recepție înregistrată din greșeală.',
+      evidenceId: (await s.evidence('storno.pdf')).id,
+      method: 'black',
+    });
+    const discharge = await s.propose('retail.discharge', {
+      month: '2026-10',
+      warehouseId: store.id,
+    });
+    expect(discharge.effect).toBeNull();
+    expect(codes(discharge)).toEqual(['RETAIL_NO_EXITS']);
+    // The close reads the month's exits the same way: none, so no discharge is asked for.
+    expect((await findings('2026-10')).map((item) => item.code)).not.toContain(
+      'RETAIL_DISCHARGE_MISSING',
+    );
+  });
+
+  test('a Z report reversed by black storno is a negative exit, not an entry', async () => {
+    const { s, store, receive, sell, post } = await retailShop();
+    // Cost 1.000, sale 1.500 + 315 VAT; 605 sold, then 605 more, the second reversed in black.
+    await receive('F-1', '2026-10-05', '1815.00');
+    await sell(1, '2026-10-20', '605.00', '105.00');
+    const wrong = await sell(2, '2026-10-21', '605.00', '105.00');
+    await s.book('ledger.reverse', {
+      entryId: wrong.entry!.id,
+      date: '2026-10-22',
+      reason: 'Raport Z înregistrat de două ori.',
+      evidenceId: (await s.evidence('storno-z.pdf')).id,
+      method: 'black',
+    });
+    // One exit of 605 (500 without VAT) at K = 500 ÷ 1.500: 166,67 of markup, 105 of VAT.
+    const discharged = await post(
+      await s.propose('retail.discharge', { month: '2026-10', warehouseId: store.id }),
+    );
+    expect(lines(discharged)).toEqual([
+      'D 378.M2 166.67',
+      'C 607 166.67',
+      'D 4428.M2-21 105.00',
+      'C 607 105.00',
+    ]);
+  });
+});
+
+// One shop, two warehouses: M1 by item at cost (FIFO), M2 at retail price. The method is each
+// warehouse's dated fact (`policy.stock.retail.<warehouseId>`), the company's
+// `policy.stock.retail` the default (OMFP 1802/2014 pct. 286 alin. (8), 287 alin. (3)).
+describe('a warehouse at cost beside one at retail price', () => {
+  test('each warehouse keeps its method: quantities at cost in one, sale price in the other', async () => {
+    const { s, file, post, store, receive, sell } = await retailShop({
+      'policy.stock.retail': 'retail',
+      'policy.stock.inventory': 'permanent',
+      'policy.stock.valuation': 'fifo',
+      'policy.stock.negative': 'refuse',
+    });
+    const counter = await s.invoke<{ id: string }>(s.owner, 'stock.warehouses.create', {
+      code: 'M1',
+      name: 'Magazin vechi',
+      keeper: 'Popa Ion',
+    });
+    const coffee = await s.invoke<{ id: string }>(s.owner, 'stock.items.create', {
+      code: 'CAF-1',
+      name: 'Cafea boabe',
+      unit: 'H87',
+      account: '371',
+      vatCategory: 'standard',
+    });
+    const supplier = await s.party('Furnizor Cafea SRL', '14399840');
+    const receipt = async (warehouseId: string, reference: string) => ({
+      date: '2026-10-02',
+      warehouseId,
+      supplierId: supplier.id,
+      reference,
+      evidenceId: (await s.evidence(`${reference}.pdf`)).id,
+      lines: [{ itemId: coffee.id, quantity: '10', value: '100.00' }],
+    });
+    // The company's fact keeps M1 at retail price too, until its own says otherwise.
+    const early = await s.propose('stock.receive', await receipt(counter.id, 'AV-0'));
+    expect(codes(early)).toEqual(['STOCK_RETAIL_METHOD']);
+    await s.invoke(s.owner, 'proposals.withdraw', {
+      proposalId: early.id,
+      reason: 'Gestiunea M1 se ține la cost',
+    });
+    const policy = (await s.evidence('politici-gestiuni.pdf')).id;
+    const fact = (warehouseId: string, value: string) =>
+      s.invoke(s.owner, 'profile.record', {
+        axis: `policy.stock.retail.${warehouseId}`,
+        value,
+        effectiveFrom: '2026-01-01',
+        evidenceId: policy,
+      });
+    // A warehouse the company has, at cost or at retail price.
+    expect((await s.refused(fact(crypto.randomUUID(), 'cost')))?.code).toBe('WAREHOUSE');
+    expect(await s.refused(fact(counter.id, 'fifo'))).toBeDefined();
+    await fact(counter.id, 'cost');
+
+    // M1: by quantity, FIFO, out on its register's Z report by article.
+    const received = await s.book('stock.receive', await receipt(counter.id, 'AV-1'));
+    expect(lines(received)).toEqual(['D 371 100.00', 'C 408 100.00']);
+    const z1 = await s.invoke<{ id: string }>(s.owner, 'documents.record', {
+      evidenceId: await file('z-m1-1.png', 'image/png', 'z-m1-1'),
+      kind: 'zreport',
+      body: {
+        seller: { name: 'Magazin Exemplu SRL', taxId: `RO${cui}`, country: 'RO' },
+        register: '4400011111',
+        number: '1',
+        issueDate: '2026-10-20',
+        receipts: 4,
+        currency: 'RON',
+        taxes: [{ rate: '21', gross: '121.00', tax: '21.00' }],
+        totals: { gross: '121.00', tax: '21.00' },
+        payments: [{ method: 'cash', amount: '121.00', currency: 'RON' }],
+        items: [
+          {
+            code: 'CAF-1',
+            name: 'Cafea boabe',
+            quantity: '4',
+            unit: 'H87',
+            gross: '121.00',
+            rate: '21',
+          },
+        ],
+      },
+    });
+    const atCost = (warehouseId: string) => ({
+      documentId: z1.id,
+      cash: '5311',
+      account: '707',
+      stock: { warehouseId, lines: [{ line: '1', itemId: coffee.id }] },
+    });
+    // Not out of M2: its goods are kept by value at sale price.
+    const fromShop = await s.propose('retail.zReport', atCost(store.id));
+    expect(codes(fromShop)).toContain('RETAIL_POLICY');
+    const z1Booked = await s.revise('retail.zReport', fromShop, atCost(counter.id));
+    expect(lines(z1Booked)).toEqual([
+      'C 707 100.00',
+      'C 4427 21.00',
+      'D 5311 121.00',
+      'C 371 40.00',
+      'D 607 40.00',
+    ]);
+    await post(z1Booked);
+
+    // M2: at sale price, its quantity treatments refused, its Z report discharged monthly.
+    expect(codes(await s.propose('stock.receive', await receipt(store.id, 'AV-2')))).toEqual([
+      'STOCK_RETAIL_METHOD',
+    ]);
+    await receive('F-2', '2026-10-05', '1815.00');
+    await sell(1, '2026-10-21', '605.00', '105.00');
+    expect(
+      codes(await s.propose('retail.discharge', { month: '2026-10', warehouseId: counter.id })),
+    ).toContain('RETAIL_POLICY');
+    const discharged = await post(
+      await s.propose('retail.discharge', { month: '2026-10', warehouseId: store.id }),
+    );
+    expect(lines(discharged)).toEqual([
+      'D 378.M2 166.67',
+      'C 607 166.67',
+      'D 4428.M2-21 105.00',
+      'C 607 105.00',
+    ]);
+    const register = await s.invoke<{ positions: { code: string; quantity: string }[] }>(
+      s.owner,
+      'stock.register',
+      {},
+    );
+    expect(register.positions.map((row) => `${row.code} ${row.quantity}`)).toEqual(['CAF-1 6.000']);
+  });
+
+  test('the company at cost, its shop’s warehouse at retail price by its own fact', async () => {
+    const c = await company({
+      'policy.stock.retail': 'cost',
+      'policy.stock.inventory': 'permanent',
+      'policy.stock.valuation': 'fifo',
+      'policy.stock.negative': 'refuse',
+    });
+    const store = await c.s.invoke<{ id: string }>(c.s.owner, 'stock.warehouses.create', {
+      code: 'M2',
+      name: 'Magazin centru',
+      keeper: 'Ionescu Maria',
+    });
+    await c.s.invoke(c.s.owner, 'retail.setup', { warehouseId: store.id, rates: ['21'] });
+    const discharge = () =>
+      c.s.propose('retail.discharge', { month: '2026-10', warehouseId: store.id });
+    const refused = await discharge();
+    expect(codes(refused)).toContain('RETAIL_POLICY');
+    await c.s.invoke(c.s.owner, 'proposals.withdraw', {
+      proposalId: refused.id,
+      reason: 'Gestiunea M2 se ține la preț cu amănuntul',
+    });
+    await c.s.invoke(c.s.owner, 'profile.record', {
+      axis: `policy.stock.retail.${store.id}`,
+      value: 'retail',
+      effectiveFrom: '2026-10-01',
+      evidenceId: (await c.s.evidence('politica-m2.pdf')).id,
+    });
+    expect(codes(await discharge())).toEqual(['RETAIL_NO_EXITS']);
   });
 });
 

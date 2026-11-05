@@ -36,8 +36,10 @@ import {
   questions,
   taxPeriodEvents,
   withdrawals,
+  type Role,
 } from '../db/schema';
 import { appendAudit, type Actor, type Commands } from './commands';
+import { maskCnps, payClasses, personnelAccount, withoutPersons } from './personal';
 import {
   requireActiveApprover,
   requireSegregated,
@@ -45,6 +47,7 @@ import {
   type Segregation,
 } from './controls';
 import { holdsSubject, writeEntry } from './ledger';
+import { closedMonths } from './periods';
 import { loadAccounts, loadState, mergeStates } from './state';
 import { auditHead } from './events';
 import { rootOf, sourceReview } from './sources';
@@ -458,6 +461,21 @@ export class Proposals {
       .orderBy(desc(periodEvents.seq))
       .limit(1);
     if (period?.kind === 'close') issues.push(block('PERIOD_CLOSED', 'Luna este închisă.'));
+    else {
+      // A close covers every earlier month: its balances, and every later close's built on them,
+      // would miss an entry dated before it.
+      const month = effect.date.slice(0, 7);
+      const later = await closedMonths(tx, companyId, { after: month });
+      const last = later.at(-1)?.month;
+      if (last)
+        issues.push(
+          block(
+            'LATER_CLOSED',
+            `O lună ulterioară este închisă (${last}) și acoperă lunile dinaintea ei: redeschideți întâi lunile închise de după ${month} sau datați înregistrarea după ${last}.`,
+            { months: later.map((item) => item.month) },
+          ),
+        );
+    }
     const periods = [
       ...new Set(effect.taxEntries.map((entry) => `${entry.tax}/${entry.taxPeriod}`)),
     ];
@@ -854,6 +872,8 @@ export class Proposals {
             effectHash: input.effectHash,
             approverId: actor.actorId,
             approverEpoch: access.epoch,
+            // None, as agents never approve; the database refuses one (`inv:approval_person`).
+            agentId: actor.agentId ?? null,
             acknowledgements: canonical([...new Set(input.acknowledge)].sort()),
             engineAt: this.clock(),
           });
@@ -1044,6 +1064,8 @@ export class Proposals {
       effectHash: member.effectHash,
       approverId: batch.decidedBy,
       approverEpoch: batch.decidedEpoch,
+      // The decider's approval, given in `actions.approve`; whoever executes the batch acted on it.
+      agentId: null,
       acknowledgements: canonical([]),
       batchRequestId: batch.requestId,
       engineAt: this.clock(),
@@ -1354,12 +1376,13 @@ export class Proposals {
       );
       if (check) await this.commands.db.write((tx) => saveCheck(tx, actor.companyId, check));
     }
-    return this.commands.read(actor, 'proposals.get', async (tx) => {
+    return this.commands.read(actor, 'proposals.get', async (tx, access) => {
       const [view] = await this.disclosed(
         tx,
         actor,
         [await this.view(tx, actor.companyId, proposalId)],
         true,
+        access.role,
       );
       return view!;
     });
@@ -1376,7 +1399,7 @@ export class Proposals {
       withInput?: boolean;
     },
   ) {
-    return this.commands.read(actor, 'proposals.list', async (tx) => {
+    return this.commands.read(actor, 'proposals.list', async (tx, access) => {
       const rows = await tx
         .select()
         .from(proposals)
@@ -1388,7 +1411,7 @@ export class Proposals {
       );
       const page = views.slice(0, input.limit);
       return {
-        items: await this.disclosed(tx, actor, page, input.withInput ?? false),
+        items: await this.disclosed(tx, actor, page, input.withInput ?? false, access.role),
         next: views.length > input.limit ? page.at(-1)!.id : null,
       };
     });
@@ -1399,15 +1422,34 @@ export class Proposals {
    * `proposals.revise` starts from. The input and the basis go only to a caller who may read
    * every data class of the treatment, as `events.since` decides (`Commands.readable`): a person,
    * or an agent whose grant's reads cover them; otherwise both are null and the view `redacted`.
+   * The effect shows no one's pay to an agent whose reads do not cover `payroll` and `personal`
+   * (`withoutPersons`: the lines on personnel accounts summed, without the person, and their open
+   * items left out), and no CNP (a B2C buyer's in a tax entry's attributes) to a caller who may
+   * not read personal data in clear (`Commands.disclosable`).
    */
   private async disclosed(
     tx: Transaction,
     actor: Actor,
     views: ProposalView[],
     withInput: boolean,
+    role: Role,
   ): Promise<ProposalView[]> {
     if (!views.length) return views;
     const readable = await this.commands.readable(tx, actor);
+    const pay = readable(payClasses);
+    const cnps = (await this.commands.disclosable(tx, actor, role))(['personal']);
+    const shown = (view: ProposalView): ProposalView => {
+      let effect = view.effect;
+      if (effect && !pay)
+        effect = {
+          ...effect,
+          lines: withoutPersons(effect.lines),
+          openItems: effect.openItems.filter((item) => !personnelAccount(item.controlAccount)),
+        };
+      return cnps
+        ? { ...view, effect }
+        : { ...view, effect: maskCnps(effect), issues: maskCnps(view.issues) };
+    };
     const inputs = new Map<string, string>();
     if (withInput)
       for (const row of await tx
@@ -1431,11 +1473,16 @@ export class Proposals {
       // The data classes of the treatment's own operation; an unknown treatment's are unknown.
       const classes = this.commands.dataClassesOf(`${view.treatment}.propose`);
       if (actor.agentId && !(classes && readable(classes)))
-        return { ...view, basis: null, ...(withInput ? { input: null } : {}), redacted: true };
+        return {
+          ...shown(view),
+          basis: null,
+          ...(withInput ? { input: null } : {}),
+          redacted: true,
+        };
       const stored = inputs.get(`${view.id}/${view.version}`);
       return withInput && stored
-        ? { ...view, input: JSON.parse(stored) as Record<string, unknown> }
-        : view;
+        ? { ...shown(view), input: JSON.parse(stored) as Record<string, unknown> }
+        : shown(view);
     });
   }
 

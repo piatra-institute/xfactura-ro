@@ -47,7 +47,7 @@ export const yearEndSources: readonly LegalSource[] = [
       {
         url: 'https://xfactura.invalid/owner-download/NORMA_09_10_2009.pdf',
         sha256: 'e2685102d4a20cae415a9d17de981ffec55bfe4479ad1aa6f332cd721fba7670',
-        retrievedOn: '2026-11-06',
+        retrievedOn: '2026-11-05',
         mediaType: 'application/pdf',
       },
     ],

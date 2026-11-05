@@ -44,9 +44,11 @@ import {
 } from '../db/schema';
 import { sha256, type ObjectStore } from '../adapters/object-store';
 import type { Actor, Commands } from '../kernel/commands';
+import { maskCnps } from '../kernel/personal';
 import type { Proposals } from '../kernel/proposals';
 import { joinIdentityGroup } from '../kernel/sources';
 import { loadState } from '../kernel/state';
+import { maskedTaxId } from './company';
 import type { Sealer } from './payroll';
 
 export const sellerInput = z.object({ details: partySchema }).strict();
@@ -305,6 +307,8 @@ export class Sales {
     });
   }
 
+  /** A partner with its current details; for agents, an individual's identifier and any CNP in
+   * the details are masked (`maskedTaxId`, `maskCnps`). */
   partyDetails(actor: Actor, input: { partyId: string }) {
     return this.commands.read(actor, 'parties.get', async (tx) => {
       const [party] = await tx
@@ -313,14 +317,15 @@ export class Sales {
         .where(and(eq(parties.companyId, actor.companyId), eq(parties.id, input.partyId)));
       requireCondition(party, 'NOT_FOUND', 'Partenerul nu există.', 404);
       const details = await latestDetails(tx, actor.companyId, party.id);
+      const shown = details?.details ?? null;
       return {
         id: party.id,
         kind: party.kind,
         country: party.country,
-        taxId: party.taxId,
+        taxId: maskedTaxId(actor, party),
         name: party.name,
         version: details?.version ?? null,
-        details: details?.details ?? null,
+        details: actor.agentId ? maskCnps(shown) : shown,
       };
     });
   }

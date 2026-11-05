@@ -36,6 +36,11 @@ import { stockAccountsSpec, stockMethodsSpec } from './stock';
 import { importSpec, transportSpec, viesSpec } from './trade';
 import { efacturaB2cSpec, retailCoefficientSpec, retailZReportSpec } from './retail';
 import {
+  productionAccountsSpec,
+  productionCoefficientSpec,
+  productionCostingSpec,
+} from './production';
+import {
   certificateDaysSpec,
   dividendRateSpec,
   ipRateSpec,
@@ -108,4 +113,7 @@ export const reviewSpecs: readonly ReviewSpec[] = [
   retailCoefficientSpec,
   retailZReportSpec,
   efacturaB2cSpec,
+  productionAccountsSpec,
+  productionCostingSpec,
+  productionCoefficientSpec,
 ];

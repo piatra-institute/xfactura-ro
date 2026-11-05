@@ -28,6 +28,7 @@ describe('question kinds', () => {
       'obligation.filed',
       'payroll.absences',
       'payroll.benefits',
+      'production.excess',
       'profile.fact',
       'profit.account',
       'profit.losses',

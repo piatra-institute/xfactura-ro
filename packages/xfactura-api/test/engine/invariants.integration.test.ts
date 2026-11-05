@@ -1,8 +1,10 @@
 import { afterAll, describe, expect, test } from 'bun:test';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import { canonical, derivedId } from 'xfactura-core/hash';
 import type { Effect, StockMoveSpec } from 'xfactura-core/kernel';
+import type { LocalDate } from 'xfactura-core/time';
+import { PartyIdentities } from '../../source/engine/db/identity';
 import {
   answerMediaType,
   guardedTables,
@@ -26,6 +28,8 @@ import {
   bankMappings,
   bankMovements,
   bankStatements,
+  bomLines,
+  boms,
   cashRegisterEvents,
   cashRegisters,
   commands,
@@ -78,6 +82,8 @@ import {
   treasuryAccounts,
   warehouses,
   withdrawals,
+  workOrderEvents,
+  workOrders,
 } from '../../source/engine/db/schema';
 import { authorizedDeclaration, lockTaxPeriod } from './fixtures/locks';
 import {
@@ -703,7 +709,7 @@ async function payrollRecords(world: World) {
       companyId: world.company,
       kind: 'ro_individual',
       country: 'RO',
-      taxId: `cnp:${'0'.repeat(64)}`,
+      taxId: `cnp:k1:${'0'.repeat(64)}`,
       name: 'Salariat',
       createdBy: world.owner,
     });
@@ -872,7 +878,13 @@ async function bankRecords(world: World) {
       createdBy: world.owner,
     });
   });
-  const statement = async (from: string, to: string, opening: bigint, closing: bigint) => {
+  const statement = async (
+    from: string,
+    to: string,
+    opening: bigint,
+    closing: bigint,
+    extra: Partial<typeof bankStatements.$inferInsert> = {},
+  ) => {
     const id = randomUUID();
     await world.db.write((tx) =>
       tx.insert(bankStatements).values({
@@ -888,14 +900,16 @@ async function bankRecords(world: World) {
         closingMinor: closing,
         financialHash: id.replace(/-/g, '').padEnd(64, '0'),
         createdBy: world.owner,
+        ...extra,
       }),
     );
     return id;
   };
-  const movement = (statementId: string, bookingDate: string) =>
-    world.db.write((tx) =>
+  const movement = async (statementId: string, bookingDate: string) => {
+    const id = randomUUID();
+    await world.db.write((tx) =>
       tx.insert(bankMovements).values({
-        id: randomUUID(),
+        id,
         companyId: world.company,
         treasuryAccountId: accountId,
         statementId,
@@ -907,7 +921,24 @@ async function bankRecords(world: World) {
         details: '{}',
       }),
     );
-  return { statement, movement };
+    return id;
+  };
+  /** A movement of a statement an agent transcribed from a file, its citations as checked. */
+  const transcribed = async (status: 'verified' | 'unverified') =>
+    movement(
+      await statement('2026-03-01', '2026-03-31', 0n, 100n, {
+        format: 'transcribed',
+        citations: canonical({
+          extractor: null,
+          items: [
+            { what: 'opening', status: 'verified' },
+            { what: 'entries.0', status },
+          ],
+        }),
+      }),
+      '2026-03-10',
+    );
+  return { statement, movement, transcribed };
 }
 
 /** A question asked in the owner's name about a vehicle: `answer` and `withdraw` it, `ask`
@@ -1268,6 +1299,121 @@ async function cashRegister(world: World, code = '4400012345') {
   return { id, evidenceId };
 }
 
+/** Production (G4): a table (345) made of boards (301) on a bill of materials valid from 1 March,
+ * its line, and a work order on it with its closing, each when asked. */
+async function productionRecords(world: World) {
+  const [evidenceId, product, material, bomId] = [
+    randomUUID(),
+    randomUUID(),
+    randomUUID(),
+    randomUUID(),
+  ];
+  await world.db.write(async (tx) => {
+    await tx.insert(evidence).values({
+      id: evidenceId,
+      companyId: world.company,
+      hash: evidenceId.replaceAll('-', '').padEnd(64, '0'),
+      filename: 'fisa-tehnica.pdf',
+      mediaType: 'application/pdf',
+      size: 1,
+      createdBy: world.owner,
+    });
+    // The finished products' and raw materials' accounts, beyond the minimal chart.
+    await tx.insert(ledgerAccounts).values(
+      ['345', '301'].map((code) => ({
+        companyId: world.company,
+        code,
+        name: code,
+        nature: 'both' as const,
+        book: 'general' as const,
+        postable: true,
+        controlKind: null,
+        validFrom: '2015-01-01',
+        chartVersion: 'test',
+        createdBy: world.owner,
+      })),
+    );
+    await tx.insert(stockItems).values([
+      {
+        id: product,
+        companyId: world.company,
+        code: `MASA-${product.slice(0, 6)}`,
+        name: 'Masă',
+        unit: 'H87',
+        account: '345',
+        createdBy: world.owner,
+      },
+      {
+        id: material,
+        companyId: world.company,
+        code: `PAL-${material.slice(0, 6)}`,
+        name: 'Placă PAL',
+        unit: 'H87',
+        account: '301',
+        createdBy: world.owner,
+      },
+    ]);
+  });
+  const bom = (values: Partial<typeof boms.$inferInsert> = {}) =>
+    world.db.write((tx) =>
+      tx.insert(boms).values({
+        id: randomUUID(),
+        companyId: world.company,
+        itemId: product,
+        version: 1,
+        validFrom: '2026-03-01',
+        outputQuantity: 1000n,
+        standardCost: 55000n,
+        evidenceId,
+        createdBy: world.owner,
+        ...values,
+      }),
+    );
+  await bom({ id: bomId });
+  const line = (lineNo: number, itemId = material) =>
+    world.db.write((tx) =>
+      tx.insert(bomLines).values({
+        companyId: world.company,
+        bomId,
+        lineNo,
+        itemId,
+        quantity: 2000n,
+      }),
+    );
+  await line(1);
+  const order = async (values: Partial<typeof workOrders.$inferInsert> = {}) => {
+    const id = randomUUID();
+    await world.db.write((tx) =>
+      tx.insert(workOrders).values({
+        id,
+        companyId: world.company,
+        number: `CP-${id.slice(0, 6)}`,
+        itemId: product,
+        bomId,
+        quantity: 10000n,
+        openedOn: '2026-03-02',
+        evidenceId,
+        createdBy: world.owner,
+        ...values,
+      }),
+    );
+    return id;
+  };
+  const event = (orderId: string, seq: number, date = '2026-03-25') =>
+    world.db.write((tx) =>
+      tx.insert(workOrderEvents).values({
+        companyId: world.company,
+        orderId,
+        seq,
+        kind: 'closed',
+        date,
+        evidenceId,
+        createdBy: world.owner,
+      }),
+    );
+  return { product, material, bomId, evidenceId, bom, line, order, event };
+}
+
 async function stockRecords(world: World, item: Partial<typeof stockItems.$inferInsert> = {}) {
   const itemId = randomUUID();
   const [first, second] = [randomUUID(), randomUUID()];
@@ -1354,6 +1500,29 @@ async function stockRecords(world: World, item: Partial<typeof stockItems.$infer
 }
 
 /** Locks the world's financial year as an executed reviewed year close does. */
+/** Adds a financial year to the world's company, beside its 2026. */
+const addYear = (world: World, from: string, to: string) =>
+  world.db.write((tx) =>
+    tx.insert(fiscalYears).values({
+      id: randomUUID(),
+      companyId: world.company,
+      kind: 'financial',
+      label: from.slice(0, 4),
+      from,
+      to,
+      createdBy: world.owner,
+    }),
+  );
+/** An opening entry (DESCHIDERE) on the first day of 2026. */
+const openingEntry = () =>
+  effect(
+    [
+      { account: '5121', side: 'D', bani: 500000n },
+      { account: '704', side: 'C', bani: 500000n },
+    ],
+    { journalCode: 'DESCHIDERE', date: '2026-01-01' as LocalDate, description: 'Deschidere' },
+  );
+
 async function lockYear(world: World) {
   const id = randomUUID();
   const decidedEpoch = await epoch(world, world.reviewer);
@@ -1907,12 +2076,32 @@ const attacks: Attack[] = [
   },
   {
     trigger: entry,
+    code: 'later_period_closed',
+    name: 'posting into an open month before a closed one',
+    run: async (world) => {
+      const { proposed, approvalId } = await approved(world, sale(world));
+      // March is empty, so April closes without it; the close covers March.
+      await periodEvent(world, '2026-04');
+      return post(world, proposed, { approvalId });
+    },
+  },
+  {
+    trigger: entry,
     code: 'closed_year',
     name: 'posting into a financial year a reviewed year close locked',
     run: async (world) => {
       const { proposed, approvalId } = await approved(world, sale(world));
       await lockYear(world);
       return post(world, proposed, { approvalId });
+    },
+  },
+  {
+    trigger: entry,
+    code: 'opening_first_year',
+    name: 'an opening entry in a year whose previous year the books keep',
+    run: async (world) => {
+      await addYear(world, '2025-01-01', '2025-12-31');
+      return book(world, openingEntry());
     },
   },
   {
@@ -2453,6 +2642,63 @@ const attacks: Attack[] = [
           createdBy: world.owner,
         }),
       ),
+  },
+  {
+    trigger: 'inv_bom_guard',
+    code: 'bom_product',
+    name: 'a bill of materials of a raw material',
+    run: async (world) => {
+      const records = await productionRecords(world);
+      return records.bom({ itemId: records.material });
+    },
+  },
+  {
+    trigger: 'inv_bom_guard',
+    code: 'bom_version',
+    name: "a product's second bill of materials valid before its first",
+    run: async (world) => {
+      const records = await productionRecords(world);
+      return records.bom({ version: 2, validFrom: '2026-02-01' });
+    },
+  },
+  {
+    trigger: 'inv_bom_line_guard',
+    code: 'bom_line',
+    name: 'a bill of materials taking a finished product as its material',
+    run: async (world) => {
+      const records = await productionRecords(world);
+      return records.line(2, records.product);
+    },
+  },
+  {
+    trigger: 'inv_bom_line_guard',
+    code: 'bom_sealed',
+    name: 'a material added to a bill of materials a work order is costed on',
+    run: async (world) => {
+      const records = await productionRecords(world);
+      await records.order();
+      return records.line(2);
+    },
+  },
+  {
+    trigger: 'inv_work_order_guard',
+    code: 'work_order_bom',
+    name: 'a work order opened before its bill of materials is valid',
+    run: async (world) => {
+      const records = await productionRecords(world);
+      return records.order({ openedOn: '2026-02-15' });
+    },
+  },
+  {
+    trigger: 'inv_work_order_event_guard',
+    code: 'work_order_event',
+    name: 'a work order closed twice',
+    run: async (world) => {
+      const records = await productionRecords(world);
+      const orderId = await records.order();
+      await records.event(orderId, 1);
+      return records.event(orderId, 2, '2026-03-26');
+    },
   },
   {
     trigger: 'inv_acc_open_items_sealed',
@@ -3075,6 +3321,25 @@ const attacks: Attack[] = [
     },
   },
   {
+    trigger: 'inv_asset_event_guard',
+    code: 'asset_locked_year',
+    name: 'disposing of an asset within a locked financial year',
+    run: async (world) => {
+      const { dispose } = await assetRecord(world);
+      await lockYear(world);
+      return dispose(1, '2026-06-30');
+    },
+  },
+  {
+    trigger: 'inv_asset_guard',
+    code: 'asset_locked_year',
+    name: 'registering an asset in use before a locked financial year ends',
+    run: async (world) => {
+      await lockYear(world);
+      return assetRecord(world, { commissionedOn: '2025-06-01' });
+    },
+  },
+  {
     trigger: 'inv_employment_terms_guard',
     code: 'terms_sequence',
     name: "skipping a version of a contract's terms",
@@ -3386,6 +3651,21 @@ const attacks: Attack[] = [
       ),
   },
   {
+    trigger: 'inv_fiscal_year_overlap',
+    code: 'year_contiguous',
+    name: 'a financial year after a gap',
+    run: (world) => addYear(world, '2028-01-01', '2028-12-31'),
+  },
+  {
+    trigger: 'inv_fiscal_year_overlap',
+    code: 'year_before_opening',
+    name: 'a financial year before the opening entry of the first',
+    run: async (world) => {
+      await book(world, openingEntry());
+      return addYear(world, '2025-01-01', '2025-12-31');
+    },
+  },
+  {
     trigger: 'inv_bank_statement_guard',
     code: 'statement_overlap',
     name: 'a second statement for days another already reports',
@@ -3533,6 +3813,109 @@ const attacks: Attack[] = [
       return post(world, proposed, { policyId });
     },
   },
+  {
+    trigger: entry,
+    code: 'binding',
+    name: 'a policy posting a bank movement transcribed from a photo, its citations unverified',
+    run: async (world) => {
+      const movementId = await (await bankRecords(world)).transcribed('unverified');
+      const policyId = await policy(world, world.reviewer, [
+        { kind: 'sourceAuthority', allow: ['efactura'] },
+      ]);
+      const proposed = await propose(world, sale(world), {
+        readSet: [{ kind: 'movement', id: movementId, version: 'v' }],
+      });
+      return post(world, proposed, { policyId });
+    },
+  },
+  {
+    trigger: 'inv_approval_guard',
+    code: 'approval_person',
+    name: "an agent approving a version in its issuer's name",
+    run: async (world) => {
+      const proposed = await propose(world, sale(world));
+      return world.db.write(async (tx) =>
+        tx.insert(approvals).values({
+          id: randomUUID(),
+          companyId: world.company,
+          proposalId: proposed.proposalId,
+          version: proposed.version,
+          effectHash: proposed.effectHash,
+          approverId: world.reviewer,
+          approverEpoch: await epoch(world, world.reviewer),
+          agentId: randomUUID(),
+          acknowledgements: '[]',
+        }),
+      );
+    },
+  },
+  {
+    trigger: 'inv_action_decision_guard',
+    code: 'decision_person',
+    name: "an agent approving an action in its issuer's name",
+    run: async (world) => {
+      const requestId = await actionRequest(world);
+      return world.db.write(async (tx) =>
+        tx.insert(actionDecisions).values({
+          companyId: world.company,
+          requestId,
+          decision: 'approve',
+          previewHash: 'preview',
+          decidedBy: world.reviewer,
+          decidedEpoch: await epoch(world, world.reviewer),
+          agentId: randomUUID(),
+        }),
+      );
+    },
+  },
+  {
+    trigger: 'inv_policy_guard',
+    code: 'policy_person',
+    name: "an agent granting a posting policy in its issuer's name",
+    run: async (world) =>
+      world.db.write(async (tx) =>
+        tx.insert(postingPolicies).values({
+          id: randomUUID(),
+          companyId: world.company,
+          name: 'Facturi emise',
+          treatments: canonical(['test.treatment']),
+          rulesHashes: canonical(['rules-1']),
+          preconditions: '[]',
+          approvedBy: world.reviewer,
+          approverEpoch: await epoch(world, world.reviewer),
+          agentId: randomUUID(),
+          validFrom: '2026-01-01',
+          expiresAt: later,
+        }),
+      ),
+  },
+  ...(
+    [
+      [
+        'an individual known by an unkeyed hash of the CNP',
+        'ro_individual',
+        `cnp:${'a'.repeat(64)}`,
+      ],
+      ['an individual known by the CNP itself', 'ro_individual', '2900501170024'],
+      ['a company under an unkeyed CNP hash', 'ro_legal_entity', `cnp:${'b'.repeat(64)}`],
+    ] as const
+  ).map(([name, kind, taxId]): Attack => ({
+    trigger: 'inv_party_guard',
+    code: 'party_identity',
+    name,
+    run: async (world) =>
+      world.db.write((tx) =>
+        tx.insert(parties).values({
+          id: randomUUID(),
+          companyId: world.company,
+          kind,
+          country: 'RO',
+          taxId,
+          name: 'Persoană',
+          createdBy: world.owner,
+        }),
+      ),
+  })),
   {
     trigger: 'inv_membership_insert',
     code: 'system_member',
@@ -3898,6 +4281,116 @@ describe('database invariants', () => {
     await records.link(await records.add({ identityKey: null }), extracted, 'supersedes');
   });
 
+  test('a policy posts a transcribed movement whose citations hold, or where extracted is allowed', async () => {
+    const world = await fresh();
+    const bank = await bankRecords(world);
+    const reading = async (movementId: string) =>
+      propose(world, sale(world), {
+        readSet: [{ kind: 'movement', id: movementId, version: 'v' }],
+      });
+    const verified = await reading(await bank.transcribed('verified'));
+    await post(world, verified, { policyId: await policy(world) });
+    const unverified = await reading(
+      await bank.movement(
+        await bank.statement('2026-04-01', '2026-04-30', 100n, 200n, {
+          format: 'transcribed',
+          citations: canonical({
+            extractor: null,
+            items: [{ what: 'opening', status: 'unverified' }],
+          }),
+        }),
+        '2026-04-10',
+      ),
+    );
+    expect(await refusal(post(world, unverified, { policyId: await policy(world) }))).toBe(
+      'binding',
+    );
+    const allowing = await policy(world, world.reviewer, [
+      { kind: 'sourceAuthority', allow: ['efactura', 'extracted'] },
+    ]);
+    await post(world, unverified, { policyId: allowing });
+  });
+
+  // A party's identifier for an individual was the CNP's plain SHA-256, which a birth date lets
+  // anyone find. Migration 0031's data step keys it, under the installation's secret.
+  test('the data step keys every individual’s identifier, and needs the secret to', async () => {
+    const world = await fresh();
+    const cnp = (body: string) => {
+      const weights = [2, 7, 9, 1, 4, 6, 3, 5, 8, 2, 7, 9];
+      const control =
+        weights.reduce((sum, weight, index) => sum + weight * Number(body[index]), 0) % 11;
+      return `${body}${control === 10 ? 1 : control}`;
+    };
+    const [hashedCnp, rawCnp] = [cnp('290050117002'), cnp('180010112345')];
+    const [hashed, raw, company] = [randomUUID(), randomUUID(), randomUUID()];
+    // The books as they were: the guard that now refuses these identifiers did not exist.
+    await world.db.client.execute('DROP TRIGGER inv_party_guard');
+    await world.db.write((tx) =>
+      tx.insert(parties).values(
+        (
+          [
+            [
+              hashed,
+              'ro_individual',
+              `cnp:${createHash('sha256').update(hashedCnp).digest('hex')}`,
+            ],
+            [raw, 'ro_individual', rawCnp],
+            [company, 'ro_legal_entity', '14399840'],
+          ] as const
+        ).map(([id, kind, taxId]) => ({
+          id,
+          companyId: world.company,
+          kind,
+          country: 'RO',
+          taxId,
+          name: 'Partener',
+          createdBy: world.owner,
+        })),
+      ),
+    );
+    await expect(world.db.migrate()).rejects.toThrow(/ACCOUNTING_AUTH_SECRET/);
+    const secret = 'synthetic-installation-secret-of-32-characters';
+    await world.db.migrate({ secret });
+    const identities = new PartyIdentities(secret);
+    const taxIds = new Map(
+      (
+        await world.db.orm
+          .select({ id: parties.id, taxId: parties.taxId })
+          .from(parties)
+          .where(eq(parties.companyId, world.company))
+      ).map((row) => [row.id, row.taxId]),
+    );
+    expect([taxIds.get(hashed), taxIds.get(raw), taxIds.get(company)]).toEqual([
+      identities.ofCnp(world.company, hashedCnp),
+      identities.ofCnp(world.company, rawCnp),
+      '14399840',
+    ]);
+    // Once keyed, nothing is left to do, and the guards are back.
+    await world.db.migrate();
+    expect(
+      await refusal(
+        world.db.write((tx) =>
+          tx.update(parties).set({ name: 'Altul' }).where(eq(parties.id, hashed)),
+        ),
+      ),
+    ).toBe('immutable_record');
+    expect(
+      await refusal(
+        world.db.write((tx) =>
+          tx.insert(parties).values({
+            id: randomUUID(),
+            companyId: world.company,
+            kind: 'ro_individual',
+            country: 'RO',
+            taxId: rawCnp,
+            name: 'Partener',
+            createdBy: world.owner,
+          }),
+        ),
+      ),
+    ).toBe('party_identity');
+  });
+
   test('installation is idempotent and restores a dropped invariant', async () => {
     const world = await fresh();
     await world.db.client.execute('DROP TRIGGER inv_entry_guard');
@@ -4183,6 +4676,8 @@ describe('append-only records', () => {
         createdBy: world.owner,
       }),
     );
+    const production = await productionRecords(world);
+    await production.event(await production.order(), 1);
     const refused: Record<string, [string | undefined, string | undefined]> = {};
     for (const table of guardedTables) {
       const count = await world.db.client.execute(`SELECT count(*) AS n FROM ${table}`);

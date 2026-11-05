@@ -32,7 +32,7 @@ export const receiptSources: readonly LegalSource[] = [
       {
         url: 'https://static.anaf.ro/static/3/Ploiesti/20260925104315_comunicat-termen_formular_394_30_septembrie_2026.pdf',
         sha256: '46328ccf128a7ec405efe20c3b015d8274d8dda6e15d9dd5642144f6c3746299',
-        retrievedOn: '2026-11-06',
+        retrievedOn: '2026-11-05',
         mediaType: 'application/pdf',
       },
     ],
@@ -71,7 +71,7 @@ export const receiptSources: readonly LegalSource[] = [
       {
         url: 'https://xfactura.invalid/owner-download/oug_28_1999.pdf',
         sha256: '804efcb004c9ac9f4a84113c00fd4da3f4e47cd1f856fbf47debd0707fad06e8',
-        retrievedOn: '2026-11-06',
+        retrievedOn: '2026-11-05',
         mediaType: 'application/pdf',
       },
     ],

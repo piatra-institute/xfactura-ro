@@ -609,6 +609,29 @@ function leaseMonth(): D406 {
   return model;
 }
 
+/** A month without customers, as a shop selling only on Z reports has: the Customers section
+ * empty (ANAF's definitions MF.C.1, Customer 0..*). */
+function withoutCustomers(): D406 {
+  const model = period('L', [10, 10, 10]);
+  const strip = (value: unknown): unknown =>
+    Array.isArray(value)
+      ? value.map(strip)
+      : value && typeof value === 'object'
+        ? Object.fromEntries(
+            Object.entries(value)
+              .filter(([key]) => key !== 'customer')
+              .map(([key, item]) => [key, strip(item)]),
+          )
+        : value;
+  return {
+    ...model,
+    customers: [],
+    salesInvoices: [],
+    payments: model.payments.filter((payment) => !JSON.stringify(payment).includes(customer)),
+    journals: strip(model.journals) as D406Journal[],
+  };
+}
+
 const files: Record<string, D406> = {
   'month-2026-10': period('L', [10, 10, 10]),
   'month-2026-10-eur': period('L', [10, 10, 10], true),
@@ -704,6 +727,22 @@ describe('official D406 validation', () => {
         saftDuk,
       );
       expect(results).toEqual(Object.fromEntries(Object.keys(files).map((name) => [name, 'ok'])));
+    },
+    180_000,
+  );
+
+  validator(
+    'DUKIntegrator accepts a month without customers, or without any invoice and product',
+    async () => {
+      const model = withoutCustomers();
+      const bare = { ...model, purchaseInvoices: [], products: [] };
+      expect([checkD406(model), checkD406(bare)]).toEqual([[], []]);
+      const results = await validateAnaf(
+        'D406',
+        { shop: writeD406(model), bare: writeD406(bare) },
+        saftDuk,
+      );
+      expect(results).toEqual({ shop: 'ok', bare: 'ok' });
     },
     180_000,
   );

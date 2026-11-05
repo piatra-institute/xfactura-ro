@@ -8,6 +8,8 @@ export {
   itemOf,
   openingInput,
   periodCostInput,
+  periodCostOf,
+  productAccounts,
   quantityInput,
   receiveInput,
   stockAccountsAt,

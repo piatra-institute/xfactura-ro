@@ -63,6 +63,9 @@ export interface ReadPlan {
   /** The stock register: the positions (an item in a warehouse) with their layers, and the
    * catalogue's cards of the items read. */
   stock?: StockQuery;
+  /** Production (G4): the bills of materials, the work orders with their events and, on request,
+   * the lines production postings tagged (`production:…`). */
+  production?: ProductionQuery;
 }
 
 /**
@@ -87,10 +90,19 @@ export interface StockQuery {
   /** With each layer's flows in a date range: what it held before, what entered and what left
    * (the periodic average's month). */
   flows?: { from: LocalDate; to: LocalDate };
+  /** With each layer's moves in the months still open, summed per day (`StockLayerState.days`):
+   * an exit reads what its layers held on its own date, which the plan may not know yet (an
+   * invoice's), and nothing is posted in a closed month. */
+  dated?: boolean;
 }
 
-/** What moved on a layer in a date range, signed: entries (quantities zero or more, value-only
- * moves among them) and exits (quantities below zero). */
+/**
+ * What moved on a layer in a date range, signed. A move is an entry or an exit by the line it
+ * explains, a debit or a credit of the stock account (a red storno of a receipt, a return to the
+ * supplier, is a negative entry; of an exit, a customer's return, a negative exit); a reversal's
+ * move by the move it mirrors, so a black storno nets against its original; a move without a line
+ * (a transfer) by the sign of its quantity.
+ */
 export interface StockFlows {
   opening: { quantity: bigint; bani: bigint };
   entered: { quantity: bigint; bani: bigint };
@@ -110,6 +122,15 @@ export interface StockLayerState extends StockLayerInfo {
   seq: number;
   /** On request (`flows`). */
   flows?: StockFlows;
+  /** On request (`dated`): what moved on it each day of the months still open, in date order. */
+  days?: readonly StockDay[];
+}
+
+/** A layer's moves of one day, summed. */
+export interface StockDay {
+  date: LocalDate;
+  quantity: bigint;
+  bani: bigint;
 }
 
 /** An item in a warehouse: its layers in FIFO order (by date, then posting), with what each
@@ -143,6 +164,67 @@ export interface WarehouseRecord {
   code: string;
   name: string;
   keeper: string;
+}
+
+/**
+ * What a treatment reads of production (G4): the whole catalogue of bills of materials and work
+ * orders, as one read whose version counts them and their events; with `lines`, also every line
+ * tagged `production:…` (per order, per product account) dated in the range, with the quantity
+ * the stock moves on it carry, whose count and last posting are part of the version.
+ */
+export interface ProductionQuery {
+  lines?: { from?: LocalDate; to: LocalDate };
+}
+
+/** A version of a bill of materials (BOM): the materials one output quantity of its product
+ * takes, with its labour and machine norms and its standard cost when the company keeps one. */
+export interface BomRecord {
+  id: string;
+  /** The product, an item of the catalogue on a product account (341, 345). */
+  itemId: string;
+  version: number;
+  validFrom: LocalDate;
+  /** The quantity of product the norms are for, in thousandths of its unit. */
+  outputQuantity: bigint;
+  /** The standard cost of the output quantity, in bani; null when none is kept. */
+  standardCost: bigint | null;
+  /** Labour and machine hours for the output quantity, in thousandths of an hour. */
+  labourHours: bigint | null;
+  machineHours: bigint | null;
+  evidenceId: string;
+  lines: readonly { lineNo: number; itemId: string; quantity: bigint }[];
+}
+
+/** A work order (comandă de producție): its product, the BOM version it is costed on, the
+ * quantity launched, the day it opened and the day it closed, if it did. */
+export interface WorkOrderRecord {
+  id: string;
+  number: string;
+  itemId: string;
+  bomId: string;
+  quantity: bigint;
+  openedOn: LocalDate;
+  closedOn: LocalDate | null;
+  evidenceId: string;
+}
+
+/** Lines tagged by production postings, summed per tag, account, entry date and the stock item
+ * their moves carry (null for lines without moves). Signed amounts net reversals out. */
+export interface ProductionLine {
+  tag: string;
+  account: string;
+  date: LocalDate;
+  debit: bigint;
+  credit: bigint;
+  item: string | null;
+  /** The net quantity of the moves on these lines, in thousandths. */
+  quantity: bigint;
+}
+
+export interface ProductionState {
+  boms: ReadonlyMap<string, BomRecord>;
+  orders: ReadonlyMap<string, WorkOrderRecord>;
+  lines: readonly ProductionLine[];
 }
 
 /** What ANAF's register held about a Romanian party on a date, as one snapshot recorded it. */
@@ -243,11 +325,15 @@ export interface TurnoverQuery {
   prefixes: string[];
   from: LocalDate;
   to: LocalDate;
+  /** `original`: a reversal's lines count on the side of the lines they reverse, as their red
+   * storno (negative amounts), so a black storno nets against its original instead of adding to
+   * both sides' turnover (what moved in and out, as the coefficients of pct. 286 read it). */
+  sides?: 'original';
 }
 
 /** The read key of a turnover query, as `Loaded.turnover` holds it. */
 export const turnoverKey = (query: TurnoverQuery) =>
-  `${[...query.prefixes].sort().join(',')}|${query.from}|${query.to}`;
+  `${[...query.prefixes].sort().join(',')}|${query.from}|${query.to}${query.sides ? `|${query.sides}` : ''}`;
 
 export interface AccountTurnover {
   account: string;
@@ -309,7 +395,9 @@ export interface ReadSetEntry {
      * (the engine adds it, and loads the answer into `Loaded.answers`). */
     | 'answer'
     /** A stock position (`item|warehouse`) or the whole register (`*`): its moves posted. */
-    | 'stock';
+    | 'stock'
+    /** The production catalogue (`catalogue`) and, with lines, its tagged lines in a range. */
+    | 'production';
   id: string;
   version: string;
 }
@@ -557,6 +645,8 @@ export interface Loaded {
   /** The catalogue's items and the warehouses read. */
   stockItems: ReadonlyMap<string, StockItemRecord>;
   warehouses: ReadonlyMap<string, WarehouseRecord>;
+  /** Production (G4), when the plan reads it. */
+  production?: ProductionState;
 }
 
 /** The company profile value on an axis at a date, or null when nothing is recorded. */

@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { employees, parties } from '../../source/engine/db/schema';
 import type { ProposalView } from '../../source/engine/kernel/views';
@@ -38,8 +39,8 @@ type Run = {
 };
 
 /** An employer with ANAF as a partner and one employee on the minimum wage. */
-async function employer(options: { policy?: '635' | '6458' } = {}) {
-  const s = await scenario();
+async function employer(options: { policy?: '635' | '6458'; cui?: string } = {}) {
+  const s = await scenario(options.cui ? { cui: options.cui } : {});
   open.push(s);
   const record = async (axis: string, value: string) =>
     s.invoke(s.owner, 'profile.record', {
@@ -197,7 +198,9 @@ describe('payroll', () => {
     const [party] = await s.engine.db.read((tx) =>
       tx.select().from(parties).where(eq(parties.id, employee.partyId)),
     );
-    expect(party!.taxId).toMatch(/^cnp:[0-9a-f]{64}$/);
+    // A keyed hash of the CNP, never the CNP nor its plain SHA-256 (found from a birth date).
+    expect(party!.taxId).toMatch(/^cnp:k1:[0-9a-f]{64}$/);
+    expect(party!.taxId).not.toContain(createHash('sha256').update(code).digest('hex'));
     expect(JSON.stringify(await s.list(s.owner, 'payroll.employees.list'))).not.toContain(code);
     expect(
       (
@@ -515,5 +518,185 @@ describe('payroll', () => {
     expect(asked.lines[0]!.issues.map((issue) => issue.code)).toEqual(['YOUNG_TO_DECIDE']);
     const decided = await prepare({ entries: [{ contractId: young.contractId, under26: true }] });
     expect(decided.issues).toBe(0);
+  });
+});
+
+describe('what an agent reads of the payroll', () => {
+  /** An agent of the reviewer's, granted these operations. */
+  const reader = async (s: Scenario, scopes: string[]) =>
+    s.engine.agents.authenticate(
+      (
+        await s.invoke<{ token: string }>(s.reviewer, 'agents.issue', {
+          name: 'Asistent',
+          scopes,
+          expiresAt: s.expiresIn(7),
+        })
+      ).token,
+      s.company.id,
+    );
+  const bani = (amount: string) => Math.round(Number(amount) * 100);
+  const personnel = <Row extends { account: string; partyId?: string }>(rows: Row[]) =>
+    rows.filter((row) => row.account === '421');
+
+  // proposals.get redacted a payroll proposal's input and showed its effect: a 421 line per
+  // employee, with their party and pay. The ledger, the open items and the year close's preview
+  // showed the same. An agent whose reads do not cover payroll and personal now sees the
+  // personnel accounts summed, without the person.
+  test('an agent without the payroll class sees no one’s pay', async () => {
+    const { s, hire, prepare, recognize } = await employer();
+    await hire(['Popescu', 'Ana'], cnp('290050112345'), { baseSalary: '4325' });
+    await hire(['Ionescu', 'Dan'], cnp('180010112345'), { baseSalary: '6000' });
+    const proposal = await recognize(await prepare());
+    const agent = await reader(s, [
+      'proposals.get',
+      'ledger.journal',
+      'openItems.list',
+      'ledger.inventoryRegister',
+      'parties.list',
+      'parties.get',
+      'actions.get',
+    ]);
+    const seen = await s.invoke<ProposalView & { redacted?: true }>(agent, 'proposals.get', {
+      id: proposal.id,
+    });
+    expect(seen.redacted).toBe(true);
+    expect(seen.effectHash).toBe(proposal.effectHash);
+    const owed = (side: 'D' | 'C') =>
+      personnel(proposal.effect!.lines)
+        .filter((line) => line.side === side)
+        .reduce((sum, line) => sum + bani(line.amount), 0);
+    expect(personnel(seen.effect!.lines).map((line) => [line, bani(line.amount)])).toEqual([
+      [{ account: '421', side: 'C', amount: expect.any(String) }, owed('C')],
+      [{ account: '421', side: 'D', amount: expect.any(String) }, owed('D')],
+    ]);
+    expect(seen.effect!.openItems.filter((item) => item.controlAccount === '421')).toEqual([]);
+    // The rest of the entry stands as booked.
+    expect(seen.effect!.lines.filter((line) => line.account !== '421')).toEqual(
+      proposal.effect!.lines.filter((line) => line.account !== '421'),
+    );
+    // An agent whose reads cover payroll and personal sees each person's line.
+    const payroll = await reader(s, ['proposals.get', 'questions.list']);
+    const full = await s.invoke<ProposalView>(payroll, 'proposals.get', { id: proposal.id });
+    expect(personnel(full.effect!.lines).filter((line) => line.partyId)).toHaveLength(4);
+
+    await s.post(await s.approve(proposal));
+    type Journal = { entries: { lines: { account: string; side: string; partyId?: string }[] }[] };
+    const journal = (actor: typeof agent) =>
+      s.invoke<Journal>(actor, 'ledger.journal', { from: '2026-10-01', to: '2026-10-31' });
+    const [entry] = (await journal(agent)).entries;
+    expect(personnel(entry!.lines).some((line) => line.partyId)).toBe(false);
+    expect(personnel(entry!.lines)).toHaveLength(2);
+    expect(personnel((await journal(s.owner)).entries[0]!.lines)).toHaveLength(4);
+    const items = await s.list<{ account: string }>(agent, 'openItems.list');
+    expect(items.some((item) => item.account === '421')).toBe(false);
+    expect((await s.list<{ account: string }>(s.owner, 'openItems.list')).length).toBe(
+      items.length + 2,
+    );
+    const register = await s.list<{ account: string; items: unknown[] }>(
+      agent,
+      'ledger.inventoryRegister',
+      { date: '2026-10-31' },
+    );
+    expect(register.find((row) => row.account === '421')).toMatchObject({ items: [] });
+    // The employees are partners whose identifier, a keyed hash of the CNP, agents never see.
+    const people = (
+      await s.list<{ id: string; kind: string; taxId: string | null }>(agent, 'parties.list')
+    ).filter((party) => party.kind === 'ro_individual');
+    expect(people.map((party) => party.taxId)).toEqual(['*************', '*************']);
+    expect(
+      (await s.invoke<{ taxId: string }>(agent, 'parties.get', { partyId: people[0]!.id })).taxId,
+    ).toBe('*************');
+
+    // The year close's preview holds each open item at the year's end: the unpaid pay is summed.
+    const request = await s.invoke<{ id: string }>(s.owner, 'years.close.request', {
+      financialYearId: s.year.id,
+    });
+    type Item = {
+      account: string;
+      currency: string;
+      bani: string;
+      minor: string;
+      partyId?: string;
+    };
+    type Closing = { preview: { closing: { items: Item[] } } };
+    const closing = async (actor: typeof agent) =>
+      personnel(
+        (await s.invoke<Closing>(actor, 'actions.get', { id: request.id })).preview.closing.items,
+      );
+    expect(await closing(agent)).toEqual([
+      { account: '421', currency: 'RON', bani: expect.any(String), minor: expect.any(String) },
+    ]);
+    expect((await closing(s.owner)).filter((item) => item.partyId)).toHaveLength(2);
+  });
+
+  // declarations.prepare unsealed the CNPs into the D112 XML and kept it as ordinary evidence,
+  // which evidence.read gave any agent granted it, whatever classes its grant covered.
+  test('the D112 XML reaches only those who may read payroll and personal data', async () => {
+    const { s, hire, prepare, recognize } = await employer({ cui: '18547290' });
+    await s.invoke(s.owner, 'sales.seller.record', {
+      details: {
+        name: 'Exemplu Servicii SRL',
+        vatId: 'RO18547290',
+        address: { lines: ['Str. Lungă 10'], city: 'Galați', subdivision: 'RO-GL', country: 'RO' },
+      },
+    });
+    const code = cnp('290050117002');
+    await hire(['Popescu', 'Ana'], code, { baseSalary: '7000' });
+    await s.post(await s.approve(await recognize(await prepare())));
+    const d112 = await s.invoke<{ evidenceId: string }>(s.owner, 'declarations.prepare', {
+      kind: 'D112',
+      period: '2026-10',
+      options: {
+        declarant: { lastName: 'Popescu', firstName: 'Ana', role: 'Administrator' },
+        caen: '6201',
+        phone: '0236000000',
+      },
+    });
+    const holds = async (read: Promise<unknown>) => JSON.stringify(await read).includes(code);
+    const agent = await reader(s, [
+      'declarations.list',
+      'evidence.read',
+      'evidence.list',
+      'documents.record',
+    ]);
+    expect((await s.refused(s.invoke(agent, 'payroll.employees.list')))?.code).toBe('AGENT_SCOPE');
+    const refusal = await s.refused(
+      s.invoke(agent, 'evidence.read', { id: d112.evidenceId, mode: 'text' }),
+    );
+    expect(refusal).toMatchObject({
+      code: 'EVIDENCE_CLASS',
+      details: { dataClasses: ['evidence', 'payroll', 'personal', 'tax'] },
+    });
+    expect(JSON.stringify(refusal).includes(code)).toBe(false);
+    expect(
+      (await s.list<{ id: string }>(agent, 'evidence.list')).find(
+        (item) => item.id === d112.evidenceId,
+      ),
+    ).toMatchObject({ filename: null, redacted: true });
+    // Nor are citations checked against it for the agent: their outcome would tell what it says.
+    expect(
+      (
+        await s.refused(
+          s.invoke(agent, 'documents.record', {
+            evidenceId: d112.evidenceId,
+            kind: 'contract',
+            body: {},
+            citations: {},
+          }),
+        )
+      )?.code,
+    ).toBe('EVIDENCE_CLASS');
+    // A person who may record a CNP reads it; a viewer, who may not, does not.
+    expect(
+      await holds(s.invoke(s.owner, 'evidence.read', { id: d112.evidenceId, mode: 'text' })),
+    ).toBe(true);
+    expect(
+      (await s.refused(s.invoke(s.viewer, 'evidence.get', { id: d112.evidenceId })))?.code,
+    ).toBe('EVIDENCE_CLASS');
+    // An agent whose reads cover payroll and personal reads it.
+    const payroll = await reader(s, ['declarations.list', 'evidence.read', 'questions.list']);
+    expect(
+      await holds(s.invoke(payroll, 'evidence.read', { id: d112.evidenceId, mode: 'text' })),
+    ).toBe(true);
   });
 });

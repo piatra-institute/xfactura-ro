@@ -40,6 +40,8 @@ export type D406VatCodeRow = {
   /** A distance sale or TBE service to a consumer in another Member State with its place in
    * Romania (art. 278^1 alin. (1); the tax entry's `distance: origin`). */
   distance?: true;
+  /** VAT a company outside VAT owes through the special return (D301; `regime: special`). */
+  special?: true;
   /** The SAF-T TaxCode. */
   taxCode: string;
   /** Its description in ANAF's nomenclature, as vatTaxCodes has it. */
@@ -480,8 +482,82 @@ export const d406FlatRateCodes: readonly D406VatCodeRow[] = [
   },
 ];
 
+/**
+ * A change of VAT regime (V1, src/ro/treatments/vat-registration.ts): the late registration's
+ * regularization (REG-310, art. 310 alin. (6^2)–(6^3); D300 rd. 16 and 33), at the standard rate
+ * of its range, which its tax entry records: the VAT collected on the supplies made since the
+ * threshold, Livrari "Regularizări taxă colectată" (3103xx, the words of D300 rd. 16), and the VAT
+ * deductible on the purchases of the range, Achizitii ded 100% "Regularizări taxă dedusă"
+ * (3091xx). ANAF's sheet maps these rows to other row numbers of the return; the reading by their
+ * words is the expert's to confirm (`ro.vat.late_registration`).
+ */
+export const d406RegimeCodes: readonly D406VatCodeRow[] = [
+  ...(
+    [
+      ['21', '310345', '309106'],
+      ['11', '310352', '309107'],
+      ['19', '310317', '309101'],
+    ] as const
+  ).flatMap(([rate, collected, deducted]): D406VatCodeRow[] => [
+    {
+      direction: 'output',
+      code: 'REG-310',
+      rate,
+      taxCode: collected,
+      description: vatTaxCodes[collected]!.description,
+      d300: '16',
+    },
+    {
+      direction: 'input',
+      code: 'REG-310',
+      rate,
+      deduction: 'full',
+      taxCode: deducted,
+      description: vatTaxCodes[deducted]!.description,
+      d300: '33',
+    },
+  ]),
+];
+
+/**
+ * A company outside VAT (art. 310, V1: the header's regime 100020, "Persoană impozabilă ce aplică
+ * regimul special de scutire pentru întreprinderile mici"). ANAF's sheets have no row of the
+ * special scheme, and the VAT information is required on every line (GL.33, S.I.49):
+ * - its sales, invoiced without VAT (category O), exempt by the special scheme and without the
+ *   right of deduction: Livrari 310326 "Livrări de bunuri și prestări de servicii scutite fără
+ *   drept de deducere" (`d406NonPayerSaleCode`), the expert's to confirm against 310324
+ *   ("Operatiuni care nu intra in sfera de aplicare a TVA"), which art. 268 and 310 contradict;
+ * - its purchases with VAT, which it cannot deduct: the 3511xx rows (`S-<rate>`, `none`);
+ * - the services it buys from abroad, whose VAT it owes through D301 (art. 307 alin. (2), art.
+ *   324) and never deducts (`regime: special` on the tax entry): Achizitii neded 3563xx, "pentru
+ *   care beneficiarul este obligat la plata TVA cf. art. 307 alin. (2)", with the column D301
+ *   (sections 4 and 4.1): 356319/356320/356306 from the Union, 356317/356318/356304 from outside
+ *   it. ANAF's answers (v1.2, 5) give 306306 for an art. 317 code holder: the same row with the
+ *   deduction a non-payer does not have.
+ */
+export const d406NonPayerSaleCode = '310326';
+export const d406SpecialCodes: readonly D406VatCodeRow[] = (
+  [
+    ['RC-EU-SERV', '21', '356319'],
+    ['RC-EU-SERV', '11', '356320'],
+    ['RC-EU-SERV', '19', '356306'],
+    ['RC-NONEU-SERV', '21', '356317'],
+    ['RC-NONEU-SERV', '11', '356318'],
+    ['RC-NONEU-SERV', '19', '356304'],
+  ] as const
+).map(([code, rate, taxCode]) => ({
+  direction: 'input',
+  code,
+  rate,
+  deduction: 'none',
+  special: true,
+  taxCode,
+  description: vatTaxCodes[taxCode]!.description,
+  d300: '',
+}));
+
 /** Adjustments reported at the rate of the VAT they adjust, which their tax entry records. */
-export const d406RatedAdjustments = ['ADJ-300', 'ADJ-304', 'ADJ-305'];
+export const d406RatedAdjustments = ['ADJ-300', 'ADJ-304', 'ADJ-305', 'REG-310'];
 
 /** The engine's codes whose collected side is reported with the acquisition. */
 export const d406ReverseCharges = ['RC-EU-SERV', 'RC-NONEU-SERV'];
@@ -575,6 +651,8 @@ export function d406VatTaxCode(entry: {
   cashVat?: boolean;
   /** A sale to a consumer in another Member State below the threshold (`distance: origin`). */
   distance?: boolean;
+  /** VAT owed through the special return outside VAT (`regime: special`). */
+  special?: boolean;
 }): string | null | undefined {
   if (entry.direction === 'output' && d406CollectedWithAcquisition(entry.code)) return null;
   const row = [
@@ -584,6 +662,8 @@ export function d406VatTaxCode(entry: {
     ...d406FlatRateCodes,
     ...d406DistanceCodes,
     ...d406TradeCodes,
+    ...d406RegimeCodes,
+    ...d406SpecialCodes,
   ].find(
     (item) =>
       item.direction === entry.direction &&
@@ -591,7 +671,8 @@ export function d406VatTaxCode(entry: {
       (item.rate === undefined || item.rate === entry.rate) &&
       (item.deduction === undefined || item.deduction === entry.deduction) &&
       (item.cashVat ?? false) === (entry.cashVat ?? false) &&
-      (item.distance ?? false) === (entry.distance ?? false),
+      (item.distance ?? false) === (entry.distance ?? false) &&
+      (item.special ?? false) === (entry.special ?? false),
   );
   return row && vatTaxCodes[row.taxCode] ? row.taxCode : undefined;
 }

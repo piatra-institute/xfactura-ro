@@ -407,7 +407,13 @@ export const lateRegistration: Treatment<LateRegistrationInput> = {
         ],
       };
     const taxPeriod = vatPeriodOf(loaded, input.date);
-    const attributes = { from: input.from, until: input.until, consideration: 'inclusive' };
+    // The standard rate of the range, at which the VAT is regularized (D406 reports it by rate).
+    const attributes = {
+      from: input.from,
+      until: input.until,
+      consideration: 'inclusive',
+      ...(rate ? { rate: String(Number(rate)) } : {}),
+    };
     const lines: LineSpec[] = [];
     const taxEntries: TaxEntrySpec[] = [];
     const vatEntry = (fields: Partial<TaxEntrySpec>): TaxEntrySpec => ({

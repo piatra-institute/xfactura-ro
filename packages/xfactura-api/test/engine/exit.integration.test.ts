@@ -406,6 +406,7 @@ class Bookkeeper {
         // needed).
         return false;
       case 'obligation.due':
+      case 'closure.need':
       case 'determination.missing':
       case 'threshold.approaching':
         this.skipped.add(item.kind);
@@ -1456,13 +1457,14 @@ describe('Phase 1 exit: an MCP agent keeps four months of books, people approve'
       calls.filter((call) => !call.ok).map((call) => `${call.operation} ${call.code}`),
     ).toEqual(['bank.importCsv BANK_MAPPING_MISSING']);
     expect(agent.notes).toEqual([]);
-    // Left to others: the tax returns and yearly determinations, and a template for the
-    // supplier's payments.
+    // Left to others: the tax returns, the closure's facts and yearly determinations, and a
+    // template for the supplier's payments.
     expect(
       [...agent.skipped].filter(
         (kind) =>
           ![
             'obligation.due',
+            'closure.need',
             'determination.missing',
             'threshold.approaching',
             'template.candidate bank.settle',

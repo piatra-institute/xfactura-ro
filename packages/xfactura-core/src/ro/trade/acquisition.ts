@@ -109,10 +109,17 @@ export const euAcquisitionRecognition: Treatment<EuAcquisitionInput> = {
   followUp(input, loaded) {
     const parsed = invoiceDocumentSchema.safeParse(loaded.documents.get(input.documentId)?.body);
     if (!parsed.success || parsed.data.currency === LEDGER_CURRENCY) return null;
-    // The rate of the issue date and of the tax point, at most the 15th of the next month.
+    // The rate of the issue date and of the tax point, at most the 15th of the next month: each
+    // read up to its own date, since a read keeps only the latest rates before it (a month of
+    // daily rates after the issue date would leave the issue date's out).
     const supplied = parsed.data.deliveryDate ?? input.supplyDate ?? parsed.data.issueDate;
     const until = [parsed.data.issueDate, fifteenthAfter(supplied as LocalDate, 15)].sort().at(-1)!;
-    return { fx: [{ currency: parsed.data.currency, until: until as LocalDate }] };
+    return {
+      fx: [
+        { currency: parsed.data.currency, until: parsed.data.issueDate as LocalDate },
+        { currency: parsed.data.currency, until: until as LocalDate },
+      ],
+    };
   },
   evaluate(input, loaded, rules): Evaluation {
     const record = loaded.documents.get(input.documentId);

@@ -758,6 +758,25 @@ describe('obligation closure', () => {
     });
     expect(intermittent.status).toBe('UNSUPPORTED');
     expect(intermittent.unsupported.map((item) => item.trigger)).toEqual(['RETAIL_INTERMITTENT']);
+    // Production (G4): covered once its cost method is recorded, on the perpetual inventory.
+    const producing = { ...noBooks, productionMonths: ['2026-09'] };
+    const manufacturer = closure({ facts: [...withGoods, ...policies], books: producing });
+    expect(manufacturer.needs.map((need) => need.fact)).toEqual(['policy.production.cost']);
+    const costed = closure({
+      facts: [...withGoods, ...policies, fact('policy.production.cost', 'standard', '2026-01-01')],
+      books: producing,
+    });
+    expect([costed.needs, costed.unsupported]).toEqual([[], []]);
+    const counted = closure({
+      facts: [
+        ...withGoods,
+        ...policies,
+        fact('policy.production.cost', 'standard', '2026-01-01'),
+        fact('policy.stock.inventory', 'intermittent', '2026-02-01'),
+      ],
+      books: producing,
+    });
+    expect(counted.unsupported.map((item) => item.trigger)).toEqual(['PRODUCTION_INTERMITTENT']);
   });
 
   test('a yearly determination missing, or contradicted by the books, blocks what depends on it', () => {
@@ -1046,6 +1065,7 @@ describe('agent-ready', () => {
     expect(agent.detectors.map((item) => item.kind)).toEqual([
       'determination.missing',
       'threshold.approaching',
+      'closure.need',
     ]);
     expect(agent.templates).toEqual([]);
   });

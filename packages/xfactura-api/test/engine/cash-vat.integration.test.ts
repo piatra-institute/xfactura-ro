@@ -652,6 +652,35 @@ describe('VAT on collection at the month close', () => {
     });
     expect(findings(await s.close('2026-10'))).toContain('CASH_VAT_CEILING');
   });
+
+  test('counts only supplies toward the ceiling, never the VAT the company self-assesses as a buyer', async () => {
+    // 5,000,100.00 of ferrous waste bought under the domestic reverse charge (art. 331): its VAT
+    // collected on the acquisition (TI-A-21) is no supply of the company.
+    const { s, document } = await company();
+    const waste = await document({
+      number: 'TI-1',
+      date: '2026-10-10',
+      counterparty: 'RO13548146',
+      category: 'AE',
+      rate: '0',
+      net: '5000100.00',
+      tax: '0.00',
+      gross: '5000100.00',
+    });
+    const proposal = await s.propose('invoices.reverseCharge', {
+      documentId: waste.id,
+      parts: [{ category: 'waste', account: '6028', amount: '5000100.00' }],
+    });
+    expect(proposal.issues.filter((issue) => issue.severity === 'block')).toEqual([]);
+    await s.post(
+      await s.approve(
+        proposal,
+        s.reviewer,
+        proposal.issues.filter((issue) => issue.severity === 'ack').map((issue) => issue.code),
+      ),
+    );
+    expect(findings(await s.close('2026-10'))).not.toContain('CASH_VAT_CEILING');
+  });
 });
 
 describe('VAT on collection in the declarations', () => {

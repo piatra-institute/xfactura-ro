@@ -594,3 +594,155 @@ describe('invoices.flatRate: a purchase from a farmer', () => {
     expect(schemesAgent.detectors[0]!.kind).toBe('margin.travel');
   });
 });
+
+describe('the margin scheme after a storno', () => {
+  const d394Options = {
+    caen: '4779',
+    phone: '0236123456',
+    representative: {
+      name: 'Popescu Ana',
+      role: 'Administrator',
+      address: 'Galați, Str. Lungă 10',
+    },
+    preparer: {
+      kind: 'company',
+      cui: '14399840',
+      name: 'Contabil Exemplu SRL',
+      capacity: 'Împuternicit',
+    },
+    consultation: true,
+    affiliates: false,
+  };
+  const d300Options = {
+    declarant: { lastName: 'Popescu', firstName: 'Ana', role: 'Administrator' },
+    caen: '4779',
+    bank: 'Banca Exemplu',
+    account: 'RO49AAAA1B31007593840000',
+  };
+  type Artifact = { state: string; steps: { state: string; detail: string | null }[] };
+  const summary = (artifact: Artifact) => JSON.parse(artifact.steps[0]!.detail!);
+
+  // A storno negates the amounts its tax entries' attributes hold (`signedAttributes`): D394
+  // sums an item's `price` and `cost`, so the sale and its storno cancel out.
+  test('a margin sale reversed in the period leaves no LS operation in D394', async () => {
+    const s = await scenario({ cui, clock: () => Date.parse('2026-11-10T10:00:00Z') });
+    open.push(s);
+    for (const [axis, value] of Object.entries({
+      'vat.status': 'normal_vat',
+      'vat.period': 'monthly',
+      'activity.goods': 'margin_goods',
+      'policy.storno': 'black',
+    }))
+      await s.invoke(s.owner, 'profile.record', {
+        axis,
+        value,
+        effectiveFrom: '2026-01-01',
+        evidenceId: (await s.evidence(`${axis}.pdf`)).id,
+      });
+    await s.invoke(s.owner, 'sales.seller.record', {
+      details: {
+        name: 'Exemplu SRL',
+        vatId: `RO${cui}`,
+        address: { lines: ['Str. Lungă 10'], city: 'Galați', subdivision: 'RO-GL', country: 'RO' },
+      },
+    });
+    const buyer = await s.party('Client Exemplu SRL', '14399840');
+    await s.invoke(s.owner, 'parties.recordDetails', {
+      partyId: buyer.id,
+      details: {
+        name: 'Client Exemplu SRL',
+        vatId: 'RO14399840',
+        address: { lines: ['Bd. Unirii 5'], city: 'Brașov', subdivision: 'RO-BV', country: 'RO' },
+      },
+    });
+    const series = await s.invoke<{ id: string }>(s.owner, 'sales.series.create', {
+      code: 'XF',
+      prefix: 'XF',
+      width: 4,
+      revenueAccount: '707',
+    });
+    const post = async (proposal: ProposalView) => {
+      expect(proposal.issues.filter((issue) => issue.severity === 'block')).toEqual([]);
+      return s.post(
+        await s.approve(
+          proposal,
+          s.reviewer,
+          proposal.issues.filter((issue) => issue.severity === 'ack').map((issue) => issue.code),
+        ),
+      );
+    };
+    const xml = invoiceXml({
+      company: cui,
+      number: 'AF-1',
+      date: '2026-10-02',
+      counterparty: '1800101400016',
+      category: 'O',
+      net: '1000.00',
+      tax: '0.00',
+      gross: '1000.00',
+    });
+    const watch = await s.invoke<{ id: string }>(s.owner, 'invoices.import', {
+      evidenceId: (
+        await s.invoke<{ id: string }>(s.owner, 'evidence.record', {
+          filename: 'AF-1.xml',
+          mediaType: 'application/xml',
+          base64: Buffer.from(xml).toString('base64'),
+        })
+      ).id,
+    });
+    await post(
+      await s.invoke<ProposalView>(s.owner, 'proposals.propose', {
+        treatment: 'margin.purchase',
+        input: {
+          documentId: watch.id,
+          scheme: 'goods',
+          goods: 'second_hand',
+          supplier: 'individual',
+        },
+      }),
+    );
+    const mention = 'regimul marjei - bunuri second-hand';
+    const issued = await s.invoke<Issued>(s.owner, 'sales.issue', {
+      seriesId: series.id,
+      buyerId: buyer.id,
+      issueDate: '2026-10-15',
+      lines: [
+        {
+          name: 'Ceas',
+          quantity: '1',
+          unitCode: 'C62',
+          price: '1500',
+          vat: { category: 'E', exemptionReason: mention },
+        },
+      ],
+      margin: { scheme: 'goods', items: [{ purchaseDocumentId: watch.id, price: '1500' }] },
+    });
+    const sold = await post(
+      await s.invoke<ProposalView>(s.owner, 'proposals.get', { id: issued.recognition.proposalId }),
+    );
+    // The sale is reversed (black storno) in the same month.
+    const reversed = await s.propose('ledger.reverse', {
+      entryId: sold.entry!.id,
+      date: '2026-10-20',
+      reason: 'Factura emisă din greșeală',
+      evidenceId: (await s.evidence('storno.pdf')).id,
+    });
+    await post(reversed);
+
+    const d300 = await s.invoke<Artifact>(s.owner, 'declarations.prepare', {
+      kind: 'D300',
+      period: '2026-10',
+      options: d300Options,
+    });
+    // The sale and its reversal net to nothing on rd. 9.
+    expect(summary(d300).rows.R9_1 ?? 0).toBe(0);
+    expect(summary(d300).rows.R9_2 ?? 0).toBe(0);
+    const d394 = await s.invoke<Artifact>(s.owner, 'declarations.prepare', {
+      kind: 'D394',
+      period: '2026-10',
+      options: d394Options,
+    });
+    // No LS operation: the sale and its storno cancel out, and so do the margins' fields.
+    expect(summary(d394).operations.filter((op: { type: string }) => op.type === 'LS')).toEqual([]);
+  });
+});

@@ -596,6 +596,18 @@ export async function yearLock(tx: Transaction, companyId: string, yearId: strin
   return { requestId: last.requestId, closing: preview.closing ?? null };
 }
 
+/**
+ * A locked financial year that ends on or after `date`: a fixed asset commissioned or disposed
+ * of then belongs to that year's register and to the snapshot its close recorded, so it is not
+ * registered any more (`assets.register`, `assets.dispose`; the database refuses it too,
+ * `inv:asset_locked_year`). Null when no locked year does.
+ */
+export async function lockedThrough(tx: Transaction, companyId: string, date: string) {
+  for (const year of await yearsOf(tx, companyId))
+    if (date <= year.to && (await yearLock(tx, companyId, year.id))) return year;
+  return null;
+}
+
 // ---------------------------------------------------------------------------------------------
 // The review of the year's last day
 
@@ -1708,10 +1720,14 @@ export async function yearEndWork(
       if (error instanceof RuleGapError) continue;
       throw error;
     }
+    // Within the year's last month nothing of its end can be done yet (the inventory at its last
+    // day, the year's profit tax, the result closed after the last entry): a warning until the
+    // year has ended, as the pro-rata's and the capital goods' adjustments are.
+    const ended = today > year.to;
     for (const item of items)
       work.push({
         subject: { kind: 'yearend', id: `${year.to.slice(0, 4)}|${item.id}` },
-        severity: item.severity,
+        severity: item.severity === 'block' && !ended ? 'warn' : item.severity,
         period: year.to.slice(0, 4),
         message: item.message,
         details: { check: item.check, ...item.details },

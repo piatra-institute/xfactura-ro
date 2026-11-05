@@ -105,7 +105,8 @@ export const stockVersions: ParameterVersion[] = [
     'ro.stock.accounts',
     {
       quantity: [...stockAccountSynthetics],
-      covered: ['301', '302', '303', '371', '381'],
+      // Production (G4) keeps its work in progress (331) and products (341, 345, 346) here too.
+      covered: ['301', '302', '303', '331', '341', '345', '346', '371', '381'],
       // Consumption, sale and shortage: each stock account's expense of group 60 (601 "valoarea
       // ... incluse pe cheltuieli, constatate lipsă la inventar"; 607 "valoarea mărfurilor
       // vândute, constatate lipsă la inventar"; 608 likewise for packaging).
@@ -121,6 +122,12 @@ export const stockVersions: ParameterVersion[] = [
         { prefix: '303', account: '603' },
         { prefix: '371', account: '607' },
         { prefix: '381', account: '608' },
+        // Products and work in progress leave onto the variation of stocks (the functions of
+        // 331, 341, 345, 346 and 711: sold or found missing, 711; G4).
+        { prefix: '331', account: '711' },
+        { prefix: '341', account: '711' },
+        { prefix: '345', account: '711' },
+        { prefix: '346', account: '711' },
       ],
       impairment: {
         allowances: [
@@ -129,6 +136,10 @@ export const stockVersions: ParameterVersion[] = [
           { prefix: '303', account: '3922' },
           { prefix: '371', account: '397' },
           { prefix: '381', account: '398' },
+          { prefix: '331', account: '393' },
+          { prefix: '341', account: '3941' },
+          { prefix: '345', account: '3945' },
+          { prefix: '346', account: '3946' },
         ],
         expense: '6814',
         revenue: '7814',
@@ -144,6 +155,9 @@ export const stockVersions: ParameterVersion[] = [
       OMFP('pct.285-286'),
       OMFP('pct.289-292'),
       OMFP('conturi.30'),
+      OMFPA('conturi.331-332'),
+      OMFPA('conturi.341-346'),
+      OMFPA('conturi.711-712'),
       OMFP('conturi.371-378'),
       OMFP('conturi.381-388'),
       OMFP('conturi.39'),
@@ -183,12 +197,23 @@ export function allowanceFor(accounts: StockAccounts, stockAccount: string): str
   return match?.account ?? null;
 }
 
-/** Why an item cannot be kept on `account` yet; null when the treatments cover it. */
-export function supportedItemAccount(account: string): string | null {
+/** The accounts production (G4) keeps in the register: work in progress (331) and products. */
+export const productionStockAccounts = ['331', '341', '345', '346'] as const;
+
+/** Why an item cannot be kept on `account` by a treatment; null when it covers it. Products and
+ * work in progress enter from production only: a treatment that also takes them names the
+ * synthetic accounts it accepts (`accept`). */
+export function supportedItemAccount(
+  account: string,
+  accept: readonly string[] = [],
+): string | null {
   const synthetic = account.split('.')[0]!.slice(0, 3);
   if (['301', '302', '303', '371', '381'].includes(synthetic)) return null;
+  if (accept.includes(synthetic)) return null;
+  if ((productionStockAccounts as readonly string[]).includes(synthetic))
+    return 'Produsele și producția în curs (331, 341, 345, 346) intră în gestiune din producția proprie (production.output, production.cost) și ies prin vânzare, inventariere sau transfer: tratamentul nu le acoperă.';
   if (synthetic.startsWith('33') || synthetic.startsWith('34'))
-    return 'Producția în curs și produsele (33x, 34x) se țin prin modulul de producție (G4), care nu există încă.';
+    return 'Serviciile în curs de execuție (332) și produsele agricole (347) nu sunt acoperite de modulul de producție (G4).';
   if (synthetic.startsWith('35'))
     return 'Stocurile aflate la terți (35x) nu sunt încă acoperite: transferul la terți și înapoi.';
   return 'Activele biologice de natura stocurilor (361) nu sunt încă acoperite.';

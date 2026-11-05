@@ -5,6 +5,7 @@ import { provisionsReview, receivableCollectibility, untakenLeave } from '../ro/
 import { supplierItem } from '../ro/stock/questions';
 import { etransportUit, goodsProof } from '../ro/trade/questions';
 import { zGoods } from '../ro/retail/questions';
+import { productionExcess } from '../ro/production/questions';
 import { isLocalDate } from '../time';
 
 /*
@@ -678,20 +679,23 @@ const profitLosses = define({
 export type ProfitLossesAnswer = z.infer<ReturnType<typeof profitLosses.answer>>;
 
 /**
- * A return the engine does not prepare (D700, the declaration of the fiscal vector's changes),
- * filed by the company through ANAF's portal: the person records its registration number and the
- * receipt, and the calendar shows it filed.
+ * A return filed outside the engine: one it does not prepare (D700, the declaration of the fiscal
+ * vector's changes; INS's Intrastat), or any other the calendar lists that the company filed
+ * through ANAF's portal (a month whose format the engine does not write, a return filed before
+ * its books moved here). The person records its registration number and the receipt, and the
+ * calendar and the worklist show it filed.
  */
 const obligationFiled = define({
   id: 'obligation.filed',
   summary:
-    "A return the engine does not prepare (D700) filed by the company through ANAF's portal: the registration number, the date and the receipt, which mark it filed on the calendar.",
+    "A return filed outside the engine (D700, Intrastat, or any return of the calendar the company filed through ANAF's portal): the registration number, the date and the receipt, which mark it filed on the calendar and take it off the worklist.",
   holds: 'once',
   subjects: ['obligation'],
   params: z
     .object({
-      // A return filed through ANAF's portal (D700, D710), or INS's Intrastat declaration.
-      kind: z.string().regex(/^(D\d{3}|Intrastat\.(arrivals|dispatches))$/),
+      // Any return of the calendar: ANAF's (D100, D112, D406, S1005, D700, D710…), the half-year
+      // report (SF.halfyear) or INS's Intrastat declaration.
+      kind: z.string().regex(/^(D\d{3}|S\d{4}|SF\.halfyear|Intrastat\.(arrivals|dispatches))$/),
       period: z.string().regex(/^\d{4}(-(0[1-9]|1[0-2]|Q[1-4]))?$/),
     })
     .strict(),
@@ -705,7 +709,7 @@ const obligationFiled = define({
       })
       .strict(),
   prompt: (_subject, params) =>
-    `Declarația ${params.kind} pentru ${params.period} se depune în afara aplicației (portalul ANAF). Indicați numărul de înregistrare, data depunerii și atașați recipisa.`,
+    `Declarația ${params.kind} pentru ${params.period} se depune sau a fost depusă în afara aplicației (portalul ANAF, ori INS pentru Intrastat). Indicați numărul de înregistrare, data depunerii și atașați recipisa.`,
   evidence: (value) => [value.evidenceId],
 });
 export type ObligationFiledAnswer = z.infer<ReturnType<typeof obligationFiled.answer>>;
@@ -936,6 +940,7 @@ export const questionKinds = {
   'goods.proof': goodsProof,
   'etransport.uit': etransportUit,
   'retail.goods': zGoods,
+  'production.excess': productionExcess,
 } as const;
 export type QuestionKindId = keyof typeof questionKinds;
 export const questionKindIds = Object.keys(questionKinds) as [QuestionKindId, ...QuestionKindId[]];

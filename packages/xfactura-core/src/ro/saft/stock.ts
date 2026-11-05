@@ -28,6 +28,7 @@ import {
  * any other value is a fatal error). */
 export const stockMovementTypes: Readonly<Record<string, string>> = {
   '10': 'Achiziție',
+  '20': 'Producție',
   '30': 'Vânzare',
   '40': 'Retur produse vândute',
   '50': 'Retur produse achiziționate',

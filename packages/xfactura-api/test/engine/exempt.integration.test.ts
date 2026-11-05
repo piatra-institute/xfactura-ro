@@ -451,8 +451,31 @@ describe('exempt rent and the pro-rata', () => {
     expect((await c.work()).filter((item) => item.kind === 'vat.prorata')).toEqual([]);
     const december = await c.prepare('D300', '2026-12', { declarant, ...d300 });
     expect(summary(december).rows).toMatchObject({ R31_2: 210 });
+    expect(summary(december).proRata).toBe('60');
     expect(december.state).not.toBe('blocked');
     validated(december);
+
+    // The adjustment reversed in December: its definitive pro-rata goes with it. The return's
+    // header is the provisional again, rd. 34 nets to nothing, and the year waits on its
+    // adjustment once more.
+    const storno = await c.s.propose('ledger.reverse', {
+      entryId: adjusted.entry!.id,
+      date: '2026-12-31',
+      reason: 'Calculul pro rata se reface',
+      evidenceId: (await c.s.evidence('storno-pro-rata.pdf')).id,
+      method: 'red',
+    });
+    await c.s.post(await c.s.approve(storno));
+    const again = await c.prepare('D300', '2026-12', { declarant, ...d300 });
+    expect(summary(again).proRata).toBe('50');
+    expect(summary(again).rows.R31_2 ?? 0).toBe(0);
+    expect((await c.work()).filter((item) => item.kind === 'vat.prorata')).toMatchObject([
+      { subject: { kind: 'prorata', id: '2026/definitive' }, severity: 'warn' },
+    ]);
+    expect(
+      (await c.s.invoke<{ posted: unknown }>(c.s.owner, 'vat.proRata.compute', { year: 2026 }))
+        .posted,
+    ).toBeNull();
   });
 
   test('without a provisional pro-rata: the purchase asks, the closure needs it', async () => {
@@ -952,5 +975,130 @@ describe('a cancellation of the registration with stock', () => {
       },
     });
     validated(informative);
+  });
+});
+
+describe('the pro-rata after a storno', () => {
+  const cui = '18547290';
+  // prorataYear sums `attributes.prorataTax` / `prorataDeducted`, which a storno negates.
+  test('a mixed purchase reversed in the year leaves no pro-rata adjustment', async () => {
+    let now = Date.parse('2026-10-31T10:00:00Z');
+    const s = await scenario({ cui, clock: () => now });
+    open.push(s);
+    for (const [axis, value, from] of [
+      ['entity.form', 'srl', '2020-01-01'],
+      ['activity.goods', 'no', '2020-01-01'],
+      ['regime.excluded', 'none', '2020-01-01'],
+      ['employer', 'no', '2020-01-01'],
+      ['vat.status', 'normal_vat', '2020-01-01'],
+      ['vat.cash', 'no', '2020-01-01'],
+      ['income_tax', 'micro', '2026-01-01'],
+      ['vat.period', 'monthly', '2026-01-01'],
+      ['vat.prorata', '50', '2026-01-01'],
+    ] as const)
+      await s.invoke(s.owner, 'profile.record', {
+        axis,
+        value,
+        effectiveFrom: from,
+        evidenceId: (await s.evidence(`${axis}-${value}.pdf`)).id,
+      });
+    await s.invoke(s.owner, 'sales.seller.record', {
+      details: {
+        name: 'Exemplu Imobiliare SRL',
+        vatId: `RO${cui}`,
+        address: { lines: ['Str. Lungă 10'], city: 'Galați', subdivision: 'RO-GL', country: 'RO' },
+      },
+    });
+    const importXml = async (number: string, xml: string) =>
+      s.invoke<{ id: string }>(s.owner, 'invoices.import', {
+        evidenceId: (
+          await s.invoke<{ id: string }>(s.owner, 'evidence.record', {
+            filename: `${number}.xml`,
+            mediaType: 'application/xml',
+            base64: Buffer.from(xml).toString('base64'),
+          })
+        ).id,
+      });
+    const book = async (treatment: string, input: unknown, acknowledge: string[] = []) => {
+      const proposal = await s.invoke<ProposalView>(s.owner, 'proposals.propose', {
+        treatment,
+        input,
+      });
+      expect(proposal.issues.filter((issue) => issue.severity === 'block')).toEqual([]);
+      return s.post(await s.approve(proposal, s.reviewer, acknowledge));
+    };
+    const sale = await importXml(
+      'V-1',
+      invoiceXml({
+        company: cui,
+        number: 'V-1',
+        date: '2026-10-10',
+        direction: 'sale',
+        net: '60000.00',
+        tax: '12600.00',
+        gross: '72600.00',
+        counterparty: 'RO14399840',
+      }),
+    );
+    await book('invoices.recognize', { documentId: sale.id, account: '704' });
+    const rent = await importXml(
+      'V-2',
+      invoiceXml({
+        company: cui,
+        number: 'V-2',
+        date: '2026-10-01',
+        direction: 'sale',
+        category: 'E',
+        rate: '0',
+        tax: '0.00',
+        net: '40000.00',
+        gross: '40000.00',
+        counterparty: 'RO14399840',
+      }).replace(
+        /(<cac:TaxSubtotal>.*?<cac:TaxCategory><cbc:ID>[EKG]<\/cbc:ID><cbc:Percent>0<\/cbc:Percent>)/,
+        `$1<cbc:TaxExemptionReasonCode>VATEX-EU-135-1</cbc:TaxExemptionReasonCode>`,
+      ),
+    );
+    await book('invoices.recognize', {
+      documentId: rent.id,
+      account: '706',
+      exemption: 'art.292(2)(e)',
+    });
+    const overhead = await importXml(
+      'F-2',
+      invoiceXml({
+        company: cui,
+        number: 'F-2',
+        date: '2026-10-15',
+        net: '10000.00',
+        tax: '2100.00',
+        gross: '12100.00',
+        counterparty: 'RO14399840',
+      }),
+    );
+    const mixed = await book('invoices.recognize', {
+      documentId: overhead.id,
+      account: '628',
+      deduction: 'prorata',
+    });
+    // The mixed purchase is reversed in the same month (booked by mistake).
+    const reversal = await s.propose('ledger.reverse', {
+      entryId: mixed.entry!.id,
+      date: '2026-10-25',
+      reason: 'Factura înregistrată din greșeală',
+      evidenceId: (await s.evidence('storno.pdf')).id,
+      method: 'black',
+    });
+    expect(reversal.issues.filter((issue) => issue.severity === 'block')).toEqual([]);
+    await s.post(await s.approve(reversal, s.reviewer));
+
+    now = Date.parse('2026-12-15T10:00:00Z');
+    const computed = await s.invoke<{ adjustment: string | null; definitive: unknown }>(
+      s.owner,
+      'vat.proRata.compute',
+      { year: 2026 },
+    );
+    // No mixed purchase stands in 2026: nothing to adjust.
+    expect(computed.adjustment ?? '0.00').toBe('0.00');
   });
 });

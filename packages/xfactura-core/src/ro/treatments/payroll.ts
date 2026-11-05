@@ -353,7 +353,8 @@ export const payrollRecognition: Treatment<PayrollInput> = {
       '444',
       delta((booking) => booking.tax),
     );
-    // CAM is owed on the employer's total base, rounded once, as the D112 declares it.
+    // CAM is owed on the employer's total base, rounded once, as the D112 declares it: a nonzero
+    // amount below one leu is one leu (the structure's rounding).
     let cam: bigint;
     try {
       const at = monthStart(input.month as Month);
@@ -363,8 +364,10 @@ export const payrollRecognition: Treatment<PayrollInput> = {
         'leu_half_up'
       )
         throw new Error('Unknown rounding.');
-      const camOf = (base: bigint) =>
-        divRound(base * parseScaled(rate, 4), 100_000_000n, 'halfAwayFromZero') * 100n;
+      const camOf = (base: bigint) => {
+        const lei = divRound(base * parseScaled(rate, 4), 100_000_000n, 'halfAwayFromZero');
+        return (lei === 0n && base * parseScaled(rate, 4) > 0n ? 1n : lei) * 100n;
+      };
       cam = camOf(now.camBase) - (before ? camOf(before.camBase) : 0n);
     } catch (error) {
       if (!(error instanceof RuleGapError)) throw error;

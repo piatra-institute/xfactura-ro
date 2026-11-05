@@ -7,7 +7,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { $ } from 'bun';
-import { anaf, validateAnaf } from './anaf';
+import { anaf, anafD112FirstHalf, d112FirstHalfDuk, validateAnaf } from './anaf';
 import {
   calculateInvoice,
   fromInvoicer,
@@ -1073,6 +1073,131 @@ describe('official D112 validation', () => {
       expect(results).toEqual(
         Object.fromEntries(Object.keys(payrolls).map((name) => [name, 'ok'])),
       );
+    },
+    120_000,
+  );
+
+  // January–June 2026: the structure of 30.03.2026 (salMin 4050, Suma300 300 lei; NZL 18 in
+  // January, 21 in June), validated by the J26.0.3 ANAF published for those months and by the
+  // general kit's J27.0.8, which keeps their table.
+  const january = (people: D112Insured[], month = 1): D112 => ({
+    ...payroll(people),
+    period: { year: 2026, month },
+    parameters: { minimumWage: 4050, relief: 300 },
+  });
+  const days = (person: D112Insured, daysWorked: number, hours = 8): D112Insured => ({
+    ...person,
+    employment: { ...person.employment, daysWorked, hoursWorked: daysWorked * hours },
+  });
+  const firstHalf: Record<string, D112> = {
+    // 300 lei of the minimum wage outside every base: CAS 25% × 3750 = 937,50 → 938, CASS 375,
+    // deduction 20% × 4050 = 810, tax 10% × (3750 − 938 − 375 − 810 = 1627) = 163.
+    'january-minimum-wage': january([
+      days(
+        insured({
+          cnp: '1900315170013',
+          lastName: 'Ionescu',
+          firstName: 'Mihai',
+          from: '2024-03-01',
+          employment: {
+            type: '51',
+            baseSalary: 4050,
+            unemploymentBase: 4050,
+            camBase: 3750,
+            cassBase: 3750,
+            cass: 375,
+            casBase: 3750,
+            cas: 938,
+            relief: 300,
+          },
+          income: {
+            cash: 4050,
+            deduction: { basic: 810, young: 0, children: 0 },
+            taxBase: 1627,
+            tax: 163,
+            paid: 2574,
+          },
+        }),
+        18,
+      ),
+    ]),
+    // The part-time contract's limit sum: (4050 − 300) × 18 / 18 = 3750 lei; the full-time
+    // employee's deduction 10,5% × 4050 = 425.
+    'january-part-time': january([
+      days(
+        {
+          ...partTimeEmployee,
+          minimum: { kind: 'due', base: 3750 },
+          income: {
+            ...partTimeEmployee.income,
+            deduction: { basic: 810, young: 0, children: 0 },
+            taxBase: 815,
+            tax: 82,
+            paid: 1543,
+          },
+        },
+        18,
+        4,
+      ),
+      days(
+        {
+          ...fullTimeEmployee,
+          income: {
+            ...fullTimeEmployee.income,
+            deduction: { basic: 425, young: 0, children: 0 },
+            taxBase: 2825,
+            tax: 283,
+            paid: 2967,
+          },
+        },
+        18,
+      ),
+    ]),
+    'june-full-time': january(
+      [
+        days(
+          {
+            ...fullTimeEmployee,
+            income: {
+              ...fullTimeEmployee.income,
+              deduction: { basic: 425, young: 0, children: 0 },
+              taxBase: 2825,
+              tax: 283,
+              paid: 2967,
+            },
+          },
+          21,
+        ),
+      ],
+      6,
+    ),
+  };
+
+  anafD112FirstHalf(
+    'DUKIntegrator accepts the January–June 2026 payrolls, in J26.0.3 and in J27.0.8',
+    async () => {
+      for (const model of Object.values(firstHalf)) expect(checkD112(model)).toEqual([]);
+      const written = Object.fromEntries(
+        Object.entries(firstHalf).map(([name, model]) => [name, writeD112(model)]),
+      );
+      const ok = Object.fromEntries(Object.keys(firstHalf).map((name) => [name, 'ok']));
+      expect(await validateAnaf('D112', written, d112FirstHalfDuk)).toEqual(ok);
+      expect(await validateAnaf('D112', written)).toEqual(ok);
+      // Both apply January's limit sum, (4050 − 300) × 18 / 18.
+      const low = written['january-part-time']!.replace('A_13P="3750"', 'A_13P="3500"');
+      expect(low).not.toBe(written['january-part-time']);
+      for (const verdict of [
+        await validateAnaf('D112', { low }, d112FirstHalfDuk),
+        await validateAnaf('D112', { low }),
+      ])
+        expect(verdict.low).toContain('SP1A.3: A_13P(3500) trebuie sa fie = 3750');
+      // The register's parameters must be the structure's; medical leave is not written there.
+      expect(
+        checkD112({
+          ...firstHalf['january-minimum-wage']!,
+          parameters: { minimumWage: 4325, relief: 200 },
+        }).map((check) => check.code),
+      ).toContain('D112_PARAMETERS');
     },
     120_000,
   );

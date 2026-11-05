@@ -61,10 +61,12 @@ type Artifact = {
   steps: { state: string; actor: string | null; detail: string | null }[];
 };
 
-/** A VAT payer with its details, a bank account, an opening balance and one customer. */
+/** A VAT payer (or a company outside VAT) with its details, a bank account, an opening balance
+ * and one customer. */
 async function company(
   vatPeriod: 'monthly' | 'quarterly' | null,
   validator?: DeclarationValidator,
+  status: 'normal_vat' | 'non_vat' = 'normal_vat',
 ) {
   const s = await scenario({ cui, ...(validator ? { declarationValidator: validator } : {}) });
   open.push(s);
@@ -75,7 +77,7 @@ async function company(
       effectiveFrom: '2026-01-01',
       evidenceId: (await s.evidence(`${axis}.pdf`)).id,
     });
-  await fact('vat.status', 'normal_vat');
+  await fact('vat.status', status);
   if (vatPeriod) await fact('vat.period', vatPeriod);
   await s.invoke(s.owner, 'sales.seller.record', {
     details: {
@@ -168,7 +170,7 @@ async function company(
   };
   const prepare = (period: string, options: Record<string, unknown> = { contact }) =>
     s.invoke<Artifact>(s.owner, 'declarations.prepare', { kind: 'D406', period, options });
-  return { s, customer, sell, document, buy, file, prepare };
+  return { s, customer, sell, document, buy, file, prepare, fact };
 }
 
 /** September 2026 of a monthly payer: sales (one in EUR, a credit note), purchases (one on the
@@ -1452,4 +1454,310 @@ describe('D406 taxes other than VAT', () => {
     },
     120_000,
   );
+});
+
+/** Each line's account with its VAT (TaxType 300): the TaxCode, base and VAT. */
+const taxCodes = (lines: XmlElement[]) =>
+  lines.map((line) => [
+    value(line, 'AccountID'),
+    ...children(line, 'TaxInformation')
+      .filter((tax) => value(tax, 'TaxType') === '300')
+      .map(
+        (tax) =>
+          `${value(tax, 'TaxCode')} ${value(tax, 'TaxBase')} ${value(children(tax, 'TaxAmount')[0]!, 'Amount')}`,
+      ),
+  ]);
+const transactionLines = (file: XmlElement, document: string) =>
+  children(
+    children(file, 'Transaction').find((transaction) =>
+      children(transaction, 'TransactionLine').some(
+        (line) => value(line, 'SourceDocumentID') === document,
+      ),
+    )!,
+    'TransactionLine',
+  );
+
+describe('D406 outside VAT, abroad and over several accounts', () => {
+  /** A company outside VAT (art. 310) in the third quarter: a sale without VAT, a purchase with
+   * VAT it cannot deduct, and Irish services whose VAT it owes through D301 (art. 307 alin. (2)),
+   * expensed beside the base. */
+  async function outside(validator?: DeclarationValidator) {
+    const books = await company(null, validator, 'non_vat');
+    const { s, document, file, fact } = books;
+    await fact('vat.eu', 'none');
+    await s.invoke(s.owner, 'fx.importBnr', { evidenceId: await file('nbrfxrates.xml', bnr) });
+    const anaf = await s.invoke<{ id: string }>(s.owner, 'parties.create', {
+      kind: 'ro_public_institution',
+      country: 'RO',
+      taxId: '8000000000',
+      name: 'ANAF',
+    });
+    // V-1: 1,000.00 lei without VAT (category O).
+    const sale = await document({
+      number: 'V-1',
+      direction: 'sale',
+      counterparty: '14399840',
+      date: '2026-07-10',
+      category: 'O',
+      rate: '0',
+      tax: '0.00',
+      net: '1000.00',
+      gross: '1000.00',
+    });
+    await s.book('invoices.recognize', { documentId: sale.id, account: '704' });
+    // F-1: 500.00 + 105.00 lei of VAT, which stays in the expense.
+    const bought = await document({
+      number: 'F-1',
+      counterparty: '26000020',
+      date: '2026-08-05',
+      net: '500.00',
+      tax: '105.00',
+      gross: '605.00',
+    });
+    await s.book('invoices.recognize', {
+      documentId: bought.id,
+      account: '628',
+      deduction: 'none',
+    });
+    // ADS-1: 100.00 € at 5.0000 = 500.00 lei; 21% VAT owed, 105.00 lei on 4423.
+    const ads = await document({
+      number: 'ADS-1',
+      country: 'IE',
+      counterparty: 'IE6388047V',
+      currency: 'EUR',
+      category: 'AE',
+      rate: '0',
+      tax: '0.00',
+      net: '100.00',
+      gross: '100.00',
+      date: '2026-09-15',
+    });
+    const proposal = await s.propose('invoices.crossBorder', {
+      documentId: ads.id,
+      account: '623',
+      supply: 'services_general_rule',
+      deduction: 'none',
+      authorityId: anaf.id,
+    });
+    expect(proposal.issues.filter((issue) => issue.severity === 'block')).toEqual([]);
+    await s.post(
+      await s.approve(
+        proposal,
+        s.reviewer,
+        proposal.issues.filter((issue) => issue.severity === 'ack').map((issue) => issue.code),
+      ),
+    );
+    return books;
+  }
+  const outsideOptions = { contact, accounts: { '623': '6231' } };
+
+  test('a company outside VAT files each quarter, as 100020, its sales under the special scheme’s code', async () => {
+    const { s, prepare } = await outside();
+    // Quarterly outside VAT (OPANAF nr. 1.783/2021 anexa nr. 4 pct. 3), not by month.
+    const month = await s.refused(prepare('2026-08', outsideOptions));
+    expect(month?.code).toBe('VAT_PERIOD');
+    const file = await fileOf(s, await prepare('2026-Q3', outsideOptions));
+    expect(value(children(file, 'Header')[0]!, 'HeaderComment')).toBe('T');
+    expect(value(children(file, 'TaxRegistration')[0]!, 'TaxType')).toBe('100020');
+    // The sale: 310326 on its revenue and its invoice line; the purchase: 351104, its VAT not
+    // deducted; the Irish services: 356319 on the expense, the VAT expensed and 4423 without.
+    expect(taxCodes(transactionLines(file, 'V-1'))).toEqual([
+      ['4111'],
+      ['704', '310326 1000.00 0.00'],
+    ]);
+    expect(taxCodes(transactionLines(file, 'F-1'))).toEqual([
+      ['628', '351104 500.00 105.00'],
+      ['401'],
+    ]);
+    expect(taxCodes(transactionLines(file, 'ADS-1'))).toEqual([
+      ['623', '356319 500.00 105.00'],
+      ['401'],
+      ['623'],
+      ['4423'],
+    ]);
+    const sale = children(file, 'Invoice').find((node) => value(node, 'InvoiceNo') === 'V-1')!;
+    expect(
+      children(sale, 'InvoiceLine').map((line) =>
+        value(children(line, 'TaxInformation')[0]!, 'TaxCode'),
+      ),
+    ).toEqual(['310326']);
+  });
+
+  official(
+    "a quarter outside VAT passes ANAF's SAF-T validator",
+    async () => {
+      const { prepare } = await outside(kits());
+      const prepared = await prepare('2026-Q3', outsideOptions);
+      expect([prepared.state, prepared.steps.at(-1)?.detail ?? null]).toEqual([
+        'validated_official',
+        null,
+      ]);
+    },
+    120_000,
+  );
+
+  /** A payer's sale to a French consumer below the threshold (art. 278^1): Romanian VAT. */
+  async function consumerSale(validator?: DeclarationValidator) {
+    const books = await company('monthly', validator);
+    const { s, file, fact } = books;
+    await fact('vat.distance', 'origin');
+    await s.invoke(s.owner, 'fx.importBnr', { evidenceId: await file('nbrfxrates.xml', bnr) });
+    const imported = await s.invoke<{ id: string; partyId: string }>(s.owner, 'invoices.import', {
+      evidenceId: await file(
+        'EB-1.xml',
+        invoiceXml({
+          company: cui,
+          number: 'EB-1',
+          direction: 'sale',
+          counterparty: '0000000000000',
+          country: 'FR',
+          date: '2026-09-15',
+          net: '1000.00',
+          tax: '210.00',
+          gross: '1210.00',
+        }),
+      ),
+    });
+    // The consumer's billing address, without a VAT code.
+    await s.invoke(s.owner, 'parties.recordDetails', {
+      partyId: imported.partyId,
+      details: {
+        name: 'Jeanne Martin',
+        legalId: '0000000000000',
+        address: { lines: ['12 rue de la Paix'], city: 'Paris', country: 'FR' },
+      },
+    });
+    const proposal = await s.propose('invoices.euConsumer', {
+      documentId: imported.id,
+      account: '704',
+      supply: 'electronic',
+      location: [
+        { kind: 'billing_address', country: 'FR' },
+        { kind: 'ip', country: 'FR' },
+      ],
+    });
+    expect(proposal.issues.filter((issue) => issue.severity === 'block')).toEqual([]);
+    await s.post(
+      await s.approve(
+        proposal,
+        s.reviewer,
+        proposal.issues.filter((issue) => issue.severity === 'ack').map((issue) => issue.code),
+      ),
+    );
+    return { ...books, consumer: imported.partyId };
+  }
+
+  test('a consumer of another Member State is its own customer, 04 with a code of the books, its sale under 310346', async () => {
+    const { s, prepare, consumer } = await consumerSale();
+    const file = await fileOf(s, await prepare('2026-09'));
+    const code = `04${consumer.replace(/-/g, '').slice(0, 24).toUpperCase()}`;
+    const customer = children(file, 'Customer').find((node) => value(node, 'CustomerID') === code);
+    expect(customer).toBeDefined();
+    const invoice = children(file, 'Invoice').find((node) => value(node, 'InvoiceNo') === 'EB-1')!;
+    expect(value(children(invoice, 'CustomerInfo')[0]!, 'CustomerID')).toBe(code);
+    expect(
+      children(invoice, 'InvoiceLine').map((line) =>
+        value(children(line, 'TaxInformation')[0]!, 'TaxCode'),
+      ),
+    ).toEqual(['310346']);
+  });
+
+  official(
+    "a month with a sale to a consumer of another Member State passes ANAF's SAF-T validator",
+    async () => {
+      const { prepare } = await consumerSale(kits());
+      const prepared = await prepare('2026-09');
+      expect([prepared.state, prepared.steps.at(-1)?.detail ?? null]).toEqual([
+        'validated_official',
+        null,
+      ]);
+    },
+    120_000,
+  );
+
+  test('attributes a rate’s lines over several accounts by the goods received, else by their amounts, and refuses only the lines nothing tells apart', async () => {
+    const { s, document, prepare, fact } = await company('monthly');
+    for (const [axis, value_] of [
+      ['policy.stock.valuation', 'fifo'],
+      ['policy.stock.inventory', 'permanent'],
+      ['policy.stock.negative', 'refuse'],
+    ] as const)
+      await fact(axis, value_);
+    const depot = await s.invoke<{ id: string }>(s.owner, 'stock.warehouses.create', {
+      code: 'D1',
+      name: 'Depozit',
+      keeper: 'Ionescu Maria',
+    });
+    const item = (code: string, name: string, account: string) =>
+      s.invoke<{ id: string }>(s.owner, 'stock.items.create', {
+        code,
+        name,
+        unit: 'H87',
+        account,
+      });
+    const board = await item('PAL-1', 'Placă PAL', '301');
+    const lacquer = await item('LAC-1', 'Lac', '3021');
+    const twoLines = (number: string, first: string, second: string, names: [string, string]) => {
+      const net = (Number(first) + Number(second)).toFixed(2);
+      const tax = ((Number(net) * 21) / 100).toFixed(2);
+      return document({
+        number,
+        counterparty: '26000039',
+        date: '2026-09-12',
+        net,
+        tax,
+        gross: (Number(net) + Number(tax)).toFixed(2),
+        lines: [
+          { rate: '21', net: first, name: names[0] },
+          { rate: '21', net: second, name: names[1] },
+        ],
+      });
+    };
+    // Two materials at one rate, 250.00 each, on 301 and 3021: the reception tells them apart.
+    const materials = await twoLines('M-1', '250.00', '250.00', ['Placă PAL', 'Lac']);
+    await s.book('invoices.recognize', {
+      documentId: materials.id,
+      allocations: [
+        { account: '301', vat: 'S-21', amount: '250.00' },
+        { account: '3021', vat: 'S-21', amount: '250.00' },
+      ],
+      stock: {
+        warehouseId: depot.id,
+        lines: [
+          { line: '1', itemId: board.id, quantity: '5' },
+          { line: '2', itemId: lacquer.id, quantity: '10' },
+        ],
+      },
+    });
+    // Two services at one rate, 300.00 and 200.00, on 628 and 6028: their amounts tell them.
+    const services = await twoLines('S-1', '300.00', '200.00', ['Găzduire', 'Piese mărunte']);
+    await s.book('invoices.recognize', {
+      documentId: services.id,
+      allocations: [
+        { account: '628', vat: 'S-21', amount: '300.00' },
+        { account: '6028', vat: 'S-21', amount: '200.00' },
+      ],
+    });
+    const file = await fileOf(s, await prepare('2026-09'));
+    const accounts = (number: string) =>
+      children(
+        children(file, 'Invoice').find((node) => value(node, 'InvoiceNo') === number)!,
+        'InvoiceLine',
+      ).map((line) => value(line, 'AccountID'));
+    expect(accounts('M-1')).toEqual(['301', '3021']);
+    expect(accounts('S-1')).toEqual(['628', '6028']);
+    // 250.00 and 250.00 on 628 and 6028: nothing tells which line is which.
+    const same = await twoLines('S-2', '250.00', '250.00', ['Găzduire', 'Piese mărunte']);
+    await s.book('invoices.recognize', {
+      documentId: same.id,
+      allocations: [
+        { account: '628', vat: 'S-21', amount: '250.00' },
+        { account: '6028', vat: 'S-21', amount: '250.00' },
+      ],
+    });
+    const refused = await s.refused(prepare('2026-09'));
+    expect(
+      (refused?.details as { problems: { code: string }[] }).problems.map((item) => item.code),
+    ).toEqual(['D406_SPLIT']);
+  });
 });

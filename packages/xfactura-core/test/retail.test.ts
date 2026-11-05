@@ -397,6 +397,37 @@ describe('the retail price method', () => {
     ).toBe(true);
   });
 
+  test("the year's coefficient applies to the year's exits, less what earlier months took", () => {
+    // October as above, discharged (166,67 and 105,00); November receives 1.210,00 with a markup
+    // of 100,00 (VAT 210,00) and sells 605,00: K = (500 + 100) ÷ (1.500 + 1.000) = 24%, on the
+    // year's exits without VAT, 1.000,00: 240,00 − 166,67 = 73,33, so 378 keeps 600 − 240 = 360 =
+    // 24% × the 1.500,00 still held. The month's exits alone (24% × 500 = 120,00) would leave
+    // 313,33, at no coefficient.
+    const november: [string, string, 'D' | 'C', bigint][] = [
+      ...ledger,
+      ['2026-10-31', '378.M2', 'D', 16_667n],
+      ['2026-10-31', '4428.M2-21', 'D', 10_500n],
+      ['2026-11-04', '371.M2-21', 'D', 121_000n],
+      ['2026-11-04', '4428.M2-21', 'C', 21_000n],
+      ['2026-11-04', '378.M2', 'C', 10_000n],
+      ['2026-11-20', '371.M2-21', 'C', 60_500n],
+    ];
+    const input = retailDischargeInput.parse({ month: '2026-11', warehouseId: STORE });
+    const plan = retailDischarge.followUp!(input, shop())!;
+    const evaluation = retailDischarge.evaluate(
+      input,
+      shop({ turnover: postings(november, plan.turnover!) }),
+      rules(),
+    );
+    expect(evaluation.issues).toEqual([]);
+    expect(lines(evaluation.effect)).toEqual([
+      'D 378.M2 73.33',
+      'C 607 73.33',
+      'D 4428.M2-21 105.00',
+      'C 607 105.00',
+    ]);
+  });
+
   test('counts at sale price: a shortage leaves, its deducted VAT adjusted on its cost', () => {
     const input = retailCountInput.parse({
       date: '2026-10-31',
@@ -560,10 +591,11 @@ describe('agent-ready and reviewable', () => {
       for (const outcome of outcomes)
         expect(outcome.engine.summary).not.toContain('Blocat: RULE_GAP');
     }
-    // The coefficient's second case differs between the readings: 25% against 26,67%.
+    // The coefficient's second case differs between the readings: 25% on the year's exits less
+    // January's 1.000,00, against 26,67% on February's.
     const coefficient = reviewSpecs.find((item) => item.key === 'ro.stock.retail.coefficient')!;
     const second = coefficient.cases[1]!.run(register);
-    expect(second.engine.summary).toContain('D 378.M1 1.250,00 lei');
+    expect(second.engine.summary).toContain('D 378.M1 1.500,00 lei');
     expect(second.alternative.summary).toContain('D 378.M1 1.333,33 lei');
   });
 });

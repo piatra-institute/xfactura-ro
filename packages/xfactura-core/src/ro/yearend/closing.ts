@@ -33,7 +33,7 @@ export interface SnapshotAsset {
   value: string;
   depreciated: string;
   impaired: string;
-  /** Its fiscal basis' version, or null. */
+  /** Its fiscal basis' version at the close, or null: recorded, not compared at the opening. */
   fiscal: number | null;
 }
 export interface ClosingSnapshot {
@@ -104,7 +104,12 @@ export function snapshotDifferences(
     (row) => `${row.account}/${row.currency}`,
   );
   section('items', closing.items, opening.items, (row) => row.id);
-  section('assets', closing.assets, opening.assets, (row) => row.id);
+  // An asset's fiscal basis is recorded, not compared: a version recorded since is the basis of
+  // the computations after it (Codul fiscal art. 28), which the closed year's are not, and nothing
+  // the next year opens with changes. The register's cards and disposals of a locked year do not
+  // change (`assets.register` and `assets.dispose` refuse them), nor its tagged lines.
+  const held = ({ fiscal: _, ...asset }: SnapshotAsset) => asset;
+  section('assets', closing.assets.map(held), opening.assets.map(held), (row) => row.id);
   for (const key of [
     ...new Set([...Object.keys(closing.carried), ...Object.keys(opening.carried)]),
   ].sort()) {

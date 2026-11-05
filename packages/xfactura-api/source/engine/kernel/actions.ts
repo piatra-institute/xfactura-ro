@@ -8,6 +8,7 @@ import type { Transaction } from '../db/database';
 import { actionDecisions, actionExecutions, actionRequests } from '../db/schema';
 import type { Actor, Commands, Permission } from './commands';
 import { requireActiveApprover, requireSegregated, segregationOn } from './controls';
+import { payClasses, previewWithoutPersons } from './personal';
 
 /**
  * A reviewed action without journal lines (closing or reopening a month, …). A request stores a
@@ -114,7 +115,7 @@ export class Actions {
           createdBy: actor.actorId,
           agentId: actor.agentId ?? null,
         });
-        return this.view(tx, actor.companyId, id);
+        return this.shown(tx, actor, await this.view(tx, actor.companyId, id));
       },
     );
   }
@@ -184,6 +185,8 @@ export class Actions {
         previewHash: input.previewHash,
         decidedBy: actor.actorId,
         decidedEpoch: access.epoch,
+        // None, as agents never decide; the database refuses one (`inv:decision_person`).
+        agentId: actor.agentId ?? null,
         reason: input.reason ?? null,
         engineAt: now,
       });
@@ -219,7 +222,7 @@ export class Actions {
             eq(actionExecutions.requestId, input.id),
           ),
         );
-      if (done) return this.view(tx, actor.companyId, input.id);
+      if (done) return this.shown(tx, actor, await this.view(tx, actor.companyId, input.id));
       await requireActiveApprover(
         tx,
         actor.companyId,
@@ -244,7 +247,7 @@ export class Actions {
         result: canonical(result),
         executedBy: actor.actorId,
       });
-      return this.view(tx, actor.companyId, input.id);
+      return this.shown(tx, actor, await this.view(tx, actor.companyId, input.id));
     });
   }
 
@@ -284,8 +287,18 @@ export class Actions {
     };
   }
 
+  /** A view as this caller sees it: an agent whose reads do not cover `payroll` and `personal`
+   * sees no one's pay in a preview (the year close's snapshot sums the personnel accounts' open
+   * items, `previewWithoutPersons`). The preview hash is the one approved, whatever is shown. */
+  private async shown(tx: Transaction, actor: Actor, view: ActionView): Promise<ActionView> {
+    if ((await this.commands.readable(tx, actor))(payClasses)) return view;
+    return { ...view, preview: previewWithoutPersons(view.operation, view.preview) as JsonValue };
+  }
+
   get(actor: Actor, id: string) {
-    return this.commands.read(actor, 'actions.get', (tx) => this.view(tx, actor.companyId, id));
+    return this.commands.read(actor, 'actions.get', async (tx) =>
+      this.shown(tx, actor, await this.view(tx, actor.companyId, id)),
+    );
   }
 
   /** Requests in the order they were made, with the status `view` derives, filtered in SQL. */
@@ -342,7 +355,11 @@ export class Actions {
         .limit(input.limit + 1);
       const page = rows.slice(0, input.limit);
       return {
-        items: await Promise.all(page.map((row) => this.view(tx, actor.companyId, row.id))),
+        items: await Promise.all(
+          page.map(async (row) =>
+            this.shown(tx, actor, await this.view(tx, actor.companyId, row.id)),
+          ),
+        ),
         next: rows.length > input.limit ? page.at(-1)!.id : null,
       };
     });

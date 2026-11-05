@@ -7,6 +7,7 @@ import { accountCodePattern } from 'xfactura-core/kernel';
 import { chartAmendments, controlKindOf, referenceChart } from 'xfactura-core/ro/chart';
 import { impairmentPolicies } from 'xfactura-core/ro/yearend';
 import { stockPolicyAxes } from 'xfactura-core/ro/stock';
+import { productionPolicyAxes } from 'xfactura-core/ro/production';
 import {
   booksSystems,
   entityFormOf,
@@ -16,11 +17,14 @@ import {
 } from 'xfactura-core/ro/entity';
 import { prorataValues } from 'xfactura-core/ro/exempt';
 import { taxpayerCategories } from 'xfactura-core/ro/saft/applicability';
-import type { LocalDate } from 'xfactura-core/time';
+import { isValidCnp } from 'xfactura-core/ro/identifiers';
+import { addDays, type LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
+import type { PartyIdentities } from '../db/identity';
 import {
   commands,
   companies,
+  entries,
   evidence,
   fiscalYears,
   invitations,
@@ -28,9 +32,13 @@ import {
   memberships,
   parties,
   profileFacts,
+  proposals,
   user,
+  warehouses,
 } from '../db/schema';
 import { appendAudit, commandKey, type Actor, type Commands, type Ids } from '../kernel/commands';
+import { entryStands } from '../kernel/ledger';
+import { cnpMask } from '../kernel/personal';
 import { loadState } from '../kernel/state';
 import { sha256 } from '../adapters/object-store';
 
@@ -162,22 +170,45 @@ export const profileAxes = {
   'policy.stock.inventory': stockPolicyAxes['policy.stock.inventory'],
   'policy.stock.negative': stockPolicyAxes['policy.stock.negative'],
   'policy.stock.retail': stockPolicyAxes['policy.stock.retail'],
+  // The cost of the company's products (OMFP 1802/2014 pct. 8 pct. 7, 286; core ro/production):
+  // the standard cost with its price differences, or the actual production cost.
+  'policy.production.cost': productionPolicyAxes['policy.production.cost'],
 } as const;
+/** A warehouse's own method, at cost or at retail price, in place of the company's
+ * `policy.stock.retail` for it (`policy.stock.retail.<warehouseId>`, core ro/stock
+ * `retailMethodAt`; OMFP 1802/2014 pct. 286 alin. (8), 287 alin. (3)). */
+const warehouseRetailAxis =
+  /^policy\.stock\.retail\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export const profileInput = z
   .object({
-    axis: z.enum(
-      Object.keys(profileAxes) as [keyof typeof profileAxes, ...(keyof typeof profileAxes)[]],
-    ),
+    axis: z.union([
+      z.enum(
+        Object.keys(profileAxes) as [keyof typeof profileAxes, ...(keyof typeof profileAxes)[]],
+      ),
+      z.string().regex(warehouseRetailAxis),
+    ]),
     value: z.string(),
     effectiveFrom: day,
     evidenceId: z.uuid(),
     supersedesId: z.uuid().optional(),
   })
   .strict()
-  .refine((fact) => (profileAxes[fact.axis] as readonly string[]).includes(fact.value), {
-    message: 'Valoare nepermisă pentru această axă.',
-    path: ['value'],
-  });
+  .refine(
+    (fact) =>
+      (
+        (profileAxes[fact.axis as keyof typeof profileAxes] ??
+          profileAxes['policy.stock.retail']) as readonly string[]
+      ).includes(fact.value),
+    { message: 'Valoare nepermisă pentru această axă.', path: ['value'] },
+  );
+/** A partner's identifier as a caller sees it: an individual's (the keyed hash of a CNP) is
+ * masked for agents, to whom it is no use and who never read a CNP. */
+export const maskedTaxId = (
+  actor: Actor,
+  party: { kind: string; taxId: string | null },
+): string | null =>
+  actor.agentId && party.kind === 'ro_individual' && party.taxId ? cnpMask : party.taxId;
+
 export const partyInput = z
   .object({
     kind: z.enum([
@@ -252,6 +283,18 @@ export async function writeProfileFact(
     .from(evidence)
     .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.id, input.evidenceId)));
   requireCondition(source, 'EVIDENCE', 'Documentul justificativ nu este disponibil.', 404);
+  if (warehouseRetailAxis.test(input.axis)) {
+    const [store] = await tx
+      .select({ id: warehouses.id })
+      .from(warehouses)
+      .where(
+        and(
+          eq(warehouses.companyId, actor.companyId),
+          eq(warehouses.id, input.axis.slice(input.axis.lastIndexOf('.') + 1)),
+        ),
+      );
+    requireCondition(store, 'WAREHOUSE', 'Gestiunea nu există.', 404);
+  }
   await checkForm(tx, actor.companyId, input);
   if (input.supersedesId) {
     const [superseded] = await tx
@@ -535,7 +578,11 @@ export class Companies {
 }
 
 export class Configuration {
-  constructor(private readonly commands: Commands) {}
+  constructor(
+    private readonly commands: Commands,
+    /** Individuals' party identifiers (`parties.create`). */
+    private readonly identities: PartyIdentities,
+  ) {}
 
   years(actor: Actor) {
     return this.commands.read(actor, 'years.list', (tx) =>
@@ -553,8 +600,66 @@ export class Configuration {
     );
   }
 
+  /**
+   * Adds a financial or fiscal year. The years of a kind follow one another, without an overlap
+   * (a date in two financial years is in none: `financialYearOf`) and without a gap, and no
+   * financial year is added before an opening entry that stands: the books open with their first
+   * year, and the ledger carries every later one's balances. The database refuses each too
+   * (`inv:year_overlap`, `inv:year_contiguous`, `inv:year_before_opening`), and the table is
+   * append-only.
+   */
   createYear(actor: Actor, key: string, input: z.infer<typeof yearInput>) {
     return this.commands.run(actor, key, 'years.create', input, 'manage', async (tx) => {
+      const years = await tx
+        .select({ from: fiscalYears.from, to: fiscalYears.to })
+        .from(fiscalYears)
+        .where(and(eq(fiscalYears.companyId, actor.companyId), eq(fiscalYears.kind, input.kind)))
+        .orderBy(asc(fiscalYears.from));
+      const overlap = years.find((year) => year.from <= input.to && input.from <= year.to);
+      requireCondition(
+        !overlap,
+        'YEAR_OVERLAP',
+        `Exercițiul se suprapune cu exercițiul ${overlap?.from} – ${overlap?.to}.`,
+        409,
+      );
+      const first = years[0];
+      const last = years.at(-1);
+      if (first && last)
+        requireCondition(
+          years.some(
+            (year) =>
+              year.to === addDays(input.from as LocalDate, -1) ||
+              year.from === addDays(input.to as LocalDate, 1),
+          ),
+          'YEAR_GAP',
+          `Exercițiile se succed fără întrerupere: noul exercițiu începe la ${addDays(last.to as LocalDate, 1)} sau se încheie la ${addDays(first.from as LocalDate, -1)}.`,
+          409,
+        );
+      if (input.kind === 'financial') {
+        const [opening] = await tx
+          .select({ date: entries.date })
+          .from(entries)
+          .innerJoin(
+            proposals,
+            and(eq(proposals.companyId, entries.companyId), eq(proposals.id, entries.proposalId)),
+          )
+          .where(
+            and(
+              eq(entries.companyId, actor.companyId),
+              eq(entries.journalCode, 'DESCHIDERE'),
+              gt(entries.date, input.to),
+              entryStands('"acc_entries"'),
+              sql`${proposals.subjectKey} not like 'reverse:%'`,
+            ),
+          )
+          .limit(1);
+        requireCondition(
+          !opening,
+          'YEAR_BEFORE_OPENING',
+          `Registrele se deschid cu nota de deschidere din ${opening?.date}: un exercițiu anterior i-ar număra soldurile de două ori. Stornați nota de deschidere înainte de a adăuga exercițiul.`,
+          409,
+        );
+      }
       const id = this.commands.ids();
       await tx
         .insert(fiscalYears)
@@ -659,30 +764,72 @@ export class Configuration {
     );
   }
 
+  /** The company's partners; an individual's identifier (the keyed hash of a CNP) is masked
+   * for agents (`maskedTaxId`). */
   parties(actor: Actor) {
-    return this.commands.read(actor, 'parties.list', (tx) =>
-      tx
-        .select({
-          id: parties.id,
-          kind: parties.kind,
-          country: parties.country,
-          taxId: parties.taxId,
-          name: parties.name,
-        })
-        .from(parties)
-        .where(eq(parties.companyId, actor.companyId))
-        .orderBy(asc(parties.name), asc(parties.id)),
+    return this.commands.read(actor, 'parties.list', async (tx) =>
+      (
+        await tx
+          .select({
+            id: parties.id,
+            kind: parties.kind,
+            country: parties.country,
+            taxId: parties.taxId,
+            name: parties.name,
+          })
+          .from(parties)
+          .where(eq(parties.companyId, actor.companyId))
+          .orderBy(asc(parties.name), asc(parties.id))
+      ).map((row) => ({ ...row, taxId: maskedTaxId(actor, row) })),
     );
   }
 
+  /**
+   * A partner. An individual's identifier, when given, is a CNP, kept only as its keyed hash
+   * (`PartyIdentities`), the identity an employee who is this person has; the CNP itself is
+   * recorded sealed with `parties.recordCnp`. A partner of the same country and identifier as one
+   * already recorded is refused (`PARTY_EXISTS`, naming it).
+   */
   createParty(actor: Actor, key: string, input: z.infer<typeof partyInput>) {
     return this.commands.run(actor, key, 'parties.create', input, 'write', async (tx) => {
-      const taxId = input.taxId?.replace(/^RO/i, '').replace(/\s+/g, '') ?? null;
+      const code = input.taxId?.replace(/^RO/i, '').replace(/\s+/g, '') ?? null;
+      const individual = input.kind === 'ro_individual';
+      requireCondition(
+        !individual || code === null || isValidCnp(code),
+        'CNP',
+        'Codul unei persoane fizice este CNP-ul ei, iar acesta nu este valid.',
+      );
+      const taxId = individual && code ? this.identities.ofCnp(actor.companyId, code) : code;
+      if (taxId) {
+        const [existing] = await tx
+          .select({ id: parties.id })
+          .from(parties)
+          .where(
+            and(
+              eq(parties.companyId, actor.companyId),
+              eq(parties.country, input.country),
+              eq(parties.taxId, taxId),
+            ),
+          );
+        requireCondition(
+          !existing,
+          'PARTY_EXISTS',
+          'Există deja un partener cu această țară și acest cod de identificare.',
+          409,
+          { partyId: existing?.id },
+        );
+      }
       const id = this.commands.ids();
       await tx
         .insert(parties)
         .values({ id, companyId: actor.companyId, ...input, taxId, createdBy: actor.actorId });
-      return { id, kind: input.kind, country: input.country, taxId, name: input.name };
+      return {
+        id,
+        kind: input.kind,
+        country: input.country,
+        taxId: maskedTaxId(actor, { kind: input.kind, taxId }),
+        name: input.name,
+      };
     });
   }
 }

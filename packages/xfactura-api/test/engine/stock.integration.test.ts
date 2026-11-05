@@ -450,3 +450,155 @@ describe('the stock register', () => {
     expect(s.engine.operations.get('inventory.stock.propose').agent).toBe(true);
   });
 });
+
+// The review of November 2026 (review-findings.integration.test.ts), fixed: the weighted average
+// reads what a pool held on the exit's date, a negative pool refilled past zero holds the
+// receipt's cost, and the periodic average's month nets reversals and returns.
+describe('valuation on the dates the moves carry', () => {
+  /** Paper (3028) in one warehouse, received on delivery notes and consumed on slips. */
+  async function paper(
+    method: 'fifo' | 'average' | 'periodic',
+    negative: 'refuse' | 'allow' = 'refuse',
+  ) {
+    const { s, item, warehouse } = await stockCompany(method, {
+      'policy.stock.negative': negative,
+    });
+    const sheet = await item('HRT-1', 'Hârtie', '3028');
+    const depot = await warehouse('D1', 'Depozit');
+    const supplier = await s.party('Furnizor SRL', '14399840');
+    const receive = async (reference: string, date: string, quantity: string, value: string) =>
+      s.book('stock.receive', {
+        date,
+        warehouseId: depot.id,
+        supplierId: supplier.id,
+        reference,
+        evidenceId: (await s.evidence(`${reference}.pdf`)).id,
+        lines: [{ itemId: sheet.id, quantity, value }],
+      });
+    const consumption = async (reference: string, date: string, quantity: string) =>
+      s.propose('stock.consume', {
+        date,
+        warehouseId: depot.id,
+        reference,
+        evidenceId: (await s.evidence(`${reference}.pdf`)).id,
+        lines: [{ itemId: sheet.id, quantity }],
+      });
+    const reverse = async (entryId: string, date: string, method: 'red' | 'black') =>
+      s.book('ledger.reverse', {
+        entryId,
+        date,
+        reason: 'Document înregistrat din greșeală.',
+        evidenceId: (await s.evidence(`storno-${entryId}.pdf`)).id,
+        method,
+      });
+    const card = async () =>
+      (
+        await s.invoke<{ closing: { quantity: string; value: string } }>(s.owner, 'stock.card', {
+          itemId: sheet.id,
+          warehouseId: depot.id,
+        })
+      ).closing;
+    const findings = async (month: string) =>
+      ((await s.close(month)).preview as { findings: { code: string }[] }).findings.map(
+        (finding) => finding.code,
+      );
+    return { s, receive, consumption, reverse, card, findings };
+  }
+  const codes = (proposal: ProposalView) => proposal.issues.map((issue) => issue.code);
+
+  // The whole pool counted as available on any date after its first receipt, valued at today's
+  // average: an exit dated when the warehouse was empty was accepted, at a later purchase's price.
+  test('an exit dated when the warehouse was empty is refused', async () => {
+    const { s, receive, consumption } = await paper('average');
+    await receive('AV-1', '2026-03-01', '10', '100.00');
+    await s.post(await s.approve(await consumption('BC-1', '2026-03-02', '10')));
+    await receive('AV-2', '2026-03-20', '10', '200.00');
+    const late = await consumption('BC-2', '2026-03-10', '5');
+    expect(codes(late)).toEqual(['STOCK_INSUFFICIENT']);
+    expect(late.issues[0]!.details).toMatchObject({ available: '0.000', requested: '5.000' });
+    // On the 20th, after the receipt, the 5 leave at its price.
+    const after = await consumption('BC-3', '2026-03-21', '5');
+    expect(lines(after)).toEqual(['D 6028 100.00', 'C 3028 100.00']);
+  });
+
+  test('an exit dated before a later receipt leaves at its date’s average', async () => {
+    const { s, receive, consumption, card } = await paper('average');
+    await receive('AV-1', '2026-03-01', '10', '100.00');
+    await receive('AV-2', '2026-03-20', '10', '200.00');
+    // On 10 March the pool held 10 at 10,00: 5 cost 50,00, not 75,00 (today's average).
+    const backdated = await consumption('BC-1', '2026-03-10', '5');
+    expect(lines(backdated)).toEqual(['D 6028 50.00', 'C 3028 50.00']);
+    // No more than it held on that day leaves on it.
+    expect(codes(await consumption('BC-2', '2026-03-10', '12'))).toEqual(['STOCK_INSUFFICIENT']);
+    await s.post(await s.approve(backdated));
+    expect(await card()).toEqual({ quantity: '15.000', value: '250.00' });
+  });
+
+  test('a FIFO lot emptied on the exit’s date and restored later is not available then', async () => {
+    const { s, receive, consumption, reverse } = await paper('fifo');
+    await receive('AV-1', '2026-03-01', '10', '100.00');
+    const out = await s.post(await s.approve(await consumption('BC-1', '2026-03-05', '10')));
+    // Reversed on the 25th: the lot holds 10 again from then on, not on the 10th.
+    await reverse(out.entry!.id, '2026-03-25', 'red');
+    expect(codes(await consumption('BC-2', '2026-03-10', '5'))).toEqual(['STOCK_INSUFFICIENT']);
+    expect(lines(await consumption('BC-3', '2026-03-26', '5'))).toEqual([
+      'D 6028 50.00',
+      'C 3028 50.00',
+    ]);
+  });
+
+  // The estimate of a negative pool's exits was corrected only by a receipt bringing it back to
+  // exactly zero: one crossing zero kept the estimate in the stock.
+  test('a negative pool refilled past zero holds the receipt’s cost', async () => {
+    const { s, receive, consumption, card } = await paper('average', 'allow');
+    await receive('AV-1', '2026-03-01', '2', '20.00');
+    const out = await consumption('BC-1', '2026-03-02', '5');
+    expect(lines(out)).toEqual(['D 6028 50.00', 'C 3028 50.00']);
+    await s.post(
+      await s.approve(
+        out,
+        s.reviewer,
+        out.issues.filter((issue) => issue.severity === 'ack').map((issue) => issue.code),
+      ),
+    );
+    // The 3 taken beyond the stock cost 12,00 each, not the 10,00 they left at: 6,00 more.
+    const refill = await receive('AV-2', '2026-03-03', '10', '120.00');
+    expect(lines(refill)).toEqual(['D 3028 120.00', 'D 6028 6.00', 'C 3028 6.00', 'C 408 120.00']);
+    // 7 left of the 10 received at 12,00.
+    expect(await card()).toEqual({ quantity: '7.000', value: '84.00' });
+  });
+
+  // The month's flows were split by the sign of each move's quantity: a reversed receipt counted
+  // among the exits, which were brought to an average that included it.
+  test('the periodic average: a receipt reversed in the month is neither an entry nor an exit', async () => {
+    const { s, receive, consumption, reverse, findings } = await paper('periodic');
+    await receive('AV-1', '2026-03-02', '10', '100.00');
+    const wrong = await receive('AV-2', '2026-03-03', '10', '200.00');
+    await reverse(wrong.entry!.id, '2026-03-04', 'red');
+    const consumed = await s.post(await s.approve(await consumption('BC-1', '2026-03-05', '5')));
+    expect(lines(consumed)).toEqual(['D 6028 50.00', 'C 3028 50.00']);
+    // The month held 10 at 10,00: the 5 consumed cost 50,00 as booked, and the close asks for no
+    // costing. Before: D 6028 −25,00 / C 3028 −25,00 (15 "exits" at 300,00 ÷ 20).
+    expect(codes(await s.propose('stock.periodCost', { month: '2026-03' }))).toEqual([
+      'NOTHING_TO_BOOK',
+    ]);
+    expect(await findings('2026-03')).not.toContain('STOCK_PERIOD_COST_MISSING');
+  });
+
+  test('the periodic average nets a black storno and a consumption reversed, and costs the rest', async () => {
+    const { s, receive, consumption, reverse, findings } = await paper('periodic');
+    await receive('AV-1', '2026-03-02', '10', '100.00');
+    const wrong = await receive('AV-2', '2026-03-03', '10', '200.00');
+    await reverse(wrong.entry!.id, '2026-03-04', 'black');
+    await s.post(await s.approve(await consumption('BC-1', '2026-03-05', '5')));
+    const twice = await s.post(await s.approve(await consumption('BC-2', '2026-03-06', '2')));
+    await reverse(twice.entry!.id, '2026-03-07', 'red');
+    await receive('AV-3', '2026-03-08', '10', '300.00');
+    // Entries 20 for 400,00 (the black storno a negative entry), exits 5 at the running 10,00:
+    // at the month's 20,00 they cost 100,00, 50,00 more.
+    expect(await findings('2026-03')).toContain('STOCK_PERIOD_COST_MISSING');
+    const costed = await s.book('stock.periodCost', { month: '2026-03' });
+    expect(lines(costed)).toEqual(['D 6028 50.00', 'C 3028 50.00']);
+    expect(await findings('2026-03')).not.toContain('STOCK_PERIOD_COST_MISSING');
+  });
+});

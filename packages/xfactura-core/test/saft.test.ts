@@ -18,6 +18,7 @@ import {
   d406Namespace,
   d406PartyId,
   d406Period,
+  partyIdError,
   writeD406,
   type D406,
   type D406Line,
@@ -27,6 +28,9 @@ import {
   d406BaseRateCode,
   d406CashVatReleaseCode,
   d406DomesticReverseChargeCodes,
+  d406NonPayerSaleCode,
+  d406RegimeCodes,
+  d406SpecialCodes,
   d406VatCodes,
   d406VatTaxCode,
 } from '../src/ro/saft/tax-codes';
@@ -758,16 +762,20 @@ describe('D406 checks', () => {
     expect(codes(with_({ address: { city: 'Galați', county: 'RO-XX', country: 'RO' } }))).toEqual([
       'error:D406_ADDRESS',
     ]);
-    expect(
-      codes(
-        model({
-          customers: [],
-          salesInvoices: [],
-          journals: [{ id: 'J', description: 'J', type: 'J', transactions: [purchase, payroll] }],
-          payments: [],
-        }),
-      ),
-    ).toEqual(['error:D406_PARTIES']);
+    // A month without customers (a shop selling only on Z reports): the section stays, empty
+    // (ANAF's definitions MF.C.1: Customer 0..*), and ANAF's validator accepts it.
+    const withoutCustomers = model({
+      customers: [],
+      salesInvoices: [],
+      journals: [{ id: 'J', description: 'J', type: 'J', transactions: [purchase, payroll] }],
+      payments: [],
+    });
+    expect(codes(withoutCustomers)).toEqual([]);
+    expect(writeD406(withoutCustomers)).toContain('<nsSAFT:Customers/>');
+    // Nor any invoice, so no product (ANAF's definitions MF.P.1: Product 0..*).
+    const withoutInvoices = { ...withoutCustomers, purchaseInvoices: [], products: [] };
+    expect(codes(withoutInvoices)).toEqual([]);
+    expect(writeD406(withoutInvoices)).toContain('<nsSAFT:Products/>');
     const anonymous = model({ suppliers: [{ ...model().suppliers[0]!, id: '080000000000000' }] });
     expect(codes(anonymous)).toContain('error:D406_PARTY_ID');
   });
@@ -873,10 +881,7 @@ describe('D406 checks', () => {
   });
 
   test('require the entries a periodic file has', () => {
-    expect(codes(model({ products: [] }))).toEqual([
-      'error:D406_PRODUCTS',
-      'error:D406_PRODUCT_UNKNOWN',
-    ]);
+    expect(codes(model({ products: [] }))).toEqual(['error:D406_PRODUCT_UNKNOWN']);
     expect(codes(model({ company: { ...model().company, ibans: [] } }))).toEqual([
       'error:D406_BANK',
     ]);
@@ -1031,6 +1036,57 @@ describe('D406 VAT codes of the engine', () => {
       { direction: 'input', code: 'RC-EU-SERV', deduction: 'full' },
     ] as const)
       expect(d406VatTaxCode(entry)).toBeUndefined();
+  });
+});
+
+describe('D406 outside VAT and after a late registration', () => {
+  test('a late registration is reported by rate under the regularizations of D300 rd. 16 and 33', () => {
+    for (const row of d406RegimeCodes) {
+      const code = vatTaxCodes[row.taxCode]!;
+      expect(code.description).toBe(row.description);
+      expect(code.percentage).toBe(row.rate!);
+      expect(code.kind).toBe(row.direction === 'output' ? 'sales' : 'purchases');
+    }
+    expect(d406VatTaxCode({ direction: 'output', code: 'REG-310', rate: '21' })).toBe('310345');
+    expect(d406VatTaxCode({ direction: 'output', code: 'REG-310', rate: '19' })).toBe('310317');
+    expect(
+      d406VatTaxCode({ direction: 'input', code: 'REG-310', rate: '21', deduction: 'full' }),
+    ).toBe('309106');
+    expect(d406VatTaxCode({ direction: 'output', code: 'REG-310' })).toBeUndefined();
+  });
+
+  test("a company outside VAT: its sales exempt without deduction, D301's VAT on services from abroad", () => {
+    expect(vatTaxCodes[d406NonPayerSaleCode]!.description).toBe(
+      'Livrări de bunuri și prestări de servicii scutite fără drept de deducere',
+    );
+    for (const row of d406SpecialCodes) {
+      const code = vatTaxCodes[row.taxCode]!;
+      expect(code.description).toBe(row.description);
+      expect(code.kind).toBe('nondeductible');
+      expect(code.percentage).toBe(row.rate!);
+      expect(code.description).toContain('art. 307 alin.(2)');
+    }
+    const special = { direction: 'input' as const, deduction: 'none' as const, special: true };
+    expect(d406VatTaxCode({ ...special, code: 'RC-EU-SERV', rate: '21' })).toBe('356319');
+    expect(d406VatTaxCode({ ...special, code: 'RC-NONEU-SERV', rate: '21' })).toBe('356317');
+    // A payer's reverse charge without deduction keeps its own rows (D300 rd. 7 and 22).
+    expect(
+      d406VatTaxCode({ direction: 'input', code: 'RC-EU-SERV', rate: '21', deduction: 'none' }),
+    ).toBe('350704');
+    // The collected side is still reported with the acquisition.
+    expect(d406VatTaxCode({ direction: 'output', code: 'RC-EU-SERV', special: true })).toBeNull();
+  });
+
+  test('a partner without a code of its state takes one of the books: 04 an individual, 05 or 06 an operator', () => {
+    const consumer = d406PartyId({ kind: 'internal', code: 'A1B2C3D4E5F6A7B8C9D0E1F2' });
+    expect(consumer).toBe('04A1B2C3D4E5F6A7B8C9D0E1F2');
+    const union = d406PartyId({ kind: 'internal', code: 'A1B2C3', country: 'FR', eu: true });
+    const outside = d406PartyId({ kind: 'internal', code: 'A1B2C3', country: 'US', eu: false });
+    expect([union, outside]).toEqual(['05FRA1B2C3', '06USA1B2C3']);
+    for (const id of [consumer, union, outside]) {
+      expect(partyIdError(id, true)).toBeUndefined();
+      expect(id.length).toBeLessThanOrEqual(35);
+    }
   });
 });
 

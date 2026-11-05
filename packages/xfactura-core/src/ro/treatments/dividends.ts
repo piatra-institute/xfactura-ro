@@ -12,6 +12,7 @@ import { divRound, formatMoney, parseMoney, parseScaled } from '../../money';
 import { RuleGapError } from '../../rules';
 import { isLocalDate, type LocalDate } from '../../time';
 import { whtCode, type Withheld } from '../withholding/codes';
+import { taxDue } from './due';
 
 const block = (code: string, message: string, path?: string): Issue => ({
   code,
@@ -294,6 +295,9 @@ export const dividendWithholding: Treatment<WithholdingInput> = {
           currency: 'RON',
           normalSide: 'C',
           mayReverse: false,
+          // Due by the 25th of the month after it was withheld, with its D100 (art. 43 alin. (2),
+          // art. 97 alin. (7)).
+          ...taxDue('D100.dividends', input.date.slice(0, 7), input.date.slice(0, 7), rules),
         },
       ],
       taxEntries: [],

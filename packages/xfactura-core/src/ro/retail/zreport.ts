@@ -21,6 +21,7 @@ import {
   type InvoiceStock,
   type StockResult,
 } from '../stock/invoices';
+import { retailMethodAt } from '../stock/valuation';
 import { retailAccountsOf, retailSynthetics, retailTag, retailWarehouse } from './accounts';
 import { zReportDocumentSchema, zReportKind, type ZReportDocument } from './documents';
 import type { ZReportRule } from './parameters';
@@ -416,8 +417,12 @@ export const zReportRecognition: Treatment<ZReportInput> = {
         ),
       );
 
-    // The goods.
-    const retail = profileAt(loaded, 'policy.stock.retail', date);
+    // The goods, by the method of the warehouse they leave (`retailMethodAt`: its own fact, else
+    // the company's): at retail price (`goods`), or at cost from the register (`stock`).
+    const warehouseId = input.goods?.warehouseId ?? input.stock?.warehouseId;
+    const retail = warehouseId
+      ? retailMethodAt(loaded, warehouseId, date)
+      : profileAt(loaded, 'policy.stock.retail', date);
     const inventory = profileAt(loaded, 'policy.stock.inventory', date);
     const goodsParts = parts.filter((part) => part.account.startsWith('707'));
     let stock: StockResult | null = null;
@@ -426,7 +431,7 @@ export const zReportRecognition: Treatment<ZReportInput> = {
       issues.push(
         block(
           'RETAIL_POLICY',
-          'Mărfurile nu se țin la preț cu amănuntul (policy.stock.retail): descărcarea se face din gestiunea pe articole.',
+          'Gestiunea nu ține mărfurile la preț cu amănuntul (policy.stock.retail): descărcarea se face din gestiunea pe articole (stock).',
           'goods',
         ),
       );
@@ -434,7 +439,7 @@ export const zReportRecognition: Treatment<ZReportInput> = {
       issues.push(
         block(
           'RETAIL_POLICY',
-          'Mărfurile se țin la preț cu amănuntul (policy.stock.retail): descărcarea se face din gestiunea la preț de vânzare (goods).',
+          'Gestiunea ține mărfurile la preț cu amănuntul (policy.stock.retail): descărcarea se face din gestiunea la preț de vânzare (goods).',
           'stock',
         ),
       );

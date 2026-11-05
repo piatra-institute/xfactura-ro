@@ -1302,12 +1302,32 @@ async function booksOf(
             sql`${lines.account} LIKE '3%'`,
             sql`not (${lines.account} LIKE '371%' and coalesce(${lines.item}, '') LIKE 'margin:%')`,
             sql`not (${lines.account} LIKE '39%' and coalesce(${lines.item}, '') LIKE 'impairment:stock:%')`,
+            // The products' price differences production books (348, G4), by order and account.
+            sql`not (${lines.account} LIKE '348%' and coalesce(${lines.item}, '') LIKE 'production:%')`,
             sql`not exists (select 1 from ${stockMoves} m where m.company_id = ${lines.companyId}
               and m.entry_id = ${lines.entryId} and m.line_no = ${lines.lineNo})`,
             sql`${proposals.treatmentId} <> 'stock.opening'`,
             // An opening balance (DESCHIDERE) the register takes over with `stock.opening`; one
             // it does not take over is the month close's (STOCK_LEDGER_DIFFERS).
             sql`${entries.journalCode} <> 'DESCHIDERE'`,
+          ),
+        )
+    )
+      .map((row) => row.month)
+      .sort(),
+    // Production (G4): the months its postings tagged a line (an order, its work in progress, its
+    // price differences).
+    productionMonths: (
+      await tx
+        .selectDistinct({ month: sql<string>`substr(${entries.date}, 1, 7)` })
+        .from(lines)
+        .innerJoin(entries, lineEntry)
+        .where(
+          and(
+            eq(lines.companyId, companyId),
+            gte(entries.date, from),
+            lte(entries.date, to),
+            sql`coalesce(${lines.item}, '') LIKE 'production:%'`,
           ),
         )
     )
@@ -1343,6 +1363,28 @@ async function booksOf(
           ? ('goods' as const)
           : ('flat_rate' as const),
     })),
+    // Sales in the Union scheme (V4), by the month of their tax point, entries that stand.
+    ossMonths: (
+      await tx
+        .selectDistinct({ month: sql<string>`substr(${taxEntries.taxPoint}, 1, 7)` })
+        .from(taxEntries)
+        .innerJoin(
+          entries,
+          and(eq(entries.companyId, taxEntries.companyId), eq(entries.id, taxEntries.entryId)),
+        )
+        .where(
+          and(
+            eq(taxEntries.companyId, companyId),
+            eq(taxEntries.tax, 'VAT'),
+            gte(taxEntries.taxPoint, from),
+            lte(taxEntries.taxPoint, to),
+            eq(taxEntries.code, 'EXP-OSS'),
+            entryStands('"acc_entries"'),
+          ),
+        )
+    )
+      .map((row) => row.month)
+      .sort(),
     sponsorshipMonths: await monthsOfLines(['6582']),
     payrollWithoutContractMonths: payrollTax.filter((month) => !employmentMonths.includes(month)),
     incomeSources: years.map((year) => {

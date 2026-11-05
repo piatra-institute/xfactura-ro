@@ -38,6 +38,7 @@ import {
   enterpriseMembers,
   entries,
   evidence,
+  fiscalYears,
   fxRates,
   incomeSources,
   parties,
@@ -58,7 +59,7 @@ import { pausedScopes } from './automation';
 import { auditHead } from './events';
 import { entryStands, holdsSubject } from './ledger';
 import { SYSTEM_PRINCIPAL } from './principals';
-import { periodStates, type CloseCheck } from './periods';
+import { closedMonths, type CloseCheck } from './periods';
 import { groupLinkKinds } from './sources';
 import type { ProposalChange } from './views';
 
@@ -81,6 +82,7 @@ export const workKinds = [
   'action.awaitingDecision',
   'action.approved',
   'obligation.due',
+  'closure.need',
   'determination.missing',
   'threshold.approaching',
   'profit.unclassified',
@@ -739,13 +741,15 @@ const actionsDetector: Detector = {
   },
 };
 
-// Returns due in the last three and next two months, not yet filed.
+// Returns not yet filed: every one from the books' first month (an overdue return stays until
+// it is filed, in the engine or recorded as filed outside it) to two months ahead.
 
 /** A return of the obligations calendar, as far as the worklist reads it. */
 export type Obligation = {
   kind: string;
   deadline: string;
   period: string;
+  start: string;
   end: string;
   due: string | null;
   status: string;
@@ -757,6 +761,9 @@ export type Obligation = {
     subject: { kind: string; id: string };
     params: { [key: string]: unknown };
   } | null;
+  /** For a blocked return whose deadline's rule is beyond the register's horizon: the year whose
+   * rules it waits for. */
+  waiting?: number | null;
 };
 export type ObligationsOf = (
   tx: Transaction,
@@ -764,6 +771,58 @@ export type ObligationsOf = (
   range: { from: string; to: string },
   today: LocalDate,
 ) => Promise<Obligation[]>;
+
+/** The months the worklist reads the calendar and the closure over: from the first month of the
+ * company's books (its first financial year), or three months back without one, to two months
+ * ahead. */
+async function worklistRange(tx: Transaction, companyId: string, today: LocalDate) {
+  const month = today.slice(0, 7) as Month;
+  const [first] = await tx
+    .select({ from: sql<string | null>`min(${fiscalYears.from})` })
+    .from(fiscalYears)
+    .where(and(eq(fiscalYears.companyId, companyId), eq(fiscalYears.kind, 'financial')));
+  const back = addMonths(month, -3);
+  const start = (first?.from?.slice(0, 7) ?? back) as Month;
+  return { from: start < back ? start : back, to: addMonths(month, 2) };
+}
+
+/** A closure question's step: the engine opens those of a yearly determination (their
+ * parameters are its computation) through `determinations.propose`; others are asked as named. */
+function askSteps(question: NonNullable<Obligation['question']>, year: number): WorkStep[] {
+  return ['determination.confirm', 'micro.conditions', 'year.figures'].includes(question.kind) ||
+    question.subject.id.includes('/')
+    ? [agent('determinations.propose', { year })]
+    : [agent('questions.ask', question as unknown as WorkStep['inputHint'])];
+}
+
+/** Recording a return filed outside the engine: an agent asks, a person answers with ANAF's
+ * registration number and receipt (`obligation.filed`). */
+const filedOutsideSteps = (item: { kind: string; period: string }): WorkStep[] => [
+  agent('questions.ask', {
+    kind: 'obligation.filed',
+    subject: { kind: 'obligation', id: `${item.kind}/${item.period}` },
+    params: { kind: item.kind, period: item.period },
+  }),
+  human('questions.answer'),
+];
+
+/**
+ * How much an unfiled return weighs on the worklist. Overdue and rejected returns block. A
+ * blocked one blocks once its period has started; before, it warns. One waiting for its year's
+ * rules (its deadline's rule beyond the register's horizon, before the rollover) blocks no close
+ * of the year before: it is information until its period starts, a warning while it runs, and
+ * blocks once it ended, its deadline then weeks away. The others warn within 7 days of their
+ * deadline.
+ */
+function obligationSeverity(item: Obligation, today: LocalDate): WorkSeverity {
+  if (['overdue', 'rejected'].includes(item.status)) return 'block';
+  if (item.status === 'blocked') {
+    const started = item.start <= today;
+    if (item.waiting) return item.end < today ? 'block' : started ? 'warn' : 'info';
+    return started ? 'block' : 'warn';
+  }
+  return item.due && item.due <= addDays(today, 7) ? 'warn' : 'info';
+}
 
 function obligationsDetector(calendar: ObligationsOf): Detector {
   const key = (item: Obligation) => [item.due ?? '9999-12-31', item.end, item.kind, item.period];
@@ -776,49 +835,36 @@ function obligationsDetector(calendar: ObligationsOf): Detector {
     id: 'obligations',
     kinds: ['obligation.due'],
     async list({ tx, companyId, today }, page) {
-      const month = today.slice(0, 7) as Month;
-      const due = (
-        await calendar(
-          tx,
-          companyId,
-          { from: addMonths(month, -3), to: addMonths(month, 2) },
-          today,
-        )
-      )
+      const due = (await calendar(tx, companyId, await worklistRange(tx, companyId, today), today))
         .filter((item) => !['filed', 'accepted'].includes(item.status))
         .filter((item) =>
           page.only !== undefined
             ? `${item.kind}|${item.period}` === page.only
             : page.after === null || after(key(item), page.after.split('|')),
         );
-      const soon = addDays(today, 7);
       const items = due.slice(0, page.limit).map((item): Draft => {
         const artifactId = item.artifactId;
-        // A return blocked by an unknown fact: the closure's question. The engine opens those of
-        // a yearly determination (their parameters are its computation); others are asked as named.
-        const ask: WorkStep[] = item.question
-          ? ['determination.confirm', 'micro.conditions', 'year.figures'].includes(
-              item.question.kind,
-            ) || item.question.subject.id.includes('/')
-            ? [agent('determinations.propose', { year: Number(item.end.slice(0, 4)) })]
-            : [agent('questions.ask', item.question as unknown as WorkStep['inputHint'])]
-          : [];
-        // A return the company files outside the engine: a person records the filing.
+        // A return blocked by an unknown fact: the closure's question. One the engine does not
+        // cover (or without a deadline rule) is filed outside it, recorded as such. One waiting
+        // for its year's rules has nothing to do until they are reviewed.
+        const ask: WorkStep[] = item.waiting
+          ? []
+          : item.question
+            ? askSteps(item.question, Number(item.end.slice(0, 4)))
+            : filedOutsideSteps(item);
+        // A return the company files outside the engine: a person records the filing. Any other
+        // overdue or rejected return may have been filed outside it too, recorded the same way.
         const external = externalReturns.includes(item.kind);
         const next: WorkStep[] =
           item.status === 'blocked'
             ? ask
             : external && (item.status === 'due' || item.status === 'overdue')
-              ? [
-                  agent('questions.ask', {
-                    kind: 'obligation.filed',
-                    subject: { kind: 'obligation', id: `${item.kind}/${item.period}` },
-                    params: { kind: item.kind, period: item.period },
-                  }),
-                  human('questions.answer'),
-                ]
+              ? filedOutsideSteps(item)
               : item.status === 'due' || item.status === 'overdue'
-                ? [agent('declarations.prepare', { kind: item.kind, period: item.period })]
+                ? [
+                    agent('declarations.prepare', { kind: item.kind, period: item.period }),
+                    ...(item.status === 'overdue' ? filedOutsideSteps(item) : []),
+                  ]
                 : item.status === 'rejected'
                   ? [
                       agent('declarations.prepare', {
@@ -826,6 +872,7 @@ function obligationsDetector(calendar: ObligationsOf): Detector {
                         period: item.period,
                         supersedesId: artifactId,
                       }),
+                      ...filedOutsideSteps(item),
                     ]
                   : item.status === 'prepared'
                     ? [
@@ -842,18 +889,16 @@ function obligationsDetector(calendar: ObligationsOf): Detector {
         return {
           kind: 'obligation.due',
           subject: { kind: 'obligation', id: `${item.kind}|${item.period}` },
-          severity: ['overdue', 'blocked', 'rejected'].includes(item.status)
-            ? 'block'
-            : item.due && item.due <= soon
-              ? 'warn'
-              : 'info',
+          severity: obligationSeverity(item, today),
           due: item.due,
           period: item.period,
           message:
             item.status === 'blocked'
-              ? item.question
-                ? `Nu se știe dacă declarația ${item.kind} pentru ${item.period} se datorează: ${item.gap ?? 'lipsește un fapt'}`
-                : `Declarația ${item.kind} pentru ${item.period} este blocată: ${item.gap ?? 'lipsește regula'}.`
+              ? item.waiting
+                ? `Declarația ${item.kind} pentru ${item.period} așteaptă regulile pentru ${item.waiting}: termenul ei și ce lipsește (${(item.gap ?? 'regula').replace(/\.+$/, '')}) se stabilesc după ce expertul contabil le aprobă.`
+                : item.question
+                  ? `Nu se știe dacă declarația ${item.kind} pentru ${item.period} se datorează: ${item.gap ?? 'lipsește un fapt'}`
+                  : `Declarația ${item.kind} pentru ${item.period} este blocată: ${item.gap ?? 'lipsește regula'}.`
               : `Declarația ${item.kind} pentru ${item.period}${item.due ? `, cu termen la ${item.due}` : ''}: ${item.status}.`,
           details: {
             kind: item.kind,
@@ -864,12 +909,82 @@ function obligationsDetector(calendar: ObligationsOf): Detector {
             artifactId,
             gap: item.gap,
             ...(item.question ? { question: item.question as unknown as JsonValue } : {}),
+            ...(item.waiting ? { waiting: item.waiting } : {}),
           },
           next,
           cursor: key(item).join('|'),
         };
       });
       return { items, next: due.length > page.limit ? items.at(-1)!.cursor : null };
+    },
+  };
+}
+
+// The obligation closure's needs over the worklist's range: each fact or determination it cannot
+// read (NEEDS_EVIDENCE), the returns it blocks or none (the scope facts), with its question.
+
+/** A need of the obligation closure, as the worklist reads it. */
+export type ClosureNeed = {
+  id: string;
+  code: string;
+  fact: string;
+  message: string;
+  question: NonNullable<Obligation['question']>;
+  /** The returns it leaves blocked, `<return>|<period>`. */
+  blocks: string[];
+  /** The year whose rules every return it blocks waits for, or null. */
+  waiting: number | null;
+};
+export type NeedsOf = (
+  tx: Transaction,
+  companyId: string,
+  range: { from: string; to: string },
+  today: LocalDate,
+) => Promise<ClosureNeed[]>;
+
+function needsDetector(source: NeedsOf): Detector {
+  return {
+    id: 'needs',
+    kinds: ['closure.need'],
+    async list({ tx, companyId, today }, page) {
+      // In code-unit order, as the cursor compares.
+      const found = (await source(tx, companyId, await worklistRange(tx, companyId, today), today))
+        .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        .filter((need) =>
+          page.only !== undefined
+            ? need.id === page.only
+            : page.after === null || need.id > page.after,
+        );
+      const items = found.slice(0, page.limit).map((need): Draft => {
+        // A yearly fact (`vat.period/2027`) of a year not begun, or one only that year's rules
+        // can settle, waits: nobody can answer it yet.
+        const year = /\/(\d{4})$/.exec(need.fact)?.[1];
+        const waits = need.waiting ?? (year && `${year}-01-01` > today ? Number(year) : null);
+        return {
+          kind: 'closure.need',
+          subject: { kind: 'need', id: need.id },
+          severity: waits ? 'info' : 'warn',
+          due: null,
+          period: year ?? null,
+          message: waits
+            ? `${need.message} Se stabilește după începutul anului ${waits}, cu regulile lui.`
+            : `${need.message}${
+                need.blocks.length
+                  ? ` Nu se știe dacă se datorează: ${need.blocks.slice(0, 6).join(', ')}${need.blocks.length > 6 ? ` și încă ${need.blocks.length - 6}` : ''}.`
+                  : ' Închiderea obligațiilor nu poate confirma ce declarații se datorează.'
+              }`,
+          details: {
+            code: need.code,
+            fact: need.fact,
+            question: need.question as unknown as JsonValue,
+            blocks: need.blocks,
+            ...(waits ? { waiting: waits } : {}),
+          },
+          next: waits ? [] : askSteps(need.question, Number(year ?? today.slice(0, 4))),
+          cursor: need.id,
+        };
+      });
+      return { items, next: found.length > page.limit ? items.at(-1)!.cursor : null };
     },
   };
 }
@@ -978,7 +1093,7 @@ function profitDetector(source: ProfitWorkOf): Detector {
 /** An item of the annual statements module, as the worklist reads it. */
 export type AnnualWorkItem = {
   subjectId: string;
-  severity: 'block' | 'warn';
+  severity: WorkSeverity;
   year: number;
   kind: string;
   message: string;
@@ -1254,7 +1369,7 @@ function payrollDetector(source: PayrollWorkOf): Detector {
   };
 }
 
-// Month-close checks of the months not closed, up to the current one.
+// Month-close checks of the months that ended and are not closed.
 
 /** What to do about a close finding, by its code. */
 const findingSteps: Record<string, (month: Month) => WorkStep[]> = {
@@ -1274,24 +1389,28 @@ const findingSteps: Record<string, (month: Month) => WorkStep[]> = {
   SPV_PENDING: () => [agent('spv.refresh')],
   SUPPLIER_STATUS_UNCHECKED: (month) => [agent('parties.checkStatus', { month })],
   LOAN_INTEREST_DUE: () => [propose('loans.accrue')],
+  // Production (G4, core ro/production/agent.ts): the month's first and last steps.
+  PRODUCTION_WIP_REVERSAL_MISSING: (month) => [propose('production.wipReverse', { month })],
+  PRODUCTION_COST_MISSING: (month) => [propose('production.cost', { month })],
+  PRODUCTION_DIFFERENCES_MISSING: (month) => [propose('production.differences', { month })],
 };
 
 function closeDetector(checks: () => CloseCheck[]): Detector {
-  /** The months from the first with entries to the current one that are not closed. */
+  /** The months from the first with entries that ended before the current one and are not
+   * closed, after the latest closed month: a close covers every earlier month, so nothing is
+   * booked there. The month in progress is checked once it ends, as only then can it close: its
+   * findings (a deferral or the interest to book at its end, its production costing) are not
+   * work yet. */
   async function openMonths(tx: Transaction, companyId: string, current: Month) {
     const [first] = await tx
       .select({ month: sql<string | null>`min(${entries.period})` })
       .from(entries)
       .where(eq(entries.companyId, companyId));
-    if (!first?.month || first.month > current) return [];
-    const closed = new Set(
-      (await periodStates(tx, companyId))
-        .filter((item) => item.state === 'closed')
-        .map((item) => item.month),
-    );
+    if (!first?.month || first.month >= current) return [];
+    const latest = (await closedMonths(tx, companyId)).at(-1)?.month ?? '';
     const months: Month[] = [];
-    for (let month = first.month as Month; month <= current; month = addMonths(month, 1))
-      if (!closed.has(month)) months.push(month);
+    for (let month = first.month as Month; month < current; month = addMonths(month, 1))
+      if (month > latest) months.push(month);
     return months;
   }
   /** Whether a close of the month is requested or approved and not yet executed. */
@@ -1371,8 +1490,8 @@ function closeDetector(checks: () => CloseCheck[]): Detector {
           cursor: `${month}#${index}`,
         };
       });
-      // The next month to close, once it ended, unless its close is already requested.
-      if (month < current && month === months[0] && !(await closePending(tx, companyId, month))) {
+      // The next month to close, unless its close is already requested.
+      if (month === months[0] && !(await closePending(tx, companyId, month))) {
         const blocking = found.filter(({ finding }) => finding.severity === 'block').length;
         items.push({
           kind: 'period.unclosed',
@@ -2311,6 +2430,8 @@ export interface WorkSources {
   closeChecks: () => CloseCheck[];
   register: ParameterRegister;
   obligations: ObligationsOf;
+  /** The obligation closure's needs; none without it (a test engine). */
+  needs?: NeedsOf;
   questionState: QuestionState;
   autonomy: AutonomyWork;
   determinations: DeterminationsOf;
@@ -2337,6 +2458,7 @@ export function workDetectors(sources: WorkSources): Detector[] {
     proposalsDetector(sources.questionState),
     questionsDetector,
     obligationsDetector(sources.obligations),
+    ...(sources.needs ? [needsDetector(sources.needs)] : []),
     determinationsDetector(sources.determinations),
     profitDetector(sources.profit),
     annualDetector(sources.annual),

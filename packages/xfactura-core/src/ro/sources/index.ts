@@ -14,6 +14,7 @@ import { yearEndClauses, yearEndSources } from './yearend';
 import { stockClauses, stockSources } from './stock';
 import { tradeClauses, tradeSources } from './trade';
 import { retailClauses, retailSources } from './retail';
+import { productionClauses, productionSources } from './production';
 
 /**
  * Where the engine's Romanian rules come from. A source is a legal act or an official
@@ -131,7 +132,7 @@ export const legalSources: readonly LegalSource[] = [
       {
         url: 'https://xfactura.invalid/owner-download/REGLEMENTARI_A_29_12_2014.pdf',
         sha256: '070c826a779245dd630308f9d2256b33a90dae31fecde9caea584666fa8e00b1',
-        retrievedOn: '2026-11-06',
+        retrievedOn: '2026-11-05',
         mediaType: 'application/pdf',
       },
     ],
@@ -266,7 +267,7 @@ export const legalSources: readonly LegalSource[] = [
       {
         url: 'https://xfactura.invalid/owner-download/COD_PR_CIVILA_A_01_07_2010.pdf',
         sha256: '1331d41fed8262338246601e9c41e4734fae87aa023e351ddaf38abd8771c14f',
-        retrievedOn: '2026-11-06',
+        retrievedOn: '2026-11-05',
         mediaType: 'application/pdf',
       },
     ],
@@ -339,7 +340,7 @@ export const legalSources: readonly LegalSource[] = [
       {
         url: 'https://xfactura.invalid/owner-download/ORDIN_A_3769_23_12_2015.pdf',
         sha256: '53ea26fb0a90b47f073ec520de3550922bf5979d9fb56fe4781b8f46d439e350',
-        retrievedOn: '2026-11-06',
+        retrievedOn: '2026-11-05',
         mediaType: 'application/pdf',
       },
     ],
@@ -651,7 +652,7 @@ export const legalSources: readonly LegalSource[] = [
       {
         url: 'https://xfactura.invalid/owner-download/CODUL_MUNCII_A_24_01_2003.pdf',
         sha256: '25e033bafbe05ebf985746842b572ca394e2c65e07f8dcd7edffa4ff8be72fc2',
-        retrievedOn: '2026-11-06',
+        retrievedOn: '2026-11-05',
         mediaType: 'application/pdf',
       },
     ],
@@ -690,7 +691,7 @@ export const legalSources: readonly LegalSource[] = [
       {
         url: 'https://xfactura.invalid/owner-download/OUG_A_158_17_11_2005.pdf',
         sha256: 'dd6881304468bc528ee74bbdcf2d86285d4229177592e35f6c713b4372ac9e05',
-        retrievedOn: '2026-11-06',
+        retrievedOn: '2026-11-05',
         mediaType: 'application/pdf',
       },
     ],
@@ -977,6 +978,7 @@ export const legalSources: readonly LegalSource[] = [
   ...payrollSources,
   ...tradeSources,
   ...retailSources,
+  ...productionSources,
 ];
 
 export const clauses: readonly Clause[] = [
@@ -2564,6 +2566,7 @@ export const clauses: readonly Clause[] = [
   ...payrollClauses,
   ...tradeClauses,
   ...retailClauses,
+  ...productionClauses,
 ];
 
 const sourceById = new Map(legalSources.map((source) => [source.id, source]));

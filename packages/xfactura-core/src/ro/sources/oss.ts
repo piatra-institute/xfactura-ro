@@ -13,7 +13,7 @@ import type { Clause, LegalSource } from './index';
  * form of 01.06.2026, downloaded by the owner), the repeal of form 085 (OPANAF nr. 1.699/2021) and
  * Regulation (EU) No 282/2011 (the presumptions and evidence of the customer's place, art. 24a–24f;
  * the scheme's start, art. 57d; corrections, art. 61), in the consolidated version of 14.04.2025
- * the owner downloaded from EUR-Lex. Read on 5 and 6 November 2026.
+ * the owner downloaded from EUR-Lex. Read on 5 November 2026.
  */
 
 const declarations = 'https://static.anaf.ro/static/10/Anaf/Declaratii_R';
@@ -156,7 +156,7 @@ export const ossSources: readonly LegalSource[] = [
       {
         url: 'https://xfactura.invalid/owner-download/OUG_A_120_04_10_2021.pdf',
         sha256: 'f3c77291947d2d3a8e52f284e9a3e2e73c46469adbe9c43d47962b9608e7ae69',
-        retrievedOn: '2026-11-06',
+        retrievedOn: '2026-11-05',
         mediaType: 'application/pdf',
       },
     ],
@@ -177,7 +177,7 @@ export const ossSources: readonly LegalSource[] = [
       {
         url: 'https://xfactura.invalid/owner-download/CELEX_02011R0282-20250414_RO_TXT.pdf',
         sha256: '0b58aac7ff7cb32ad7ea3a0dadaa38553b6fa9bb42770ae368599edd504d1e24',
-        retrievedOn: '2026-11-06',
+        retrievedOn: '2026-11-05',
         mediaType: 'application/pdf',
       },
     ],

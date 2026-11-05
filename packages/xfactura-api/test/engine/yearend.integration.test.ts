@@ -256,7 +256,7 @@ const review = (s: Scenario) =>
 
 describe('the FY2026 close of a services SRL', () => {
   test('inventory, impairment, provisions, cut-off, the closing journal, the year lock and the 2027 opening', async () => {
-    const { s, fact, file, customer, employee } = await company();
+    const { s, fact, file, customer, employee, laptop } = await company();
     // Before anything: the review lists what the year's end waits on.
     const before = await review(s);
     expect(before.closed).toBe(false);
@@ -494,9 +494,9 @@ describe('the FY2026 close of a services SRL', () => {
       { financialYearId: next.id },
     );
     expect(opening).toMatchObject({ closed: true, matches: true, differences: [] });
-    // An opening entry (DESCHIDERE) would count the 2026 balances twice: the check names it,
-    // and January does not close until it is reversed.
-    const duplicate = await s.book(
+    // An opening entry (DESCHIDERE) would count the 2026 balances twice: the books opened with
+    // 2026, so it is refused.
+    const duplicate = await s.propose(
       'ledger.general',
       journal(
         (await s.evidence('deschidere-dubla.pdf')).id,
@@ -507,23 +507,55 @@ describe('the FY2026 close of a services SRL', () => {
         { date: '2027-01-01', purpose: 'opening' },
       ),
     );
-    const duplicated = await s.invoke<{ matches: boolean; openings: string[] }>(
-      s.owner,
-      'years.opening',
-      { financialYearId: next.id },
-    );
-    expect(duplicated).toMatchObject({ matches: false, openings: [duplicate.entry!.id] });
+    expect(codes(duplicate)).toEqual(['OPENING_EARLIER_YEAR']);
+    await s.invoke(s.owner, 'proposals.withdraw', {
+      proposalId: duplicate.id,
+      reason: 'Registrele țin exercițiul 2026.',
+    });
+
+    // The locked year's register stays as its close recorded it: the laptop does not leave use
+    // in 2026 any more, nor does an asset enter it. A card of 2027 and a new fiscal basis for the
+    // laptop (the basis of the computations after it) leave the opening as it was.
+    const record = (await s.evidence('pv-2027.pdf')).id;
+    const card = (commissionedOn: string) => ({
+      number: 'MF-2',
+      name: 'Monitor',
+      catalogCode: '2.2.9',
+      account: '214',
+      depreciationAccount: '2814',
+      value: '1500.00',
+      lifeMonths: 36,
+      fiscalLifeMonths: 36,
+      commissionedOn,
+      evidenceId: record,
+    });
     expect(
-      ((await s.close('2027-01')).preview as { findings: { code: string }[] }).findings.map(
-        (item) => item.code,
-      ),
-    ).toContain('YEAR_OPENING_DUPLICATE');
-    await s.book('ledger.reverse', {
-      entryId: duplicate.entry!.id,
-      date: '2027-01-01',
-      reason: 'Deschiderea dublează soldurile din 2026',
-      evidenceId: (await s.evidence('storno.pdf')).id,
-      method: 'red',
+      (
+        await s.refused(
+          s.invoke(s.owner, 'assets.dispose', {
+            assetId: laptop.id,
+            date: '2026-12-20',
+            evidenceId: record,
+          }),
+        )
+      )?.code,
+    ).toBe('YEAR_CLOSED');
+    expect((await s.refused(s.invoke(s.owner, 'assets.register', card('2025-06-01'))))?.code).toBe(
+      'YEAR_CLOSED',
+    );
+    await s.invoke(s.owner, 'assets.register', card('2027-01-10'));
+    await s.invoke(s.owner, 'assets.recordFiscal', {
+      assetId: laptop.id,
+      method: 'linear',
+      value: '6000.00',
+      m1: false,
+      evidenceId: record,
+    });
+    expect(await s.invoke(s.owner, 'years.opening', { financialYearId: next.id })).toMatchObject({
+      closed: true,
+      matches: true,
+      differences: [],
+      openings: [],
     });
     const january = await s.closeApproved('2027-01');
     expect(january.status).toBe('executed');
@@ -574,6 +606,151 @@ describe('the FY2026 close of a services SRL', () => {
       (again.preview as { findings: { code: string }[] }).findings.map((item) => item.code),
     ).not.toContain('YEAR_CLOSED');
   }, 120_000);
+});
+
+describe('the books’ years, their opening and the locked year', () => {
+  const year = (label: string, from: string, to: string) => ({
+    kind: 'financial',
+    label,
+    from,
+    to,
+  });
+  /** A PFA's 2026 closed and locked (the shortest year-end the review allows), and its 2027. */
+  async function closedYear() {
+    const s = await scenario({ clock: at('2027-02-20') });
+    open.push(s);
+    await s.invoke(s.owner, 'profile.record', {
+      axis: 'entity.form',
+      value: 'pfa',
+      effectiveFrom: '2026-01-01',
+      evidenceId: (await s.evidence('entity.form.pdf')).id,
+    });
+    await s.book(
+      'ledger.general',
+      journal(
+        (await s.evidence('deschidere.pdf')).id,
+        [
+          { account: '5121', side: 'D', amount: '8000.00' },
+          { account: '1012', side: 'C', amount: '8000.00' },
+        ],
+        { date: '2026-01-01', purpose: 'opening' },
+      ),
+    );
+    const list = await s.invoke<{ id: string }>(s.owner, 'evidence.record', {
+      filename: 'inventar.txt',
+      mediaType: 'text/plain',
+      base64: Buffer.from('Inventar 31.12.2026').toString('base64'),
+    });
+    await s.invoke(s.owner, 'documents.record', {
+      evidenceId: list.id,
+      kind: 'inventory.list',
+      body: {
+        title: 'Registrul-inventar 2026',
+        company: { name: 'Pilot PFA', taxId: '12345678' },
+        date: '2026-12-31',
+        commission: { decision: '1', decisionDate: '2026-12-15', members: ['Popescu Ana'] },
+        bank: [{ account: '5121', currency: 'RON', balance: '8000.00' }],
+      },
+    });
+    for (let month = 1; month <= 12; month++)
+      await s.closeApproved(`2026-${String(month).padStart(2, '0')}`);
+    const request = await s.invoke<ActionView>(s.owner, 'years.close.request', {
+      financialYearId: s.year.id,
+    });
+    await s.invoke(s.reviewer, 'actions.approve', {
+      id: request.id,
+      previewHash: request.previewHash,
+    });
+    await s.invoke(s.reviewer, 'actions.execute', { id: request.id });
+    const next = await s.invoke<{ id: string }>(
+      s.owner,
+      'years.create',
+      year('2027', '2027-01-01', '2027-12-31'),
+    );
+    return { s, next };
+  }
+
+  // The closing snapshot's assets come from the register, which the year lock now guards too: an
+  // asset in use by the locked year's end would change its register and closing, and every month
+  // of the next year would be refused (YEAR_OPENING_DIFFERS), with no way out once the statements
+  // are filed (STATEMENTS_FILED).
+  test('an asset commissioned by the end of a locked year is refused; the opening stays the closing', async () => {
+    const { s, next } = await closedYear();
+    const opening = () =>
+      s.invoke<{ matches: boolean | null }>(s.owner, 'years.opening', {
+        financialYearId: next.id,
+      });
+    expect((await opening()).matches).toBe(true);
+    const record = (await s.evidence('pv.pdf')).id;
+    const card = (number: string, commissionedOn: string) => ({
+      number,
+      name: 'Laptop',
+      catalogCode: '2.2.9',
+      account: '214',
+      depreciationAccount: '2814',
+      expenseAccount: '6811',
+      value: '3000.00',
+      lifeMonths: 36,
+      fiscalLifeMonths: 36,
+      commissionedOn,
+      evidenceId: record,
+    });
+    // Before the locked year (the books do not keep 2025) or within it: both are in use at its end.
+    for (const date of ['2025-06-01', '2026-12-31'])
+      expect(
+        (await s.refused(s.invoke(s.owner, 'assets.register', card('MF-1', date))))?.code,
+      ).toBe('YEAR_CLOSED');
+    const { id } = await s.invoke<{ id: string }>(
+      s.owner,
+      'assets.register',
+      card('MF-1', '2027-01-01'),
+    );
+    await s.invoke(s.owner, 'assets.dispose', {
+      assetId: id,
+      date: '2027-03-31',
+      evidenceId: record,
+    });
+    expect((await opening()).matches).toBe(true);
+  }, 60_000);
+
+  // An opening entry (DESCHIDERE) on the first day of a year whose previous year the books keep
+  // would count every balance twice: the books open once, with their first year.
+  test('an opening entry is refused while the previous year is kept', async () => {
+    const s = await scenario({ clock: at('2027-02-20') });
+    open.push(s);
+    const opening = async (date: string) =>
+      journal(
+        (await s.evidence(`deschidere-${date}.pdf`)).id,
+        [
+          { account: '5121', side: 'D', amount: '5000.00' },
+          { account: '1012', side: 'C', amount: '5000.00' },
+        ],
+        { date, purpose: 'opening' },
+      );
+    const first = await s.book('ledger.general', await opening('2026-01-01'));
+    await s.invoke(s.owner, 'years.create', year('2027', '2027-01-01', '2027-12-31'));
+    const again = await s.propose('ledger.general', await opening('2027-01-01'));
+    expect(codes(again)).toEqual(['OPENING_EARLIER_YEAR']);
+    expect(again.issues[0]!.severity).toBe('block');
+    // A year before the first would turn its opening into a later year's: refused while it
+    // stands, as a year that overlaps another or leaves a gap is.
+    const refused = async (input: ReturnType<typeof year>) =>
+      (await s.refused(s.invoke(s.owner, 'years.create', input)))?.code;
+    expect(await refused(year('2025', '2025-01-01', '2025-12-31'))).toBe('YEAR_BEFORE_OPENING');
+    expect(await refused(year('2027b', '2027-07-01', '2028-06-30'))).toBe('YEAR_OVERLAP');
+    expect(await refused(year('2029', '2029-01-01', '2029-12-31'))).toBe('YEAR_GAP');
+    expect(await refused(year('2024', '2024-01-01', '2024-12-31'))).toBe('YEAR_GAP');
+    // Once the opening is reversed, the earlier year is the books' first.
+    await s.book('ledger.reverse', {
+      entryId: first.entry!.id,
+      date: '2026-02-01',
+      reason: 'Soldurile vin din exercițiul 2025, ținut în registre.',
+      evidenceId: (await s.evidence('storno-deschidere.pdf')).id,
+      method: 'red',
+    });
+    await s.invoke(s.owner, 'years.create', year('2025', '2025-01-01', '2025-12-31'));
+    expect(codes(await s.propose('ledger.general', await opening('2025-01-01')))).toEqual([]);
+  });
 });
 
 describe('a PFA year-end', () => {
@@ -648,6 +825,35 @@ describe('a PFA year-end', () => {
       (await s.invoke<ActionView>(s.reviewer, 'actions.execute', { id: request.id })).status,
     ).toBe('executed');
   }, 60_000);
+});
+
+describe('the year-end on the worklist', () => {
+  test('warns through the year’s last month and blocks once the year has ended', async () => {
+    let today = '2026-12-02';
+    const s = await scenario({ clock: () => Date.parse(`${today}T10:00:00Z`) });
+    open.push(s);
+    await s.book(
+      'ledger.general',
+      journal(
+        (await s.evidence('balanta-deschidere.pdf')).id,
+        [
+          { account: '5121', side: 'D', amount: '1000.00' },
+          { account: '1012', side: 'C', amount: '1000.00' },
+        ],
+        { date: '2026-01-01', purpose: 'opening' },
+      ),
+    );
+    const severities = async () =>
+      new Set(
+        (
+          await s.list<{ severity: string }>(s.owner, 'work.list', { kinds: ['yearend.review'] })
+        ).map((item) => item.severity),
+      );
+    // On 2 December the inventory at 31 December and the year's result cannot be done yet.
+    expect(await severities()).toEqual(new Set(['warn']));
+    today = '2027-01-04';
+    expect(await severities()).toContain('block');
+  });
 });
 
 describe('agent-ready', () => {

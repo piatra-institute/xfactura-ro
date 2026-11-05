@@ -488,6 +488,45 @@ describe('MCP', () => {
   });
 });
 
+describe('personal data', () => {
+  // exports.get and the download were open to any reviewer and any agent granted them, while an
+  // export holds every record and file, CNPs and pay included.
+  test('an export downloads only to whoever requested it, or to an owner', async () => {
+    const agent = await grant(['exports.request', 'exports.get']);
+    const mine = await ok<{ id: string }>(await capability('exports.request'));
+    const its = await ok<{ id: string }>(
+      await capability('exports.request', {}, { token: agent.token }),
+    );
+    while (await engine.jobs.runOne());
+    const download = (id: string, token?: string) =>
+      call('GET', `/companies/${company}/exports/${id}`, undefined, token ? { token } : {});
+    expect((await download(its.id, agent.token)).status).toBe(200);
+    expect((await download(mine.id, agent.token)).status).toBe(404);
+    expect((await capability('exports.get', { id: mine.id }, { token: agent.token })).status).toBe(
+      404,
+    );
+    // The owner reads every export of the company, an agent's included.
+    expect((await download(its.id)).status).toBe(200);
+    expect(engine.operations.get('exports.get')).toMatchObject({
+      dataClasses: ['books', 'evidence', 'personal', 'payroll', 'tax'],
+      risk: 'medium',
+    });
+    expect(engine.operations.get('exports.request').risk).toBe('high');
+  });
+
+  // parties.create with the country and code of an existing partner failed with SQLite's raw
+  // constraint error.
+  test('a partner already recorded is refused as such, not by the database', async () => {
+    const partner = { kind: 'ro_legal_entity', country: 'RO', taxId: '14399840', name: 'Furnizor' };
+    const first = await ok<{ id: string }>(await capability('parties.create', partner));
+    const again = await capability('parties.create', { ...partner, taxId: 'RO14399840' });
+    expect(again.status).toBe(409);
+    expect(await again.json()).toMatchObject({
+      error: { code: 'PARTY_EXISTS', details: { partyId: first.id } },
+    });
+  });
+});
+
 describe('OpenAPI', () => {
   test('documents every operation from the same registry', async () => {
     const document = (await (

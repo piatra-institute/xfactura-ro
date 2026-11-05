@@ -236,20 +236,39 @@ const owed = (value: D112) =>
   );
 
 describe('D112 namespace and catalogues', () => {
-  test('uses v7 for July–December 2026 and nothing else', () => {
-    expect(d112Namespace({ year: 2026, month: 7 })).toBe(
-      'mfp:anaf:dgti:declaratie_unica:declaratie:v7',
-    );
-    expect(d112Namespace({ year: 2026, month: 12 })).toBe(
-      'mfp:anaf:dgti:declaratie_unica:declaratie:v7',
-    );
+  test('uses v7 for January–December 2026, in the structures of 01–06 and 07–12, and nothing else', () => {
+    for (const month of [1, 6, 7, 12])
+      expect(d112Namespace({ year: 2026, month })).toBe(
+        'mfp:anaf:dgti:declaratie_unica:declaratie:v7',
+      );
     for (const period of [
-      { year: 2026, month: 6 },
+      { year: 2025, month: 12 },
       { year: 2027, month: 1 },
       { year: 2026, month: 13 },
       { year: 2026.5, month: 8 },
     ])
-      expect(() => d112Namespace(period)).toThrow('iulie–decembrie 2026');
+      expect(() => d112Namespace(period)).toThrow('ianuarie–decembrie 2026');
+  });
+
+  test('January–June 2026: salMin 4050 and Suma300, the register’s parameters the structure’s, no medical leave', () => {
+    // 21 working days in June, 168 hours.
+    const worker = employee({ employment: { daysWorked: 21, hoursWorked: 168 } });
+    const june = (extra: Partial<D112> = {}) =>
+      model([worker], { period: { year: 2026, month: 6 }, ...extra });
+    expect(calculateD112(june()).workingDays).toBe(21);
+    expect(calculateD112(model(undefined, { period: { year: 2026, month: 1 } })).workingDays).toBe(
+      18,
+    );
+    expect(codes(june({ parameters: { minimumWage: 4050, relief: 300 } }))).toEqual([]);
+    expect(codes(june({ parameters: { minimumWage: 4325, relief: 200 } }))).toEqual([
+      'error:D112_PARAMETERS',
+    ]);
+    expect(codes(model(undefined, { parameters: { minimumWage: 4325, relief: 200 } }))).toEqual([]);
+    const sick = [worker].map((person) => ({
+      ...person,
+      accidents: { cases: 1, days: 1, fundDays: 0, employer: 0, fund: 0 },
+    }));
+    expect(codes(june({ insured: sick }))).toContain('error:D112_SICK_PERIOD');
   });
 
   test('lists the codes the structure allows for the covered fields', () => {
@@ -485,8 +504,8 @@ describe('D112 calculation', () => {
     expect(() =>
       calculateD112(one({ minimum: { kind: 'exempt', reason: 'intern' as 'student' } })),
     ).toThrow('art. 146 alin. (5^7)');
-    expect(() => calculateD112(model(undefined, { period: { year: 2026, month: 6 } }))).toThrow(
-      'iulie–decembrie 2026',
+    expect(() => calculateD112(model(undefined, { period: { year: 2027, month: 1 } }))).toThrow(
+      'ianuarie–decembrie 2026',
     );
   });
 });

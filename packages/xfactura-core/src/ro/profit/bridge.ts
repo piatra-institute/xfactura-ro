@@ -169,6 +169,9 @@ export interface BridgeResult {
     salaries: bigint;
     turnover: bigint;
     reserveLimit: bigint;
+    /** What the legal reserve may still take: a fifth of the capital less the reserve at the
+     * year's start. */
+    reserveRoom: bigint;
     sponsorship: bigint;
     sponsorshipLimits: { turnover: bigint; tax: bigint } | null;
   };
@@ -777,6 +780,7 @@ export function computeBridge(
       salaries,
       turnover,
       reserveLimit,
+      reserveRoom,
       sponsorship: sponsored,
       sponsorshipLimits: limits,
     },

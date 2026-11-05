@@ -10,6 +10,7 @@ import {
   type OpenItemInfo,
   type TaxEntrySpec,
 } from '../src/kernel';
+import { reversedAttributes, standingTaxEntries } from '../src/ro/treatments/ledger';
 import { parseLocalDate } from '../src/time';
 
 const day = parseLocalDate('2026-03-10');
@@ -279,5 +280,51 @@ describe('validateEffect', () => {
         },
       ),
     );
+  });
+});
+
+describe('a storno’s tax entries', () => {
+  test('negate the amounts and counts their attributes hold, and nothing else', () => {
+    expect(
+      reversedAttributes({
+        prorata: '50',
+        prorataTax: '2100',
+        prorataDeducted: '1050',
+        price: '1500.00',
+        cost: '-200.00',
+        margin: '0.00',
+        receipts: '3',
+        rate: '21',
+        year: '2026',
+        number: 'XF0001',
+        quarter: '2026-Q3',
+      }),
+    ).toEqual({
+      prorata: '50',
+      prorataTax: '-2100',
+      prorataDeducted: '-1050',
+      price: '-1500.00',
+      cost: '200.00',
+      margin: '0.00',
+      receipts: '-3',
+      rate: '21',
+      year: '2026',
+      number: 'XF0001',
+      quarter: '2026-Q3',
+    });
+  });
+
+  test('stand within their ledger only when neither a storno nor stornoed in it', () => {
+    const entry = (entryId: string, key: string, originTaxEntry: string | null = null) => ({
+      entryId,
+      key,
+      originTaxEntry,
+    });
+    const adjusted = entry('e1', 'vat');
+    const storno = entry('e2', 'reversal:vat', 'e1:vat');
+    const again = entry('e3', 'vat');
+    // A credit note points to its original too, but is no storno.
+    const credit = entry('e4', 'vat', 'e0:vat');
+    expect(standingTaxEntries([adjusted, storno, again, credit])).toEqual([again, credit]);
   });
 });

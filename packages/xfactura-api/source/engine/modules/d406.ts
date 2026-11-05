@@ -34,15 +34,18 @@ import {
   type D406Tax,
 } from 'xfactura-core/ro/saft/d406';
 import { supplierAppliesCashVat } from 'xfactura-core/ro/cash-vat';
+import { isRetailTag } from 'xfactura-core/ro/retail';
 import {
   d406BaseRateCode,
   d406CashVatReleaseCode,
+  d406NonPayerSaleCode,
   d406ZReportCode,
   d406RatedAdjustments,
   d406ReverseCharges,
   d406VatTaxCode,
 } from 'xfactura-core/ro/saft/tax-codes';
 import { invoiceKinds } from 'xfactura-core/ro/treatments/invoices';
+import { regimeCodes } from 'xfactura-core/ro/treatments/vat-registration';
 import { vatPeriodEnd } from 'xfactura-core/ro/treatments/vat-settlement';
 import { withheldOf, type Withheld } from 'xfactura-core/ro/withholding';
 import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
@@ -62,6 +65,7 @@ import {
   partyVersions,
   proposals,
   proposalVersions,
+  stockMoves,
   taxEntries,
   treasuryAccounts,
 } from '../db/schema';
@@ -69,7 +73,7 @@ import { justifyingDocuments } from '../kernel/reports';
 import { loadState, mergeStates } from '../kernel/state';
 import { assetsAuthorization, assetsInputs, disposalsOption, prepareAssets } from './d406-assets';
 import { prepareStock, stockInputs, stockPeriod } from './d406-stock';
-import { periodStart, sellerDetails } from './d300';
+import { lateCoverage, periodStart, sellerDetails } from './d300';
 import type { DeclarationKind, DeclarationProblem } from './declarations';
 import { Sealer } from './payroll';
 
@@ -89,6 +93,12 @@ export const d406Options = z
     /** The standard account chosen for each synthetic ANAF subdivides (605, 612, 623, 635, 646),
      * by its synthetic: `{ "646": "6461" }`. */
     accounts: z.record(z.string().regex(/^\d{3,4}$/), z.string().regex(/^\d{3,4}$/)).default({}),
+    /** The AccountID of an account whose code has no numeric form, as the company numbers it in
+     * its chart: digits beginning with its synthetic, `{ "371.M2-21": "3712021" }` (a
+     * warehouse's accounts at retail price, G2). */
+    accountIds: z
+      .record(z.string().regex(/^[1-7]\d{2,3}\.[\w.-]{1,40}$/), z.string().regex(/^[1-9]\d{2,69}$/))
+      .default({}),
     /** What the customers' advances (419) are for: the advance invoices' lines are reported as
      * goods or services. */
     advances: z.enum(['goods', 'services']).optional(),
@@ -417,6 +427,22 @@ async function booksOf(tx: Transaction, companyId: string, period: string) {
       ),
     )
     .where(inPeriod);
+  // Consumers in other Member States: the customers of the sales `invoices.euConsumer` booked
+  // (their tax entries carry `distance`), individuals without a code of their state.
+  const consumers = new Set(
+    (
+      await tx
+        .selectDistinct({ partyId: taxEntries.partyId })
+        .from(taxEntries)
+        .where(
+          and(
+            eq(taxEntries.companyId, companyId),
+            lte(taxEntries.taxPoint, end),
+            sql`json_extract(${taxEntries.attributes}, '$.distance') is not null`,
+          ),
+        )
+    ).flatMap((row) => (row.partyId ? [row.partyId] : [])),
+  );
   const itemIds = [...new Set(periodLines.flatMap((line) => line.openItemId ?? []))];
   const items = new Map(
     (itemIds.length
@@ -459,6 +485,51 @@ async function booksOf(tx: Transaction, companyId: string, period: string) {
         : [];
     }),
   );
+  // Goods an invoice received or returned (G1): each of its lines' stock account, from the item
+  // its input names for the line and the account the entry's moves booked that item on.
+  const stocked = treatments.flatMap((row) => {
+    const stock = input.get(row.entryId)!.stock as
+      { lines?: { line: string; itemId: string }[] } | undefined;
+    return (row.treatmentId === 'invoices.recognize' || row.treatmentId === 'invoices.credit') &&
+      stock?.lines?.length
+      ? [[row.entryId, stock.lines] as const]
+      : [];
+  });
+  const moved = stocked.length
+    ? await tx
+        .select({
+          entryId: stockMoves.entryId,
+          itemId: stockMoves.itemId,
+          account: stockMoves.account,
+        })
+        .from(stockMoves)
+        .where(
+          and(
+            eq(stockMoves.companyId, companyId),
+            inArray(
+              stockMoves.entryId,
+              stocked.map(([entryId]) => entryId),
+            ),
+          ),
+        )
+    : [];
+  const stockAccounts = new Map(
+    stocked.map(([entryId, rows]) => {
+      const accounts = Map.groupBy(
+        moved.filter((move) => move.entryId === entryId),
+        (move) => move.itemId,
+      );
+      return [
+        entryId,
+        new Map(
+          rows.flatMap((row) => {
+            const found = new Set((accounts.get(row.itemId) ?? []).map((move) => move.account));
+            return found.size === 1 ? [[row.line, [...found][0]!] as const] : [];
+          }),
+        ),
+      ] as const;
+    }),
+  );
   // Tax withheld at source: ANAF wants it under its WHT codes, on the line it is withheld from.
   const withholdings = new Map(
     treatments.flatMap((row) => {
@@ -482,11 +553,23 @@ async function booksOf(tx: Transaction, companyId: string, period: string) {
         : [],
     ),
   );
+  const creditEntries = new Set(
+    treatments.flatMap((row) =>
+      row.treatmentId === 'invoices.credit' || row.treatmentId === 'invoices.euConsumer'
+        ? [row.entryId]
+        : [],
+    ),
+  );
   const partyIds = [
     ...new Set([
       ...partnerOpenings.map((row) => row.partyId),
       ...[...items.values()]
-        .filter((item) => partnerOf(item.controlAccount))
+        // A refund a credit note of the period opened (461, 462) is its partner's too.
+        .filter(
+          (item) =>
+            partnerOf(item.controlAccount) ||
+            (/^46[12]/.test(item.controlAccount) && creditEntries.has(item.originEntryId)),
+        )
         .map((item) => item.partyId),
     ]),
   ].sort();
@@ -561,9 +644,13 @@ async function booksOf(tx: Transaction, companyId: string, period: string) {
   const seller = await sellerDetails(tx, companyId);
   const [company] = await tx.select().from(companies).where(eq(companies.id, companyId));
   const justifying = await justifyingDocuments(tx, companyId, headers);
+  // The days a posted late registration declares (art. 310 alin. (6^2)–(6^3)): their sales were
+  // invoiced without VAT, which its regularization (REG-310) collects.
+  const late = await lateCoverage(tx, companyId);
 
   const inputs: ReadSetEntry[] = [
     ...state.readSet,
+    late.read,
     {
       kind: 'turnover',
       id: `ledger|${year?.from ?? ''}|${end}`,
@@ -597,6 +684,9 @@ async function booksOf(tx: Transaction, companyId: string, period: string) {
     periodTaxes,
     recognized,
     allocations,
+    stockAccounts,
+    consumers,
+    lateRanges: late.ranges,
     withholdings,
     movementOf,
     items,
@@ -677,9 +767,14 @@ export function d406Declaration(
           problems.push({ code, message });
       };
 
-      // The file follows the company's VAT period: monthly (L) or quarterly (T).
-      const vatPeriod = vatPeriodOf(loaded, end);
-      if (!profileAt(loaded, 'vat.period', end))
+      // The file follows the company's VAT period: monthly (L) or quarterly (T); outside VAT,
+      // quarterly (OPANAF nr. 1.783/2021 anexa nr. 4 pct. 3: "Contribuabilii care nu sunt
+      // înregistrați în scopuri de TVA, transmit Declarația informativă D406 trimestrial").
+      const status = profileAt(loaded, 'vat.status', end);
+      const nonPayer = status === 'non_vat';
+      const quarter = `${end.slice(0, 4)}-Q${Math.ceil(Number(end.slice(5, 7)) / 3)}`;
+      const vatPeriod = nonPayer ? quarter : vatPeriodOf(loaded, end);
+      if (!nonPayer && !profileAt(loaded, 'vat.period', end))
         problem(
           'VAT_PERIOD',
           'Înregistrați perioada fiscală de TVA a companiei (lunară sau trimestrială): fișierul D406 se depune pentru aceeași perioadă.',
@@ -687,22 +782,22 @@ export function d406Declaration(
       else if (vatPeriod !== period)
         problem(
           'VAT_PERIOD',
-          `Perioada fiscală a companiei pentru ${end} este ${vatPeriod}, nu ${period}.`,
+          nonPayer
+            ? `Compania nu este înregistrată în scopuri de TVA la ${end}: fișierul D406 se depune trimestrial (${quarter}), nu pentru ${period} (OPANAF nr. 1.783/2021 anexa nr. 4 pct. 3).`
+            : `Perioada fiscală a companiei pentru ${end} este ${vatPeriod}, nu ${period}.`,
         );
-      const status = profileAt(loaded, 'vat.status', end);
+      // Nomenclator_Regim_fiscal: 100010 registered, 100040 under VAT on collection, 100020 the
+      // small enterprises' special exemption scheme (art. 310), which a company outside VAT is.
       const vatRegime =
         status === 'normal_vat'
           ? profileAt(loaded, 'vat.cash', end) === 'yes'
             ? '100040'
             : '100010'
-          : undefined;
+          : nonPayer
+            ? '100020'
+            : undefined;
       if (!vatRegime)
-        problem(
-          'D406_VAT_REGIME',
-          status === 'non_vat'
-            ? 'Regimul fiscal al unei companii neînregistrate în scopuri de TVA (100020, regimul special de scutire, sau 100050, persoană neimpozabilă) nu rezultă din registre.'
-            : 'Înregistrați regimul de TVA al companiei (vat.status).',
-        );
+        problem('D406_VAT_REGIME', 'Înregistrați regimul de TVA al companiei (vat.status).');
       if (!books.year || books.year.to < end)
         problem(
           'D406_YEAR',
@@ -747,8 +842,10 @@ export function d406Declaration(
               'D406_ACCOUNT_CHOICE',
               `Contul ${synthetic} corespunde mai multor conturi standard ANAF (${choices.join(', ')}): alegeți unul.`,
             );
+          const id = options.accountIds[row.code];
           return {
             code: row.code,
+            ...(id ? { id } : {}),
             description: clip(row.name, 256),
             ...(choices && standard && choices.includes(standard) ? { standard } : {}),
             opening: lei(row.opening),
@@ -806,11 +903,20 @@ export function d406Declaration(
             }),
           );
         else
-          problem(
-            'D406_PARTY_CODE',
-            prefix
-              ? `Partenerul ${party.name} din ${party.country} nu are cod de TVA (${prefix}…): codul lui în fișier (01 sau 05) nu rezultă din registre.`
-              : `Partenerul ${party.name} din ${party.country}: codul lui în fișier (02 cu codul fiscal sau 06 cu un cod intern) nu rezultă din registre.`,
+          // A partner abroad without a VAT code of its state: a consumer of another state (its
+          // sales booked by invoices.euConsumer) is an individual who declares no code, 04 with
+          // a code the company assigns it uniquely ("pentru pers. fizice care nu își declară
+          // CNP-ul pe tranzacții (exemplu: comerț online)"; ANAF's answers v1.2, MF.C.3, 6: one
+          // per person, never a shared one); another, an economic operator not registered for
+          // VAT, 05 (the Union) or 06 (outside it) with its country and that code (S.C.1). The
+          // code is the partner's own id in the books, the same in every file.
+          ids.set(
+            party.id,
+            d406PartyId({
+              kind: 'internal',
+              code: party.id.replace(/-/g, '').slice(0, 24).toUpperCase(),
+              ...(books.consumers.has(party.id) ? {} : { country: party.country, eu: !!prefix }),
+            }),
           );
       }
       // Invoices give the address of partners without recorded details.
@@ -845,26 +951,44 @@ export function d406Declaration(
         if (party?.address.city) addresses.set(document.partyId, addressOf(party.address));
       }
 
+      // A refund a credit note of the period opened beyond its original's balance (462 owed to a
+      // customer, 461 owed by a supplier: `invoices.credit`, `invoices.euConsumer`) is the
+      // partner's line, as the receivable or payable it continues.
+      const refundRole = (line: { openItemId: string | null }) => {
+        const item = line.openItemId ? books.items.get(line.openItemId) : undefined;
+        const documentId = item ? books.recognized.get(item.originEntryId) : undefined;
+        const kind = documentId ? loaded.documents.get(documentId)?.kind : undefined;
+        const account = item ? syntheticOf(item.controlAccount) : undefined;
+        if (account === '462' && kind === invoiceKinds.saleCredit) return 'customer' as const;
+        if (account === '461' && kind === invoiceKinds.purchaseCredit) return 'supplier' as const;
+        return undefined;
+      };
+      const roleOf = (line: { account: string; openItemId: string | null }) =>
+        partnerOf(line.account) ?? refundRole(line);
       const partnerKey = (partyId: string, account: string) => `${partyId}|${account}`;
-      const partners = new Map<string, { partyId: string; account: string; opening: bigint }>();
+      const partners = new Map<
+        string,
+        { partyId: string; account: string; opening: bigint; role: 'customer' | 'supplier' }
+      >();
       for (const row of books.partnerOpenings)
-        partners.set(partnerKey(row.partyId, row.account), { ...row });
+        partners.set(partnerKey(row.partyId, row.account), {
+          ...row,
+          role: partnerOf(row.account)!,
+        });
       for (const line of books.periodLines) {
         const item = line.openItemId ? books.items.get(line.openItemId) : undefined;
-        if (
-          item &&
-          partnerOf(line.account) &&
-          !partners.has(partnerKey(item.partyId, line.account))
-        )
+        const role = roleOf(line);
+        if (item && role && !partners.has(partnerKey(item.partyId, line.account)))
           partners.set(partnerKey(item.partyId, line.account), {
             partyId: item.partyId,
             account: line.account,
             opening: 0n,
+            role,
           });
       }
       const customers: D406Party[] = [];
       const suppliers: D406Party[] = [];
-      for (const { partyId, account, opening } of partners.values()) {
+      for (const { partyId, account, opening, role } of partners.values()) {
         const party = parties.get(partyId)!;
         const id = ids.get(partyId);
         const address = addresses.get(partyId);
@@ -874,7 +998,7 @@ export function d406Declaration(
             `Înregistrați adresa partenerului ${party.name} (parties.recordDetails).`,
           );
         if (!id || !address) continue;
-        (partnerOf(account) === 'customer' ? customers : suppliers).push({
+        (role === 'customer' ? customers : suppliers).push({
           id,
           name: clip(party.name, 256),
           address,
@@ -884,7 +1008,7 @@ export function d406Declaration(
       }
       const partner = (line: { account: string; openItemId: string | null }) => {
         const item = line.openItemId ? books.items.get(line.openItemId) : undefined;
-        const role = partnerOf(line.account);
+        const role = roleOf(line);
         const id = item ? ids.get(item.partyId) : undefined;
         if (!role || !item || !id) return {};
         return role === 'customer' ? { customer: id } : { supplier: id };
@@ -919,6 +1043,55 @@ export function d406Declaration(
       const vatOf = async (entryId: string, number: number) => {
         const taxes = taxesOf.get(entryId) ?? [];
         const found: { tax: (typeof taxes)[number]; code: string }[] = [];
+        // A sale outside VAT (art. 310) books no VAT: it is reported with the special scheme's
+        // code on its revenue (`d406NonPayerSaleCode`), its base the revenue, no VAT. So is a
+        // sale invoiced so on a day a late registration declares: its VAT is the
+        // regularization's (REG-310), reported where it is booked.
+        const documentId = books.recognized.get(entryId);
+        const kind = documentId ? loaded.documents.get(documentId)?.kind : undefined;
+        const header = books.headers.find((item) => item.id === entryId)!;
+        const exempted =
+          nonPayer ||
+          books.lateRanges.some((range) => range.from <= header.date && header.date <= range.until);
+        if (
+          exempted &&
+          !taxes.some((tax) => tax.tax === 'VAT') &&
+          (kind === invoiceKinds.sale || kind === invoiceKinds.saleCredit)
+        ) {
+          const revenue = (linesOf.get(entryId) ?? [])
+            .filter((line) => /^7/.test(line.account))
+            .reduce((sum, line) => sum + (line.side === 'C' ? line.bani : -line.bani), 0n);
+          found.push({
+            tax: {
+              companyId,
+              entryId,
+              taxNo: 0,
+              key: 'vat',
+              lineNo: null,
+              tax: 'VAT',
+              code: 'O',
+              direction: 'output',
+              baseBani: revenue,
+              taxBani: 0n,
+              deductibleBani: 0n,
+              ledgerBani: 0n,
+              taxPoint: header.date,
+              exigibility: header.date,
+              taxPeriod: null,
+              partyId: null,
+              documentId: documentId ?? null,
+              originTaxEntry: null,
+              currency: null,
+              baseMinor: null,
+              taxMinor: null,
+              fxRateId: null,
+              fxRate: null,
+              attributes: '{}',
+            },
+            code: d406NonPayerSaleCode,
+          });
+          return found;
+        }
         for (const tax of taxes) {
           const attributes = JSON.parse(tax.attributes) as Record<string, string>;
           // A cash register's day (G2): its sales need no invoice (art. 319 alin. (10)), 3803xx
@@ -977,6 +1150,8 @@ export function d406Declaration(
             code: tax.code,
             ...(rate ? { rate } : {}),
             ...(deduction ? { deduction } : {}),
+            // VAT a company outside VAT owes through the special return (art. 307 alin. (2)).
+            ...(attributes.regime === 'special' ? { special: true } : {}),
             // A sale of the company under VAT on collection, or a purchase from a supplier in it.
             cashVat:
               tax.direction === 'output'
@@ -1069,19 +1244,70 @@ export function d406Declaration(
         const zReport =
           vat.length > 0 &&
           vat.every(({ tax }) => JSON.parse(tax.attributes).documentType === 'zreport');
-        // A sale's goods out of the stock register (G1: the stock account against 60x) carry no
-        // VAT: its base lines are its revenue's (G3).
+        // A sale's goods out of the stock register (G1: the stock account against 60x; G4: the
+        // products against 711) carry no VAT: its base lines are its revenue's (G3).
         const sold =
           vat.length > 0 &&
           vat.every(({ tax }) => tax.direction === 'output') &&
           own.some((line) => /^7/.test(line.account));
+        // VAT a company outside VAT owes through the special return (art. 307 alin. (2)): its
+        // authority's item (4423) and the VAT expensed beside the base (the line before it) are
+        // no base lines; the purchase's expense is.
+        const special =
+          vat.length > 0 && vat.every(({ tax }) => JSON.parse(tax.attributes).regime === 'special');
+        const specialLines = new Set<number>();
+        if (special)
+          own.forEach((line, index) => {
+            const item = line.openItemId ? books.items.get(line.openItemId) : undefined;
+            if (item?.kind !== 'tax.payable') return;
+            specialLines.add(index);
+            const expensed = own[index - 1];
+            if (expensed && expensed.side !== line.side && expensed.bani === line.bani)
+              specialLines.add(index - 1);
+          });
+        // A count's shortage (G1, G2, G4: the stock account against 60x or 711) with its deducted
+        // VAT adjusted (art. 304, Dr 635 / Cr 4426): the goods' lines carry no VAT, the
+        // adjustment's expense is its base.
+        const adjusted =
+          vat.length > 0 &&
+          vat.every(({ tax }) => tax.code.startsWith('ADJ-')) &&
+          own.some((line) => /^3/.test(line.account));
+        // A reception at sale price (G2): the VAT its price includes (Dr 371 / Cr 4428) and the
+        // markup (Dr 371 / Cr 378), each written after the cost as the goods' line and its
+        // credit, both on the warehouse's tag, carry no VAT: the cost's line is the base.
+        const retailAdded = new Set<number>();
+        if (vat.length)
+          own.forEach((line, index) => {
+            const goods = own[index - 1];
+            if (
+              isRetailTag(line.item ?? undefined) &&
+              /^(378|4428)/.test(line.account) &&
+              goods &&
+              /^371/.test(goods.account) &&
+              goods.item === line.item &&
+              goods.bani === line.bani
+            )
+              retailAdded.add(index).add(index - 1);
+          });
         const found = baseLinesOf(
           own.flatMap((line, index) =>
             isBase(line) &&
             (!zReport || /^70/.test(line.account)) &&
-            !(sold && /^(3|60)/.test(line.account)) &&
-            // The customs debt of an import (446, G3) is the authority's, not a base.
-            !(vat.length > 0 && /^446/.test(line.account))
+            !(sold && /^(3|60|711)/.test(line.account)) &&
+            !(adjusted && /^(3|60|711)/.test(line.account)) &&
+            !retailAdded.has(index) &&
+            !specialLines.has(index) &&
+            // The customs debt of an import (446, G3) is the authority's, not a base; nor is
+            // another tax owed to it (the Union scheme's VAT on 4423, V4), nor the exchange
+            // difference a credit note realizes on the receivable it reduces.
+            !(vat.length > 0 && /^446/.test(line.account)) &&
+            !(vat.length > 0 && /^(665|765)/.test(line.account)) &&
+            !(
+              vat.length > 0 &&
+              /^tax\./.test(
+                (line.openItemId ? books.items.get(line.openItemId)?.kind : undefined) ?? '',
+              )
+            )
               ? [{ index, account: line.account }]
               : [],
           ),
@@ -1114,7 +1340,31 @@ export function d406Declaration(
               }
             : undefined;
         const taxFor = new Map<number, D406Tax[]>();
-        if (vat.length && bases.length > 1) {
+        // A late registration's regularization (REG-310): the VAT collected on its expense (Dr
+        // 635 / Cr 4427), the VAT deducted on its income (Dr 4426 / Cr 7588), each on the line
+        // its VAT line is booked against.
+        const regularized =
+          vat.length > 0 &&
+          bases.length === vat.length &&
+          vat.every(({ tax }) => tax.code === regimeCodes.late);
+        if (regularized) {
+          for (const { tax, code } of vat) {
+            const index = bases.find((at) =>
+              tax.direction === 'output' ? own[at]!.side === 'D' : own[at]!.side === 'C',
+            );
+            if (index === undefined) {
+              problem(
+                'D406_SPLIT',
+                `Nota ${header.number}: regularizarea ${tax.code} nu are linia de bază.`,
+              );
+              continue;
+            }
+            taxFor.set(index, [
+              ...(taxFor.get(index) ?? []),
+              { type: '300', code, base: lei(tax.baseBani), amount: lei(tax.taxBani) },
+            ]);
+          }
+        } else if (vat.length && bases.length > 1) {
           const keys = parts?.map((part) => part.vat) ?? vat.map(({ tax }) => categoryOf(tax));
           if (keys.length !== bases.length)
             problem(
@@ -1255,7 +1505,7 @@ export function d406Declaration(
           continue;
         }
         const own = linesOf.get(header.id) ?? [];
-        const partnerLine = own.find((line) => isCounterparty(line) && partnerOf(line.account));
+        const partnerLine = own.find((line) => isCounterparty(line) && roleOf(line));
         // The base lines the ledger's VAT went on, one per part.
         const bases = entryBases.get(header.id) ?? [];
         const baseLine = bases[0];
@@ -1297,10 +1547,13 @@ export function d406Declaration(
         );
         const lineKey = (line: (typeof invoice.lines)[number]) =>
           norm(line.vat.category === 'S' ? `S-${line.vat.rate}` : line.vat.category);
-        let byAmount: number[] | undefined;
-        if (lease && parts && keys.length === bases.length)
+        // The one way to group a rate's lines so that each part's lines add up to its amount: a
+        // lease's instalment (167 and 666 at one rate), or several accounts at one rate whose
+        // lines nothing else tells apart.
+        const grouped = () => {
+          if (!parts || keys.length !== bases.length) return undefined;
           try {
-            byAmount = linesByAmount(
+            return linesByAmount(
               invoice.lines.map((line) => ({
                 key: lineKey(line),
                 amount: parseMoney(line.netAmount, invoice.currency),
@@ -1312,13 +1565,19 @@ export function d406Declaration(
               })),
             );
           } catch {
-            byAmount = undefined;
+            return undefined;
           }
-        const lineAccounts = invoice.lines.map((line, index) => {
+        };
+        let byAmount = lease ? grouped() : undefined;
+        // Goods received or returned: each line's stock account, as its item was booked (G1).
+        const stockOf = books.stockAccounts.get(header.id);
+        const attributed = (line: (typeof invoice.lines)[number]) => {
           if (bases.length === 1) return baseLine.account;
           if (keys.length !== bases.length) return undefined;
-          if (byAmount) return bases[byAmount[index]!]!.account;
           let members = bases.flatMap((base, j) => (keys[j] === lineKey(line) ? [j] : []));
+          const stockAccount = stockOf?.get(line.id);
+          if (stockAccount && members.some((j) => bases[j]!.account === stockAccount))
+            return stockAccount;
           const negative = line.netAmount.startsWith('-') !== (invoice.typeCode === '381');
           const signed = parts
             ? members.filter((j) => parts[j]!.amount.startsWith('-') === negative)
@@ -1326,7 +1585,18 @@ export function d406Declaration(
           if (signed.length) members = signed;
           const accounts = [...new Set(members.map((j) => bases[j]!.account))];
           return accounts.length === 1 ? accounts[0] : undefined;
-        });
+        };
+        let lineAccounts = invoice.lines.map((line, index) =>
+          byAmount ? bases[byAmount[index]!]!.account : attributed(line),
+        );
+        // A rate's lines booked on several accounts, told apart by their amounts alone.
+        if (!byAmount && lineAccounts.some((account) => account === undefined)) {
+          byAmount = grouped();
+          if (byAmount)
+            lineAccounts = invoice.lines.map(
+              (line, index) => attributed(line) ?? bases[byAmount![index]!]!.account,
+            );
+        }
         if (lineAccounts.some((account) => account === undefined)) {
           problem(
             'D406_SPLIT',
@@ -1492,7 +1762,7 @@ export function d406Declaration(
         const movementId = books.movementOf.get(header.id);
         const movement = movementId ? loaded.movements.get(movementId) : undefined;
         const settled = (linesOf.get(header.id) ?? []).filter(
-          (line) => line.openItemId && partnerOf(line.account),
+          (line) => line.openItemId && roleOf(line),
         );
         if (!movement || !settled.length || !transactionIds.has(header.id)) continue;
         payments.push({

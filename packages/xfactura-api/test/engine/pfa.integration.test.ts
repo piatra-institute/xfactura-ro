@@ -1431,6 +1431,69 @@ describe('D212 from the books', () => {
     expect((await refused({}))?.code).toBe('D212_MEMBER');
   });
 
+  test('a PFA registered during the year: its first form starts the activity, a later one changes it', async () => {
+    // Registered on 1 March 2025: before it no form is recorded (read as an SRL), which is not a
+    // change of form (instrucțiuni pct. 3.5.14 are about a PFA becoming an II and the like).
+    const s = await scenario({ year: 2025, declarationValidator: unused });
+    open.push(s);
+    const { id: certificate } = await s.evidence('certificat-inregistrare.pdf');
+    for (const [axis, value] of [
+      ['entity.form', 'pfa'],
+      ['books.system', 'single'],
+      ['cas.status', 'liable'],
+      ['cass.exception', 'none'],
+    ])
+      await s.invoke(s.owner, 'profile.record', {
+        axis,
+        value,
+        effectiveFrom: '2025-03-01',
+        evidenceId: certificate,
+      });
+    await s.invoke(s.owner, 'pfa.sources.record', {
+      effectiveFrom: '2025-03-01',
+      name: 'Activități de realizare a software-ului la comandă',
+      caen: '6201',
+      place: 'Str. Exemplu nr. 1, Cluj-Napoca',
+      county: 'CJ',
+      authorization: { number: 'F12/345/2025', date: '2025-02-20' },
+      startedOn: '2025-03-01',
+      liberal: false,
+      method: 'sistem_real',
+      realBasis: 'required',
+      evidenceId: certificate,
+    });
+    const holder = await s.invoke<{ id: string }>(s.owner, 'parties.create', {
+      kind: 'ro_individual',
+      country: 'RO',
+      name: 'Popescu Ion (titular)',
+    });
+    await s.invoke(s.owner, 'parties.recordCnp', { partyId: holder.id, cnp: '1781105170030' });
+    await s.book(
+      'ledger.general',
+      journal(
+        (await s.evidence('chitanta-1.pdf')).id,
+        [
+          { account: '5121', side: 'D', amount: '30000.00' },
+          { account: '704', side: 'C', amount: '30000.00' },
+        ],
+        { date: '2025-04-10' },
+      ),
+    );
+    const options = {
+      holderPartyId: holder.id,
+      taxpayer: { lastName: 'Popescu', firstName: 'Ion', address: 'Str. Exemplu nr. 1, Cluj' },
+    };
+    expect((await prepare(s, '2025', options)).state).toBe('prepared');
+    // Becoming an II in September is a change of form within the year: still refused.
+    await s.invoke(s.owner, 'profile.record', {
+      axis: 'entity.form',
+      value: 'ii',
+      effectiveFrom: '2025-09-01',
+      evidenceId: certificate,
+    });
+    expect((await s.refused(prepare(s, '2025', options)))?.code).toBe('D212_FORM_CHANGE');
+  });
+
   official(
     'income of 2024 on a norm started in December: cap12 to ANAF’s validator',
     async () => {

@@ -121,6 +121,21 @@
       "flatten": true
     },
     {
+      "name": "anaf-d112-0126",
+      "description": "ANAF DUKIntegrator 1.4.17.3.3 again, in its own folder for the D112 validator of reporting months 01–06/2026 (below): one kit holds one D112Validator.jar; only the jars and configuration are extracted",
+      "url": "https://static.anaf.ro/static/DUKIntegrator/dist_javaInclus20200203.zip",
+      "sha256": "dddd3c7d743b4347e56b03d40637ee870e724f5df78fa0e5636ba427e3bc01c9",
+      "extract": ["dist/DUKIntegrator.jar", "dist/lib/", "dist/config/"]
+    },
+    {
+      "name": "anaf-d112-0126",
+      "description": "ANAF D112 validator J26.0.3 and PDF generator (22.04.2026): reporting months 01–06/2026, structure D112_A7.2.6 v7 of 30.03.2026 (structura_D112_0126_300326: salMin 4050, Suma300 300 lei, NZL 18, 20, 22, 20, 20, 21), before J27 added the fields of 07/2026; ANAF's page now links J27 for these months too, which the general kit's J27.0.8 validates alike",
+      "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/D112Validator_22042026.zip",
+      "sha256": "9e0c82bf9b5fe0b60db1550825403151be76c877edcf00a2b7b93f714342d83f",
+      "extract": ["D112Validator.jar", "D112Pdf.jar"],
+      "into": "dist/lib"
+    },
+    {
       "name": "anaf-saft",
       "description": "ANAF's SAF-T kit (DUKIntegrator 1.4.18.3.3 with the D406 and D406T validators J2.2.8, 16.02.2026), in its own folder: its DUKIntegrator and dec libraries differ from the general kit's, and only they load the D406 validator; the Windows JREs are not extracted",
       "url": "https://static.anaf.ro/static/10/Anaf/Informatii_R/duk_SAFT_an_luna_20260216.zip",

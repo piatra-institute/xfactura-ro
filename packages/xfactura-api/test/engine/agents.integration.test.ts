@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Treatment } from 'xfactura-core/kernel';
-import { agentGrants } from '../../source/engine/db/schema';
+import { actionDecisions, agentGrants, memberships } from '../../source/engine/db/schema';
 import { Engine } from '../../source/engine/engine';
 import type { ActionView } from '../../source/engine/kernel/actions';
 import { scenario, secret, type Scenario } from './scenario';
@@ -201,5 +201,57 @@ describe('actions.list', () => {
       { limit: 2, after: first.next },
     );
     expect(second).toMatchObject({ items: [{ id: march.id, status: 'requested' }], next: null });
+  });
+});
+
+describe('agents never approve', () => {
+  // The rule had no database backstop: approvals, decisions and policies recorded no agent, so a
+  // code path that skipped the engine's refusal would have stored an agent's approval as its
+  // issuer's. Each now records the acting agent, and the database refuses one.
+  test('an approval, a decision or a policy made through a grant is refused, by the database too', async () => {
+    const s = await fresh();
+    const grant = await issue(s, ['toolset:review']);
+    const agent = await s.engine.agents.authenticate(grant.token, s.company.id);
+    const policy = {
+      name: 'Cheltuieli mici',
+      treatments: ['ledger.general'],
+      rulesHashes: ['a'.repeat(64)],
+      preconditions: [],
+      validFrom: '2026-01-01',
+      expiresAt: s.expiresIn(30),
+    };
+    const january = await s.close('2026-01');
+    for (const [operation, input] of [
+      ['policies.create', policy],
+      ['actions.approve', { id: january.id, previewHash: january.previewHash }],
+    ] as const)
+      expect((await s.refused(s.invoke(agent, operation, input)))?.code).toBe('AGENT_SCOPE');
+    // A path that skipped the engine's refusal records the agent, and the database refuses it.
+    const [member] = await s.engine.db.read((tx) =>
+      tx.select().from(memberships).where(eq(memberships.userId, s.reviewer.actorId)),
+    );
+    const bypass = await s.refused(
+      s.engine.db.write((tx) =>
+        s.engine.policies.insert(
+          tx,
+          s.company.id,
+          policy,
+          { userId: s.reviewer.actorId, epoch: member!.epoch },
+          null,
+          grant.id,
+        ),
+      ),
+    );
+    expect(bypass).toMatchObject({ details: { invariant: 'policy_person' } });
+    // What a person approves records no agent.
+    const approved = await s.invoke<ActionView>(s.reviewer, 'actions.approve', {
+      id: january.id,
+      previewHash: january.previewHash,
+    });
+    expect(approved.status).toBe('approved');
+    const [decision] = await s.engine.db.read((tx) =>
+      tx.select().from(actionDecisions).where(eq(actionDecisions.requestId, january.id)),
+    );
+    expect(decision).toMatchObject({ decidedBy: s.reviewer.actorId, agentId: null });
   });
 });

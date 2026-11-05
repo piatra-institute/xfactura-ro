@@ -15,7 +15,8 @@ import { invoiceKinds } from 'xfactura-core/ro/treatments/invoices';
 import { parseInvoiceXml, type InvoiceDocument } from 'xfactura-core/ubl/invoice-document';
 import type { Transaction } from '../db/database';
 import { companies, documents, evidence, parties } from '../db/schema';
-import { sha256, type ObjectStore } from '../adapters/object-store';
+import type { ObjectStore } from '../adapters/object-store';
+import type { PartyIdentities } from '../db/identity';
 import type { Actor, Commands, Ids } from '../kernel/commands';
 import { joinIdentityGroup } from '../kernel/sources';
 import { appendDetails } from './sales';
@@ -90,12 +91,19 @@ function convert(record: unknown): Converted {
   }
 }
 
-/** The partner for a buyer: an individual is known by a hash of the CNP, never the CNP. */
-async function buyerParty(tx: Transaction, actor: Actor, draft: InvoiceDraft, ids: Ids) {
+/** The partner for a buyer: an individual is known by the keyed hash of the CNP, never the CNP,
+ * the same identity an employee who is this person has. */
+async function buyerParty(
+  tx: Transaction,
+  actor: Actor,
+  draft: InvoiceDraft,
+  ids: Ids,
+  identities: PartyIdentities,
+) {
   const buyer = draft.buyer;
   const code = (buyer.vatId ?? buyer.legalId ?? '').replace(/^RO/i, '');
   const individual = buyer.address.country === 'RO' && isValidCnp(code);
-  const taxId = individual ? `cnp:${sha256(code)}` : code;
+  const taxId = individual ? identities.ofCnp(actor.companyId, code) : code;
   const [existing] = await tx
     .select()
     .from(parties)
@@ -135,6 +143,7 @@ export class InvoicerImport {
   constructor(
     private readonly commands: Commands,
     private readonly objects: ObjectStore,
+    private readonly identities: PartyIdentities,
   ) {}
 
   run(actor: Actor, key: string, input: z.infer<typeof invoicerImportInput>) {
@@ -227,7 +236,7 @@ export class InvoicerImport {
           evidenceId: source.id,
           origin: 'invoicer-export',
           docDate: item.date,
-          partyId: await buyerParty(tx, actor, item.draft, this.commands.ids),
+          partyId: await buyerParty(tx, actor, item.draft, this.commands.ids, this.identities),
           currency: item.body.currency,
           number: item.number,
           identityKey,

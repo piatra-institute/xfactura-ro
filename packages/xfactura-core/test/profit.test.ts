@@ -457,6 +457,87 @@ describe('the tax bridge', () => {
     expect(codes(under)).toEqual([]);
   });
 
+  test('the previous year’s turnover a cited answer states settles the minimum tax', () => {
+    const figures = (turnover: string) =>
+      answer(
+        'year.figures',
+        { kind: 'year', id: '2025' },
+        { values: { turnover, netTurnover: turnover }, evidenceIds: [EVIDENCE] },
+      );
+    const quarter = (extra: AnswerRecord[]) =>
+      run({
+        period: '2026-Q1',
+        date: '2026-03-31',
+        answers: [noLosses(), ...extra],
+        result: [row('704', '0', '10.00')],
+      });
+    // 50,000,000 € at 5.0800 (31.12.2025) is 254,000,000.00 lei.
+    expect(codes(quarter([figures('800000.00')]))).toEqual([]);
+    const over = quarter([figures('254000000.01')]);
+    expect(over.issues.find((item) => item.code === 'PROFIT_MINIMUM_TAX')?.severity).toBe('block');
+    // Another year's figures settle nothing: the reviewer confirms.
+    const other = answer(
+      'year.figures',
+      { kind: 'year', id: '2024' },
+      { values: { turnover: '800000.00' }, evidenceIds: [EVIDENCE] },
+    );
+    expect(quarter([other]).issues.map((item) => `${item.severity} ${item.code}`)).toEqual([
+      'ack PROFIT_MINIMUM_TAX',
+    ]);
+  });
+
+  test('the legal reserve is asked only while it has room under a fifth of the capital', () => {
+    const quarter = (reserve?: string) =>
+      run({
+        period: '2026-Q1',
+        date: '2026-03-31',
+        previousTurnover: '800000.00',
+        result: [row('704', '0', '10000.00')],
+        capital: '200.00',
+        ...(reserve ? { reserve } : {}),
+      });
+    expect(codes(quarter())).toEqual(['LEGAL_RESERVE']);
+    expect(codes(quarter('30.00'))).toEqual(['LEGAL_RESERVE']);
+    // 40 lei, a fifth of 200: nothing more is set aside, nor deducted.
+    const full = quarter('40.00');
+    expect(codes(full)).toEqual([]);
+    expect(full.position!.rows.P13).toBe('0');
+  });
+
+  test('the tax is due with its return: a quarter’s D100, the year’s D101', () => {
+    const due = (period: string, date?: string) =>
+      run({
+        period,
+        ...(date ? { date } : {}),
+        previousTurnover: '800000.00',
+        result: [row('704', '0', '10000.00')],
+        input: { legalReserve: { evidenceId: EVIDENCE } },
+      }).effect?.openItems[0]?.dueDate;
+    // 25 April 2026 is a Saturday: the next working day.
+    expect(due('2026-Q1', '2026-03-31')).toBe('2026-04-27' as LocalDate);
+    expect(due('2026')).toBe('2027-06-25' as LocalDate);
+  });
+
+  test('losses stated for the books’ start are whole lei, rounded as D101 rounds, never cut', () => {
+    const stated = answer(
+      'profit.losses',
+      { kind: 'company', id: 'losses' },
+      {
+        vintages: [{ year: 2024, amount: '1000.50', remaining: '600.49' }],
+        evidenceIds: [EVIDENCE],
+      },
+    );
+    const year = run({
+      period: '2026',
+      previousTurnover: '800000.00',
+      answers: [stated],
+      result: [row('704', '0', '10000.00')],
+    });
+    expect(year.position!.losses.before).toEqual([
+      { year: 2024, amount: '1001', remaining: '600' },
+    ]);
+  });
+
   test('the annual tax refuses a year whose result is closed', () => {
     const closed = run({
       period: '2026',

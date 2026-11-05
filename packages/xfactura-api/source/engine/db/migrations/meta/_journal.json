@@ -211,6 +211,20 @@
       "when": 1793892666810,
       "tag": "0029_cash_registers",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1793897503782,
+      "tag": "0030_production",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1793906961070,
+      "tag": "0031_personal_data",
+      "breakpoints": true
     }
   ]
 }

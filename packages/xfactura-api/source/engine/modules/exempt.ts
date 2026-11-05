@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray, like, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, like, lte, notLike, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { profileAt, vatPeriodOf } from 'xfactura-core/kernel';
 import { formatMoney, parseMoney } from 'xfactura-core/money';
@@ -15,13 +15,15 @@ import {
   shareOf,
 } from 'xfactura-core/ro/exempt';
 import { immovableAsset, tangibleAsset, type CapitalGoodsRule } from 'xfactura-core/ro/nonpayers';
+import { standingTaxEntries } from 'xfactura-core/ro/treatments/ledger';
 import { prorataYear, yearPeriods } from 'xfactura-core/ro/treatments/prorata';
 import { regimeCodes } from 'xfactura-core/ro/treatments/vat-registration';
 import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
 import { bucharestDate, type LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
-import { assets, questions, taxEntries } from '../db/schema';
+import { assets, entries, questions, taxEntries } from '../db/schema';
 import type { Actor, Commands } from '../kernel/commands';
+import { entryStands } from '../kernel/ledger';
 import { loadState } from '../kernel/state';
 import type { VatAdjustmentWorkItem, WorkStep } from '../kernel/work';
 import { standing } from './questions';
@@ -125,7 +127,8 @@ export async function prorataOf(
   const adjustments = definitive ? prorataAdjustments(year.purchases, definitive.percent) : [];
   lines.push(...adjustments.map((item) => item.line));
   const total = adjustments.reduce((sum, item) => sum + item.bani, 0n);
-  const booked = entries.filter(
+  // The adjustment that stands: neither a storno nor stornoed in the year.
+  const booked = standingTaxEntries(entries).filter(
     (entry) =>
       entry.code === adjustmentCodes.prorata && entry.attributes.year === String(input.year),
   );
@@ -377,14 +380,28 @@ export async function vatAdjustmentWork(
         sql`json_extract(${taxEntries.attributes}, '$.prorata') is not null`,
       ),
     );
-    const adjusted = await probe(
-      and(
-        eq(taxEntries.companyId, companyId),
-        eq(taxEntries.code, adjustmentCodes.prorata),
-        inArray(taxEntries.taxPeriod, yearPeriods(year)),
-        sql`json_extract(${taxEntries.attributes}, '$.year') = ${String(year)}`,
-      ),
-    );
+    // The year's adjustment that stands: neither a storno nor stornoed.
+    const adjusted =
+      (
+        await tx
+          .select({ code: taxEntries.code })
+          .from(taxEntries)
+          .innerJoin(
+            entries,
+            and(eq(entries.companyId, taxEntries.companyId), eq(entries.id, taxEntries.entryId)),
+          )
+          .where(
+            and(
+              eq(taxEntries.companyId, companyId),
+              eq(taxEntries.code, adjustmentCodes.prorata),
+              inArray(taxEntries.taxPeriod, yearPeriods(year)),
+              sql`json_extract(${taxEntries.attributes}, '$.year') = ${String(year)}`,
+              notLike(taxEntries.key, 'reversal:%'),
+              entryStands('"acc_entries"'),
+            ),
+          )
+          .limit(1)
+      ).length > 0;
     const provisional = provisionalProrata(loaded.profile, (today < to ? today : to) as LocalDate);
     if (exempt && !provisional.found)
       items.push({

@@ -77,6 +77,8 @@ describe('dividends', () => {
       });
     const individual = await withhold(personal!.id, '30000.00');
     expect(lines(individual)).toEqual(['D 457 4800.00', 'C 446 4800.00']);
+    // Due with June's D100: 25 July 2026 is a Saturday, so the next working day.
+    expect(individual.effect!.openItems.map((item) => item.dueDate)).toEqual(['2026-07-27']);
     await s.post(await s.approve(individual));
 
     // A company shareholder: the reviewer confirms the art. 43 alin. (4) exemption does not apply.

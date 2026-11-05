@@ -5,9 +5,12 @@ import { isLocalDate, monthEnd, monthOf, type LocalDate } from '../../time';
 import { INDEXED_LEASE_METHOD } from '../financing';
 import { selectRate } from '../fx';
 
-/** Monetary items are settled in a fixed amount of currency and are revalued; advances and
- * deferrals are not. Loans and their interest are (OMFP 1802/2014, the functions of accounts 162,
- * 167, 168 and 519). */
+/** Monetary items are settled in a fixed or determinable amount of currency (OMFP 1802/2014 pct.
+ * 315) and are revalued each month (pct. 325); advances and deferrals are not (pct. 315 alin.
+ * (3), 316 alin. (2)). Loans and their interest are (the functions of accounts 162, 167, 168 and
+ * 519). So is a tax owed or claimed in a currency: the Union scheme's VAT, owed in euro to the
+ * special account (Codul fiscal art. 315 alin. (12)–(13); 4423, `invoices.euConsumer`), which
+ * no text leaves out of pct. 325's "datoriile în valută". */
 export const monetaryKinds: ReadonlySet<OpenItemKind> = new Set<OpenItemKind>([
   'receivable',
   'payable',
@@ -17,6 +20,8 @@ export const monetaryKinds: ReadonlySet<OpenItemKind> = new Set<OpenItemKind>([
   'unapplied.payment',
   'loan.payable',
   'loan.interest',
+  'tax.payable',
+  'tax.receivable',
 ]);
 
 export const revaluationInput = z

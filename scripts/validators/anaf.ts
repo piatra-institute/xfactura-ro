@@ -13,11 +13,18 @@ export const saftDuk = path.join(
   '../..',
   '.validators/anaf-saft/duk_SAFT_an_luna/dist',
 );
+/** The kit of the D112 validator ANAF published for reporting months 01–06/2026 (J26.0.3). */
+export const d112FirstHalfDuk = path.join(
+  import.meta.dir,
+  '../..',
+  '.validators/anaf-d112-0126/dist',
+);
 const installed = (dist: string) =>
   existsSync(path.join(dist, 'DUKIntegrator.jar')) && Bun.which('java') !== null;
 /** Runs when DUKIntegrator and Java are installed, and is skipped (never passed) otherwise. */
 export const anaf = installed(duk) ? test : test.skip;
 export const anafSaft = installed(saftDuk) ? test : test.skip;
+export const anafD112FirstHalf = installed(d112FirstHalfDuk) && installed(duk) ? test : test.skip;
 
 /**
  * The declarations validated in one long-lived JVM per kit (DukServer.java): with it, every

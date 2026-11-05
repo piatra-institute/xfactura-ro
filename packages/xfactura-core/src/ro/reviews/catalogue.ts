@@ -66,6 +66,11 @@ export const reviewProfiles: readonly ReviewProfile[] = [
     title: 'Comerț cu amănuntul: case de marcat, rapoarte Z, preț cu amănuntul și B2C (G2)',
     defined: 'docs/CONFORMANCE.md (fațetă)',
   },
+  {
+    id: 'RO-PRODUCTION',
+    title: 'Producție: fișe tehnice, comenzi, producție în curs, cost standard și efectiv (G4)',
+    defined: 'docs/CONFORMANCE.md (fațetă)',
+  },
 ];
 
 /** What a wrong value costs: a wrong tax amount (3), a rejected filing (2), a presentation (1). */
@@ -887,6 +892,46 @@ export const keyAnnotations: Readonly<Record<string, KeyAnnotation>> = {
         'The rate the goods enter at moves their cost and the exchange difference of the payable; the VAT is the declaration’s.',
     },
     obligations: ['S1005', 'S1003', 'D406'],
+  },
+  'ro.production.accounts': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-PRODUCTION', 'RO-PAY'],
+      basis:
+        'Every manufacturer with employees, each month: the labour each work order takes decides its work in progress and its products’ cost.',
+    },
+    risk: {
+      kind: 'tax_amount',
+      basis:
+        'The labour capitalized in the work in progress and in the stock of products moves the month’s result, so the taxable profit.',
+    },
+    obligations: ['D101', 'D100.profit', 'S1005', 'S1003', 'D406'],
+  },
+  'ro.production.costing': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-PRODUCTION'],
+      basis: 'Every manufacturer with a work order open at a month’s end.',
+    },
+    risk: {
+      kind: 'tax_amount',
+      basis: 'The work in progress (331 against 711) is part of the period’s result.',
+    },
+    obligations: ['D101', 'D100.profit', 'S1005', 'S1003', 'D406'],
+  },
+  'ro.production.coefficient': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-PRODUCTION'],
+      basis:
+        'Manufacturers at the standard cost: every month, the price differences spread over the products sold.',
+    },
+    risk: {
+      kind: 'tax_amount',
+      basis:
+        'The coefficient sets the cost of the products sold each month, so the taxable profit of the quarter.',
+    },
+    obligations: ['D101', 'D100.profit', 'S1005', 'D406'],
   },
   'ro.nonresident.certificate_days': {
     reach: {

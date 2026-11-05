@@ -13,6 +13,7 @@ import {
   sql,
   type SQL,
 } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/sqlite-core';
 import { hashOf } from 'xfactura-core/hash';
 import type {
   AccountBalance,
@@ -32,12 +33,15 @@ import type {
   PartyStatus,
   PayrollRunState,
   PostedEntry,
+  ProductionQuery,
+  ProductionState,
   AccountTurnover,
   AssetState,
   ProfitPosting,
   ProfileFact,
   ReadPlan,
   ReadSetEntry,
+  StockDay,
   StockItemRecord,
   StockLayerState,
   StockMoveSpec,
@@ -65,6 +69,8 @@ import {
   documents,
   entries,
   bankMovements,
+  bomLines,
+  boms,
   evidence,
   fiscalYears,
   fxRates,
@@ -76,6 +82,7 @@ import {
   payrollLines,
   payrollRunEvents,
   payrollRuns,
+  periodEvents,
   profileFacts,
   proposals,
   proposalVersions,
@@ -86,9 +93,15 @@ import {
   taxEntries,
   treasuryAccounts,
   warehouses,
+  workOrderEvents,
+  workOrders,
 } from '../db/schema';
 
 const date = (value: string) => value as LocalDate;
+/** A turnover read on the original sides (`TurnoverQuery.sides`): the reversal proposal of an
+ * entry, and the line of the entry it reverses. */
+const reversal = alias(proposals, 'turnover_reversal');
+const reversedLine = alias(lines, 'turnover_reversed_line');
 /** +1 for a debit line, −1 for a credit line. */
 const sign = sql`case ${lines.side} when 'D' then 1 else -1 end`;
 
@@ -250,17 +263,31 @@ export async function loadStock(tx: Transaction, companyId: string, query: Stock
       total += row.count;
     }
   }
-  // Each layer's flows in the range: before it, entering in it, leaving in it.
+  // Each layer's flows in the range: before it, entering in it, leaving in it. A move in the range
+  // enters or leaves by the line it explains (a debit or a credit of the stock account, so a red
+  // storno of a receipt or a return to the supplier is a negative entry), a reversal's move by
+  // the move it mirrors (the same number in the reversed entry, whose subject names it), so that
+  // a storno in black nets against its original too; a move without a line by its quantity's sign.
   const flows = new Map<string, StockFlows>();
   if (query.flows && (query.all || itemIds.length)) {
     const { from, to } = query.flows;
     const zero = () => ({ quantity: 0n, bani: 0n });
+    const mirrored = sql`coalesce((SELECT substr(rp.subject_key, 9) FROM acc_proposals rp
+      WHERE rp.company_id = ${entries.companyId} AND rp.id = ${entries.proposalId}
+        AND substr(rp.subject_key, 1, 8) = 'reverse:'), ${stockMoves.entryId})`;
+    const side = sql`coalesce((SELECT CASE WHEN ol.side IS NOT NULL THEN ol.side
+          WHEN om.quantity < 0 THEN 'C' ELSE 'D' END
+        FROM acc_stock_moves om LEFT JOIN acc_lines ol ON ol.company_id = om.company_id
+          AND ol.entry_id = om.entry_id AND ol.line_no = om.line_no
+        WHERE om.company_id = ${stockMoves.companyId} AND om.entry_id = ${mirrored}
+          AND om.move_no = ${stockMoves.moveNo}),
+      CASE WHEN ${stockMoves.quantity} < 0 THEN 'C' ELSE 'D' END)`;
     for (const row of await tx
       .select({
         layer: stockMoves.layerId,
         part: sql<string>`CASE WHEN ${entries.date} < ${from} THEN 'opening'
           WHEN ${entries.date} > ${to} THEN 'later'
-          WHEN ${stockMoves.quantity} < 0 THEN 'left' ELSE 'entered' END`,
+          WHEN ${side} = 'C' THEN 'left' ELSE 'entered' END`,
         quantity: sql<bigint>`coalesce(sum(${stockMoves.quantity}), 0)`.mapWith(BigInt),
         bani: sql<bigint>`coalesce(sum(${stockMoves.bani}), 0)`.mapWith(BigInt),
       })
@@ -275,6 +302,58 @@ export async function loadStock(tx: Transaction, companyId: string, query: Stock
       if (row.part !== 'later')
         held[row.part as keyof StockFlows] = { quantity: row.quantity, bani: row.bani };
       flows.set(row.layer, held);
+    }
+  }
+  // Each layer's moves per day in the months still open: nothing is posted on or before the last
+  // closed month (`inv:later_period_closed`), so what moved after any exit's date is here. The
+  // open months' entries are read first when a month is closed, the items' moves otherwise.
+  const days = new Map<string, StockDay[]>();
+  if (query.dated && (query.all || itemIds.length)) {
+    const [closed] = await tx
+      .select({ month: sql<string | null>`max(${periodEvents.month})` })
+      .from(periodEvents)
+      .where(
+        and(
+          eq(periodEvents.companyId, companyId),
+          eq(periodEvents.kind, 'close'),
+          sql`${periodEvents.seq} = (SELECT max(q.seq) FROM acc_period_events q
+            WHERE q.company_id = ${periodEvents.companyId} AND q.month = ${periodEvents.month})`,
+        ),
+      );
+    const select = {
+      layer: stockMoves.layerId,
+      date: entries.date,
+      quantity: sql<bigint>`coalesce(sum(${stockMoves.quantity}), 0)`.mapWith(BigInt),
+      bani: sql<bigint>`coalesce(sum(${stockMoves.bani}), 0)`.mapWith(BigInt),
+    };
+    const join = [
+      eq(entries.companyId, stockMoves.companyId),
+      eq(entries.id, stockMoves.entryId),
+    ] as const;
+    const rows = closed?.month
+      ? await tx
+          .select(select)
+          .from(entries)
+          .crossJoin(stockMoves)
+          .where(
+            and(
+              eq(entries.companyId, companyId),
+              sql`${entries.period} > ${closed.month}`,
+              ...join,
+              ...(query.all ? [] : [inArray(stockMoves.itemId, itemIds)]),
+            ),
+          )
+          .groupBy(stockMoves.layerId, entries.date)
+      : await tx
+          .select(select)
+          .from(stockMoves)
+          .crossJoin(entries)
+          .where(and(...moveScope, ...join))
+          .groupBy(stockMoves.layerId, entries.date);
+    for (const row of rows.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))) {
+      const list = days.get(row.layer) ?? [];
+      list.push({ date: date(row.date), quantity: row.quantity, bani: row.bani });
+      days.set(row.layer, list);
     }
   }
   const positions = new Map<string, StockPosition>();
@@ -305,6 +384,7 @@ export async function loadStock(tx: Transaction, companyId: string, query: Stock
             },
           }
         : {}),
+      ...(query.dated ? { days: days.get(layer.id) ?? [] } : {}),
     });
     layersOf.set(key, list);
   }
@@ -364,6 +444,155 @@ export async function loadStock(tx: Transaction, companyId: string, query: Stock
       .orderBy(asc(warehouses.code)))
       stores.set(row.id, { id: row.id, code: row.code, name: row.name, keeper: row.keeper });
   return { positions, items, warehouses: stores, readSet };
+}
+
+/**
+ * Production (G4): the bills of materials with their lines, the work orders with the day each
+ * closed, and, with `lines`, every line tagged `production:…` dated in the range, summed per tag,
+ * account, entry date and the stock item its moves carry. One read: a BOM version, an order, an
+ * event or a tagged line posted in the range changes its version.
+ */
+async function loadProduction(tx: Transaction, companyId: string, query: ProductionQuery) {
+  const bomRows = await tx
+    .select()
+    .from(boms)
+    .where(eq(boms.companyId, companyId))
+    .orderBy(asc(boms.itemId), asc(boms.version));
+  const lineRows = await tx
+    .select()
+    .from(bomLines)
+    .where(eq(bomLines.companyId, companyId))
+    .orderBy(asc(bomLines.bomId), asc(bomLines.lineNo));
+  const orderRows = await tx
+    .select()
+    .from(workOrders)
+    .where(eq(workOrders.companyId, companyId))
+    .orderBy(asc(workOrders.number));
+  const eventRows = await tx
+    .select()
+    .from(workOrderEvents)
+    .where(eq(workOrderEvents.companyId, companyId))
+    .orderBy(asc(workOrderEvents.orderId), asc(workOrderEvents.seq));
+  const bomMap: ProductionState['boms'] extends ReadonlyMap<string, infer V>
+    ? Map<string, V>
+    : never = new Map();
+  for (const row of bomRows)
+    bomMap.set(row.id, {
+      id: row.id,
+      itemId: row.itemId,
+      version: row.version,
+      validFrom: date(row.validFrom),
+      outputQuantity: row.outputQuantity,
+      standardCost: row.standardCost,
+      labourHours: row.labourHours,
+      machineHours: row.machineHours,
+      evidenceId: row.evidenceId,
+      lines: lineRows
+        .filter((line) => line.bomId === row.id)
+        .map((line) => ({ lineNo: line.lineNo, itemId: line.itemId, quantity: line.quantity })),
+    });
+  const closed = new Map(
+    eventRows.filter((row) => row.kind === 'closed').map((row) => [row.orderId, row.date]),
+  );
+  const orderMap: ProductionState['orders'] extends ReadonlyMap<string, infer V>
+    ? Map<string, V>
+    : never = new Map();
+  for (const row of orderRows)
+    orderMap.set(row.id, {
+      id: row.id,
+      number: row.number,
+      itemId: row.itemId,
+      bomId: row.bomId,
+      quantity: row.quantity,
+      openedOn: date(row.openedOn),
+      closedOn: closed.has(row.id) ? date(closed.get(row.id)!) : null,
+      evidenceId: row.evidenceId,
+    });
+  const tagged: ProductionState['lines'][number][] = [];
+  let mark = '';
+  if (query.lines) {
+    const { from, to } = query.lines;
+    const range = and(
+      eq(lines.companyId, companyId),
+      like(lines.item, 'production:%'),
+      lte(entries.date, to),
+      ...(from ? [gte(entries.date, from)] : []),
+    );
+    const join = and(eq(entries.companyId, lines.companyId), eq(entries.id, lines.entryId));
+    // The moves of each tagged line, summed per line first: a line taking two lots has two moves.
+    const moved = tx
+      .select({
+        entryId: stockMoves.entryId,
+        lineNo: stockMoves.lineNo,
+        item: sql<string>`max(${stockMoves.itemId})`.as('moved_item'),
+        quantity: sql<bigint>`sum(${stockMoves.quantity})`.as('moved_quantity'),
+      })
+      .from(stockMoves)
+      .where(
+        and(
+          eq(stockMoves.companyId, companyId),
+          inArray(
+            stockMoves.entryId,
+            tx
+              .select({ id: lines.entryId })
+              .from(lines)
+              .where(and(eq(lines.companyId, companyId), like(lines.item, 'production:%'))),
+          ),
+        ),
+      )
+      .groupBy(stockMoves.entryId, stockMoves.lineNo)
+      .as('moved');
+    const rows = await tx
+      .select({
+        tag: lines.item,
+        account: lines.account,
+        date: entries.date,
+        debit:
+          sql<bigint>`sum(CASE WHEN ${lines.side} = 'D' THEN ${lines.bani} ELSE 0 END)`.mapWith(
+            BigInt,
+          ),
+        credit:
+          sql<bigint>`sum(CASE WHEN ${lines.side} = 'C' THEN ${lines.bani} ELSE 0 END)`.mapWith(
+            BigInt,
+          ),
+        item: moved.item,
+        quantity: sql<bigint>`coalesce(sum(${moved.quantity}), 0)`.mapWith(BigInt),
+      })
+      .from(lines)
+      .innerJoin(entries, join)
+      .leftJoin(moved, and(eq(moved.entryId, lines.entryId), eq(moved.lineNo, lines.lineNo)))
+      .where(range)
+      .groupBy(lines.item, lines.account, entries.date, sql`moved_item`)
+      .orderBy(asc(lines.item), asc(lines.account), asc(entries.date), sql`moved_item`);
+    for (const row of rows)
+      tagged.push({
+        tag: row.tag!,
+        account: row.account,
+        date: date(row.date),
+        debit: row.debit,
+        credit: row.credit,
+        item: row.item ?? null,
+        quantity: row.quantity,
+      });
+    const [counted] = await tx
+      .select({
+        count: sql<number>`count(*)`.mapWith(Number),
+        last: sql<number>`COALESCE(max(${entries.seq}), 0)`.mapWith(Number),
+      })
+      .from(lines)
+      .innerJoin(entries, join)
+      .where(range);
+    mark = `/${counted!.count}/${counted!.last}`;
+  }
+  const readSet: ReadSetEntry[] = [
+    {
+      kind: 'production',
+      id: query.lines ? `lines|${query.lines.from ?? ''}|${query.lines.to}` : 'catalogue',
+      version: `${bomRows.length}/${orderRows.length}/${eventRows.length}${mark}`,
+    },
+  ];
+  const state: ProductionState = { boms: bomMap, orders: orderMap, lines: tagged };
+  return { state, readSet };
 }
 
 /** Open items with their balances, as of everything posted so far. */
@@ -946,23 +1175,58 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
       lte(entries.date, query.to),
     );
     const join = and(eq(entries.companyId, lines.companyId), eq(entries.id, lines.entryId));
-    const rows = await tx
-      .select({
-        account: lines.account,
-        debit:
-          sql<bigint>`sum(CASE WHEN ${lines.side} = 'D' THEN ${lines.bani} ELSE 0 END)`.mapWith(
-            BigInt,
-          ),
-        credit:
-          sql<bigint>`sum(CASE WHEN ${lines.side} = 'C' THEN ${lines.bani} ELSE 0 END)`.mapWith(
-            BigInt,
-          ),
-      })
-      .from(lines)
-      .innerJoin(entries, join)
-      .where(range)
-      .groupBy(lines.account)
-      .orderBy(asc(lines.account));
+    const rows =
+      query.sides === 'original'
+        ? // A reversal's line on the side of the line it reverses (the same number in the entry its
+          // subject names), with its amount negated when it is on the other side (black storno).
+          await tx
+            .select({
+              account: lines.account,
+              debit: sql<bigint>`sum(CASE WHEN coalesce(${reversedLine.side}, ${lines.side}) = 'D'
+                THEN CASE WHEN ${lines.side} = 'D' THEN ${lines.bani} ELSE -${lines.bani} END
+                ELSE 0 END)`.mapWith(BigInt),
+              credit: sql<bigint>`sum(CASE WHEN coalesce(${reversedLine.side}, ${lines.side}) = 'C'
+                THEN CASE WHEN ${lines.side} = 'C' THEN ${lines.bani} ELSE -${lines.bani} END
+                ELSE 0 END)`.mapWith(BigInt),
+            })
+            .from(lines)
+            .innerJoin(entries, join)
+            .leftJoin(
+              reversal,
+              and(
+                eq(reversal.companyId, entries.companyId),
+                eq(reversal.id, entries.proposalId),
+                sql`substr(${reversal.subjectKey}, 1, 8) = 'reverse:'`,
+              ),
+            )
+            .leftJoin(
+              reversedLine,
+              and(
+                eq(reversedLine.companyId, lines.companyId),
+                sql`${reversedLine.entryId} = substr(${reversal.subjectKey}, 9)`,
+                eq(reversedLine.lineNo, lines.lineNo),
+              ),
+            )
+            .where(range)
+            .groupBy(lines.account)
+            .orderBy(asc(lines.account))
+        : await tx
+            .select({
+              account: lines.account,
+              debit:
+                sql<bigint>`sum(CASE WHEN ${lines.side} = 'D' THEN ${lines.bani} ELSE 0 END)`.mapWith(
+                  BigInt,
+                ),
+              credit:
+                sql<bigint>`sum(CASE WHEN ${lines.side} = 'C' THEN ${lines.bani} ELSE 0 END)`.mapWith(
+                  BigInt,
+                ),
+            })
+            .from(lines)
+            .innerJoin(entries, join)
+            .where(range)
+            .groupBy(lines.account)
+            .orderBy(asc(lines.account));
     const [mark] = await tx
       .select({
         count: sql<number>`count(*)`.mapWith(Number),
@@ -1198,6 +1462,8 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
     ? await loadStock(tx, companyId, plan.stock)
     : { positions: new Map(), items: new Map(), warehouses: new Map(), readSet: [] };
   readSet.push(...stock.readSet);
+  const production = plan.production ? await loadProduction(tx, companyId, plan.production) : null;
+  if (production) readSet.push(...production.readSet);
 
   const loaded: Loaded = {
     years,
@@ -1222,6 +1488,7 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
     stock: stock.positions,
     stockItems: stock.items,
     warehouses: stock.warehouses,
+    ...(production ? { production: production.state } : {}),
   };
   return { loaded, readSet };
 }
@@ -1273,6 +1540,9 @@ export function mergeStates(
     stock: merge(first.loaded.stock, second.loaded.stock),
     stockItems: merge(first.loaded.stockItems, second.loaded.stockItems),
     warehouses: merge(first.loaded.warehouses, second.loaded.warehouses),
+    ...((first.loaded.production ?? second.loaded.production)
+      ? { production: first.loaded.production ?? second.loaded.production }
+      : {}),
   };
   const seen = new Set<string>();
   const readSet = [...first.readSet, ...second.readSet]

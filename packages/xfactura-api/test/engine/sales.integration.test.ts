@@ -287,7 +287,14 @@ describe('invoicer export import', () => {
       'parties.list',
     );
     const person = partners.find((item) => item.kind === 'ro_individual')!;
-    expect(person.taxId).toMatch(/^cnp:[a-f0-9]{64}$/);
+    // A keyed hash of the CNP, never the CNP nor its plain SHA-256.
+    expect(person.taxId).toMatch(/^cnp:k1:[a-f0-9]{64}$/);
+    // The export names an individual by CNP: the file is personal data.
+    expect(
+      (await s.list<{ id: string; dataClasses: string[] }>(s.owner, 'evidence.list')).find(
+        (item) => item.id === evidenceId,
+      )?.dataClasses,
+    ).toEqual(['evidence', 'personal']);
     expect(
       (await s.invoke<{ details: unknown }>(s.owner, 'parties.get', { partyId: person.id }))
         .details,
@@ -337,5 +344,141 @@ describe('invoicer export import', () => {
       '20250001',
       ['NUMBER_USED'],
     ]);
+  });
+});
+
+describe('personal data an agent reads', () => {
+  /** A synthetic CNP with a valid control digit. */
+  const cnpOf = (body: string) => {
+    const weights = [2, 7, 9, 1, 4, 6, 3, 5, 8, 2, 7, 9];
+    const control =
+      weights.reduce((sum, weight, index) => sum + weight * Number(body[index]), 0) % 11;
+    return `${body}${control === 10 ? 1 : control}`;
+  };
+  const reader = async (s: Scenario, scopes: string[]) =>
+    s.engine.agents.authenticate(
+      (
+        await s.invoke<{ token: string }>(s.reviewer, 'agents.issue', {
+          name: 'Asistent',
+          scopes,
+          expiresAt: s.expiresIn(7),
+        })
+      ).token,
+      s.company.id,
+    );
+  /** Whether what a call returns holds the CNP (a boolean, so that no failure prints it). */
+  const holds = async (code: string, read: Promise<unknown>) =>
+    JSON.stringify(await read).includes(code);
+
+  // A B2C invoice's XML carries the buyer's CNP (BT-47): it was kept as ordinary evidence, and
+  // its document and recognition carried the CNP in clear to any agent.
+  test('a B2C buyer’s CNP reaches no agent: the XML is personal, the document and booking mask it', async () => {
+    const { s, issue } = await company();
+    const code = cnpOf('290050117002');
+    const person = await s.invoke<{ id: string }>(s.owner, 'parties.create', {
+      kind: 'ro_individual',
+      country: 'RO',
+      name: 'Maria Ionescu',
+    });
+    await s.invoke(s.owner, 'parties.recordDetails', {
+      partyId: person.id,
+      details: {
+        name: 'Maria Ionescu',
+        address: {
+          lines: ['Str. Domnească 7'],
+          city: 'Galați',
+          subdivision: 'RO-GL',
+          country: 'RO',
+        },
+      },
+    });
+    await s.invoke(s.owner, 'parties.recordCnp', { partyId: person.id, cnp: code });
+    const issued = await issue({
+      buyerId: person.id,
+      issueDate: '2026-10-28',
+      b2c: { identification: 'cnp' },
+    });
+    const agent = await reader(s, [
+      'evidence.read',
+      'evidence.list',
+      'documents.get',
+      'proposals.get',
+    ]);
+    expect(
+      (await s.refused(s.invoke(agent, 'evidence.read', { id: issued.evidenceId, mode: 'meta' })))
+        ?.code,
+    ).toBe('EVIDENCE_CLASS');
+    expect(
+      (await s.list<{ id: string }>(agent, 'evidence.list')).find(
+        (item) => item.id === issued.evidenceId,
+      ),
+    ).toMatchObject({ filename: null, dataClasses: ['evidence', 'personal'], redacted: true });
+    const document = s.invoke<{ body: { customer: { taxId: string } } }>(agent, 'documents.get', {
+      id: issued.documentId,
+    });
+    expect(await holds(code, document)).toBe(false);
+    expect((await document).body.customer.taxId).toBe('*************');
+    const recognition = s.invoke(agent, 'proposals.get', { id: issued.recognition.proposalId });
+    expect(await holds(code, recognition)).toBe(false);
+    // A person who may record a CNP reads it where the engine keeps it; a viewer does not.
+    expect(await holds(code, s.invoke(s.owner, 'documents.get', { id: issued.documentId }))).toBe(
+      true,
+    );
+    expect(await holds(code, s.invoke(s.viewer, 'documents.get', { id: issued.documentId }))).toBe(
+      false,
+    );
+    expect(
+      (await s.refused(s.invoke(s.viewer, 'evidence.get', { id: issued.evidenceId })))?.code,
+    ).toBe('EVIDENCE_CLASS');
+  });
+
+  // parties.create with the country and code of a partner already recorded threw SQLite's raw
+  // constraint error.
+  test('a partner already recorded is refused by name; an individual is known by a keyed CNP hash', async () => {
+    const { s, buyer } = await company();
+    const create = (input: Record<string, unknown>) =>
+      s.invoke<{ id: string; taxId: string | null }>(s.owner, 'parties.create', {
+        country: 'RO',
+        name: 'Partener',
+        ...input,
+      });
+    expect(
+      await s.refused(create({ kind: 'ro_legal_entity', taxId: 'RO 14399840' })),
+    ).toMatchObject({ code: 'PARTY_EXISTS', details: { partyId: buyer.id } });
+    const code = cnpOf('180010112345');
+    const person = await create({ kind: 'ro_individual', taxId: code });
+    expect(person.taxId).toMatch(/^cnp:k1:[0-9a-f]{64}$/);
+    expect(await s.refused(create({ kind: 'ro_individual', taxId: code }))).toMatchObject({
+      code: 'PARTY_EXISTS',
+      details: { partyId: person.id },
+    });
+    expect((await s.refused(create({ kind: 'ro_individual', taxId: '1800101123456' })))?.code).toBe(
+      'CNP',
+    );
+    // The employee who is this person is the same party.
+    await s.invoke(s.owner, 'profile.record', {
+      axis: 'employer',
+      value: 'yes',
+      effectiveFrom: '2026-01-01',
+      evidenceId: (await s.evidence('angajator.pdf')).id,
+    });
+    const employee = await s.invoke<{ partyId: string }>(s.owner, 'payroll.employees.record', {
+      lastName: 'Ionescu',
+      firstName: 'Dan',
+      cnp: code,
+      healthFund: 'RO-GL',
+    });
+    expect(employee.partyId).toBe(person.id);
+    // Agents never see an individual's identifier.
+    const agent = await reader(s, ['parties.list', 'parties.get', 'parties.create']);
+    expect(
+      (await s.list<{ id: string; taxId: string }>(agent, 'parties.list')).find(
+        (party) => party.id === person.id,
+      )?.taxId,
+    ).toBe('*************');
+    expect(
+      (await s.invoke<{ taxId: string }>(agent, 'parties.get', { partyId: person.id })).taxId,
+    ).toBe('*************');
+    expect(await holds(code, s.list(agent, 'parties.list'))).toBe(false);
   });
 });

@@ -137,6 +137,50 @@ describe('obligations calendar', () => {
     expect([closure.obligations, closure.needs]).toEqual([[], []]);
   });
 
+  test('a return filed outside the engine is filed; next year’s wait for their rules', async () => {
+    const { s, calendar } = await company({
+      'entity.form': 'srl',
+      'vat.status': 'normal_vat',
+      'vat.period': 'monthly',
+      employer: 'yes',
+      'payroll.period': 'monthly',
+      income_tax: 'micro',
+    });
+    // March's D112, filed through ANAF's portal before the books moved here: a person records
+    // it with ANAF's receipt, whatever the return.
+    const asked = await s.invoke<{ id: string }>(s.owner, 'questions.ask', {
+      kind: 'obligation.filed',
+      subject: { kind: 'obligation', id: 'D112/2026-03' },
+      params: { kind: 'D112', period: '2026-03' },
+    });
+    expect(await calendar('2026-03', '2026-03')).toContain('D112 2026-03 2026-04-27 overdue');
+    await s.invoke(s.reviewer, 'questions.answer', {
+      questionId: asked.id,
+      value: {
+        registrationNumber: 'INTERNT-400000001-2026',
+        submittedOn: '2026-04-24',
+        evidenceId: (await s.evidence('recipisa-d112-2026-03.pdf')).id,
+      },
+    });
+    expect(await calendar('2026-03', '2026-03')).toContain('D112 2026-03 2026-04-27 filed');
+    // January 2027's returns: blocked, their deadlines' rules beyond the register's horizon, so
+    // waiting for the rules of 2027; December's are not.
+    const rows = await s.list<{
+      kind: string;
+      period: string;
+      status: string;
+      waiting: number | null;
+    }>(s.owner, 'obligations.calendar', { from: '2026-12', to: '2027-01', today: '2026-11-10' });
+    const waiting = (period: string) =>
+      rows
+        .filter((row) => row.period === period)
+        .map((row) => `${row.kind} ${row.status} ${row.waiting}`);
+    expect(waiting('2027-01')).toEqual(
+      expect.arrayContaining(['D300 blocked 2027', 'D112 blocked 2027', 'D406 blocked 2027']),
+    );
+    expect(waiting('2026-12').every((row) => row.endsWith(' null'))).toBe(true);
+  });
+
   test('a PFA: D300 and D394 as for any payer; no D406 (exempt), no S1005 nor D101', async () => {
     const { calendar } = await company({
       'entity.form': 'pfa',

@@ -1,8 +1,26 @@
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, like, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireCondition } from 'xfactura-core/errors';
-import { evidence } from '../db/schema';
+import type { DataClass } from 'xfactura-core/kernel';
+import { isValidCnp } from 'xfactura-core/ro/identifiers';
+import type { Transaction } from '../db/database';
+import {
+  artifactEvents,
+  artifacts,
+  documents,
+  employmentTerms,
+  enterpriseMembers,
+  evidence,
+  garnishmentReleases,
+  garnishments,
+  payrollRuns,
+  questionAnswers,
+  questions,
+  regesRecords,
+  type Role,
+} from '../db/schema';
 import { idSchema, type Actor, type Commands } from '../kernel/commands';
+import { declarationClasses } from './declarations';
 import { sha256, type ObjectStore } from '../adapters/object-store';
 import {
   decodeText,
@@ -152,6 +170,117 @@ const textFileLimit = pdfTextLimits.inputBytes;
 
 type EvidenceRecord = typeof evidence.$inferSelect;
 
+/** A listed file: with its data classes, and `redacted` (no name) when the caller may not read
+ * them, as `evidence.read` and `evidence.get` then refuse it. */
+export const evidenceListItem = evidenceView.extend({
+  filename: z.string().nullable(),
+  /** What the file holds: `evidence`, and the classes of the records that use it (below). */
+  dataClasses: z.array(z.string()),
+  redacted: z.literal(true).optional(),
+});
+
+/** The payroll records that cite a file: an employment contract, a correction's document, a
+ * garnishment order or its release, a REGES-ONLINE receipt. */
+const payrollFiles = [
+  [employmentTerms, employmentTerms.evidenceId],
+  [payrollRuns, payrollRuns.correctionEvidenceId],
+  [garnishments, garnishments.evidenceId],
+  [garnishmentReleases, garnishmentReleases.evidenceId],
+  [regesRecords, regesRecords.evidenceId],
+] as const;
+
+/**
+ * The data classes of files beyond `evidence`, from what uses them, so that files recorded before
+ * classes existed have them too:
+ * - a return's files (its XML, ANAF's PDF, the signed copy, ANAF's answers): the return's
+ *   (`declarationClasses`): D112's `payroll` and `personal`, the CNPs of D205 and the others;
+ * - a file a document reads whose counterparty is an individual known by a CNP (a B2C invoice's
+ *   XML, BT-47; a purchase from an individual; the invoicer's export): `personal`;
+ * - a file a payroll record cites, or the answer to a payroll question: `payroll`, `personal`;
+ * - a family enterprise's members' agreement, with their CNPs: `personal`.
+ */
+export async function evidenceClasses(
+  tx: Pick<Transaction, 'select'>,
+  companyId: string,
+  ids?: readonly string[],
+): Promise<Map<string, DataClass[]>> {
+  if (ids && !ids.length) return new Map();
+  const classes = new Map<string, Set<DataClass>>();
+  const add = (id: string | null, kinds: readonly DataClass[]) => {
+    if (!id) return;
+    const set = classes.get(id) ?? new Set<DataClass>();
+    for (const kind of kinds) set.add(kind);
+    classes.set(id, set);
+  };
+  const among = (column: Parameters<typeof isNotNull>[0]): SQL =>
+    ids ? inArray(column, [...ids]) : isNotNull(column);
+  for (const row of await tx
+    .select({ id: artifacts.evidenceId, kind: artifacts.kind })
+    .from(artifacts)
+    .where(and(eq(artifacts.companyId, companyId), among(artifacts.evidenceId))))
+    add(row.id, declarationClasses(row.kind));
+  for (const row of await tx
+    .select({ id: artifactEvents.evidenceId, kind: artifacts.kind })
+    .from(artifactEvents)
+    .innerJoin(
+      artifacts,
+      and(
+        eq(artifacts.companyId, artifactEvents.companyId),
+        eq(artifacts.id, artifactEvents.artifactId),
+      ),
+    )
+    .where(and(eq(artifactEvents.companyId, companyId), among(artifactEvents.evidenceId))))
+    add(row.id, declarationClasses(row.kind));
+  for (const [table, column] of payrollFiles)
+    for (const row of await tx
+      .select({ id: column })
+      .from(table)
+      .where(and(eq(table.companyId, companyId), among(column))))
+      add(row.id, ['payroll', 'personal']);
+  for (const row of await tx
+    .select({ id: questionAnswers.evidenceId })
+    .from(questionAnswers)
+    .innerJoin(
+      questions,
+      and(
+        eq(questions.companyId, questionAnswers.companyId),
+        eq(questions.id, questionAnswers.questionId),
+      ),
+    )
+    .where(
+      and(
+        eq(questionAnswers.companyId, companyId),
+        like(questions.kind, 'payroll.%'),
+        among(questionAnswers.evidenceId),
+      ),
+    ))
+    add(row.id, ['payroll', 'personal']);
+  for (const row of await tx
+    .select({ id: enterpriseMembers.evidenceId })
+    .from(enterpriseMembers)
+    .where(and(eq(enterpriseMembers.companyId, companyId), among(enterpriseMembers.evidenceId))))
+    add(row.id, ['personal']);
+  const field = (path: string) => sql<string | null>`json_extract(${documents.body}, ${path})`;
+  for (const row of await tx
+    .select({
+      id: documents.evidenceId,
+      customer: field('$.customer.taxId'),
+      supplier: field('$.supplier.taxId'),
+      buyer: field('$.buyerTaxId'),
+      seller: field('$.seller.taxId'),
+    })
+    .from(documents)
+    .where(and(eq(documents.companyId, companyId), among(documents.evidenceId))))
+    if (
+      [row.customer, row.supplier, row.buyer, row.seller].some(
+        (code) =>
+          typeof code === 'string' && isValidCnp(code.replace(/\s+/g, '').replace(/^RO/i, '')),
+      )
+    )
+      add(row.id, ['personal']);
+  return new Map([...classes].map(([id, set]) => [id, [...set].sort()]));
+}
+
 /** Original source files: immutable, content-addressed and company-scoped. */
 export class Evidence {
   /** Text layers being derived, so that concurrent reads of one file start one reader. */
@@ -207,9 +336,11 @@ export class Evidence {
     );
   }
 
+  /** Every file with its data classes; one the caller may not read keeps its place without its
+   * name (`redacted`). */
   list(actor: Actor) {
-    return this.commands.read(actor, 'evidence.list', (tx) =>
-      tx
+    return this.commands.read(actor, 'evidence.list', async (tx, access) => {
+      const rows = await tx
         .select({
           id: evidence.id,
           hash: evidence.hash,
@@ -219,7 +350,36 @@ export class Evidence {
         })
         .from(evidence)
         .where(eq(evidence.companyId, actor.companyId))
-        .orderBy(asc(evidence.createdAt), asc(evidence.id)),
+        .orderBy(asc(evidence.createdAt), asc(evidence.id));
+      const classes = await evidenceClasses(tx, actor.companyId);
+      const disclosable = await this.commands.disclosable(tx, actor, access.role);
+      return rows.map((row): z.infer<typeof evidenceListItem> => {
+        const held: DataClass[] = ['evidence', ...(classes.get(row.id) ?? [])];
+        return disclosable(held)
+          ? { ...row, dataClasses: held }
+          : { ...row, filename: null, dataClasses: held, redacted: true };
+      });
+    });
+  }
+
+  /**
+   * Refuses a file whose data classes the caller may not read (`Commands.disclosable`): a
+   * return's XML with CNPs and diagnoses to an agent whose grant reads no payroll, or to a viewer.
+   * Whatever reads a file's text for a caller checks it first (`evidence.read`, `.get`, citations
+   * checked against it), or the outcome of a citation would tell what the file says.
+   */
+  async requireReadable(tx: Pick<Transaction, 'select'>, actor: Actor, role: Role, id: string) {
+    const held: DataClass[] = [
+      'evidence',
+      ...((await evidenceClasses(tx, actor.companyId, [id])).get(id) ?? []),
+    ];
+    const disclosable = await this.commands.disclosable(tx, actor, role);
+    requireCondition(
+      disclosable(held),
+      'EVIDENCE_CLASS',
+      'Documentul conține date pe care nu le puteți citi (date personale sau salariale).',
+      403,
+      { dataClasses: held },
     );
   }
 
@@ -227,24 +387,26 @@ export class Evidence {
    * `evidence.get` is no agent operation; they read with `readText`. */
   async read(actor: Actor, id: string) {
     idSchema.parse(id);
-    return this.commands.read(actor, 'evidence.get', async (tx) => {
+    return this.commands.read(actor, 'evidence.get', async (tx, access) => {
       const [record] = await tx
         .select()
         .from(evidence)
         .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.id, id)));
       requireCondition(record, 'NOT_FOUND', 'Documentul nu este disponibil.', 404);
+      await this.requireReadable(tx, actor, access.role, record.id);
       return { record, bytes: await this.objects.get(actor.companyId, record.hash) };
     });
   }
 
   /** `evidence.read`: what a file is and how to read it, or its lines, page by page. */
   async readText(actor: Actor, input: z.infer<typeof evidenceReadInput>): Promise<EvidenceReading> {
-    const record = await this.commands.read(actor, 'evidence.read', async (tx) => {
+    const record = await this.commands.read(actor, 'evidence.read', async (tx, access) => {
       const [row] = await tx
         .select()
         .from(evidence)
         .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.id, input.id)));
       requireCondition(row, 'NOT_FOUND', 'Documentul nu este disponibil.', 404);
+      await this.requireReadable(tx, actor, access.role, row.id);
       return row;
     });
     // An image is refused before anything is derived from a file that is none.

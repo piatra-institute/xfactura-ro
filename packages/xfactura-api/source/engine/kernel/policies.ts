@@ -8,6 +8,8 @@ import { effectAmount, effectParties } from 'xfactura-core/templates';
 import type { Transaction } from '../db/database';
 import {
   actionRequests,
+  bankMovements,
+  bankStatements,
   documents,
   memberships,
   policyRevocations,
@@ -193,13 +195,16 @@ export class PostingPolicies {
     );
   }
 
-  /** Writes a policy in the caller's transaction, approved by `approver` under `epoch`. */
+  /** Writes a policy in the caller's transaction, approved by `approver` under `epoch`, created
+   * through `agentId` (none: the database refuses an agent's, `inv:policy_person`). A policy
+   * from a graduation (`requestId`) is its decider's, whoever executes the request. */
   async insert(
     tx: Transaction,
     companyId: string,
     input: PolicyInput,
     approver: { userId: string; epoch: number },
     requestId: string | null = null,
+    agentId: string | null = null,
   ) {
     this.validate(input.treatments);
     const expiresAt = Date.parse(input.expiresAt);
@@ -222,6 +227,7 @@ export class PostingPolicies {
       preconditions: canonical(input.preconditions),
       approvedBy: approver.userId,
       approverEpoch: approver.epoch,
+      agentId,
       validFrom: input.validFrom,
       expiresAt,
       requestId,
@@ -251,10 +257,14 @@ export class PostingPolicies {
       403,
     );
     return this.commands.run(actor, key, 'policies.create', input, 'review', async (tx, access) => {
-      const created = await this.insert(tx, actor.companyId, input, {
-        userId: actor.actorId,
-        epoch: access.epoch,
-      });
+      const created = await this.insert(
+        tx,
+        actor.companyId,
+        input,
+        { userId: actor.actorId, epoch: access.epoch },
+        null,
+        actor.agentId ?? null,
+      );
       await this.sweepAfter(tx, actor.companyId, created.id);
       return created;
     });
@@ -392,24 +402,59 @@ export class PostingPolicies {
       : { low: BigInt(row.low), high: BigInt(row.high!) };
   }
 
-  /** The authority of each document the version read. */
+  /**
+   * The authority of each source the version read: each document's, and `extracted` for each
+   * bank movement of a statement an agent transcribed from a PDF or a photo with a citation no
+   * text layer verified (`bank.recordStatement`), as the database decides (`inv:binding`).
+   */
   private async sources(tx: Transaction, companyId: string, evaluated: Evaluated) {
-    const ids = evaluated.readSet
-      .filter((entry) => entry.kind === 'document')
-      .map((entry) => entry.id);
-    if (!ids.length) return [];
-    return (
-      await tx
-        .select({ authority: documents.authority })
-        .from(documents)
-        .where(and(eq(documents.companyId, companyId), inArray(documents.id, ids)))
-    ).map((row) => row.authority ?? 'unknown');
+    const read = (kind: string) =>
+      evaluated.readSet.filter((entry) => entry.kind === kind).map((entry) => entry.id);
+    const ids = read('document');
+    const movements = read('movement');
+    const authorities = ids.length
+      ? (
+          await tx
+            .select({ authority: documents.authority })
+            .from(documents)
+            .where(and(eq(documents.companyId, companyId), inArray(documents.id, ids)))
+        ).map((row) => row.authority ?? 'unknown')
+      : [];
+    const transcribed = movements.length
+      ? await tx
+          .select({ citations: bankStatements.citations })
+          .from(bankMovements)
+          .innerJoin(
+            bankStatements,
+            and(
+              eq(bankStatements.companyId, bankMovements.companyId),
+              eq(bankStatements.id, bankMovements.statementId),
+            ),
+          )
+          .where(
+            and(
+              eq(bankMovements.companyId, companyId),
+              inArray(bankMovements.id, movements),
+              eq(bankStatements.format, 'transcribed'),
+            ),
+          )
+      : [];
+    for (const { citations } of transcribed) {
+      const items = (JSON.parse(citations ?? 'null') as { items?: unknown } | null)?.items;
+      if (
+        !Array.isArray(items) ||
+        items.some((item) => (item as { status?: string } | null)?.status !== 'verified')
+      )
+        authorities.push('extracted');
+    }
+    return authorities;
   }
 
   /**
    * The conditions of a policy a version fails, by kind (empty when the policy may post it),
    * the implicit ones included: every warning acknowledged (`acknowledges`), and no extracted
-   * document unless allowed (`sourceAuthority`).
+   * document, nor a movement transcribed without verified citations, unless allowed
+   * (`sourceAuthority`).
    */
   async failing(tx: Transaction, companyId: string, policy: PolicyRow, candidate: Candidate) {
     const { evaluated } = candidate;

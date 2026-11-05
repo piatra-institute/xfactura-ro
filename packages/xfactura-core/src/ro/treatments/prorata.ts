@@ -31,6 +31,7 @@ import {
 import type { CapitalGoodsRule } from '../nonpayers/parameters';
 import { immovableAsset, tangibleAsset } from '../nonpayers/regime';
 import { invoiceKinds } from './invoices';
+import { standingTaxEntries } from './ledger';
 
 /*
  * The year-end adjustment of a taxable person with mixed operations (Codul fiscal art. 300 alin.
@@ -162,6 +163,11 @@ export function prorataYear(
     if (seen.has(id)) continue;
     seen.add(id);
     if (!entry.taxPoint.startsWith(String(year)) || entry.attributes.release) continue;
+    // A storno of another year's supply or purchase (`correctsTaxPeriod`, ledger.reverse) is that
+    // year's: it neither counts in this year's supplies nor takes this year's definitive pro-rata
+    // (as a credit note across years would not, PRORATA_CREDIT_YEAR).
+    const corrects = entry.attributes.correctsTaxPeriod;
+    if (corrects && !corrects.startsWith(String(year))) continue;
     if (entry.direction === 'output') {
       // Taxable supplies, the domestic reverse charge's supplies (TI-L, art. 331) among them.
       if (
@@ -412,14 +418,15 @@ export const prorataAdjustment: Treatment<ProrataInput> = {
         0n,
       );
       // The deduction at the definitive pro-rata of the acquisition's year, as its adjustment
-      // recorded it.
+      // that stands recorded it.
       const booked = [`${acquiredYear}-12`, `${acquiredYear}-Q4`]
-        .flatMap((item) => loaded.taxLedger.get(`VAT|${item}`)?.entries ?? [])
-        .find(
+        .flatMap((item) => standingTaxEntries(loaded.taxLedger.get(`VAT|${item}`)?.entries ?? []))
+        .filter(
           (entry) =>
             entry.code === adjustmentCodes.prorata &&
             entry.attributes.year === String(acquiredYear),
-        );
+        )
+        .at(-1);
       if (!booked?.attributes.definitive) {
         issues.push(
           block(

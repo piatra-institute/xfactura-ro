@@ -497,12 +497,12 @@ export class Treasury {
 
   /** The evidence rows and the bank account a file import reads, before its transaction. */
   private prepare(actor: Actor, operation: string, evidenceIds: string[], accountId: string) {
-    return this.commands.read(actor, operation, async (tx) => {
+    return this.commands.read(actor, operation, async (tx, access) => {
       const rows = await tx
         .select()
         .from(evidence)
         .where(and(eq(evidence.companyId, actor.companyId), inArray(evidence.id, evidenceIds)));
-      for (const id of evidenceIds)
+      for (const id of evidenceIds) {
         requireCondition(
           rows.some((row) => row.id === id),
           'EVIDENCE',
@@ -510,6 +510,9 @@ export class Treasury {
           404,
           { evidenceId: id },
         );
+        // Citations are checked against the file: only for one who may read it.
+        await this.evidence.requireReadable(tx, actor, access.role, id);
+      }
       const [account] = await tx
         .select()
         .from(treasuryAccounts)

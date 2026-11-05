@@ -97,7 +97,7 @@ export const questions: readonly AgentQuestion[] = [
 /** A worklist item kind the module raises, and the rule or check it stands for. */
 export interface AgentDetector {
   /** The worklist kind (`work.list`). */
-  kind: 'determination.missing' | 'threshold.approaching';
+  kind: 'determination.missing' | 'threshold.approaching' | 'closure.need';
   summary: string;
   /** The parameters or clauses whose rule the item enforces. */
   rules: readonly string[];
@@ -125,6 +125,17 @@ export const detectors: readonly AgentDetector[] = [
     summary: `A threshold reached at ${WATCH_PERCENT}% (warning) or crossed (blocking) during the year: the micro-enterprise limit, the small-enterprise VAT threshold, the VAT on collection ceiling.`,
     rules: ['ro.micro.revenue_limit_eur', 'ro.vat.exemption.threshold', 'ro.vat.cash.ceiling'],
     next: [{ operation: 'determinations.propose', by: 'agent' }],
+  },
+  {
+    kind: 'closure.need',
+    summary:
+      'A fact or determination the obligation closure cannot read (NEEDS_EVIDENCE) over the worklist’s months, with the returns it leaves blocked, or none for the scope facts (activity.goods, regime.excluded): a warning, information for a year not begun or waiting for its rules.',
+    rules: [],
+    next: [
+      { operation: 'questions.ask', by: 'agent' },
+      { operation: 'determinations.propose', by: 'agent' },
+      { operation: 'questions.answer', by: 'human' },
+    ],
   },
 ];
 

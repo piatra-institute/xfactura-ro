@@ -31,7 +31,7 @@ export const schemeSources: readonly LegalSource[] = [
       {
         url: 'https://xfactura.invalid/owner-download/OMFP_1155_2016.pdf',
         sha256: '64414a654583ae168d52cf94c224b67213e9d09bbfaafc1bb76d937aabbb6d27',
-        retrievedOn: '2026-11-06',
+        retrievedOn: '2026-11-05',
         mediaType: 'application/pdf',
       },
     ],

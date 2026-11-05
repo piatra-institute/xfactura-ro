@@ -425,9 +425,10 @@ export function schemeSections(
   roundToLeu: (bani: bigint) => bigint,
   problems: DeclarationProblem[],
 ) {
+  // Each document's value in its group: a storno in the period cancels its invoice's.
   const groups = new Map<
     string,
-    { type: 'LS' | 'AS'; partner: D394Partner; documents: Set<string>; bani: bigint }
+    { type: 'LS' | 'AS'; partner: D394Partner; documents: Map<string, bigint>; bani: bigint }
   >();
   const travel = { sales: 0n, costs: 0n, base: 0n, vat: 0n, found: false };
   const goods = { sales: 0n, costs: 0n, base: 0n, vat: 0n, found: false };
@@ -471,22 +472,33 @@ export function schemeSections(
     const group = groups.get(key) ?? {
       type,
       partner: found.partner,
-      documents: new Set<string>(),
+      documents: new Map<string, bigint>(),
       bani: 0n,
     };
-    group.documents.add(entry.documentId ?? `${entry.entryId}`);
+    const document = entry.documentId ?? `${entry.entryId}`;
+    group.documents.set(document, (group.documents.get(document) ?? 0n) + bani);
     group.bani += bani;
     groups.set(key, group);
   }
-  const operations: D394Operation[] = [...groups.values()].map((group) => ({
-    type: group.type,
-    rate: '0',
-    partner: group.partner,
-    invoices: group.documents.size,
-    base: Number(roundToLeu(group.bani)),
-    vat: 0,
-  }));
+  const operations: D394Operation[] = [...groups.values()].flatMap((group) => {
+    const invoices = [...group.documents.values()].filter((bani) => bani !== 0n).length;
+    return invoices || group.bani !== 0n
+      ? [
+          {
+            type: group.type,
+            rate: '0' as const,
+            partner: group.partner,
+            invoices,
+            base: Number(roundToLeu(group.bani)),
+            vat: 0,
+          },
+        ]
+      : [];
+  });
   const whole = (bani: bigint) => Number(roundToLeu(bani));
+  // A period whose sales a storno cancelled has no margins to report.
+  for (const held of [travel, goods])
+    held.found &&= [held.sales, held.costs, held.base, held.vat].some((bani) => bani !== 0n);
   return {
     operations,
     margins: {

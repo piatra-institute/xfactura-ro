@@ -27,6 +27,7 @@ import { invoiceDocumentSchema, type InvoiceDocument } from '../../ubl/invoice-d
 import { selectRate } from '../fx';
 import { obligationDue } from '../obligations';
 import { invoiceKinds, taxPointOf } from '../treatments/invoices';
+import { creditPartner } from '../treatments/settlement';
 import type { DistanceThreshold } from './parameters';
 import { memberStateOf, resolveRate } from './rates';
 
@@ -231,7 +232,11 @@ export const euConsumerRecognition: Treatment<EuConsumerInput> = {
     documents: [input.documentId, ...(input.originalDocumentId ? [input.originalDocumentId] : [])],
     profile: true,
     ...(input.authorityId ? { parties: [input.authorityId] } : {}),
-    ...(input.originalDocumentId ? { openItems: [{ documentId: input.originalDocumentId }] } : {}),
+    // A credit note's original receivable, with its history: in a currency, it is reduced at
+    // the rate it is carried at.
+    ...(input.originalDocumentId
+      ? { openItems: [{ documentId: input.originalDocumentId, history: true }] }
+      : {}),
   }),
   followUp(input, loaded) {
     const parsed = invoiceDocumentSchema.safeParse(loaded.documents.get(input.documentId)?.body);
@@ -242,7 +247,13 @@ export const euConsumerRecognition: Treatment<EuConsumerInput> = {
         : taxPointOf(parsed.data),
     );
     const until = [parsed.data.issueDate, point].sort().at(-1)!;
+    const carried = [...loaded.openItems.values()]
+      .filter(
+        (item) => item.documentId === input.originalDocumentId && item.currency !== LEDGER_CURRENCY,
+      )
+      .flatMap((item) => item.history ?? []);
     return {
+      ...(carried.length ? { entries: [...new Set(carried)] } : {}),
       // The year's sales of the same kind before this one: the threshold is cumulated over them.
       taxPeriods: periodsTo(loaded, point).map((period) => ({ tax: 'VAT', period })),
       ...(parsed.data.currency === LEDGER_CURRENCY
@@ -647,14 +658,42 @@ export const euConsumerRecognition: Treatment<EuConsumerInput> = {
         mayReverse: false,
         documentId: record.id,
       });
-    lines.push({
-      account: '4111',
-      side: 'D',
-      bani: receivable,
-      openItem: credit ? originalItem!.id : 'counterparty',
-      partyId,
-      ...currencyOf(grossMinor, accounting),
-    });
+    // A credit note reduces its original's receivable by what it still holds, at its carrying
+    // amount (in euro, at the rate it is carried at: its invoice's or the last month-end
+    // revaluation's), never past zero; beyond it (the sale collected already), the consumer is
+    // owed a refund (462), in the invoice's currency.
+    const partner = credit
+      ? creditPartner({
+          item: originalItem!,
+          loaded,
+          purchase: false,
+          bani: -receivable,
+          minor: -grossMinor,
+          ...(accounting ? { rate: accounting } : {}),
+          partyId: partyId!,
+        })
+      : null;
+    if (partner) {
+      lines.push(...partner.lines);
+      openItems.push(...partner.openItems);
+      if (partner.refund)
+        issues.push(
+          ack(
+            'CREDIT_REFUND',
+            `Factura inițială mai are deschiși ${formatMoney(-grossMinor - partner.refund.minor, body.currency)} ${body.currency}: restul notei de credit, ${formatMoney(partner.refund.minor, body.currency)} ${body.currency}, se datorează consumatorului (462 „Creditori diverși”), de restituit (OMFP nr. 1.802/2014, funcțiunea contului 462). Confirmați.`,
+          ),
+        );
+    } else
+      lines.push({
+        account: '4111',
+        side: 'D',
+        bani: receivable,
+        openItem: 'counterparty',
+        partyId,
+        ...currencyOf(grossMinor, accounting),
+      });
+    // The VAT lines follow the partner's and the revenue's.
+    const first = lines.length + 1;
     const quarter = quarterOf(supplied);
     const common = {
       number: body.number,
@@ -682,7 +721,7 @@ export const euConsumerRecognition: Treatment<EuConsumerInput> = {
           taxBani: tax,
           deductibleBani: 0n,
           ledgerBani: tax,
-          line: 1 + index + 1,
+          line: first + index,
           taxPoint,
           exigibility: taxPoint,
           taxPeriod,
@@ -792,7 +831,17 @@ export const euConsumerRecognition: Treatment<EuConsumerInput> = {
       });
     }
     // Revenue: the receivable less the VAT, so the receivable stays exact in its currency.
-    lines.splice(1, 0, { account: input.account, side: 'C', bani: receivable - taxLei });
+    lines.splice(first - 1, 0, { account: input.account, side: 'C', bani: receivable - taxLei });
+    // A credit note's receivable released at its carrying amount, not at the note's rate: the
+    // difference is a realized exchange difference (OMFP 1802/2014 pct. 322), a loss (6651) when
+    // more is released than the note reverses, a gain (7651) otherwise.
+    if (partner?.excess)
+      lines.push({
+        account: partner.excess > 0n ? '6651' : '7651',
+        side: partner.excess > 0n ? 'D' : 'C',
+        bani: partner.excess > 0n ? partner.excess : -partner.excess,
+        memo: 'Diferență de curs realizată',
+      });
     const effect: Effect = {
       schema: 'effect@1',
       date: date(body.issueDate),

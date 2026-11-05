@@ -13,6 +13,7 @@ import {
 } from 'xfactura-core/ro/declarations/d300';
 import { counties } from 'xfactura-core/ro/geo';
 import { regimeCodes } from 'xfactura-core/ro/treatments/vat-registration';
+import { isReversalTaxEntry, standingTaxEntries } from 'xfactura-core/ro/treatments/ledger';
 import { adjustmentCodes, exemptCodes, provisionalProrata } from 'xfactura-core/ro/exempt';
 import { vatPeriodEnd } from 'xfactura-core/ro/treatments/vat-settlement';
 import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
@@ -468,9 +469,14 @@ function deferredRows(
  * the first return after registration: the entries of those days are the regularization's, not
  * their period's. Read as one input: a late registration posted or reversed changes it.
  */
-async function lateCoverage(tx: Transaction, companyId: string) {
+export async function lateCoverage(tx: Transaction, companyId: string) {
   const rows = await tx
-    .select({ attributes: taxEntries.attributes, base: taxEntries.baseBani, seq: entries.seq })
+    .select({
+      attributes: taxEntries.attributes,
+      base: taxEntries.baseBani,
+      key: taxEntries.key,
+      seq: entries.seq,
+    })
     .from(taxEntries)
     .innerJoin(
       entries,
@@ -491,7 +497,8 @@ async function lateCoverage(tx: Transaction, companyId: string) {
     const attributes = JSON.parse(row.attributes) as { from?: string; until?: string };
     if (!attributes.from || !attributes.until) continue;
     const key = `${attributes.from}|${attributes.until}`;
-    net.set(key, (net.get(key) ?? 0n) + (row.base === 0n ? 1n : row.base));
+    const one = isReversalTaxEntry(row) ? -1n : 1n;
+    net.set(key, (net.get(key) ?? 0n) + (row.base === 0n ? one : row.base));
   }
   return {
     ranges: [...net]
@@ -568,9 +575,10 @@ function proRataOf(
   period: string,
   given: string,
 ): { value: string; problem?: DeclarationProblem } {
-  const adjustment = (loaded.taxLedger.get(`VAT|${period}`)?.entries ?? []).find(
-    (entry) => entry.code === adjustmentCodes.prorata && entry.attributes.definitive,
-  );
+  // The period's year-end adjustment that stands: a storno withdraws its definitive pro-rata.
+  const adjustment = standingTaxEntries(loaded.taxLedger.get(`VAT|${period}`)?.entries ?? [])
+    .filter((entry) => entry.code === adjustmentCodes.prorata && entry.attributes.definitive)
+    .at(-1);
   const provisional = provisionalProrata(loaded.profile, vatPeriodEnd(period));
   const derived = adjustment
     ? adjustment.attributes.definitive!
@@ -826,6 +834,8 @@ export function d300Declaration(
         summary: {
           period,
           type: model.type,
+          // The header's pro-rata: the provisional, or the definitive of the year-end adjustment.
+          proRata: model.proRata,
           rows: model.rows,
           // What the next return carries: the payable or negative balance, and the refund choice.
           balances: Object.fromEntries(

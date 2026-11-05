@@ -12,6 +12,7 @@ import {
 import { divRound, formatMoney, parseMoney, parseScaled } from '../../money';
 import { RuleGapError } from '../../rules';
 import { addDays, isLocalDate, type LocalDate } from '../../time';
+import { taxDue } from './due';
 
 const block = (code: string, message: string, path?: string): Issue => ({
   code,
@@ -405,6 +406,8 @@ export const microTax: Treatment<MicroTaxInput> = {
           currency: 'RON',
           normalSide: 'C',
           mayReverse: false,
+          // Due with the quarter's D100 (art. 56 alin. (1)).
+          ...taxDue('D100.micro', range.from.slice(0, 7), range.to.slice(0, 7), rules),
         },
       ],
       taxEntries: [],

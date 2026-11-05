@@ -34,6 +34,7 @@ import {
 } from '../db/schema';
 import type { Transaction } from '../db/database';
 import type { Actor, Commands } from './commands';
+import { payClasses, personnelAccount, withoutPersons } from './personal';
 import { lineSpec, loadState } from './state';
 
 const ron = (bani: bigint) => formatMoney(bani, 'RON');
@@ -951,9 +952,12 @@ export class Reports {
     });
   }
 
-  /** Registrul-jurnal: entries in recording order, with their lines. */
+  /** Registrul-jurnal: entries in recording order, with their lines. An agent whose reads do not
+   * cover `payroll` and `personal` sees the lines on personnel accounts summed per entry, account
+   * and side, without the person (`withoutPersons`): a payroll entry's are each employee's pay. */
   journal(actor: Actor, input: z.infer<typeof journalInput>) {
     return this.commands.read(actor, 'ledger.journal', async (tx) => {
+      const pay = (await this.commands.readable(tx, actor))(payClasses);
       const headers = await tx
         .select()
         .from(entries)
@@ -995,24 +999,26 @@ export class Reports {
           description: entry.description,
           proposalId: entry.proposalId,
           binding: entry.approvalId ? ('approval' as const) : ('policy' as const),
-          lines: rows
-            .filter((row) => row.entryId === entry.id)
-            .map((row) => {
-              const { bani, currency, ...line } = lineSpec(row);
-              return {
-                ...line,
-                amount: ron(bani),
-                ...(currency
-                  ? {
-                      currency: {
-                        code: currency.code,
-                        amount: formatMoney(currency.minor, currency.code),
-                        rate: currency.rate,
-                      },
-                    }
-                  : {}),
-              };
-            }),
+          lines: ((shown) => (pay ? shown : withoutPersons(shown)))(
+            rows
+              .filter((row) => row.entryId === entry.id)
+              .map((row) => {
+                const { bani, currency, ...line } = lineSpec(row);
+                return {
+                  ...line,
+                  amount: ron(bani),
+                  ...(currency
+                    ? {
+                        currency: {
+                          code: currency.code,
+                          amount: formatMoney(currency.minor, currency.code),
+                          rate: currency.rate,
+                        },
+                      }
+                    : {}),
+                };
+              }),
+          ),
         })),
         next: headers.length > input.limit ? page.at(-1)!.seq : null,
       };
@@ -1099,10 +1105,12 @@ export class Reports {
    * Registrul-inventar (OMFP 2634/2015 pct. 46): at a date, every asset, liability and equity
    * account (classes 1–5) with a balance, and what makes it up: open items by partner, fixed
    * assets by inventory number. The inventoried value is the books' until inventory differences
-   * are recorded.
+   * are recorded. An agent whose reads do not cover `payroll` and `personal` sees a personnel
+   * account's balance without the people it is owed to.
    */
   inventoryRegister(actor: Actor, input: z.infer<typeof inventoryInput>) {
     return this.commands.read(actor, 'ledger.inventoryRegister', async (tx) => {
+      const pay = (await this.commands.readable(tx, actor))(payClasses);
       const balances = await tx
         .select({
           account: lines.account,
@@ -1164,7 +1172,12 @@ export class Reports {
           balance: sides(row.bani),
           items: [
             ...items
-              .filter((item) => item.account === synthetic(row.account) && item.bani !== 0n)
+              .filter(
+                (item) =>
+                  item.account === synthetic(row.account) &&
+                  item.bani !== 0n &&
+                  (pay || !personnelAccount(item.account)),
+              )
               .map((item) => ({ description: item.party, balance: sides(item.bani) })),
             ...cards
               .filter((card) => card.account === row.account)

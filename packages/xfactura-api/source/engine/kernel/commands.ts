@@ -238,6 +238,25 @@ export class Commands {
     return (classes) => classes.every((kind) => covered.has(kind));
   }
 
+  /**
+   * Whether this principal may read data of every class given where the engine holds it in clear:
+   * a file that carries CNPs or diagnoses opened from their seals, a CNP a document, a citation or
+   * a validator's message holds. As `readable` for an agent, and, for `personal` and `payroll`,
+   * only under a role that may record such data (`write`: owners and reviewers, and their
+   * agents): a viewer, who records no CNP, never reads one.
+   */
+  async disclosable(
+    tx: Pick<Transaction, 'select'>,
+    actor: Actor,
+    role: Role,
+  ): Promise<(classes: readonly DataClass[]) => boolean> {
+    const readable = await this.readable(tx, actor);
+    return (classes) =>
+      readable(classes) &&
+      (roleAllows(role, 'write') ||
+        !classes.some((kind) => kind === 'personal' || kind === 'payroll'));
+  }
+
   /** The data classes an operation declares; undefined for one the engine does not know. */
   dataClassesOf(operation: string) {
     return this.policy(operation)?.dataClasses;

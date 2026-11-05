@@ -8,6 +8,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as schema from './schema';
+import { rekeyIndividuals } from './identity';
 import { ensureInvariants } from './invariants';
 
 export class Database {
@@ -39,8 +40,12 @@ export class Database {
     }
   }
 
-  /** Applies generated migrations, then installs the invariants (ADR 0010). */
-  async migrate() {
+  /**
+   * Applies generated migrations and their data steps, then installs the invariants (ADR 0010).
+   * `secret` is the installation's (`ACCOUNTING_AUTH_SECRET`): a data step that keys a record
+   * with it needs it (`rekeyIndividuals`, migration 0031), and refuses without it.
+   */
+  async migrate(options: { secret?: string } = {}) {
     await this.initialize();
     // The previous engine's books used another schema and cannot be upgraded (ADR 0012).
     const previous = await this.client.execute(
@@ -53,6 +58,7 @@ export class Database {
     await migrateDrizzle(this.orm, {
       migrationsFolder: fileURLToPath(new URL('./migrations', import.meta.url)),
     });
+    await rekeyIndividuals(this.client, options.secret);
     await ensureInvariants(this.client);
     const violations = await this.client.execute('PRAGMA foreign_key_check');
     if (violations.rows.length) throw new Error('Foreign-key violations after migration.');

@@ -61,7 +61,7 @@ export const documentTypes: readonly AgentDocumentType[] = [
     id: 'retail.policy',
     title: 'Politicile contabile: mărfurile la cost sau la preț cu amănuntul',
     summary:
-      'The administrator’s written policy (OMFP 1802/2014 pct. 286 alin. (8)): `policy.stock.retail` (cost or retail) and `policy.stock.inventory` (permanent for the retail method), recorded as `profile.fact`, the document as evidence.',
+      'The administrator’s written policy (OMFP 1802/2014 pct. 286 alin. (8), 287 alin. (3)): `policy.stock.retail` (cost or retail, for every warehouse), `policy.stock.retail.<warehouseId>` (one warehouse’s own method, a shop at retail price beside a depot at cost) and `policy.stock.inventory` (permanent for the retail method), recorded as `profile.fact`, the document as evidence.',
     evidenceFor: ['policy.stock.retail', 'policy.stock.inventory'],
   },
 ];
@@ -79,7 +79,7 @@ export const questions: readonly AgentQuestion[] = [
     answeredBy: 'owner',
     evidence: ['retail.policy'],
     summary:
-      'The goods kept at cost or at retail price (`policy.stock.retail`) and the inventory method (`policy.stock.inventory`), which decide how a Z report discharges the goods it sold.',
+      'The goods kept at cost or at retail price (`policy.stock.retail`, or a warehouse’s own `policy.stock.retail.<warehouseId>`) and the inventory method (`policy.stock.inventory`), which decide how a Z report discharges the goods it sold.',
   },
 ];
 

@@ -118,7 +118,10 @@ export function cashVatChecks(
         }
         // The turnover as the returns of the year declare it: the base of the supplies whose
         // VAT became chargeable, taxable or with the place of supply abroad (norme pct. 26
-        // alin. (4)); a reverse charge's collected side is an acquisition.
+        // alin. (4)). The VAT the company self-assesses as a customer is collected on an
+        // acquisition, not a supply: services from abroad (RC-…), intra-community acquisitions
+        // of goods (AIC-…), imports whose VAT is not paid at customs (IMP-DEF-…) and the
+        // domestic reverse charge's acquisitions (TI-A-…).
         const [row] = await tx
           .select({ base: sql<bigint>`coalesce(sum(${taxEntries.baseBani}), 0)`.mapWith(BigInt) })
           .from(taxEntries)
@@ -131,6 +134,9 @@ export function cashVatChecks(
               gte(taxEntries.exigibility, `${month.slice(0, 4)}-01-01`),
               lte(taxEntries.exigibility, end),
               not(like(taxEntries.code, 'RC-%')),
+              not(like(taxEntries.code, 'AIC-%')),
+              not(like(taxEntries.code, 'IMP-DEF-%')),
+              not(like(taxEntries.code, 'TI-A-%')),
             ),
           );
         const turnover = row?.base ?? 0n;

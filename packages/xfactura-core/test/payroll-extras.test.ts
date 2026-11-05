@@ -195,6 +195,27 @@ describe('the pay with benefits, and the mandate', () => {
     expect(main.result!.deduction.basic).toBe(86_500n);
     expect(main.result!.relief).toBe(0n);
   });
+
+  test('a contribution below one leu is one leu, as D112 declares it; the tax is rounded alone', () => {
+    // 20 lei: CAS 5, CASS 2, CAM 2.25% = 0.45 → 1 leu (the structure's rounding); the tax 10% of
+    // 20 − 5 − 2 = 13 lei is 1.30 → 1 leu.
+    const small = pay({
+      mandate: true,
+      baseSalary: 2_000n,
+      mainJob: false,
+      items: [{ kind: 'salary', amount: 2_000n, label: 'Remunerație' }],
+    });
+    expect(small.result).toMatchObject({ cas: 500n, cass: 200n, cam: 100n, tax: 100n });
+    // 4 lei: CAS 1 leu, CASS 0.40 → 1 and CAM 0.09 → 1 leu each; the tax, 10% of 4 − 1 − 1 = 2
+    // lei, is 0.20 lei: nothing.
+    const tiny = pay({
+      mandate: true,
+      baseSalary: 400n,
+      mainJob: false,
+      items: [{ kind: 'salary', amount: 400n, label: 'Remunerație' }],
+    });
+    expect(tiny.result).toMatchObject({ cas: 100n, cass: 100n, cam: 100n, tax: 0n });
+  });
 });
 
 const certificate = (code: string, from: string, to: string): SickCertificate => ({

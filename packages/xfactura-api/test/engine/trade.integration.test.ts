@@ -378,6 +378,23 @@ describe('EU goods: an intra-community acquisition into stock and a supply out o
       expect.objectContaining({ type: 'L', country: 'DE', code: '123456788', base: 400000 }),
     ]);
     validated(recapitulative);
+    // D394 lists the operations on the national territory: the acquisition (D390's) and the
+    // exempt supply are not in it.
+    const domestic = await c.prepare('D394', '2026-10', {
+      caen: '4637',
+      phone: '0236123456',
+      representative: { name: 'Popescu Ana', role: 'Administrator', address: 'Galați' },
+      preparer: {
+        kind: 'company',
+        cui: '14399840',
+        name: 'Contabil SRL',
+        capacity: 'Împuternicit',
+      },
+      consultation: true,
+      affiliates: false,
+    });
+    expect(summary(domestic).operations).toEqual([]);
+    validated(domestic);
     await s.invoke(s.owner, 'parties.recordDetails', {
       partyId: sold.partyId,
       details: {
@@ -439,6 +456,55 @@ describe('EU goods: an intra-community acquisition into stock and a supply out o
       { from: '2026-10', to: '2026-10' },
     );
     expect(after.items.find((item) => item.documentId === sold.id)?.status).toBe('declared');
+  });
+
+  test('an acquisition booked after a month of daily rates reads its issue date’s rate', async () => {
+    const c = await company(fakeVies(() => true));
+    const { s } = c;
+    const coffee = await c.item('CAF-3', 'Cafea verde', 'KGM', '09011100');
+    // The rates of every day from 10 October to 15 November, imported before the booking: a
+    // read keeping only the latest 20 before the tax point's limit (15 November) would miss the
+    // issue date's (7 October).
+    const days: string[] = [];
+    for (let day = Date.parse('2026-10-10'); day <= Date.parse('2026-11-15'); day += 86_400_000)
+      days.push(new Date(day).toISOString().slice(0, 10));
+    const daily = bnr.replace(
+      /<Cube date="2026-10-01">/,
+      `${days.map((date) => `<Cube date="${date}"><Rate currency="EUR">5.1000</Rate></Cube>`).join('')}<Cube date="2026-10-01">`,
+    );
+    await s.invoke(s.owner, 'fx.importBnr', { evidenceId: await c.file('daily.xml', daily) });
+    const bought = await c.importXml({
+      number: 'DE-78',
+      date: '2026-10-07',
+      deliveryDate: '2026-10-05',
+      direction: 'purchase',
+      currency: 'EUR',
+      category: 'K',
+      country: 'DE',
+      counterparty: 'DE123456788',
+      net: '1000.00',
+      reason: 'VATEX-EU-IC',
+      lines: [{ rate: '0', net: '1000.00', name: 'Cafea verde' }],
+    });
+    const acquisition = await s.propose('goods.euAcquisition', {
+      documentId: bought.id,
+      account: '371',
+      arrangement: 'standard',
+      rate: 'standard',
+      deduction: 'full',
+      stock: {
+        warehouseId: c.warehouse.id,
+        lines: [{ line: '1', itemId: coffee.id, quantity: '100' }],
+      },
+    });
+    expect(codes(acquisition)).not.toContain('FX_RATE');
+    // 1.000,00 EUR at the 7 October rate, 5,0800: 5.080,00 lei, VAT 1.066,80.
+    expect(lines(acquisition)).toEqual([
+      'D 371 5080.00',
+      'C 401 5080.00',
+      'C 4427 1066.80',
+      'D 4426 1066.80',
+    ]);
   });
 
   test('a supply without its transport yet: pending, then the proof answered', async () => {

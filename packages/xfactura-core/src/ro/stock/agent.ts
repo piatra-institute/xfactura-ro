@@ -13,7 +13,7 @@ export const documentTypes: readonly AgentDocumentType[] = [
     title:
       'Politicile contabile privind stocurile (metoda de evaluare, inventarul permanent sau intermitent)',
     summary:
-      "The administrator's written accounting policies: the output method (FIFO, LIFO, the weighted average after each receipt or monthly; OMFP 1802/2014 pct. 96), perpetual or periodic inventory (pct. 289–291), whether stock may go negative, goods at cost or at the retail price. Recorded as `profile.fact` on the `policy.stock.*` axes, the document as evidence.",
+      "The administrator's written accounting policies: the output method (FIFO, LIFO, the weighted average after each receipt or monthly; OMFP 1802/2014 pct. 96), perpetual or periodic inventory (pct. 289–291), whether stock may go negative, goods at cost or at the retail price (for every warehouse, or one warehouse's own, `policy.stock.retail.<warehouseId>`). Recorded as `profile.fact` on the `policy.stock.*` axes, the document as evidence.",
     evidenceFor: [
       'policy.stock.valuation',
       'policy.stock.inventory',

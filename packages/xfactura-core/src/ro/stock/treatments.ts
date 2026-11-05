@@ -10,6 +10,7 @@ import {
   type LineSpec,
   type Loaded,
   type OpenItemSpec,
+  type StockFlows,
   type StockItemRecord,
   type Treatment,
   type TurnoverQuery,
@@ -57,10 +58,16 @@ export const stockAccountsAt = (rules: RuleContext, date: LocalDate) =>
   rules.param<StockAccounts>('ro.stock.accounts', 'accounting_transaction_date', date);
 
 /** The catalogue's item, or the issue saying it is not one the treatments cover. */
-export function itemOf(loaded: Loaded, id: string, path: string): StockItemRecord | Issue {
+export function itemOf(
+  loaded: Loaded,
+  id: string,
+  path: string,
+  /** The production accounts the treatment also takes (G4: products sold, moved, taken over). */
+  accept: readonly string[] = [],
+): StockItemRecord | Issue {
   const item = loaded.stockItems.get(id);
   if (!item) return block('STOCK_ITEM_UNKNOWN', 'Articolul de stoc nu există.', path);
-  const unsupported = supportedItemAccount(item.account);
+  const unsupported = supportedItemAccount(item.account, accept);
   if (unsupported) return block('STOCK_KIND_UNSUPPORTED', unsupported, path);
   return item;
 }
@@ -71,12 +78,20 @@ export function warehouseOf(loaded: Loaded, id: string, path: string): Warehouse
   );
 }
 
+/** The products (G4) a sale, a transfer and a takeover take besides goods and materials. */
+export const productAccounts = ['341', '345', '346'] as const;
+
 const isIssue = (value: unknown): value is Issue =>
   typeof value === 'object' && value !== null && 'severity' in value && 'code' in value;
 
-/** The policy, or its issues pushed into `issues`. */
-function policyOf(loaded: Loaded, date: LocalDate, issues: Issue[]): StockPolicy | null {
-  const policy = stockPolicyAt(loaded, date);
+/** The policy for the warehouses a treatment moves goods in, or its issues pushed into `issues`. */
+function policyOf(
+  loaded: Loaded,
+  date: LocalDate,
+  issues: Issue[],
+  warehouses: readonly string[] = [],
+): StockPolicy | null {
+  const policy = stockPolicyAt(loaded, date, warehouses);
   if (Array.isArray(policy)) {
     issues.push(...policy);
     return null;
@@ -84,11 +99,13 @@ function policyOf(loaded: Loaded, date: LocalDate, issues: Issue[]): StockPolicy
   return policy;
 }
 
-/** The read of the positions an input's lines name. */
-const positionsOf = (warehouses: string[], items: string[]) => ({
+/** The read of the positions an input's lines name; `dated` for an exit, which reads what they
+ * held on its date. */
+const positionsOf = (warehouses: string[], items: string[], dated = false) => ({
   positions: warehouses.flatMap((warehouse) => items.map((item) => ({ item, warehouse }))),
   items,
   warehouses,
+  ...(dated ? { dated } : {}),
 });
 
 /** Lines on one account per expense account, debit-positive amounts summed. */
@@ -158,7 +175,7 @@ export const stockReceipt: Treatment<ReceiveInput> = {
       issues.push(block('PARTY', 'Furnizorul nu este disponibil.', 'supplierId'));
     const warehouse = warehouseOf(loaded, input.warehouseId, 'warehouseId');
     if (isIssue(warehouse)) issues.push(warehouse);
-    const policy = policyOf(loaded, input.date, issues);
+    const policy = policyOf(loaded, input.date, issues, [input.warehouseId]);
     const accounts = stockAccountsAt(rules, input.date);
     if (issues.length || !policy) return { effect: null, issues };
     const lines: LineSpec[] = [];
@@ -191,6 +208,8 @@ export const stockReceipt: Treatment<ReceiveInput> = {
           value,
           lines.length - 1,
           policy,
+          // A pool below zero this receipt covers: its exits' estimate corrected (pct. 96).
+          expenseFor(accounts, item.account) ?? undefined,
         ),
       );
       total += value;
@@ -286,7 +305,11 @@ export const stockConsumption: Treatment<ConsumeInput> = {
   plan: (input) => ({
     evidence: [input.evidenceId],
     profile: true,
-    stock: positionsOf([input.warehouseId], [...new Set(input.lines.map((line) => line.itemId))]),
+    stock: positionsOf(
+      [input.warehouseId],
+      [...new Set(input.lines.map((line) => line.itemId))],
+      true,
+    ),
   }),
   evaluate(input, loaded, rules) {
     const issues: Issue[] = [];
@@ -294,7 +317,7 @@ export const stockConsumption: Treatment<ConsumeInput> = {
       issues.push(block('EVIDENCE', 'Bonul de consum nu este disponibil.', 'evidenceId'));
     const warehouse = warehouseOf(loaded, input.warehouseId, 'warehouseId');
     if (isIssue(warehouse)) issues.push(warehouse);
-    const policy = policyOf(loaded, input.date, issues);
+    const policy = policyOf(loaded, input.date, issues, [input.warehouseId]);
     const accounts = stockAccountsAt(rules, input.date);
     if (issues.length || !policy) return { effect: null, issues };
     const lines: LineSpec[] = [];
@@ -421,6 +444,7 @@ export const stockTransfer: Treatment<TransferInput> = {
     stock: positionsOf(
       [input.from, input.to],
       [...new Set(input.lines.map((line) => line.itemId))],
+      true,
     ),
   }),
   evaluate(input, loaded) {
@@ -434,12 +458,12 @@ export const stockTransfer: Treatment<TransferInput> = {
       const warehouse = warehouseOf(loaded, id, field);
       if (isIssue(warehouse)) issues.push(warehouse);
     }
-    const policy = policyOf(loaded, input.date, issues);
+    const policy = policyOf(loaded, input.date, issues, [input.from, input.to]);
     if (issues.length || !policy) return { effect: null, issues };
     const book = new StockBook(loaded, [], 'transfer');
     let total = 0n;
     input.lines.forEach((row, index) => {
-      const item = itemOf(loaded, row.itemId, `lines.${index}.itemId`);
+      const item = itemOf(loaded, row.itemId, `lines.${index}.itemId`, productAccounts);
       if (isIssue(item)) return void issues.push(item);
       const moved = book.transfer(
         {
@@ -533,7 +557,7 @@ export const stockOpening: Treatment<OpeningInput> = {
       issues.push(block('EVIDENCE', 'Lista de inventariere nu este disponibilă.', 'evidenceId'));
     const warehouse = warehouseOf(loaded, input.warehouseId, 'warehouseId');
     if (isIssue(warehouse)) issues.push(warehouse);
-    const policy = policyOf(loaded, input.date, issues);
+    const policy = policyOf(loaded, input.date, issues, [input.warehouseId]);
     if (issues.length || !policy) return { effect: null, issues };
     const query: TurnoverQuery = { prefixes: ['3'], from: always, to: input.date };
     const ledger = new Map(
@@ -551,7 +575,7 @@ export const stockOpening: Treatment<OpeningInput> = {
     const taken = new Map<string, bigint>();
     input.lines.forEach((row, index) => {
       const path = `lines.${index}`;
-      const item = itemOf(loaded, row.itemId, `${path}.itemId`);
+      const item = itemOf(loaded, row.itemId, `${path}.itemId`, productAccounts);
       if (isIssue(item)) return void issues.push(item);
       const value = parseMoney(row.value, 'RON');
       if (value === 0n)
@@ -632,6 +656,25 @@ const monthEnd = (month: string) =>
     .slice(0, 10) as LocalDate;
 
 /**
+ * A periodic pool's month (OMFP nr. 1.802/2014 pct. 96 alin. (2): the average of the stock at the
+ * period's start and of what entered in it): its exits at that average (`cost`) and the
+ * difference from what they were booked at; null without exits, `empty` when the opening and the
+ * entries hold nothing to average. Entries and exits net their reversals and returns
+ * (`StockFlows`): a receipt reversed in the month is neither, goods given back to the supplier
+ * are a negative entry.
+ */
+export function periodCostOf(
+  flows: StockFlows,
+): { quantity: bigint; cost: bigint; difference: bigint } | 'empty' | null {
+  const { opening, entered, left } = flows;
+  if (left.quantity === 0n) return null;
+  const quantity = opening.quantity + entered.quantity;
+  if (quantity <= 0n) return 'empty';
+  const cost = prorate(opening.bani + entered.bani, -left.quantity, quantity);
+  return { quantity: -left.quantity, cost, difference: cost - -left.bani };
+}
+
+/**
  * The month's exits under the periodic weighted average (OMFP nr. 1.802/2014 pct. 96 alin. (2):
  * the average of the stock at the period's start and of what entered in it): each exit was
  * valued at the running average when booked, and this brings the month's exits of each pool to
@@ -692,10 +735,9 @@ export const stockPeriodCost: Treatment<PeriodCostInput> = {
     for (const position of loaded.stock.values())
       for (const layer of position.layers) {
         if (layer.method !== 'periodic' || !layer.flows) continue;
-        const { opening, entered, left } = layer.flows;
-        if (left.quantity === 0n) continue;
-        const quantity = opening.quantity + entered.quantity;
-        if (quantity <= 0n) {
+        const month = periodCostOf(layer.flows);
+        if (month === null) continue;
+        if (month === 'empty') {
           issues.push(
             block(
               'STOCK_PERIOD_EMPTY',
@@ -706,8 +748,7 @@ export const stockPeriodCost: Treatment<PeriodCostInput> = {
           );
           continue;
         }
-        const cost = prorate(opening.bani + entered.bani, -left.quantity, quantity);
-        const difference = cost - -left.bani;
+        const { cost, difference } = month;
         if (difference === 0n) continue;
         const expense = expenseFor(accounts, layer.account);
         if (!expense) {
@@ -734,7 +775,7 @@ export const stockPeriodCost: Treatment<PeriodCostInput> = {
           ),
         );
         rows.push(
-          `${item?.code ?? layer.item}: ${formatQuantity(-left.quantity)} la ${lei(cost)} lei (provizoriu ${lei(-left.bani)})`,
+          `${item?.code ?? layer.item}: ${formatQuantity(month.quantity)} la ${lei(cost)} lei (provizoriu ${lei(cost - difference)})`,
         );
       }
     if (issues.length) return { effect: null, issues };

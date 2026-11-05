@@ -21,6 +21,11 @@ import { nonpayerDefinitions, nonpayerVersions } from 'xfactura-core/ro/nonpayer
 import { exemptDefinitions, exemptVersions } from 'xfactura-core/ro/exempt';
 import { euConsumerRecognition, ossDefinitions, ossVersions } from 'xfactura-core/ro/oss';
 import { stockDefinitions, stockTreatments, stockVersions } from 'xfactura-core/ro/stock';
+import {
+  productionDefinitions,
+  productionTreatments,
+  productionVersions,
+} from 'xfactura-core/ro/production';
 import { tradeDefinitions, tradeTreatments, tradeVersions } from 'xfactura-core/ro/trade';
 import { retailDefinitions, retailTreatments, retailVersions } from 'xfactura-core/ro/retail';
 import { prorataAdjustment } from 'xfactura-core/ro/treatments/prorata';
@@ -99,6 +104,7 @@ import { ParameterRegister } from 'xfactura-core/rules';
 import { clause, sourceOf } from 'xfactura-core/ro/sources';
 import { addDays, bucharestDate } from 'xfactura-core/time';
 import type { Database, Transaction } from './db/database';
+import { PartyIdentities } from './db/identity';
 import type { Role } from './db/schema';
 import type { ObjectStore } from './adapters/object-store';
 import { actionQuery, Actions, actionStatuses } from './kernel/actions';
@@ -173,6 +179,7 @@ import {
 import {
   Evidence,
   evidenceInput,
+  evidenceListItem,
   evidenceReadInput,
   evidenceReading,
   evidenceView,
@@ -270,6 +277,17 @@ import {
   warehouseInput,
   warehouseView,
 } from './modules/stock';
+import {
+  bomInput,
+  bomView,
+  closeOrderInput,
+  costSheetInput,
+  costSheetView,
+  orderInput,
+  orderView,
+  Production,
+  productionChecks,
+} from './modules/production';
 import { d394Declaration } from './modules/d394';
 import { d406Declaration } from './modules/d406';
 import { d112Declaration } from './modules/d112';
@@ -287,7 +305,12 @@ import {
   taxAccountChecks,
   taxAccountWork,
 } from './modules/taxaccount';
-import { calendarInput, obligationsCalendar, obligationView } from './modules/obligations';
+import {
+  calendarInput,
+  closureNeeds,
+  obligationsCalendar,
+  obligationView,
+} from './modules/obligations';
 import {
   compareInput,
   openingInput,
@@ -539,6 +562,7 @@ export const defaultRegister = () =>
       ...stockDefinitions,
       ...tradeDefinitions,
       ...retailDefinitions,
+      ...productionDefinitions,
     ],
     [
       ...vatVersions,
@@ -569,6 +593,7 @@ export const defaultRegister = () =>
       ...stockVersions,
       ...tradeVersions,
       ...retailVersions,
+      ...productionVersions,
     ],
   );
 
@@ -648,6 +673,8 @@ export class Engine {
   readonly trade: Trade;
   /** Retail and B2C (G2): the fiscal cash registers, their Z reports, the retail price method. */
   readonly retail: Retail;
+  /** Production (G4): the bills of materials, the work orders and their cost sheets. */
+  readonly production: Production;
 
   constructor(
     readonly db: Database,
@@ -749,6 +776,7 @@ export class Engine {
       ...stockTreatments,
       ...tradeTreatments,
       ...retailTreatments,
+      ...productionTreatments,
       ...(options.treatments ?? []),
     );
     this.templates = new Templates(this.commands, this.proposals);
@@ -774,6 +802,7 @@ export class Engine {
       ...schemeChecks,
       ...stockChecks,
       ...retailChecks,
+      ...productionChecks,
       ...(options.closeChecks ?? []),
     ];
     this.actions.add(closeHandler(this.closeChecks));
@@ -789,7 +818,7 @@ export class Engine {
       this.proposals.ruleContext(tx, companyId),
     );
     this.companies = new Companies(this.commands, secret);
-    this.configuration = new Configuration(this.commands);
+    this.configuration = new Configuration(this.commands, new PartyIdentities(secret));
     this.agents = new Agents(this.commands, secret, () =>
       this.operations.grantable().map(({ id, toolset }) => ({ id, toolset })),
     );
@@ -818,7 +847,7 @@ export class Engine {
     );
     this.positions = new Positions(this.commands);
     this.sales = new Sales(this.commands, objects, this.proposals, new Sealer(secret));
-    this.invoicerImport = new InvoicerImport(this.commands, objects);
+    this.invoicerImport = new InvoicerImport(this.commands, objects, new PartyIdentities(secret));
     this.anaf = options.anaf
       ? new AnafConnections(
           this.commands,
@@ -861,7 +890,7 @@ export class Engine {
         secret,
         this.clock,
       ),
-      d112Declaration(secret),
+      d112Declaration(secret, (tx, companyId) => this.proposals.ruleContext(tx, companyId)),
       d205Declaration(secret),
       d207Declaration(),
       d100Declaration(),
@@ -907,6 +936,7 @@ export class Engine {
     this.schemes = new SpecialSchemes(this.commands);
     this.stock = new Stock(this.commands);
     this.retail = new Retail(this.commands, objects);
+    this.production = new Production(this.commands);
     this.trade = new Trade(
       this.commands,
       objects,
@@ -927,6 +957,14 @@ export class Engine {
         register: this.register,
         obligations: async (tx, companyId, range, today) =>
           obligationsCalendar(
+            tx,
+            companyId,
+            range,
+            await this.proposals.ruleContext(tx, companyId),
+            today,
+          ),
+        needs: async (tx, companyId, range, today) =>
+          closureNeeds(
             tx,
             companyId,
             range,
@@ -3069,6 +3107,110 @@ export class Engine {
         run: (actor, _, input) => this.stock.card(actor, input),
       }),
       define({
+        id: 'production.boms.record',
+        description:
+          'Înregistrează o versiune a fișei tehnice a unui produs: materialele pe cantitatea de produs, orele de manoperă și de funcționare a utilajelor și costul standard, valabilă de la o dată.',
+        summary:
+          "Records a version of a product's bill of materials: materials per output quantity, labour and machine hours and the standard cost, valid from a date.",
+        toolset: 'books',
+        dataClasses: ['books'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'write',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: bomInput,
+        output: bomView,
+        run: (actor, key, input) => this.production.recordBom(actor, key, input),
+      }),
+      define({
+        id: 'production.boms.list',
+        description: 'Fișele tehnice ale produselor, cu versiunile și materialele lor.',
+        summary: "The products' bills of materials, every version with its materials.",
+        toolset: 'reference',
+        dataClasses: ['books'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: z.object({}).strict(),
+        output: z.object({ items: z.array(bomView), next: z.string().nullable() }),
+        run: (actor) => this.production.listBoms(actor),
+      }),
+      define({
+        id: 'production.orders.open',
+        description:
+          'Deschide o comandă de producție pentru un produs, costată pe fișa tehnică valabilă la data deschiderii.',
+        summary:
+          'Opens a work order for a product, costed on the bill of materials valid on its opening day.',
+        toolset: 'books',
+        dataClasses: ['books'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'write',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: orderInput,
+        output: orderView,
+        run: (actor, key, input) => this.production.openOrder(actor, key, input),
+      }),
+      define({
+        id: 'production.orders.close',
+        description:
+          'Închide o comandă de producție la ultima ei zi de producție; calculația lunii stabilește diferențele de preț sau costul produselor ei.',
+        summary:
+          "Closes a work order on its last production day; the month's costing then settles its price differences or its products' cost.",
+        toolset: 'books',
+        dataClasses: ['books'],
+        reversible: false,
+        externalEffect: false,
+        permission: 'write',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: closeOrderInput,
+        output: orderView,
+        run: (actor, key, input) => this.production.closeOrder(actor, key, input),
+      }),
+      define({
+        id: 'production.orders.list',
+        description: 'Comenzile de producție, cu fișa tehnică și starea lor.',
+        summary: 'The work orders with their bill of materials version and state.',
+        toolset: 'books',
+        dataClasses: ['books'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: z.object({}).strict(),
+        output: z.object({ items: z.array(orderView), next: z.string().nullable() }),
+        run: (actor) => this.production.listOrders(actor),
+      }),
+      define({
+        id: 'production.costSheet',
+        description:
+          'Fișa de calculație a unei comenzi, lună cu lună: materialele, manopera și regia repartizate, produsele predate, producția în curs și diferențele de preț.',
+        summary:
+          "A work order's cost sheet month by month: materials, allocated labour and overheads, products handed over, work in progress and price differences.",
+        toolset: 'books',
+        dataClasses: ['books'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: costSheetInput,
+        output: costSheetView,
+        run: (actor, _, input) => this.production.costSheet(actor, input),
+      }),
+      define({
         id: 'retail.registers.record',
         description:
           'Înregistrează o casă de marcat (aparat de marcat electronic fiscal): numărul unic, seria fiscală, locul de instalare, gestiunea și data fiscalizării; aplicația nu comunică cu aparatul.',
@@ -3848,10 +3990,12 @@ export class Engine {
         id: 'exports.request',
         description:
           'Cere un export complet al companiei: toate înregistrările și documentele originale.',
-        summary: 'Requests a complete export of the company: every record and original file.',
+        summary:
+          'Requests a complete export of the company: every record and original file, CNPs and pay included; only its requester (or an owner) downloads it.',
         toolset: 'admin',
         dataClasses: ['books', 'evidence', 'personal', 'payroll', 'tax'],
-        reversible: true,
+        // What an export holds leaves the engine with it: nothing withdraws it once downloaded.
+        reversible: false,
         externalEffect: false,
         permission: 'review',
         agent: true,
@@ -3869,10 +4013,12 @@ export class Engine {
       }),
       define({
         id: 'exports.get',
-        description: 'Starea unui export; fișierul se descarcă de la /exports/{id}.',
-        summary: "Reads an export's status; the file downloads from /exports/{id}.",
+        description:
+          'Starea unui export cerut de dumneavoastră; fișierul se descarcă de la /exports/{id}.',
+        summary:
+          'Reads the status of an export this credential requested (an owner reads any); the file, which holds every record and original, downloads from /exports/{id}.',
         toolset: 'admin',
-        dataClasses: ['books'],
+        dataClasses: ['books', 'evidence', 'personal', 'payroll', 'tax'],
         reversible: true,
         externalEffect: false,
         permission: 'review',
@@ -3909,7 +4055,7 @@ export class Engine {
         id: 'evidence.list',
         description: 'Documentele originale păstrate.',
         summary:
-          'Lists the original files kept as evidence, with their hashes, names, media types and sizes.',
+          'Lists the original files kept as evidence, with their hashes, names, media types, sizes and data classes; a file whose classes the credential may not read is listed without its name (redacted), and evidence.read refuses it.',
         toolset: 'reference',
         dataClasses: ['evidence'],
         reversible: true,
@@ -3919,7 +4065,7 @@ export class Engine {
         effect: 'read',
         approval: 'none',
         input: z.object({}).strict(),
-        output: page(evidenceView),
+        output: page(evidenceListItem),
         run: (actor) => whole(this.evidence.list(actor)),
       }),
       define({

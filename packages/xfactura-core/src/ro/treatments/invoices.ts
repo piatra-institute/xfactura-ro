@@ -29,6 +29,7 @@ import {
 } from '../../money';
 import { selectRate } from '../fx';
 import { carryingRelease, INDEXED_LEASE_METHOD } from '../financing';
+import { creditPartner } from './settlement';
 import {
   cashVatClauses,
   creditSplit,
@@ -2081,17 +2082,28 @@ export const creditRecognition: Treatment<CreditInput> = {
         .filter((entry) => entry.documentId === original.record.id)
         .map((entry) => [entry.key, entry]),
     );
-    // Red storno: the original sides with negative amounts, so turnover stays correct.
+    // Red storno: the original sides with negative amounts, so turnover stays correct. The
+    // original's receivable or payable is reduced by what it still holds; beyond it (the invoice
+    // collected or paid already), the customer is owed a refund (462) or the supplier owes one
+    // (461), to pay back, collect or offset.
     const lines: LineSpec[] = [];
     const taxEntries: TaxEntrySpec[] = [];
-    const partner: LineSpec = {
-      account: purchase ? item!.controlAccount : '4111',
-      side: purchase ? 'C' : 'D',
-      bani: -gross,
-      openItem: item!.id,
+    const partner = creditPartner({
+      item: item!,
+      loaded,
+      purchase,
+      bani: gross,
+      minor: gross,
       partyId,
-    };
-    if (!purchase) lines.push(partner);
+    });
+    if (partner.refund)
+      issues.push(
+        warn(
+          'CREDIT_REFUND',
+          `Factura ${original.body.number} mai are deschiși ${formatMoney(gross - partner.refund.bani, LEDGER_CURRENCY)} lei: restul notei de credit, ${formatMoney(partner.refund.bani, LEDGER_CURRENCY)} lei, ${purchase ? 'îl datorează furnizorul (461 „Debitori diverși”)' : 'se datorează clientului (462 „Creditori diverși”)'}, de restituit sau de compensat (OMFP nr. 1.802/2014, funcțiunile conturilor ${purchase ? '461' : '462'}). Confirmați.`,
+        ),
+      );
+    if (!purchase) lines.push(...partner.lines);
     const partLines: number[] = [];
     parts.forEach((part, p) => {
       partLines[p] = lines.length;
@@ -2232,7 +2244,7 @@ export const creditRecognition: Treatment<CreditInput> = {
               ),
         );
     }
-    if (purchase) lines.push(partner);
+    if (purchase) lines.push(...partner.lines);
     // The goods it moves in the stock register (G1): back to the supplier, or from the customer.
     let stock: StockResult | null = null;
     if (input.stock) {
@@ -2292,7 +2304,7 @@ export const creditRecognition: Treatment<CreditInput> = {
       journalCode: credit.direction === 'sale' ? 'VANZARI' : 'CUMPARARI',
       description: `Notă de credit ${credit.body.number} pentru ${original.body.number}`,
       lines,
-      openItems: [],
+      openItems: partner.openItems,
       taxEntries,
       schedules: [],
       ...(stock?.book ? stock.book.effectPart() : {}),
@@ -2301,6 +2313,14 @@ export const creditRecognition: Treatment<CreditInput> = {
         details: {
           originalDocumentId: original.record.id,
           taxPoint,
+          ...(partner.refund
+            ? {
+                refund: {
+                  account: partner.refund.account,
+                  amount: formatMoney(partner.refund.bani, LEDGER_CURRENCY),
+                },
+              }
+            : {}),
           ...(stock ? { stock: stock.details } : {}),
           ...(cashVat.length
             ? { vatOnCollection: { categories: cashVat, clause: cashVatClauses.corrections } }

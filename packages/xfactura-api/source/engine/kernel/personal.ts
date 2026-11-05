@@ -1,0 +1,161 @@
+import type { DataClass } from 'xfactura-core/kernel';
+import { formatMoney, parseMoney } from 'xfactura-core/money';
+import { isValidCnp } from 'xfactura-core/ro/identifiers';
+
+/*
+ * Personal data in what a caller reads. CNPs are sealed at rest and opened only into the files
+ * that must carry them (returns, a B2C invoice); a person's pay is in the books on the personnel
+ * accounts. A reader who may not read the `personal` class sees no CNP, and one who may not read
+ * `payroll` and `personal` sees no amount on a personnel account tied to a person.
+ */
+
+/** What a CNP becomes for a reader who may not read personal data, as `sales.preview` writes a
+ * B2C buyer's: 13 asterisks. */
+export const cnpMask = '*************';
+
+/** The classes a person's pay belongs to: who earned, was withheld or is owed what. */
+export const payClasses: readonly DataClass[] = ['payroll', 'personal'];
+
+/** Fields that hold a party's identifier, where a CNP is masked whole. */
+const identifierKeys = new Set([
+  'taxId',
+  'legalId',
+  'vatId',
+  'buyerTaxId',
+  'cnp',
+  'careCnp',
+  'counterpartyTaxId',
+  'supplierTaxId',
+  'customerTaxId',
+]);
+
+const isCnp = (text: string) => isValidCnp(text.replace(/\s+/g, '').replace(/^RO/i, ''));
+const thirteen = /(?<!\d)[1-9]\d{12}(?!\d)/g;
+
+/**
+ * A text with its CNPs masked: each run of 13 digits that passes a CNP's check digit or, with
+ * `digits`, every run of 13 digits (a validator's message may quote one that fails it).
+ */
+export function maskCnpText(text: string, digits = false) {
+  return text.replace(thirteen, (run) => (digits || isValidCnp(run) ? cnpMask : run));
+}
+
+/**
+ * A JSON value with every CNP masked: an identifier field (`taxId`, `legalId`, `vatId`, …) that
+ * holds one, with or without RO, and a CNP inside a citation's or a message's text. Codes that
+ * merely have 13 digits elsewhere (an article's EAN) are left as they are.
+ */
+export function maskCnps<T>(value: T): T {
+  const walk = (item: unknown, key?: string): unknown => {
+    if (typeof item === 'string')
+      return key && identifierKeys.has(key)
+        ? isCnp(item)
+          ? cnpMask
+          : maskCnpText(item)
+        : key === 'text' || key === 'message' || key === 'detail'
+          ? maskCnpText(item)
+          : item;
+    if (Array.isArray(item)) return item.map((element) => walk(element, key));
+    if (item && typeof item === 'object')
+      return Object.fromEntries(
+        Object.entries(item as Record<string, unknown>).map(([name, child]) => [
+          name,
+          walk(child, name),
+        ]),
+      );
+    return item;
+  };
+  return walk(value) as T;
+}
+
+/** A personnel account (class 42: 421–428): its lines and items name the person paid, withheld
+ * from or owed. */
+export const personnelAccount = (account: string) => account.startsWith('42');
+
+type AmountLine = {
+  account: string;
+  side: 'D' | 'C';
+  amount: string;
+  partyId?: string | undefined;
+  openItem?: string | undefined;
+  memo?: string | undefined;
+  analytics?: Record<string, string> | undefined;
+  currency?: unknown;
+};
+
+/**
+ * Lines as a reader who may not read pay sees them: those on personnel accounts summed per
+ * account and side, in lei, without the person (party, open item, memo, analytics), at the
+ * place of the first; the others as they are.
+ */
+export function withoutPersons<Line extends AmountLine>(lines: Line[]): Line[] {
+  const out: Line[] = [];
+  const merged = new Map<string, { index: number; bani: bigint }>();
+  for (const line of lines) {
+    if (!personnelAccount(line.account)) {
+      out.push(line);
+      continue;
+    }
+    const key = `${line.account}/${line.side}`;
+    const bani = parseMoney(line.amount, 'RON');
+    const known = merged.get(key);
+    if (known) {
+      known.bani += bani;
+      continue;
+    }
+    const {
+      partyId: _party,
+      openItem: _item,
+      memo: _memo,
+      analytics: _analytics,
+      currency: _currency,
+      ...rest
+    } = line;
+    merged.set(key, { index: out.length, bani });
+    out.push(rest as Line);
+  }
+  for (const { index, bani } of merged.values())
+    out[index] = { ...out[index]!, amount: formatMoney(bani, 'RON') };
+  return out;
+}
+
+type StoredItem = { account: string; currency: string; bani: string; minor: string };
+
+/** A closing snapshot's open items as a reader who may not read pay sees them: those on personnel
+ * accounts summed per account and currency, without their id and party. */
+export function itemsWithoutPersons<Item extends StoredItem>(items: Item[]) {
+  const merged = new Map<string, StoredItem>();
+  const out: (Item | StoredItem)[] = [];
+  for (const item of items) {
+    if (!personnelAccount(item.account)) {
+      out.push(item);
+      continue;
+    }
+    const key = `${item.account}/${item.currency}`;
+    const known = merged.get(key);
+    if (known) {
+      known.bani = String(BigInt(known.bani) + BigInt(item.bani));
+      known.minor = String(BigInt(known.minor) + BigInt(item.minor));
+      continue;
+    }
+    const { account, currency, bani, minor } = item;
+    const sum = { account, currency, bani, minor };
+    merged.set(key, sum);
+    out.push(sum);
+  }
+  return out;
+}
+
+/**
+ * A reviewed action's preview as a reader who may not read pay sees it: the year close's closing
+ * snapshot (`years.close`) holds each open item at the year's end, an employee's unpaid pay among
+ * them.
+ */
+export function previewWithoutPersons(operation: string, preview: unknown) {
+  const closing = (preview as { closing?: { items?: StoredItem[] } } | null)?.closing;
+  if (operation !== 'years.close' || !Array.isArray(closing?.items)) return preview;
+  return {
+    ...(preview as Record<string, unknown>),
+    closing: { ...closing, items: itemsWithoutPersons(closing.items) },
+  };
+}

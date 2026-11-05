@@ -26,6 +26,7 @@ import { yearEndDefinitions, yearEndVersions } from './yearend/parameters';
 import { stockDefinitions, stockVersions } from './stock/parameters';
 import { tradeDefinitions, tradeVersions } from './trade/parameters';
 import { retailDefinitions, retailVersions } from './retail/parameters';
+import { productionDefinitions, productionVersions } from './production/parameters';
 
 /**
  * Every Romanian parameter family, in the order the engine's `defaultRegister()` assembles them
@@ -60,6 +61,7 @@ export const roDefinitions: readonly ParameterDefinition[] = [
   ...stockDefinitions,
   ...tradeDefinitions,
   ...retailDefinitions,
+  ...productionDefinitions,
 ];
 
 export const roVersions: readonly ParameterVersion[] = [
@@ -91,6 +93,7 @@ export const roVersions: readonly ParameterVersion[] = [
   ...stockVersions,
   ...tradeVersions,
   ...retailVersions,
+  ...productionVersions,
 ];
 
 export const roRegister = () => new ParameterRegister(roDefinitions, roVersions);

@@ -150,7 +150,7 @@ export const receiptInvoiceRecognition: Treatment<ReceiptInvoiceInput> = {
               documentType: 'invoice',
               fiscalReceipt: report.id,
               number: body.number,
-              receipts: input.receipts.join(','),
+              receiptNumbers: input.receipts.join(','),
             },
           },
           {

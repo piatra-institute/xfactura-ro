@@ -297,6 +297,20 @@ describe('intellectual property paid to an individual', () => {
 
 const migrations = path.join(import.meta.dir, '../../source/engine/db/migrations');
 
+/** The columns migration 0031 adds to tables the engine writes (approvals, decisions and policies
+ * record the acting agent): added to older books, so that today's engine runs on them, and taken
+ * off again before the books are migrated. Dropping a column checks every trigger, today's among
+ * them, against the older schema: the invariants go first, and the migration installs them. */
+const agentColumns = ['acc_approvals', 'acc_action_decisions', 'acc_posting_policies'];
+const withoutAgentColumns = async (db: Database) => {
+  const triggers = await db.client.execute(
+    "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'inv\\_%' ESCAPE '\\'",
+  );
+  for (const row of triggers.rows) await db.client.execute(`DROP TRIGGER ${String(row.name)}`);
+  for (const table of agentColumns)
+    await db.client.execute(`ALTER TABLE ${table} DROP COLUMN agent_id`);
+};
+
 /** Gives a new database the migrations up to `last` and the invariants: books created before the
  * migrations after it. */
 const migratedTo = (last: string) => async (db: Database) => {
@@ -313,6 +327,9 @@ const migratedTo = (last: string) => async (db: Database) => {
     );
     await db.initialize();
     await migrate(db.orm, { migrationsFolder: folder });
+    if (last < '0031')
+      for (const table of agentColumns)
+        await db.client.execute(`ALTER TABLE ${table} ADD agent_id text`);
     await ensureInvariants(db.client);
   } finally {
     await rm(folder, { recursive: true, force: true });
@@ -466,6 +483,7 @@ describe('interim dividends', () => {
     });
     await s.post(await s.approve(capital, otherOwner), otherOwner);
 
+    await withoutAgentColumns(s.db);
     await s.db.migrate();
     const chart = async (companyId: string) =>
       (

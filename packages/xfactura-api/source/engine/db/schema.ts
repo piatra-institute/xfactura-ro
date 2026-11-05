@@ -737,6 +737,9 @@ export const approvals = sqliteTable(
       .notNull()
       .references(() => user.id),
     approverEpoch: counter('approver_epoch').notNull(),
+    /** The agent that gave it: always null, as only a person approves (`inv:approval_person`).
+     * An approval a batch's execution records is its decider's, whoever executes. */
+    agentId: text('agent_id'),
     acknowledgements: canonicalJson('acknowledgements_json'),
     /** The reviewed batch (`proposals.batch`) whose approved preview names this version; the
      * approver is its decider (`inv:batch_member`). Null for a single approval. */
@@ -789,6 +792,9 @@ export const postingPolicies = sqliteTable(
       .notNull()
       .references(() => user.id),
     approverEpoch: counter('approver_epoch').notNull(),
+    /** The agent that created it: always null, as only a person grants a policy
+     * (`inv:policy_person`); one from a graduation is its decider's, whoever executes. */
+    agentId: text('agent_id'),
     validFrom: text('valid_from').notNull(),
     expiresAt: counter('expires_at').notNull(),
     /** The reviewed request (`policies.request`, from a template's graduation report) whose
@@ -1236,6 +1242,8 @@ export const actionDecisions = sqliteTable(
       .notNull()
       .references(() => user.id),
     decidedEpoch: counter('decided_epoch').notNull(),
+    /** The agent that decided: always null, as only a person decides (`inv:decision_person`). */
+    agentId: text('agent_id'),
     reason: text('reason'),
     /** When the decision was taken: segregation of duties is read on its day. */
     engineAt: engineAt(),
@@ -1724,6 +1732,134 @@ export const cashRegisterEvents = sqliteTable(
     foreignKey({
       columns: [t.companyId, t.registerId],
       foreignColumns: [cashRegisters.companyId, cashRegisters.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.evidenceId],
+      foreignColumns: [evidence.companyId, evidence.id],
+    }),
+  ],
+);
+
+/**
+ * A version of a bill of materials (G4, fișa tehnică / norma de consum): what one output quantity
+ * of a product (an item on 341 or 345) takes in materials, labour and machine hours, and its
+ * standard cost (OMFP nr. 1.802/2014 pct. 286 alin. (2): the normal levels of consumption, revised
+ * periodically). Versions are numbered per product and dated; a version is never changed, a
+ * revision is the next one.
+ */
+export const boms = sqliteTable(
+  'acc_boms',
+  {
+    id: text('id').notNull(),
+    companyId: companyId(),
+    itemId: text('item_id').notNull(),
+    version: counter('version').notNull(),
+    validFrom: text('valid_from').notNull(),
+    /** Thousandths of the product's unit the norms are for. */
+    outputQuantity: bani('output_quantity').notNull(),
+    /** The standard cost of the output quantity, in bani, when the company keeps one. */
+    standardCost: bani('standard_cost'),
+    /** Thousandths of an hour for the output quantity. */
+    labourHours: bani('labour_hours'),
+    machineHours: bani('machine_hours'),
+    /** The technical sheet or the standard cost's calculation (antecalculația). */
+    evidenceId: text('evidence_id').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.id] }),
+    uniqueIndex('bom_version').on(t.companyId, t.itemId, t.version),
+    foreignKey({
+      columns: [t.companyId, t.itemId],
+      foreignColumns: [stockItems.companyId, stockItems.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.evidenceId],
+      foreignColumns: [evidence.companyId, evidence.id],
+    }),
+  ],
+);
+
+/** A material of a BOM version: an item on a materials account and its quantity, in thousandths
+ * of its unit, for the version's output quantity. */
+export const bomLines = sqliteTable(
+  'acc_bom_lines',
+  {
+    companyId: companyId(),
+    bomId: text('bom_id').notNull(),
+    lineNo: counter('line_no').notNull(),
+    itemId: text('item_id').notNull(),
+    quantity: bani('quantity').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.bomId, t.lineNo] }),
+    foreignKey({
+      columns: [t.companyId, t.bomId],
+      foreignColumns: [boms.companyId, boms.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.itemId],
+      foreignColumns: [stockItems.companyId, stockItems.id],
+    }),
+  ],
+);
+
+/** A work order (comandă de producție, G4): the product it makes, the BOM version it is costed
+ * on, the quantity launched and the day it opened, with its launching document. */
+export const workOrders = sqliteTable(
+  'acc_work_orders',
+  {
+    id: text('id').notNull(),
+    companyId: companyId(),
+    number: text('number').notNull(),
+    itemId: text('item_id').notNull(),
+    bomId: text('bom_id').notNull(),
+    /** Thousandths of the product's unit. */
+    quantity: bani('quantity').notNull(),
+    openedOn: text('opened_on').notNull(),
+    evidenceId: text('evidence_id').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.id] }),
+    uniqueIndex('work_order_number').on(t.companyId, t.number),
+    foreignKey({
+      columns: [t.companyId, t.itemId],
+      foreignColumns: [stockItems.companyId, stockItems.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.bomId],
+      foreignColumns: [boms.companyId, boms.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.evidenceId],
+      foreignColumns: [evidence.companyId, evidence.id],
+    }),
+  ],
+);
+
+export const workOrderEventKinds = ['closed'] as const;
+/** What happened to a work order, numbered per order, each with its document: its closing (the
+ * last products delivered, the order completed or abandoned). */
+export const workOrderEvents = sqliteTable(
+  'acc_work_order_events',
+  {
+    companyId: companyId(),
+    orderId: text('order_id').notNull(),
+    seq: counter('seq').notNull(),
+    kind: text('kind', { enum: workOrderEventKinds }).notNull(),
+    date: text('date').notNull(),
+    evidenceId: text('evidence_id').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.orderId, t.seq] }),
+    foreignKey({
+      columns: [t.companyId, t.orderId],
+      foreignColumns: [workOrders.companyId, workOrders.id],
     }),
     foreignKey({
       columns: [t.companyId, t.evidenceId],

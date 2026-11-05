@@ -125,6 +125,8 @@
     "./ro/oss/agent": "./src/ro/oss/agent.ts",
     "./ro/retail": "./src/ro/retail/index.ts",
     "./ro/retail/agent": "./src/ro/retail/agent.ts",
+    "./ro/production": "./src/ro/production/index.ts",
+    "./ro/production/agent": "./src/ro/production/agent.ts",
     "./ro/declarations/d398": "./src/ro/declarations/d398.ts"
   },
   "dependencies": {

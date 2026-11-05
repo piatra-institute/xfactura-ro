@@ -15,7 +15,7 @@ import { allocate } from '../../money';
 import type { RuleContext } from '../../rules';
 import type { LocalDate } from '../../time';
 import { expenseFor } from './parameters';
-import { itemOf, stockAccountsAt, warehouseOf } from './treatments';
+import { itemOf, productAccounts, stockAccountsAt, warehouseOf } from './treatments';
 import { prorate, StockBook, stockPolicyAt } from './valuation';
 
 /*
@@ -83,6 +83,9 @@ export const invoiceStockQuery = (stock: InvoiceStock): StockQuery => {
     positions: items.map((item) => ({ item, warehouse: stock.warehouseId })),
     items,
     warehouses: [stock.warehouseId],
+    // A sale's goods leave at what the positions held on its date, which the plan does not know
+    // (the invoice's), so the days the positions moved on in the open months are read.
+    dated: true,
   };
 };
 
@@ -197,7 +200,7 @@ export function receiveInvoiceStock(args: {
   const issues: Issue[] = [];
   const warehouse = warehouseOf(loaded, stock.warehouseId, 'stock.warehouseId');
   if ('severity' in warehouse) issues.push(warehouse);
-  const policy = stockPolicyAt(loaded, date);
+  const policy = stockPolicyAt(loaded, date, [stock.warehouseId]);
   if (Array.isArray(policy)) issues.push(...policy);
   if (issues.length || Array.isArray(policy)) return failed(issues);
   const accounts = stockAccountsAt(rules, date);
@@ -386,7 +389,7 @@ export function issueInvoiceStock(args: {
   const issues: Issue[] = [];
   const warehouse = warehouseOf(loaded, stock.warehouseId, 'stock.warehouseId');
   if ('severity' in warehouse) issues.push(warehouse);
-  const policy = stockPolicyAt(loaded, date);
+  const policy = stockPolicyAt(loaded, date, [stock.warehouseId]);
   if (Array.isArray(policy)) issues.push(...policy);
   if (issues.length || Array.isArray(policy)) return failed(issues);
   const accounts = stockAccountsAt(rules, date);
@@ -404,13 +407,19 @@ export function issueInvoiceStock(args: {
       return void issues.push(
         block('STOCK_RECEIVED', 'Cantitatea recepționată se indică doar la o achiziție.', path),
       );
-    const item = itemOf(loaded, row.itemId, `${path}.itemId`);
+    const item = itemOf(loaded, row.itemId, `${path}.itemId`, productAccounts);
     if ('severity' in item) return void issues.push(item);
-    if (!item.account.startsWith('371'))
+    // Goods (371) leave onto 607; the company's products (341, 345, 346, G4) onto 711, at their
+    // registration price (the functions of 345 and 711: "valoarea la preț de înregistrare a
+    // produselor finite vândute"), their price differences following at the month's end.
+    if (
+      !item.account.startsWith('371') &&
+      !productAccounts.some((account) => item.account.startsWith(account))
+    )
       return void issues.push(
         block(
           'STOCK_SALE_ACCOUNT',
-          `Se vând ca mărfuri doar articolele din 371; ${item.code} este în ${item.account}: transferați-l întâi în mărfuri (funcțiunea contului 371).`,
+          `Se vând ca mărfuri doar articolele din 371, iar produsele proprii din 341, 345, 346; ${item.code} este în ${item.account}: transferați-l întâi în mărfuri (funcțiunea contului 371).`,
           `${path}.itemId`,
         ),
       );
@@ -502,7 +511,7 @@ export function returnInvoiceStock(args: {
   const issues: Issue[] = [];
   const warehouse = warehouseOf(loaded, stock.warehouseId, 'stock.warehouseId');
   if ('severity' in warehouse) issues.push(warehouse);
-  const policy = stockPolicyAt(loaded, date);
+  const policy = stockPolicyAt(loaded, date, [stock.warehouseId]);
   if (Array.isArray(policy)) issues.push(...policy);
   if (issues.length || Array.isArray(policy)) return failed(issues);
   const mapped = splitParts(stock, args.invoiceLines, args.parts, lines, loaded, issues);

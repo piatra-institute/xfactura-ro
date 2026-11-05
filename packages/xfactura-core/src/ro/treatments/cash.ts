@@ -189,6 +189,17 @@ export const cashMovement: Treatment<CashInput> = {
         );
         return;
       }
+      // An amount for later months (471, 472) is released by its schedule, never paid.
+      if (item.kind === 'deferral.expense' || item.kind === 'deferral.revenue') {
+        issues.push(
+          block(
+            'OPEN_ITEM_KIND',
+            'O sumă în avans (471, 472) se reia prin deferrals.release, nu se decontează prin casă: alocați plata facturii (401, 4111).',
+            `allocations.${index}`,
+          ),
+        );
+        return;
+      }
       // A receipt reduces a receivable, a payment a payable.
       settled.push({
         openItem: item.id,

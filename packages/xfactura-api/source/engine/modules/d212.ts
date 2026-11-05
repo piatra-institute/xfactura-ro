@@ -184,11 +184,23 @@ export function d212Declaration(
           message:
             'Declarația unică se pregătește pentru titularul unei PFA sau II, ori pentru un membru al unei întreprinderi familiale (entity.form).',
         });
+      // A change is a form recorded during the year after another one: the first form recorded
+      // (a PFA registered in March) starts the activity, it does not change it.
+      const formBefore = (date: string) =>
+        loaded.profile
+          .filter((fact) => fact.axis === 'entity.form' && fact.effectiveFrom < date)
+          .at(-1);
       if (
-        loaded.profile.some(
-          (fact) =>
-            fact.axis === 'entity.form' && fact.effectiveFrom > start && fact.effectiveFrom <= end,
-        )
+        loaded.profile.some((fact) => {
+          if (
+            fact.axis !== 'entity.form' ||
+            fact.effectiveFrom <= start ||
+            fact.effectiveFrom > end
+          )
+            return false;
+          const before = formBefore(fact.effectiveFrom);
+          return before !== undefined && before.value !== fact.value;
+        })
       )
         problems.push({
           code: 'D212_FORM_CHANGE',

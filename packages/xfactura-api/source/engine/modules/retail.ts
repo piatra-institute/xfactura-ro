@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, gte, inArray, like, lte, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/sqlite-core';
 import { z } from 'zod';
 import { requireCondition } from 'xfactura-core/errors';
 import { canonical, hashOf } from 'xfactura-core/hash';
@@ -305,7 +306,15 @@ async function retailWarehouses(tx: Transaction, companyId: string) {
   );
 }
 
-/** A warehouse's retail accounts' balances and turnover in a date range, per account. */
+/** The reversal proposal of an entry, and the line of the entry it reverses. */
+const reversal = alias(proposals, 'retail_reversal');
+const reversedLine = alias(lines, 'retail_reversed_line');
+
+/**
+ * A warehouse's retail accounts' balances and turnover in a date range, per account; a reversal's
+ * line on the side of the line it reverses, a black storno as its red one, so a reception
+ * reversed is not read as an exit (as the treatments read it, `TurnoverQuery.sides`).
+ */
 async function retailTurnover(
   tx: Transaction,
   companyId: string,
@@ -313,18 +322,35 @@ async function retailTurnover(
   from: string,
   to: string,
 ) {
+  const side = sql`coalesce(${reversedLine.side}, ${lines.side})`;
   const rows = await tx
     .select({
       account: lines.account,
-      debit: sql<bigint>`sum(CASE ${lines.side} WHEN 'D' THEN ${lines.bani} ELSE 0 END)`.mapWith(
-        BigInt,
-      ),
-      credit: sql<bigint>`sum(CASE ${lines.side} WHEN 'C' THEN ${lines.bani} ELSE 0 END)`.mapWith(
-        BigInt,
-      ),
+      debit: sql<bigint>`sum(CASE WHEN ${side} = 'D'
+        THEN CASE WHEN ${lines.side} = 'D' THEN ${lines.bani} ELSE -${lines.bani} END
+        ELSE 0 END)`.mapWith(BigInt),
+      credit: sql<bigint>`sum(CASE WHEN ${side} = 'C'
+        THEN CASE WHEN ${lines.side} = 'C' THEN ${lines.bani} ELSE -${lines.bani} END
+        ELSE 0 END)`.mapWith(BigInt),
     })
     .from(lines)
     .innerJoin(entries, and(eq(entries.companyId, lines.companyId), eq(entries.id, lines.entryId)))
+    .leftJoin(
+      reversal,
+      and(
+        eq(reversal.companyId, entries.companyId),
+        eq(reversal.id, entries.proposalId),
+        sql`substr(${reversal.subjectKey}, 1, 8) = 'reverse:'`,
+      ),
+    )
+    .leftJoin(
+      reversedLine,
+      and(
+        eq(reversedLine.companyId, lines.companyId),
+        sql`${reversedLine.entryId} = substr(${reversal.subjectKey}, 9)`,
+        eq(reversedLine.lineNo, lines.lineNo),
+      ),
+    )
     .where(
       and(
         eq(lines.companyId, companyId),
@@ -837,7 +863,9 @@ export function cashRegisterSections(
   const months = new Map<
     number,
     {
-      registers: Set<string>;
+      /** Each register's sales and receipts: a register whose reports a storno cancelled is
+       * not counted. */
+      registers: Map<string, { bani: bigint; receipts: number }>;
       receipts: number;
       byRate: Map<D394Rate, { base: bigint; vat: bigint }>;
     }
@@ -852,25 +880,34 @@ export function cashRegisterSections(
       continue;
     }
     const month = Number(entry.taxPoint.slice(5, 7));
-    const held = months.get(month) ?? { registers: new Set(), receipts: 0, byRate: new Map() };
-    if (entry.attributes.register && !entry.attributes.invoiced)
-      held.registers.add(entry.attributes.register);
+    const held = months.get(month) ?? { registers: new Map(), receipts: 0, byRate: new Map() };
+    if (entry.attributes.register && !entry.attributes.invoiced) {
+      const register = held.registers.get(entry.attributes.register) ?? { bani: 0n, receipts: 0 };
+      register.bani += entry.baseBani + entry.taxBani;
+      held.registers.set(entry.attributes.register, register);
+    }
     const amounts = held.byRate.get(rate as D394Rate) ?? { base: 0n, vat: 0n };
     amounts.base += entry.baseBani;
     amounts.vat += entry.taxBani;
     held.byRate.set(rate as D394Rate, amounts);
     months.set(month, held);
   }
-  // The receipts: each report's count once (its entries share it), the invoiced ones taken out.
+  // The receipts: each report's count once per entry booking it (its tax entries share it), a
+  // storno's negative (`signedAttributes`), the invoiced ones taken out.
   const counted = new Set<string>();
   for (const entry of entries_) {
     const month = Number(entry.taxPoint.slice(5, 7));
     const held = months.get(month);
     if (!held) continue;
-    const key = `${entry.documentId}|${entry.attributes.invoiced ?? ''}`;
+    const key = `${entry.entryId}|${entry.documentId}|${entry.attributes.invoiced ?? ''}`;
     if (counted.has(key)) continue;
     counted.add(key);
-    held.receipts += Number(entry.attributes.receipts ?? '0');
+    const receipts = Number(entry.attributes.receipts ?? '0');
+    held.receipts += receipts;
+    const register = entry.attributes.invoiced
+      ? undefined
+      : held.registers.get(entry.attributes.register ?? '');
+    if (register) register.receipts += receipts;
   }
   return [...months.entries()]
     .sort(([a], [b]) => a - b)
@@ -885,7 +922,10 @@ export function cashRegisterSections(
         (sum, value) => sum + (value?.base ?? 0) + (value?.vat ?? 0),
         0,
       );
-      return { month, registers: held.registers.size, receipts: held.receipts, total, byRate };
+      const registers = [...held.registers.values()].filter(
+        (register) => register.bani !== 0n || register.receipts !== 0,
+      ).length;
+      return { month, registers, receipts: held.receipts, total, byRate };
     })
     .filter((month) => month.receipts > 0 || month.total !== 0);
 }

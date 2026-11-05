@@ -15,7 +15,8 @@ import {
 } from 'xfactura-core/ro/declarations/d112';
 import { counties } from 'xfactura-core/ro/geo';
 import { d112Filing, quarterMonths, type MinimumExemption } from 'xfactura-core/ro/payroll';
-import { addDays, type LocalDate } from 'xfactura-core/time';
+import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
+import { addDays, monthStart, type LocalDate, type Month } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
 import {
   artifactEvents,
@@ -130,14 +131,37 @@ export async function d112FilingOf(tx: Transaction, companyId: string, month: st
   return { period, ...filing };
 }
 
+/** The month's minimum wage and its relief from the rule register, whole lei, for the structure's
+ * check; the rule gap's message when either is not sourced. */
+function structureParameters(rules: RuleContext, month: string) {
+  const at = monthStart(month as Month);
+  try {
+    const wage = rules.param<string>('ro.payroll.minimum_wage', 'payroll_month_start', at);
+    const relief = rules.param<{ amount: string }>(
+      'ro.payroll.minimum_wage_relief',
+      'payroll_month_start',
+      at,
+    );
+    return { parameters: { minimumWage: Number(wage), relief: Number(relief.amount) } };
+  } catch (error) {
+    if (!(error instanceof RuleGapError)) throw error;
+    return { gap: error.message };
+  }
+}
+
 /**
  * The monthly declaration of social contributions, wage tax and the insured (D112) from the
  * month's posted payroll run: each employee's contract, days, bases, contributions, deductions
  * and tax as the run computed them, their CNP opened from its seal for the declaration only. The
  * medical certificates the run paid are declared as they were paid, their diagnosis code opened
- * from its seal the same way; sick pay entered by hand, without certificates, is refused.
+ * from its seal the same way; sick pay entered by hand, without certificates, is refused. The
+ * month's minimum wage and relief are the register's (4050 and 300 lei in January–June 2026,
+ * 4325 and 200 lei from July), which must be those of ANAF's structure for the month.
  */
-export function d112Declaration(secret: string): DeclarationKind {
+export function d112Declaration(
+  secret: string,
+  rulesOf: (tx: Transaction, companyId: string) => Promise<RuleContext>,
+): DeclarationKind {
   const sealer = new Sealer(secret);
   return {
     kind: 'D112',
@@ -168,7 +192,10 @@ export function d112Declaration(secret: string): DeclarationKind {
           code: 'SELLER_DETAILS',
           message: 'Înregistrați datele de identificare ale companiei.',
         });
-      if (problems.length || !run || !seller) return { xml: '', inputs, problems, summary: null };
+      const structure = structureParameters(await rulesOf(tx, companyId), month);
+      if ('gap' in structure) problems.push({ code: 'RULE_GAP', message: structure.gap! });
+      if (problems.length || !run || !seller || !structure.parameters)
+        return { xml: '', inputs, problems, summary: null };
 
       const whole = (bani: bigint, what: string) => {
         if (bani % 100n !== 0n)
@@ -444,6 +471,7 @@ export function d112Declaration(secret: string): DeclarationKind {
           healthFund: (address.subdivision ?? 'RO-B') as D112HealthFund,
         },
         insured,
+        parameters: structure.parameters,
       };
       problems.push(
         ...checkD112(model)
