@@ -137,8 +137,8 @@ describe('obligations calendar', () => {
     expect([closure.obligations, closure.needs]).toEqual([[], []]);
   });
 
-  test('a PFA: D300 and D394 as for any payer, D406 a named gap; no S1005 nor D101', async () => {
-    const { calendar, s } = await company({
+  test('a PFA: D300 and D394 as for any payer; no D406 (exempt), no S1005 nor D101', async () => {
+    const { calendar } = await company({
       'entity.form': 'pfa',
       'vat.status': 'normal_vat',
       'vat.period': 'monthly',
@@ -146,16 +146,6 @@ describe('obligations calendar', () => {
     });
     const rows = await calendar('2026-12', '2026-12', '2026-10-27');
     expect(rows).toContain('D300 2026-12 2027-01-25 due');
-    expect(rows).toContain('D406 2026-12 - blocked');
-    expect(rows.filter((row) => /^(S1005|D101|D100) /.test(row))).toEqual([]);
-    const [d406] = (
-      await s.list<{ kind: string; gap: string | null; blockers: string[] }>(
-        s.owner,
-        'obligations.calendar',
-        { from: '2026-12', to: '2026-12', today: '2026-10-27' },
-      )
-    ).filter((item) => item.kind === 'D406');
-    expect(d406).toMatchObject({ blockers: ['D406_INDIVIDUAL'] });
-    expect(d406!.gap).toContain('OPANAF nr. 1783/2021');
+    expect(rows.filter((row) => /^(S1005|D101|D100|D406) /.test(row))).toEqual([]);
   });
 });

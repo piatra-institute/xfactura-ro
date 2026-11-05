@@ -1,3 +1,6 @@
+import { nonpayerAnchors } from './anchors-nonpayers';
+import { saftAnchors } from './anchors-saft';
+import { taxAccountAnchors } from './anchors-taxaccount';
 import type { Anchor } from './types';
 
 /**
@@ -217,10 +220,167 @@ export const clauseAnchors: Readonly<Record<string, readonly Anchor[]>> = {
       to: 'din formatul bilanțului prescurtat prevăzut la pct. 451.',
     },
   ],
+  'ANAF/Cod-fiscal-consolidat:art.147(11)': [
+    {
+      from: '(11) Ori de câte ori în cursul trimestrului persoanele fizice',
+      to: 'urmând ca după încheierea trimestrului să se depună numai declarația pentru luna a treia.',
+    },
+  ],
+  'OPANAF605/2026:anexa6.cap.I': [
+    {
+      from: 'trimestrial, până la data de 25 inclusiv a lunii următoare trimestrului, de plătitorii',
+      to: 'pentru fiecare lună din trimestru, potrivit art. 147 alin. (5) din Codul fiscal.',
+    },
+    {
+      from: 'Ori de câte ori în cursul trimestrului persoanele fizice care realizează venituri din salarii sau asimilate salariilor beneficiază de concedii şi',
+      to: 'urmând ca după încheierea trimestrului să se depună numai declaraţia pentru luna a treia.',
+    },
+  ],
+  'OMFP3254/2017:art.3-5': [
+    {
+      from: '(3) Registrul de evidență fiscală se ține, după caz, pe fiecare sursă de venit',
+      to: 'pe fiecare sursă din fiecare categorie de venit, astfel încât',
+    },
+  ],
+  'ANAF/Cod-fiscal-consolidat:art.69(3),(9)': [
+    {
+      from: '(3) Norma de venit pentru fiecare activitate desfășurată de contribuabil',
+      to: 'norma de venit fiind stabilită pentru fiecare membru asociat.',
+    },
+    {
+      from: '(9) Contribuabilii, pentru care venitul net se determină pe bază de norme de venit',
+      to: 'până la termenul legal de depunere prevăzut la art. 122 alin. (3).',
+    },
+  ],
+  'ANAF/Cod-fiscal-consolidat:norme.art.69.pct.8(5)': [
+    {
+      from: '(5) În aplicarea art. 69 din Codul fiscal, în cazul în care activitatea',
+      to: 'aplică criteriile specifice de corecție asupra normei de venit proprii.',
+    },
+  ],
+  'L239/2025:art.XII.pct.6': [
+    {
+      from: '6. La articolul 69, alineatul (3) se modifică',
+      to: 'norma de venit fiind stabilită pentru fiecare membru asociat.',
+    },
+  ],
+  'L239/2025:art.XIII': [
+    {
+      from: 'b) prevederile art. XII pct. 3 - 11, 16 şi 18 - 20 se aplică',
+      to: 'se aplică începând cu veniturile aferente anului 2026;',
+    },
+  ],
+  'LJR/Cod-fiscal-2025:art.69(3)': [
+    {
+      from: '(3) Norma de venit pentru fiecare activitate desfășurată de contribuabil nu poate fi mai mică decât salariul',
+      to: 'norma de venit fiind stabilită pentru fiecare membru asociat.',
+    },
+  ],
+  'OUG128/2024:art.I.pct.1': [
+    {
+      from: '(9) Contribuabilii, pentru care venitul net se determină pe bază de norme de venit şi',
+      to: 'prevăzut la art. 122 alin. (3).',
+    },
+    {
+      from: '(2)Prevederile art. I pct. 1-4, 6-10',
+      to: 'se aplică începând cu veniturile aferente anului 2025.',
+    },
+  ],
   'ANAF/ghid-coduri-facturi-2.9:O': [
     {
       from: 'Categoria de TVA "O": pentru operațiuni efectuate de neplătitorii de TVA',
       to: 'conform Codului Fiscal.',
     },
   ],
+  'L82/1991:art.36(1)(a)': [
+    {
+      from: '(1) Persoanele prevăzute la art. 1 alin. (1) - (3) depun un exemplar al situaţiilor financiare anuale',
+      to: 'în termen de 150 de zile de la încheierea exerciţiului financiar;',
+    },
+  ],
+  'OMF2036/2025:anexa1.pct.3.1(1)(a)': [
+    {
+      from: '3.1. (1) Termenele pentru depunerea situaţiilor financiare anuale',
+      to: 'până la data de 31 mai inclusiv a exerciţiului financiar următor celui de raportare;',
+    },
+  ],
+  'OMF1194/2025:art.2,anexa.pct.16-17': [
+    {
+      from: 'ART. 2 (1) Sistemul de raportare contabilă la 30 iunie 2025',
+      to: 'echivalentul în lei a 1.000.000 euro.',
+    },
+    {
+      from: '(4) Pentru întocmirea raportărilor contabile la 30 iunie 2025, încadrarea',
+      to: 'valabil la data încheierii exerciţiului financiar precedent.',
+    },
+    {
+      from: '16. Entităţile care nu au desfăşurat activitate de la data înfiinţării',
+      to: 'până cel mai târziu la data de 18 august 2025.',
+    },
+  ],
+  'ANAF/raportari-semestriale:2026': [{ from: 'S1012 S1013 S1029', to: 'S1074 S1081' }],
+  // The profit tax (src/ro/reviews/specs/profit.ts).
+  'ANAF/Cod-fiscal-consolidat:art.26(1)(a)': [
+    {
+      from: 'a) rezerva legală este deductibilă în limita unei cote de 5%',
+      to: 'subscris și vărsat sau din patrimoniu, după caz;',
+    },
+  ],
+  'ANAF/Cod-fiscal-consolidat:norme.art.26.pct.19(1)': [
+    {
+      from: '19. (1) În aplicarea prevederilor art. 26 alin. (1) lit. a)',
+      to: 'în funcție de nivelul profitului contabil din perioada de calcul.',
+    },
+  ],
+  'ANAF/Cod-fiscal-consolidat:art.25(3)(b)': [
+    {
+      from: 'b) cheltuielile sociale, în limita unei cote de până la 5%',
+      to: 'potrivit Codului muncii.',
+    },
+  ],
+  'ANAF/Cod-fiscal-consolidat:art.25(4)(i)': [
+    {
+      from: 'i) cheltuielile de sponsorizare și/sau mecenat, acordate potrivit legii',
+      to: 'valoarea reprezentând 20% din impozitul pe profit datorat.',
+    },
+  ],
+  'ANAF/Cod-fiscal-consolidat:art.31(1)': [
+    {
+      from: '(1) Pierderile fiscale anuale stabilite prin declarația de impozit pe profit, începând cu anul 2024',
+      to: 'la fiecare termen de plată a impozitului pe profit.',
+    },
+  ],
+  'ANAF/Cod-fiscal-consolidat:art.31(5)': [
+    {
+      from: '(5) Contribuabilii care au fost plătitori de impozit pe veniturile microîntreprinderilor și care anterior au realizat pierdere fiscală',
+      to: 'Această pierdere se recuperează potrivit alin. (1) și (7), după caz.',
+    },
+  ],
+  'ANAF/Cod-fiscal-consolidat:art.31(7)-(8)': [
+    {
+      from: '(7) Pierderile fiscale anuale stabilite prin declarația de impozit pe profit, aferente anilor precedenți',
+      to: 'aceste pierderi se cumulează.',
+    },
+  ],
+  'ANAF/Cod-fiscal-consolidat:art.41(1)': [
+    {
+      from: '(1) Calculul, declararea și plata impozitului pe profit, cu excepțiile',
+      to: 'prevăzut la art. 42.',
+    },
+  ],
+  'ANAF/Cod-fiscal-consolidat:art.19(1)': [
+    {
+      from: '(1) Rezultatul fiscal se calculează ca diferență între veniturile și cheltuielile înregistrate',
+      to: 'iar rezultatul fiscal negativ este pierdere fiscală.',
+    },
+  ],
+  'ANAF/Cod-fiscal-consolidat:art.25(2)': [
+    {
+      from: '(2) Cheltuielile cu salariile și cele asimilate salariilor astfel cum sunt definite potrivit titlului IV',
+      to: 'cu excepția celor reglementate la alin. (3) și (4).',
+    },
+  ],
+  ...nonpayerAnchors,
+  ...taxAccountAnchors,
+  ...saftAnchors,
 };

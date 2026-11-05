@@ -189,13 +189,22 @@ describe('determinations', () => {
       confirmed: true,
       values: [{ value: 'profit', effectiveFrom: '2026-01-01' }],
     });
-    // The calendar follows the closure: micro tax for 2025's last quarter, none for 2026's first.
+    // The calendar follows the closure: micro tax for 2025's last quarter, profit tax for 2026's
+    // first (quarterly by law after a micro year, art. 41 alin. (6) lit. d)), and the D700 that
+    // declares leaving the regime from 1 January, by the earlier reading of art. 55 alin. (5).
     const rows = await calendar('2025-12', '2026-03');
     expect(rows).toContain('D100 2025-12 2026-01-26 overdue');
-    expect(rows.filter((row) => row.startsWith('D100 2026'))).toEqual([]);
+    expect(rows.filter((row) => row.startsWith('D100 2026'))).toEqual([
+      'D100 2026-03 2026-04-27 due',
+    ]);
+    expect(rows).toContain('D700 2026 2026-03-31 due');
     const result = await closure('2025-12', '2026-03');
-    expect(result.status).toBe('UNSUPPORTED');
-    expect(result.unsupported.map((item) => item.trigger)).toEqual(['PROFIT_TAX']);
+    expect(result.status).toBe('ELIGIBLE');
+    expect(result.unsupported).toEqual([]);
+    expect(result.obligations.find((item) => item.kind === 'D700')).toMatchObject({
+      deadline: 'D700.micro_exit_january',
+      deadlinePeriod: '2025',
+    });
     expect(
       result.obligations.find((item) => item.kind === 'D100' && item.period === '2025-12'),
     ).toMatchObject({
@@ -323,7 +332,7 @@ describe('determinations', () => {
     expect(module.templates).toEqual([]);
   });
 
-  test('a non-payer approaching the small-enterprise threshold: warned at 80%, UNSUPPORTED past it', async () => {
+  test('a non-payer approaching the small-enterprise threshold: warned at 80%, registration due past it', async () => {
     const { s, sell, evaluate, closure } = await company({
       year: 2026,
       today: '2026-10-30',
@@ -371,12 +380,24 @@ describe('determinations', () => {
     expect(crossed.fingerprint).not.toBe(watched.fingerprint);
     const threshold = find((await evaluate(2026)).determinations, 'vat.threshold');
     expect(threshold).toMatchObject({
-      status: 'unsupported',
-      unsupported: { trigger: 'VAT_THRESHOLD_EXCEEDED' },
+      status: 'proposed',
+      changes: [{ value: 'exceeded', effectiveFrom: '2026-10-05' }],
+      unsupported: null,
+    });
+    // Registration under art. 316 is due from the crossing day (V1): the closure asks for it,
+    // never assumes it, and the worklist blocks on it.
+    expect(find((await evaluate(2026)).determinations, 'vat.status')).toMatchObject({
+      changes: [{ value: 'normal_vat', effectiveFrom: '2026-10-05' }],
+      recorded: { agrees: false },
     });
     const result = await closure('2026-10', '2026-10');
-    expect(result.status).toBe('UNSUPPORTED');
-    expect(result.unsupported.map((item) => item.trigger)).toContain('VAT_THRESHOLD_EXCEEDED');
+    expect(result.status).toBe('NEEDS_EVIDENCE');
+    expect(result.needs).toContainEqual(
+      expect.objectContaining({ code: 'DETERMINATION_CONFLICT', fact: 'vat.status/2026' }),
+    );
+    expect(
+      (await work(s, bot)).find((item) => item.subject.id === 'vat.status/2026'),
+    ).toMatchObject({ kind: 'determination.missing', severity: 'block' });
   });
 
   test('books from 1 January 2026: the worklist asks nothing of 2025, and offers no D212 while the form is unknown', async () => {

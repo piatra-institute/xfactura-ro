@@ -20,6 +20,7 @@ import {
   automationEvents,
   artifactEvents,
   assetEvents,
+  assetFiscal,
   assets,
   audit,
   bankMappings,
@@ -469,7 +470,23 @@ async function assetRecord(world: World, extra: Partial<typeof assets.$inferInse
         createdBy: world.owner,
       }),
     );
-  return { id, dispose };
+  // A fiscal basis (Codul fiscal art. 28), numbered per asset.
+  const fiscal = (version: number) =>
+    world.db.write((tx) =>
+      tx.insert(assetFiscal).values({
+        companyId: world.company,
+        assetId: id,
+        version,
+        method: 'linear',
+        valueBani: 600000n,
+        lifeMonths: 36,
+        m1: false,
+        newAsset: false,
+        evidenceId,
+        createdBy: world.owner,
+      }),
+    );
+  return { id, dispose, fiscal };
 }
 
 /** A PFA's income source (its form recorded unless `form` is false), with a way to add versions. */
@@ -2438,6 +2455,22 @@ const attacks: Attack[] = [
     run: (world) => assetRecord(world, { account: '6028' }),
   },
   {
+    trigger: 'inv_asset_fiscal_guard',
+    code: 'asset_fiscal_version',
+    name: "skipping a version of an asset's fiscal basis",
+    run: async (world) => {
+      const { fiscal } = await assetRecord(world);
+      await fiscal(1);
+      return fiscal(3);
+    },
+  },
+  {
+    trigger: 'inv_asset_fiscal_guard',
+    code: 'asset_fiscal_version',
+    name: "starting an asset's fiscal bases at a version other than 1",
+    run: async (world) => (await assetRecord(world)).fiscal(2),
+  },
+  {
     trigger: 'inv_asset_event_guard',
     code: 'asset_disposal',
     name: 'disposing of an asset before its commissioning',
@@ -3254,7 +3287,9 @@ describe('append-only records', () => {
     const spv = await submittable(world);
     await spv.step(await spv.submit(), 1, 'authorized');
     await (await payrollRecords(world)).line();
-    await (await assetRecord(world)).dispose(1, '2026-06-30');
+    const asset = await assetRecord(world);
+    await asset.dispose(1, '2026-06-30');
+    await asset.fiscal(1);
     await (await statusRecord(world)).snapshot(1);
     await (await sourceRecord(world)).version(1);
     await (await memberRecord(world)).agreement();

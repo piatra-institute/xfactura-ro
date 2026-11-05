@@ -170,6 +170,10 @@ export async function companyRecords(tx: Tx, companyId: string) {
       .select()
       .from(s.assetEvents)
       .where(eq(s.assetEvents.companyId, companyId)),
+    acc_asset_fiscal: await tx
+      .select()
+      .from(s.assetFiscal)
+      .where(eq(s.assetFiscal.companyId, companyId)),
     acc_employees: await tx.select().from(s.employees).where(eq(s.employees.companyId, companyId)),
     acc_employment_terms: await tx
       .select()

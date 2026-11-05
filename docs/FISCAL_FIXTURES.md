@@ -69,6 +69,14 @@ With only RO-SRV-01 enabled, the expected eligibility result is UNSUPPORTED with
 
 Mutation: deduct the expense as ordinary and also take the credit; the independent bridge/credit assertions must fail.
 
+## Where FP-03, FP-04 and FP-05 run (4 November 2026)
+
+The profit tax (P1) reproduces them, still as draft candidates, never as oracles:
+- **FP-03:** `correction.priorYear` books Dr 1174 / Cr 401 5,000 in July of the next year (refusing the same correction through 628), and the year's rectification (`tax.profit`, `rectification`) books the 800 lei less on 1174 (Dr 4411 / Cr 1174); its rectifying D101 passes ANAF's validator (`profit.test.ts`, `profit.integration.test.ts`, `official-d101.test.ts`).
+- **FP-04:** a 2024 vintage of 100,000 against 60,000: 42,000 recovered, 2,880 tax, 58,000 left (`profit.test.ts`).
+- **FP-05:** 2,000 of sponsorship added back (rd. 27) and credited at 1,500, no carry-forward; with only the base profile the closure still reports `SPONSORSHIP`, for D107 (`profit.test.ts`, `official-d101.test.ts`).
+- **The deadline test of OUG nr. 8/2026:** the calendar gives D101 for 2026 by 25 June 2027 (`ro.deadline.D101`).
+
 ## Promotion and mutation evidence
 
 Before promotion, freeze company/profile/period inputs, exact legal versions and clause decisions, independently signed expected entries/positions/artifact mappings, negative variants and reporting dependencies. The fixed fixture rate/limit is an oracle input for its historical scenario, not a global application default.

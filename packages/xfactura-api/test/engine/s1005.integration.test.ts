@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import path from 'node:path';
 import { s1005Field } from 'xfactura-core/ro/annual/s1005';
 import { DukIntegrator } from '../../source/engine/adapters/declaration-validator';
+import { answerAnnual } from './fixtures/annual';
 import { invoiceXml } from './fixtures/invoice';
 import { journal, scenario, type Scenario } from './scenario';
 
@@ -151,12 +152,15 @@ async function firstYear(validator?: DukIntegrator, opening = false, laptop = fa
       }),
     ),
   );
-  const prepare = (extra: Record<string, unknown> = {}, year = '2025') =>
-    s.invoke<Artifact>(s.owner, 'declarations.prepare', {
+  // The F30 chapters the books do not hold and the disclosures, answered as the owner would.
+  const prepare = async (extra: Record<string, unknown> = {}, year = '2025') => {
+    if (year === '2025') await answerAnnual(s, 'S1005', 2025, 10_000);
+    return s.invoke<Artifact>(s.owner, 'declarations.prepare', {
       kind: 'S1005',
       period: year,
       options: { ...options, ...extra },
     });
+  };
   return { s, prepare };
 }
 

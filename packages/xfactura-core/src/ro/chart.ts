@@ -121,6 +121,12 @@ const controls: Record<string, ControlKind> = {
   '444': 'tax.payable',
   '446': 'tax.payable',
   '447': 'tax.payable',
+  // Other debts to and claims on the state budget (OMFP 1802/2014, the functions of account
+  // 448): fines, penalties and interest owed (4481), and what the budget owes back, a payment to
+  // the single account not yet distributed among them included (4482). Per authority, like the
+  // taxes.
+  '4481': 'tax.payable',
+  '4482': 'tax.receivable',
   // Associates' current accounts and interest on them: per associate, normally owed to them.
   '4551': 'payable',
   '4558': 'payable',

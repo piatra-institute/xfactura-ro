@@ -6,7 +6,10 @@ import { divRound, formatMoney, LEDGER_CURRENCY, parseMoney } from 'xfactura-cor
 import { booksSystemOf, entityFormOf, individualForms } from 'xfactura-core/ro/entity';
 import {
   adjustedNorm,
+  attributeSources,
   casDue,
+  cassOtherDue,
+  daysBetween,
   distributeByQuota,
   cassDue,
   chargeJournals,
@@ -19,8 +22,11 @@ import {
   natureOf,
   offsetLosses,
   realSourceIncome,
+  segmentsOf,
   toLeu,
+  type Attribution,
   type CasRule,
+  type CassOtherRule,
   type CassRule,
   type CasStatus,
   type LossRule,
@@ -31,10 +37,13 @@ import {
   type PitLimits,
   type RealSource,
   type Rounding,
+  type Segment,
+  type SourcePart,
+  type SourcesRule,
 } from 'xfactura-core/ro/pit';
-import { normCriteria } from 'xfactura-core/ro/declarations/d212';
+import { normCriteria, type NormCriterion } from 'xfactura-core/ro/declarations/d212';
 import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
-import { monthEnd, type LocalDate, type Month } from 'xfactura-core/time';
+import { addDays, monthEnd, type LocalDate, type Month } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
 import {
   assetEvents,
@@ -56,6 +65,8 @@ import { loadState } from '../kernel/state';
 const day = z.iso.date();
 const money = z.string().regex(/^(0|[1-9]\d{0,15})(\.\d{1,2})?$/);
 const percent = z.string().regex(/^(0|[1-9]\d?)(\.\d{1,2})?$/);
+const sharePercent = z.string().regex(/^(100|[1-9]?\d)(\.\d{1,2})?$/);
+const accountMatch = z.string().regex(/^[1-9]\d{0,3}(\.[A-Z0-9_-]{1,24})*$/);
 const lei = (bani: bigint) => formatMoney(bani, LEDGER_CURRENCY);
 const block = (code: string, message: string): Issue => ({ code, severity: 'block', message });
 const info = (code: string, message: string): Issue => ({ code, severity: 'info', message });
@@ -302,6 +313,9 @@ export const fiscalRegisterInput = z
             increaseCriterion: z.enum(normCriteria).optional(),
             reductionPercent: percent.optional(),
             reductionCriterion: z.enum(normCriteria).optional(),
+            /** The day the DGRFP set the norm (its decision), for the years whose floor counts the
+             * minimum wage in force then (art. 69 alin. (3) before the income of 2026). */
+            setOn: day.optional(),
             evidenceId: z.uuid(),
           })
           .strict(),
@@ -318,6 +332,67 @@ export const fiscalRegisterInput = z
      * year: from the fiscal register's income part or the declaration filed. */
     previousGross: z
       .array(z.object({ sourceId: z.uuid(), amount: money, evidenceId: z.uuid() }).strict())
+      .max(20)
+      .default([]),
+    /** With several sources in the year, the register is kept per source (OMFP nr. 3.254/2017
+     * art. 3 alin. (3)–(4), art. 4 alin. (1), art. 5 alin. (1)): the source of each account the
+     * receipts, payments, fixed assets and expense reports are booked on (with its analytics, the
+     * longest match winning), and, for accounts whose expenses serve several sources, the key the
+     * person states for them (by gross income or by fixed shares), each with its document. */
+    attribution: z
+      .object({
+        accounts: z
+          .array(z.object({ match: accountMatch, sourceId: z.uuid() }).strict())
+          .max(200)
+          .default([]),
+        shared: z
+          .array(
+            z
+              .object({
+                match: accountMatch,
+                key: z.discriminatedUnion('kind', [
+                  z.object({ kind: z.literal('gross') }).strict(),
+                  z
+                    .object({
+                      kind: z.literal('fixed'),
+                      shares: z
+                        .array(z.object({ sourceId: z.uuid(), percent: sharePercent }).strict())
+                        .min(2)
+                        .max(20),
+                    })
+                    .strict(),
+                ]),
+                evidenceId: z.uuid(),
+              })
+              .strict(),
+          )
+          .max(50)
+          .default([]),
+        evidenceId: z.uuid(),
+      })
+      .strict()
+      .optional(),
+    /** Income the person declares from outside these books, as declared: rent, investments
+     * (interest, gains) and dividends. It counts for the CASS of art. 170 alin. (2)–(3) and for
+     * the exception of art. 174 alin. (7) lit. b), never for CAS or the business's income tax. */
+    declaredIncome: z
+      .array(
+        z
+          .object({
+            kind: z.enum(['rent', 'investment', 'dividends']),
+            /** The income the CASS counts (art. 170 alin. (4); OPANAF nr. 2.736/2025 instr. pct.
+             * 51: rent's net income, dividends and interest paid less the tax withheld). */
+            amount: money,
+            /** The CASS a payer withheld on it (D212 sec. 3.2.2 rd. 6), "0" when none. */
+            cassWithheld: money,
+            /** Its income tax is final, withheld at source: the declaration has no subsection of
+             * its own for that tax. */
+            taxSettled: z.boolean(),
+            description: z.string().trim().min(3).max(300),
+            evidenceId: z.uuid(),
+          })
+          .strict(),
+      )
       .max(20)
       .default([]),
   })
@@ -404,7 +479,7 @@ async function fiscalDepreciation(tx: Transaction, companyId: string, income: nu
     ).map((row) => [row.assetId, row.date]),
   );
   const month = (date: string) => year(date) * 12 + Number(date.slice(5, 7)) - 1;
-  const items: { nature: NatureCode; flow: bigint; label: string }[] = [];
+  const items: SourcePart[] = [];
   const issues: Issue[] = [];
   for (const card of await tx
     .select()
@@ -423,7 +498,9 @@ async function fiscalDepreciation(tx: Transaction, companyId: string, income: nu
     if (through > before)
       items.push({
         nature: 'expense.depreciation',
+        account: card.account,
         flow: -(through - before),
+        date: null,
         label: `Amortizare fiscală ${card.number} ${card.name}`,
       });
     if (disposed && year(disposed) === income && through < card.valueBani)
@@ -465,7 +542,7 @@ async function nonCashEntries(
       ),
     );
   const candidates = [...new Set(touched.map((row) => row.entryId))];
-  const items: { nature: NatureCode; flow: bigint; label: string }[] = [];
+  const items: SourcePart[] = [];
   const issues: Issue[] = [];
   if (!candidates.length) return { items, issues };
   const headers = new Map(
@@ -500,7 +577,9 @@ async function nonCashEntries(
         const flow = line.side === 'C' ? line.bani : -line.bani;
         items.push({
           nature: classify(catalogue, line.account, flow),
+          account: line.account,
           flow,
+          date: header.date as LocalDate,
           label: `Decont de cheltuieli: ${header.description}`,
         });
       }
@@ -518,29 +597,121 @@ async function nonCashEntries(
 const view = (lines: { nature: NatureCode; label: string; bani: bigint }[]) =>
   lines.map((line) => ({ nature: line.nature, label: line.label, amount: lei(line.bani) }));
 
-/** A real-system source's register for a year: its cash-basis natures and non-cash items. */
-async function realSourceYear(
+/** A source in a year: its versions, the one at the year's end, and its methods over the year. */
+type ActiveSource = {
+  versions: IncomeSourceRow[];
+  current: IncomeSourceRow;
+  segments: Segment[];
+};
+
+/** The sources active at some point of a year. */
+function activeIn(all: Map<string, IncomeSourceRow[]>, income: number): ActiveSource[] {
+  const start = `${income}-01-01`;
+  const end = `${income}-12-31`;
+  return (
+    [...all.values()]
+      .map((versions) => ({ versions, current: versionAt(versions, end) ?? versions[0]! }))
+      .filter(
+        ({ current }) => current.startedOn <= end && (!current.endedOn || current.endedOn >= start),
+      )
+      .map((item) => ({ ...item, segments: segmentsOf(item.versions, income) }))
+      // In a stable order, for the register and the D212's subsections: by start, then name.
+      .sort(
+        (a, b) =>
+          a.current.startedOn.localeCompare(b.current.startedOn) ||
+          a.current.name.localeCompare(b.current.name, 'ro') ||
+          a.current.sourceId.localeCompare(b.current.sourceId),
+      )
+  );
+}
+
+const hasReal = (source: ActiveSource) =>
+  source.segments.some((segment) => segment.method === 'sistem_real');
+const normSegment = (source: ActiveSource) =>
+  source.segments.find((segment) => segment.method === 'norma');
+
+type Attributed = {
+  result: RealSource;
+  parts: SourcePart[];
+  normGross: bigint;
+  shared: { account: string; bani: bigint }[];
+};
+
+/**
+ * A year's registers, per source: the Registrul-jurnal's natures with their dates, fiscal
+ * depreciation and expense reports, and the non-cash items given (`extra`), split among the
+ * sources (`attributeSources`); each source in the real system then gets its net income (art. 68).
+ */
+async function yearRegisters(
   tx: Transaction,
   companyId: string,
+  rules: RuleContext,
   income: number,
   params: YearParams,
-  extra: { nature: NatureCode; flow: bigint; label: string }[],
+  sources: readonly ActiveSource[],
+  extra: SourcePart[],
   eurRate: string | null,
+  attribution: Attribution | null,
 ) {
   const { rows } = await cashJournalOf(tx, companyId, income, params.catalogue);
   const depreciation = await fiscalDepreciation(tx, companyId, income);
   const reports = await nonCashEntries(tx, companyId, income, params.catalogue);
-  const nonCash = [...depreciation.items, ...reports.items, ...extra];
-  const result = realSourceIncome(
-    { parts: rows.flatMap((row) => row.parts), nonCash },
-    { limits: params.limits, rounding: params.rounding, eurRate, persons: 1 },
-  );
-  return {
-    result,
-    nonCash,
-    issues: [...depreciation.issues, ...reports.issues, ...result.issues],
-    rows,
-  };
+  const parts: SourcePart[] = [
+    ...rows.flatMap((row) =>
+      row.parts.map((part) => ({
+        nature: part.nature,
+        account: part.account,
+        flow: part.flow,
+        date: row.date,
+      })),
+    ),
+    ...depreciation.items,
+    ...reports.items,
+    ...extra,
+  ];
+  let rule: SourcesRule | null = null;
+  if (sources.length > 1 && attribution?.shared.length)
+    try {
+      rule = rules.param<SourcesRule>(
+        'ro.pit.sources',
+        'fiscal_year_start',
+        `${income}-01-01` as LocalDate,
+      );
+    } catch (error) {
+      if (!(error instanceof RuleGapError)) throw error;
+      requireCondition(false, 'RULE_GAP', error.message, 422, { ...error.gap });
+    }
+  const attributed = attributeSources({
+    parts,
+    sources: sources.map((source) => ({
+      sourceId: source.current.sourceId,
+      name: source.current.name,
+      segments: source.segments,
+    })),
+    attribution,
+    rule,
+  });
+  const issues: Issue[] = [...depreciation.issues, ...reports.issues, ...attributed.issues];
+  const registers = new Map<string, Attributed>();
+  for (const own of attributed.sources) {
+    const source = sources.find((item) => item.current.sourceId === own.sourceId)!;
+    if (!hasReal(source)) continue;
+    const result = realSourceIncome(
+      { parts: own.parts.map((part) => ({ nature: part.nature, flow: part.flow })), nonCash: [] },
+      { limits: params.limits, rounding: params.rounding, eurRate, persons: 1 },
+    );
+    for (const issue of result.issues)
+      if (!issues.some((item) => item.code === issue.code && item.message === issue.message))
+        issues.push(issue);
+    registers.set(own.sourceId, {
+      result,
+      parts: own.parts,
+      normGross: own.normGross,
+      shared: own.shared,
+    });
+  }
+  const normGross = new Map(attributed.sources.map((own) => [own.sourceId, own.normGross]));
+  return { registers, normGross, excluded: attributed.excluded, issues, rows };
 }
 
 /** The register's rows (OMFP nr. 3.254/2017 anexa nr. 1): the elements of the computation. */
@@ -575,8 +746,16 @@ const openingVintages = (input: FiscalRegisterInput, sourceId: string): LossVint
     .filter((item) => item.sourceId === sourceId && item.year < input.year)
     .map((item) => ({ year: item.year, bani: parseMoney(item.amount, LEDGER_CURRENCY) }));
 
+/** What blocks a year's registers per source: an amount no rule places, a key not admitted. */
+const attributionCodes = new Set([
+  'PIT_SOURCE_UNATTRIBUTED',
+  'PIT_SHARED_KEY',
+  'PIT_LIMIT_SOURCES',
+]);
+
 /** Each earlier year of a real-system source in these books, with its net income or loss, or
- * why a year could not be computed. */
+ * why a year could not be computed. With several sources in an earlier year, the attribution
+ * given for this year applies to it too. */
 async function earlierResults(
   tx: Transaction,
   companyId: string,
@@ -584,11 +763,13 @@ async function earlierResults(
   source: IncomeSourceRow,
   income: number,
   eurRate: string | null,
+  attribution: Attribution | null = null,
 ) {
   const from = Math.max(
     (await firstBooksYear(tx, companyId)) ?? income,
     Number(source.startedOn.slice(0, 4)),
   );
+  const all = await sourceVersions(tx, companyId);
   const years: YearResult[] = [];
   const issues: Issue[] = [];
   for (let earlier = from; earlier < income; earlier++) {
@@ -605,7 +786,31 @@ async function earlierResults(
       );
       continue;
     }
-    const { result } = await realSourceYear(tx, companyId, earlier, before, [], eurRate);
+    const active = activeIn(all, earlier);
+    const own = active.find((item) => item.current.sourceId === source.sourceId);
+    if (!own || !hasReal(own)) continue;
+    const year = await yearRegisters(
+      tx,
+      companyId,
+      rules,
+      earlier,
+      before,
+      active,
+      [],
+      eurRate,
+      attribution,
+    );
+    const blocking = year.issues.filter((issue) => attributionCodes.has(issue.code));
+    if (blocking.length) {
+      issues.push(
+        block(
+          'PIT_PRIOR_YEAR',
+          `Venitul net sau pierderea sursei ${source.name} din ${earlier} nu se pot stabili pe surse (${blocking.map((issue) => issue.code).join(', ')}): pierderile reportate din acel an lipsesc din calcul.`,
+        ),
+      );
+      continue;
+    }
+    const result = year.registers.get(source.sourceId)!.result;
     years.push({ year: earlier, params: before, net: result.totals.net, loss: result.totals.loss });
   }
   return { years, issues };
@@ -647,35 +852,68 @@ async function firstBooksYear(tx: Transaction, companyId: string) {
   return first ? year(first.from) : null;
 }
 
-/** Gross income of a year's receipts and payments, in bani: the income natures. */
-const grossOf = (rows: Awaited<ReturnType<typeof cashJournalOf>>['rows']) =>
-  rows
-    .flatMap((row) => row.parts)
-    .filter((part) => natureOf(part.nature)?.kind === 'income')
-    .reduce((sum, part) => sum + part.flow, 0n);
+/** A source's gross income of a year, in bani: the income natures placed on it, under a norm or
+ * in the real system. */
+async function sourceGross(
+  tx: Transaction,
+  companyId: string,
+  income: number,
+  catalogue: NatureCatalogue,
+  sourceId: string,
+  attribution: Attribution | null,
+) {
+  const { rows } = await cashJournalOf(tx, companyId, income, catalogue);
+  const active = activeIn(await sourceVersions(tx, companyId), income);
+  const incomeParts = rows.flatMap((row) =>
+    row.parts
+      .filter((part) => natureOf(part.nature)?.kind === 'income')
+      .map((part) => ({
+        nature: part.nature,
+        account: part.account,
+        flow: part.flow,
+        date: row.date,
+      })),
+  );
+  if (active.length <= 1) return { gross: incomeParts.reduce((sum, part) => sum + part.flow, 0n) };
+  const attributed = attributeSources({
+    parts: incomeParts,
+    sources: active.map((source) => ({
+      sourceId: source.current.sourceId,
+      name: source.current.name,
+      segments: source.segments,
+    })),
+    attribution,
+    rule: null,
+  });
+  if (attributed.issues.some((issue) => issue.code === 'PIT_SOURCE_UNATTRIBUTED')) return null;
+  const own = attributed.sources.find((item) => item.sourceId === sourceId);
+  return {
+    gross: (own?.normGross ?? 0n) + (own?.parts ?? []).reduce((sum, part) => sum + part.flow, 0n),
+  };
+}
 
-/** Days of activity in the year when less than all of it (art. 69 alin. (5); norme pct. 8 alin.
- * (8)–(10)), or null for the whole year. */
-function activeDays(source: IncomeSourceRow, income: number) {
+/** Days of activity within a period of the year (the year itself when not given), when less than
+ * all of it (art. 69 alin. (5); norme pct. 8 alin. (8)–(10)), or null for the whole year. */
+function activeDays(source: IncomeSourceRow, income: number, period?: Segment) {
   const start = `${income}-01-01`;
   const end = `${income}-12-31`;
-  const from = source.startedOn > start ? source.startedOn : start;
-  const to = source.endedOn && source.endedOn < end ? source.endedOn : end;
-  const days = (a: string, b: string) =>
-    Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000) + 1;
-  let active = Math.max(0, days(from, to));
+  const first = period && period.from > start ? period.from : start;
+  const last = period && period.to < end ? period.to : end;
+  const from = source.startedOn > first ? source.startedOn : first;
+  const to = source.endedOn && source.endedOn < last ? source.endedOn : last;
+  let active = Math.max(0, daysBetween(from, to));
   if (source.suspendedFrom) {
     const sFrom = source.suspendedFrom > from ? source.suspendedFrom : from;
     const sTo = source.suspendedTo && source.suspendedTo < to ? source.suspendedTo : to;
-    if (sFrom <= sTo) active -= days(sFrom, sTo);
+    if (sFrom <= sTo) active -= daysBetween(sFrom, sTo);
   }
-  return from === start && to === end && active === days(start, end) ? null : active;
+  return from === start && to === end && active === daysBetween(start, end) ? null : active;
 }
 
-/** Days of the year the activity was suspended, or null when it was not. */
-function interruptedDays(source: IncomeSourceRow, income: number) {
-  const whole = activeDays({ ...source, suspendedFrom: null, suspendedTo: null }, income);
-  const active = activeDays(source, income);
+/** Days of the period the activity was suspended, or null when it was not. */
+function interruptedDays(source: IncomeSourceRow, income: number, period?: Segment) {
+  const whole = activeDays({ ...source, suspendedFrom: null, suspendedTo: null }, income, period);
+  const active = activeDays(source, income, period);
   const days =
     (whole ?? (income % 4 === 0 && (income % 100 !== 0 || income % 400 === 0) ? 366 : 365)) -
     (active ?? 0);
@@ -684,10 +922,15 @@ function interruptedDays(source: IncomeSourceRow, income: number) {
 
 /**
  * The Registrul de evidență fiscală of a year (OMFP nr. 3.254/2017) and the year's income tax and
- * contributions (Codul fiscal art. 68, 69, 118, 148, 170, 174) of a PFA, II or IF with one
- * income source: from the Registrul-jurnal's natures, fiscal depreciation, expense reports and the
- * non-cash items given; losses carried from the books' earlier years and those declared before
- * them. Blocking issues mean the figures are not final.
+ * contributions (Codul fiscal art. 68, 69, 118, 148, 170, 174) of a PFA, II or IF: from the
+ * Registrul-jurnal's natures, fiscal depreciation, expense reports and the non-cash items given;
+ * losses carried from the books' earlier years and those declared before them, per source. With
+ * several sources, each amount is placed on its source by the attribution given, and an expense
+ * common to them split by the key the person states; a source that moved from a norm to the real
+ * system during the year has its norm for the days before and its books after (norme pct. 8 alin.
+ * (13)). Income the person declares from outside the books (rent, investments, dividends) counts
+ * for the CASS of art. 170 alin. (2)–(3), marked as declared. Blocking issues mean the figures are
+ * not final.
  */
 export async function fiscalRegister(
   tx: Transaction,
@@ -699,6 +942,11 @@ export async function fiscalRegister(
   const end = `${input.year}-12-31` as LocalDate;
   const { loaded } = await loadState(tx, companyId, { profile: true });
   const form = entityFormOf(loaded.profile, end);
+  requireCondition(
+    !individualForms.includes(form) || booksSystemOf(loaded.profile, end) === 'single',
+    'PFA_DOUBLE_ENTRY',
+    'Opțiunea pentru partida dublă a unei PFA, II sau IF nu este acoperită: OUG nr. 44/2008 art. 15 prevede partida simplă, iar OMFP nr. 170/2015 art. 3 o admite „cu excepția cazurilor în care … alte acte normative prevăd expres” partida simplă; se decide de expertul contabil.',
+  );
   requireCondition(
     individualForms.includes(form) && booksSystemOf(loaded.profile, end) === 'single',
     'SINGLE_ENTRY_ONLY',
@@ -714,6 +962,9 @@ export async function fiscalRegister(
     ...input.norms.map((item) => item.evidenceId),
     input.previousEurAnnualRate?.evidenceId,
     ...input.previousGross.map((item) => item.evidenceId),
+    input.attribution?.evidenceId,
+    ...(input.attribution?.shared ?? []).map((item) => item.evidenceId),
+    ...input.declaredIncome.map((item) => item.evidenceId),
   ].filter((id): id is string => Boolean(id));
   if (named.length) {
     const found = await tx
@@ -728,235 +979,317 @@ export async function fiscalRegister(
     );
   }
 
-  const active = [...(await sourceVersions(tx, companyId)).values()]
-    .map((versions) => ({
-      versions,
-      current: versionAt(versions, end) ?? versions[0]!,
-    }))
-    .filter(
-      ({ current }) => current.startedOn <= end && (!current.endedOn || current.endedOn >= start),
-    );
+  const all = await sourceVersions(tx, companyId);
+  const active = activeIn(all, input.year);
   requireCondition(
     active.length,
     'INCOME_SOURCE',
     `Nu există o sursă de venit activă în ${input.year} (pfa.sources.record).`,
   );
-  for (const { versions, current } of active) {
-    const methods = new Set(
-      versions
-        .filter(
-          (row) =>
-            row.effectiveFrom <= end &&
-            (row.effectiveFrom > start || row === versionAt(versions, start)),
-        )
-        .map((row) => row.method),
-    );
-    if (methods.size > 1)
-      issues.push(
-        block(
-          'PIT_METHOD_CHANGE',
-          `${current.name}: metoda de stabilire a venitului net s-a schimbat în cursul anului (norme pct. 8 alin. (13)); calculul pe perioade nu este încă disponibil.`,
-        ),
-      );
-  }
-  const real = active.filter(({ current }) => current.method === 'sistem_real');
-  const norma = active.filter(({ current }) => current.method === 'norma');
-  if (active.length > 1)
+  if (form === 'if' && active.length > 1)
     issues.push(
       block(
-        'PIT_SOURCES_MULTIPLE',
-        'Mai multe surse de venit în același an: încasările și plățile nu sunt încă atribuite pe surse.',
+        'PIT_IF_SOURCES',
+        'O întreprindere familială cu mai multe surse de venit în același an: distribuirea pe surse și D204 nu sunt încă disponibile.',
       ),
     );
-  if (real.length && norma.length)
+  // Art. 69 alin. (7): a nomenclator activity alongside another independent activity is in the
+  // real system; the norm's days may not overlap another source's real-system days.
+  const mixed = active.some((source) => {
+    const norm = normSegment(source);
+    return (
+      norm &&
+      active.some(
+        (other) =>
+          other !== source &&
+          other.segments.some(
+            (segment) =>
+              segment.method === 'sistem_real' &&
+              segment.from <= norm.to &&
+              segment.to >= norm.from &&
+              other.current.startedOn <= norm.to &&
+              (!other.current.endedOn || other.current.endedOn >= norm.from),
+          ),
+      )
+    );
+  });
+  if (mixed)
     issues.push(
       block(
         'PIT_NORMA_MIXED',
-        'O activitate din nomenclator desfășurată alături de o altă activitate independentă se impune în sistem real (art. 69 alin. (7)).',
+        'O activitate din nomenclator desfășurată alături de o altă activitate independentă se impune în sistem real (art. 69 alin. (7)): înregistrați sursa pe normă în sistem real (realBasis required) de la data celeilalte activități (norme pct. 8 alin. (13)).',
+      ),
+    );
+  if (active.length > 1 && !input.attribution)
+    issues.push(
+      block(
+        'PIT_SOURCE_UNATTRIBUTED',
+        `Mai multe surse de venit în ${input.year}: indicați, cu documentul ei, sursa fiecărui cont de venituri și cheltuieli (attribution), ca registrul să se țină pe fiecare sursă (OMFP nr. 3.254/2017 art. 3–5).`,
       ),
     );
   const eurRate = input.eurAnnualRate?.rate ?? null;
+  const attribution = input.attribution ?? null;
 
-  // The real source: this year's register, and the losses its earlier years carry.
+  // The real-system sources: this year's registers, and the losses each source's earlier years
+  // carry (art. 118 alin. (4): per source).
+  const extra: SourcePart[] = input.adjustments.map((item) => {
+    const kind = adjustmentNatures[item.kind];
+    return {
+      nature: kind.nature,
+      account: '',
+      flow: kind.sign * parseMoney(item.amount, LEDGER_CURRENCY),
+      date: null,
+      label: `${kind.label}: ${item.description}`,
+      sourceId: item.sourceId,
+    };
+  });
+  const year = await yearRegisters(
+    tx,
+    companyId,
+    rules,
+    input.year,
+    params,
+    active,
+    extra,
+    eurRate,
+    attribution,
+  );
+  issues.push(...year.issues);
   const sources = [];
   let realNet = 0n;
   let recalculated = 0n;
-  for (const { current } of real) {
-    const extra = input.adjustments
-      .filter((item) => item.sourceId === current.sourceId)
-      .map((item) => {
-        const kind = adjustmentNatures[item.kind];
-        return {
-          nature: kind.nature,
-          flow: kind.sign * parseMoney(item.amount, LEDGER_CURRENCY),
-          label: `${kind.label}: ${item.description}`,
-        };
-      });
-    const own = await realSourceYear(tx, companyId, input.year, params, extra, eurRate);
-    issues.push(...own.issues);
-    // Losses: those declared before the books, then each earlier year of the books in turn. An
-    // IF's losses are its members', each by quota: carried in each member's D212.
-    let vintages: LossVintage[] = [];
-    if (form !== 'if') {
-      const earlier = await earlierResults(tx, companyId, rules, current, input.year, eurRate);
-      issues.push(...earlier.issues);
-      vintages = carriedLosses(openingVintages(input, current.sourceId), earlier.years);
-    }
-    const losses = offsetLosses(
-      input.year,
-      own.result.totals.net,
-      vintages,
-      params.loss,
-      params.rounding,
-    );
-    const carried = [
-      ...losses.remaining,
-      ...(own.result.totals.loss ? [{ year: input.year, bani: own.result.totals.loss }] : []),
-    ];
-    realNet += own.result.totals.net;
-    recalculated += losses.recalculated;
-    sources.push({
-      sourceId: current.sourceId,
-      name: current.name,
-      caen: current.caen,
-      place: current.place,
-      county: current.county,
-      method: current.method,
-      realBasis: current.realBasis,
-      register: {
-        year: input.year,
-        rectification: false,
-        source: `${current.name} (CAEN ${current.caen}) – venituri din activități independente`,
-        rows: registerRows(own.result),
-      },
-      income: view(own.result.income),
-      expenses: own.result.expenses.map((line) => ({
-        nature: line.nature,
-        label: line.label,
-        amount: lei(line.bani),
-        deductible: lei(line.deductible),
-        limit: line.limit,
-      })),
-      excluded: view(own.result.excluded),
-      nonCash: own.nonCash.map((item) => ({
-        nature: item.nature,
-        label: item.label,
-        amount: lei(item.flow),
-      })),
-      base: lei(own.result.base),
-      totals: {
-        gross: lei(own.result.totals.gross),
-        deductible: lei(own.result.totals.deductible),
-        net: lei(own.result.totals.net),
-        loss: lei(own.result.totals.loss),
-      },
-      losses:
-        form === 'if'
-          ? null
-          : {
-              available: lei(losses.available),
-              offset: lei(losses.offset),
-              recalculated: lei(losses.recalculated),
-              carried: carried.map((item) => ({ year: item.year, amount: lei(item.bani) })),
-              expired: losses.expired.map((item) => ({ year: item.year, amount: lei(item.bani) })),
-            },
-    });
-  }
-
-  // Sources on a norm: the income part of the register, and the adjusted norm.
   let norms = 0n;
-  const journal = norma.length
-    ? await cashJournalOf(tx, companyId, input.year, params.catalogue)
-    : null;
-  for (const { current } of norma) {
-    const given = input.norms.find((item) => item.sourceId === current.sourceId);
-    const gross = grossOf(journal!.rows);
-    const normaRule = params.norma;
-    // Art. 69 alin. (9): gross income above 25.000 euro in the previous year (at that year's BNR
-    // average rate) puts the source in the real system from this year.
-    if (current.startedOn < start) {
-      if ('gap' in normaRule) requireCondition(false, 'RULE_GAP', normaRule.gap, 422);
-      const previous = input.year - 1;
-      const declared = input.previousGross.find((item) => item.sourceId === current.sourceId);
-      let before: bigint | null = null;
-      if (((await firstBooksYear(tx, companyId)) ?? input.year) <= previous) {
-        let catalogue: NatureCatalogue;
-        try {
-          catalogue = rules.param<NatureCatalogue>(
-            'ro.pit.natures',
-            'fiscal_year_start',
-            `${previous}-01-01` as LocalDate,
-          );
-        } catch (error) {
-          if (!(error instanceof RuleGapError)) throw error;
-          requireCondition(false, 'RULE_GAP', error.message, 422, { ...error.gap });
-        }
-        before = grossOf((await cashJournalOf(tx, companyId, previous, catalogue)).rows);
-      } else if (declared) before = parseMoney(declared.amount, LEDGER_CURRENCY);
-      const rate = input.previousEurAnnualRate?.rate;
-      if (before === null)
-        issues.push(
-          block(
-            'PIT_NORMA_PREVIOUS_GROSS',
-            `${current.name}: registrele nu cuprind anul ${previous}; indicați venitul brut al sursei din ${previous} (previousGross), pentru pragul de ${normaRule.realAboveEur} euro (art. 69 alin. (9)).`,
-          ),
+  for (const source of active) {
+    const { current } = source;
+    const norm = normSegment(source);
+    const own = year.registers.get(current.sourceId);
+    let real: Record<string, unknown> | null = null;
+    if (own) {
+      // Losses: those declared before the books, then each earlier year of the books in turn. An
+      // IF's losses are its members', each by quota: carried in each member's D212.
+      let vintages: LossVintage[] = [];
+      if (form !== 'if') {
+        const earlier = await earlierResults(
+          tx,
+          companyId,
+          rules,
+          current,
+          input.year,
+          eurRate,
+          attribution,
         );
-      else if (!rate)
+        issues.push(...earlier.issues);
+        vintages = carriedLosses(openingVintages(input, current.sourceId), earlier.years);
+      }
+      const losses = offsetLosses(
+        input.year,
+        own.result.totals.net,
+        vintages,
+        params.loss,
+        params.rounding,
+      );
+      const carried = [
+        ...losses.remaining,
+        ...(own.result.totals.loss ? [{ year: input.year, bani: own.result.totals.loss }] : []),
+      ];
+      realNet += own.result.totals.net;
+      recalculated += losses.recalculated;
+      real = {
+        register: {
+          year: input.year,
+          rectification: false,
+          source: `${current.name} (CAEN ${current.caen}) – venituri din activități independente`,
+          rows: registerRows(own.result),
+        },
+        income: view(own.result.income),
+        expenses: own.result.expenses.map((line) => ({
+          nature: line.nature,
+          label: line.label,
+          amount: lei(line.bani),
+          deductible: lei(line.deductible),
+          limit: line.limit,
+        })),
+        excluded: view(own.result.excluded),
+        nonCash: own.parts
+          .filter((part) => part.label)
+          .map((part) => ({ nature: part.nature, label: part.label!, amount: lei(part.flow) })),
+        shared: own.shared.map((item) => ({ account: item.account, amount: lei(item.bani) })),
+        base: lei(own.result.base),
+        totals: {
+          gross: lei(own.result.totals.gross),
+          deductible: lei(own.result.totals.deductible),
+          net: lei(own.result.totals.net),
+          loss: lei(own.result.totals.loss),
+        },
+        losses:
+          form === 'if'
+            ? null
+            : {
+                available: lei(losses.available),
+                offset: lei(losses.offset),
+                recalculated: lei(losses.recalculated),
+                carried: carried.map((item) => ({ year: item.year, amount: lei(item.bani) })),
+                expired: losses.expired.map((item) => ({
+                  year: item.year,
+                  amount: lei(item.bani),
+                })),
+              },
+      };
+    }
+
+    // The norm (its days on a norm): the income part of the register, and the adjusted norm.
+    let normView: Record<string, unknown> | null = null;
+    let normRows: { nr: string; element: string; value: string }[] | null = null;
+    if (norm) {
+      const given = input.norms.find((item) => item.sourceId === current.sourceId);
+      const gross = year.normGross.get(current.sourceId) ?? 0n;
+      const normaRule = params.norma;
+      if ('gap' in normaRule) requireCondition(false, 'RULE_GAP', normaRule.gap, 422);
+      // Art. 69 alin. (9): gross income above 25.000 euro in the previous year (at that year's
+      // BNR average rate) puts the source in the real system from this year.
+      if (current.startedOn < start && norm.from === start) {
+        const previous = input.year - 1;
+        const declared = input.previousGross.find((item) => item.sourceId === current.sourceId);
+        let before: bigint | null = null;
+        if (((await firstBooksYear(tx, companyId)) ?? input.year) <= previous) {
+          let catalogue: NatureCatalogue;
+          try {
+            catalogue = rules.param<NatureCatalogue>(
+              'ro.pit.natures',
+              'fiscal_year_start',
+              `${previous}-01-01` as LocalDate,
+            );
+          } catch (error) {
+            if (!(error instanceof RuleGapError)) throw error;
+            requireCondition(false, 'RULE_GAP', error.message, 422, { ...error.gap });
+          }
+          before =
+            (await sourceGross(tx, companyId, previous, catalogue, current.sourceId, attribution))
+              ?.gross ?? null;
+        } else if (declared) before = parseMoney(declared.amount, LEDGER_CURRENCY);
+        const rate = input.previousEurAnnualRate?.rate;
+        if (before === null)
+          issues.push(
+            block(
+              'PIT_NORMA_PREVIOUS_GROSS',
+              `${current.name}: registrele nu cuprind anul ${previous}, sau nu îl împart pe surse; indicați venitul brut al sursei din ${previous} (previousGross), pentru pragul de ${normaRule.realAboveEur} euro (art. 69 alin. (9)).`,
+            ),
+          );
+        else if (!rate)
+          issues.push(
+            block(
+              'PIT_EUR_RATE',
+              `${current.name}: pragul de ${normaRule.realAboveEur} euro pentru venitul brut din ${previous} (art. 69 alin. (9)) se verifică la cursul mediu BNR al anului ${previous}: indicați-l (previousEurAnnualRate).`,
+            ),
+          );
+        else {
+          const threshold = euroToBani(normaRule.realAboveEur, rate);
+          if (before > threshold)
+            issues.push(
+              block(
+                'PIT_NORMA_REAL_REQUIRED',
+                `${current.name}: venitul brut din ${previous} (${lei(before)} lei) a depășit ${normaRule.realAboveEur} euro (${lei(threshold)} lei): din ${input.year} venitul net se stabilește în sistem real (art. 69 alin. (9)). Înregistrați o versiune a sursei în sistem real (realBasis required) de la 1 ianuarie ${input.year}.`,
+              ),
+            );
+        }
+      }
+      if (!given)
         issues.push(
           block(
-            'PIT_EUR_RATE',
-            `${current.name}: pragul de ${normaRule.realAboveEur} euro pentru venitul brut din ${previous} (art. 69 alin. (9)) se verifică la cursul mediu BNR al anului ${previous}: indicați-l (previousEurAnnualRate).`,
+            'PIT_NORM_MISSING',
+            `${current.name}: indicați norma de venit publicată de DGRFP pentru activitate și loc, cu documentul ei.`,
           ),
         );
       else {
-        const threshold = euroToBani(normaRule.realAboveEur, rate);
-        if (before > threshold)
+        // The floor (art. 69 alin. (3)): 12 minimum wages of 1 January of the income year, or,
+        // before the income of 2026, of the day the DGRFP set the norm.
+        let floor: bigint | null = null;
+        if (normaRule.floorWage === 'january_1')
+          floor = params.minimumWage * BigInt(normaRule.floorWages);
+        else if (!given.setOn)
           issues.push(
             block(
-              'PIT_NORMA_REAL_REQUIRED',
-              `${current.name}: venitul brut din ${previous} (${lei(before)} lei) a depășit ${normaRule.realAboveEur} euro (${lei(threshold)} lei): din ${input.year} venitul net se stabilește în sistem real (art. 69 alin. (9)). Înregistrați o versiune a sursei în sistem real (realBasis required) de la 1 ianuarie ${input.year}.`,
+              'PIT_NORM_SET_DATE',
+              `${current.name}: pentru ${input.year}, norma este de cel puțin 12 salarii minime în vigoare la data stabilirii ei (art. 69 alin. (3) în forma de dinainte de Legea nr. 239/2025): indicați data deciziei DGRFP (setOn).`,
             ),
           );
+        else
+          try {
+            floor =
+              parseMoney(
+                rules.param<string>(
+                  'ro.payroll.minimum_wage',
+                  'payroll_month_start',
+                  `${given.setOn.slice(0, 7)}-01` as LocalDate,
+                ),
+                LEDGER_CURRENCY,
+              ) * BigInt(normaRule.floorWages);
+          } catch (error) {
+            if (!(error instanceof RuleGapError)) throw error;
+            issues.push(
+              block(
+                'RULE_GAP',
+                `${current.name}: salariul minim în vigoare la ${given.setOn}, data stabilirii normei, nu este în registru (${error.message}).`,
+              ),
+            );
+          }
+        const days = activeDays(current, input.year, norm);
+        const adjusted = adjustedNorm(
+          {
+            norm: parseMoney(given.norm, LEDGER_CURRENCY),
+            increasePercent: given.increasePercent ?? null,
+            reductionPercent: given.reductionPercent ?? null,
+            activeDays: days,
+            floor,
+          },
+          params.rounding,
+        );
+        issues.push(...adjusted.issues);
+        if (eurRate) {
+          const threshold = euroToBani(normaRule.realAboveEur, eurRate);
+          const yearGross = gross + (own ? own.result.gross : 0n);
+          if (!own && yearGross > threshold)
+            issues.push(
+              info(
+                'PIT_NORMA_THRESHOLD',
+                `${current.name}: venitul brut de ${lei(yearGross)} lei depășește ${normaRule.realAboveEur} euro (${lei(threshold)} lei): din ${input.year + 1} venitul net se stabilește în sistem real (art. 69 alin. (9)).`,
+              ),
+            );
+        } else if (!own)
+          issues.push(
+            info(
+              'PIT_EUR_RATE',
+              `Pragul de ${normaRule.realAboveEur} euro al normei (art. 69 alin. (9)) se verifică la cursul mediu BNR al anului: indicați-l.`,
+            ),
+          );
+        norms += adjusted.adjusted;
+        normRows = [{ nr: '1', element: 'Venit brut', value: lei(toLeu(gross, params.rounding)) }];
+        normView = {
+          norm: lei(parseMoney(given.norm, LEDGER_CURRENCY)),
+          increasePercent: given.increasePercent ?? null,
+          increaseCriterion: given.increaseCriterion ?? null,
+          reductionPercent: given.reductionPercent ?? null,
+          reductionCriterion: given.reductionCriterion ?? null,
+          increase: lei(adjusted.increase),
+          reduction: lei(adjusted.reduction),
+          yearly: lei(adjusted.yearly),
+          from: norm.from,
+          to: norm.to,
+          activeDays: days,
+          interruptedDays: interruptedDays(current, input.year, norm),
+          adjusted: lei(adjusted.adjusted),
+          tax: lei(incomeTax(adjusted.adjusted, params.rate, params.rounding)),
+        };
       }
-    }
-    if (!given) {
-      issues.push(
-        block(
-          'PIT_NORM_MISSING',
-          `${current.name}: indicați norma de venit publicată de DGRFP pentru activitate și loc, cu documentul ei.`,
-        ),
-      );
-      continue;
-    }
-    if ('gap' in normaRule) requireCondition(false, 'RULE_GAP', normaRule.gap, 422);
-    const adjusted = adjustedNorm(
-      {
-        norm: parseMoney(given.norm, LEDGER_CURRENCY),
-        increasePercent: given.increasePercent ?? null,
-        reductionPercent: given.reductionPercent ?? null,
-        activeDays: activeDays(current, input.year),
-        floor: params.minimumWage * BigInt(normaRule.floorWages),
-      },
-      params.rounding,
-    );
-    issues.push(...adjusted.issues);
-    if (eurRate) {
-      const threshold = euroToBani(normaRule.realAboveEur, eurRate);
-      if (gross > threshold)
+      if (own && norm)
         issues.push(
           info(
-            'PIT_NORMA_THRESHOLD',
-            `${current.name}: venitul brut de ${lei(gross)} lei depășește ${normaRule.realAboveEur} euro (${lei(threshold)} lei): din ${input.year + 1} venitul net se stabilește în sistem real (art. 69 alin. (9)).`,
+            'PIT_METHOD_CHANGE',
+            `${current.name}: venitul net al anului este fracțiunea din normă pentru ${norm.from}–${norm.to} plus venitul net din evidența contabilă de la ${addDays(norm.to, 1)} (norme pct. 8 alin. (13)).`,
           ),
         );
-    } else
-      issues.push(
-        info(
-          'PIT_EUR_RATE',
-          `Pragul de ${normaRule.realAboveEur} euro al normei (art. 69 alin. (9)) se verifică la cursul mediu BNR al anului: indicați-l.`,
-        ),
-      );
-    norms += adjusted.adjusted;
+    }
+    if (!real && !normRows) continue;
     sources.push({
       sourceId: current.sourceId,
       name: current.name,
@@ -965,27 +1298,18 @@ export async function fiscalRegister(
       county: current.county,
       method: current.method,
       realBasis: current.realBasis,
-      register: {
-        year: input.year,
-        rectification: false,
-        source: `${current.name} (CAEN ${current.caen}) – venituri din activități independente, normă de venit`,
-        rows: [{ nr: '1', element: 'Venit brut', value: lei(toLeu(gross, params.rounding)) }],
-      },
-      norm: {
-        norm: lei(parseMoney(given.norm, LEDGER_CURRENCY)),
-        increasePercent: given.increasePercent ?? null,
-        increaseCriterion: given.increaseCriterion ?? null,
-        reductionPercent: given.reductionPercent ?? null,
-        reductionCriterion: given.reductionCriterion ?? null,
-        increase: lei(adjusted.increase),
-        reduction: lei(adjusted.reduction),
-        yearly: lei(adjusted.yearly),
-        activeDays: activeDays(current, input.year),
-        interruptedDays: interruptedDays(current, input.year),
-        adjusted: lei(adjusted.adjusted),
-        tax: lei(incomeTax(adjusted.adjusted, params.rate, params.rounding)),
-      },
-    });
+      segments: source.segments,
+      ...(real ?? {
+        register: {
+          year: input.year,
+          rectification: false,
+          source: `${current.name} (CAEN ${current.caen}) – venituri din activități independente, normă de venit`,
+          rows: normRows,
+        },
+      }),
+      ...(normView ? { norm: normView } : {}),
+      ...(real && normRows ? { normRegister: normRows } : {}),
+    } as SourceView);
   }
 
   // An IF: the agreement in force all year, and the net income or loss distributed to the
@@ -999,11 +1323,12 @@ export async function fiscalRegister(
       .sort()[0]!;
     const enterprise = await enterpriseYear(tx, companyId, activityFrom, end, issues);
     const [source] = sources;
+    const onNorm = active.some((item) => normSegment(item));
     const distribution =
-      enterprise && real.length === 1 && source?.totals && !norma.length
+      enterprise && active.length === 1 && source?.totals && !onNorm
         ? distribute(enterprise.members, source.totals)
         : null;
-    if (norma.length)
+    if (onNorm)
       issues.push(
         info(
           'PIT_IF_NORMA',
@@ -1014,6 +1339,7 @@ export async function fiscalRegister(
       year: input.year,
       final: !issues.some((issue) => issue.severity === 'block'),
       sources,
+      excluded: view(year.excluded.map(excludedLine)),
       enterprise: enterprise && {
         version: enterprise.version,
         effectiveFrom: enterprise.effectiveFrom,
@@ -1027,6 +1353,7 @@ export async function fiscalRegister(
           loss: distribution ? lei(distribution.loss[index]!) : null,
         })),
       },
+      declared: [],
       contributions: null,
       tax: null,
       issues,
@@ -1051,6 +1378,15 @@ export async function fiscalRegister(
         'Nu este înregistrată situația titularului față de CASS minimă (cass.exception): calculat fără excepțiile de la art. 174 alin. (7)–(8).',
       ),
     );
+  // Income declared from outside the books: CASS of art. 170 alin. (2)–(3) on their total.
+  let other: CassOtherRule | null = null;
+  if (input.declaredIncome.length)
+    try {
+      other = rules.param<CassOtherRule>('ro.cass.other', 'fiscal_year_start', start);
+    } catch (error) {
+      if (!(error instanceof RuleGapError)) throw error;
+      requireCondition(false, 'RULE_GAP', error.message, 422, { ...error.gap });
+    }
   const person = personTax(params, {
     realNet,
     recalculated,
@@ -1060,13 +1396,36 @@ export async function fiscalRegister(
     option: profileAt(loaded, 'cas.option', end) === 'yes',
     chosen: input.casIncome ? parseMoney(input.casIncome, LEDGER_CURRENCY) : null,
     exception: Boolean(exception && exception !== 'none'),
+    declared: other
+      ? {
+          rule: other,
+          amount: input.declaredIncome.reduce(
+            (sum, item) => sum + parseMoney(item.amount, LEDGER_CURRENCY),
+            0n,
+          ),
+          withheld: input.declaredIncome.reduce(
+            (sum, item) => sum + parseMoney(item.cassWithheld, LEDGER_CURRENCY),
+            0n,
+          ),
+        }
+      : null,
   });
   issues.push(...person.issues);
   return {
     year: input.year,
     final: !issues.some((issue) => issue.severity === 'block'),
     sources,
+    excluded: view(year.excluded.map(excludedLine)),
     enterprise: null,
+    declared: input.declaredIncome.map((item) => ({
+      declared: true as const,
+      kind: item.kind,
+      amount: lei(parseMoney(item.amount, LEDGER_CURRENCY)),
+      cassWithheld: lei(parseMoney(item.cassWithheld, LEDGER_CURRENCY)),
+      taxSettled: item.taxSettled,
+      description: item.description,
+      evidenceId: item.evidenceId,
+    })),
     contributions: person.contributions,
     tax: person.tax,
     issues,
@@ -1074,10 +1433,59 @@ export async function fiscalRegister(
   };
 }
 
+/** A source of the register's result: its real-system part, its norm, or both. */
+type SourceView = {
+  sourceId: string;
+  name: string;
+  caen: string;
+  place: string;
+  county: string;
+  method: 'sistem_real' | 'norma';
+  realBasis: 'required' | 'option' | null;
+  segments: Segment[];
+  register: { year: number; rectification: boolean; source: string; rows: unknown[] };
+  totals?: { gross: string; deductible: string; net: string; loss: string };
+  losses?: {
+    available: string;
+    offset: string;
+    recalculated: string;
+    carried: { year: number; amount: string }[];
+    expired: { year: number; amount: string }[];
+  } | null;
+  norm?: {
+    norm: string;
+    increasePercent: string | null;
+    increaseCriterion: NormCriterion | null;
+    reductionPercent: string | null;
+    reductionCriterion: NormCriterion | null;
+    increase: string;
+    reduction: string;
+    yearly: string;
+    from: string;
+    to: string;
+    activeDays: number | null;
+    interruptedDays: number | null;
+    adjusted: string;
+    tax: string;
+  };
+  normRegister?: { nr: string; element: string; value: string }[];
+  [key: string]: unknown;
+};
+
+/** An amount no source takes, listed apart (assets, non-deductible items of shared accounts). */
+const excludedLine = (part: SourcePart) => ({
+  nature: part.nature,
+  label: natureOf(part.nature)?.label ?? part.nature,
+  bani: part.flow < 0n ? -part.flow : part.flow,
+});
+
 /**
  * A person's contributions and income tax for the year (art. 118, 148, 170, 174, 69^2): CAS and
  * CASS on the cumulated net incomes and norms, the share of each deducted from the real system's
- * recalculated net income, 10% on the taxable income and on the norms.
+ * recalculated net income, 10% on the taxable income and on the norms; and the CASS of the income
+ * the person declares from outside the books (art. 170 alin. (2)–(3)), which also lifts the CASS
+ * minimum of the independent income when due on at least 6 minimum wages (art. 174 alin. (7) lit.
+ * b)).
  */
 function personTax(
   params: YearParams,
@@ -1090,6 +1498,7 @@ function personTax(
     option: boolean;
     chosen: bigint | null;
     exception: boolean;
+    declared?: { rule: CassOtherRule; amount: bigint; withheld: bigint } | null;
   },
 ) {
   const cumulated = input.realNet + input.norms + input.other;
@@ -1102,8 +1511,30 @@ function personTax(
       rounding: params.rounding,
     },
   );
+  const declared = input.declared
+    ? cassOtherDue(
+        { cumulated: input.declared.amount, withheld: input.declared.withheld },
+        {
+          minimumWage: params.minimumWage,
+          rate: params.cassRate,
+          rule: input.declared.rule,
+          rounding: params.rounding,
+        },
+      )
+    : null;
+  const lifted = Boolean(
+    declared && declared.base >= params.minimumWage * BigInt(params.cass.minimumWages),
+  );
+  const issues = [...cas.issues];
+  if (lifted && !input.exception)
+    issues.push(
+      info(
+        'CASS_EXCEPTION_DECLARED',
+        'Veniturile declarate din afara registrelor datorează CASS la cel puțin 6 salarii minime: diferența până la CASS minimă pentru venitul din activități independente nu se datorează (art. 174 alin. (7) lit. b)).',
+      ),
+    );
   const cass = cassDue(
-    { cumulated, exception: input.exception },
+    { cumulated, exception: input.exception || lifted },
     {
       minimumWage: params.minimumWage,
       rate: params.cassRate,
@@ -1124,7 +1555,7 @@ function personTax(
   const realTax = incomeTax(taxable, params.rate, params.rounding);
   const normaTax = input.norms > 0n ? incomeTax(input.norms, params.rate, params.rounding) : 0n;
   return {
-    issues: cas.issues,
+    issues,
     contributions: {
       minimumWage: lei(params.minimumWage),
       cumulated: lei(cumulated),
@@ -1142,6 +1573,16 @@ function personTax(
         due: lei(cass.due),
         minimumDifference: lei(cass.minimumDifference),
         deductible: lei(deducted.cass),
+      },
+      cassOther: declared && {
+        declared: true as const,
+        cumulated: lei(input.declared!.amount),
+        band: declared.band,
+        base: lei(declared.base),
+        due: lei(declared.due),
+        withheld: lei(input.declared!.withheld),
+        plus: lei(declared.plus),
+        minus: lei(declared.minus),
       },
     },
     tax: {

@@ -342,13 +342,31 @@ describe('review queue', () => {
     expect(rows).toHaveLength(base.register.keys().length);
     expect(packets.map((packet) => [packet.kind, packet.keys])).toEqual([
       ['mechanical', ['ro.vat.rate.reduced', 'ro.micro.rate']],
+      ['interpretation', ['ro.taxaccount.distribution']],
       ['interpretation', ['ro.vat.deduction.limited']],
       ['interpretation', ['ro.vat.exemption.threshold']],
       ['interpretation', ['ro.vat.rate']],
+      ['interpretation', ['ro.deadline.D112.quarterly']],
+      ['interpretation', ['ro.profit.legal_reserve']],
       ['interpretation', ['ro.payroll.quarterly']],
+      ['interpretation', ['ro.taxaccount.advance']],
+      ['interpretation', ['ro.vat.capital_goods']],
+      ['interpretation', ['ro.vat.registration.annualized']],
+      ['interpretation', ['ro.vat.special.payable_account']],
       ['interpretation', ['ro.micro.revenue_limit_eur']],
+      ['interpretation', ['ro.vat.late_registration']],
+      ['interpretation', ['ro.d406.start']],
+      ['interpretation', ['ro.deadline.S1003']],
+      ['interpretation', ['ro.profit.sponsorship']],
       ['interpretation', ['ro.micro.linked']],
+      ['interpretation', ['ro.profit.loss_carryforward']],
+      ['interpretation', ['ro.deadline.D406.assets']],
+      ['interpretation', ['ro.profit.social_limit']],
       ['interpretation', ['ro.size.thresholds']],
+      ['interpretation', ['ro.taxaccount.accounts']],
+      ['interpretation', ['ro.pit.norma']],
+      ['interpretation', ['ro.pit.sources']],
+      ['interpretation', ['ro.d406.assets.presentation']],
     ]);
     const vat = rows.find((row) => row.key === 'ro.vat.rate')!;
     // reach 3 × risk 3 (tax amount) × urgency 3 (D394 due on 30.10.2026) ÷ 25 minutes.
@@ -357,7 +375,12 @@ describe('review queue', () => {
     const micro = rows.find((row) => row.key === 'ro.micro.revenue_limit_eur')!;
     expect(micro.deadline).toMatchObject({ obligation: 'D100.micro', due: '2027-01-25' });
     expect(micro.urgency).toBe(2);
-    expect(missing).toHaveLength(base.register.keys().length - reviewSpecs.length);
+    // Every key with a spec is annotated, but the half-year report has no return of its own
+    // whose deadline ranks it (the engine does not prepare it).
+    expect(missing).toHaveLength(base.register.keys().length - reviewSpecs.length + 1);
+    expect(missing.find((row) => row.key === 'ro.halfyear.report')!.missing).toEqual([
+      'obligations (urgency)',
+    ]);
     expect(missing.find((row) => row.key === 'ro.deadline.D300')!.missing).toEqual([
       'spec (readings, cases, minutes)',
       'reach',

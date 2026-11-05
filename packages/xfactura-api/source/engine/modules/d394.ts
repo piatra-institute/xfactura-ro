@@ -19,6 +19,7 @@ import { supplierAppliesCashVat } from 'xfactura-core/ro/cash-vat';
 import { counties } from 'xfactura-core/ro/geo';
 import { isValidCnp, isValidCui } from 'xfactura-core/ro/identifiers';
 import { invoiceKinds } from 'xfactura-core/ro/treatments/invoices';
+import { regimeCodes } from 'xfactura-core/ro/treatments/vat-registration';
 import { vatPeriodEnd } from 'xfactura-core/ro/treatments/vat-settlement';
 import type { RuleContext } from 'xfactura-core/rules';
 import { invoiceDocumentSchema } from 'xfactura-core/ubl/invoice-document';
@@ -155,8 +156,13 @@ async function inputsOf(tx: Transaction, companyId: string, period: string) {
     taxPeriods: [{ tax: 'VAT', period }],
     profile: true,
   });
+  // A change of regime (V1): only the days of the normal regime, and not the regularizations of a
+  // late registration or of the capital goods, which are no invoices.
   const all = (ledger.loaded.taxLedger.get(`VAT|${period}`)?.entries ?? []).filter(
-    (entry) => !crossBorder.test(entry.code),
+    (entry) =>
+      !crossBorder.test(entry.code) &&
+      !(Object.values(regimeCodes) as string[]).includes(entry.code) &&
+      profileAt(ledger.loaded, 'vat.status', entry.taxPoint) === 'normal_vat',
   );
   // Under VAT on collection, a collection or payment releases an invoice's VAT: the period's
   // releases are the VAT collected and deducted on payment, not operations of their own.
@@ -246,7 +252,19 @@ export function d394Declaration(
           code: 'VAT_PERIOD',
           message: `Perioada fiscală a companiei pentru ${end} este ${vatPeriodOf(loaded, end)}, nu ${period}.`,
         });
-      if (profileAt(loaded, 'vat.status', end) !== 'normal_vat')
+      // Registered on some day of the period: the first period after a registration, the last
+      // before a cancellation (art. 316 alin. (13)).
+      const first = periodStart(period);
+      if (
+        profileAt(loaded, 'vat.status', first) !== 'normal_vat' &&
+        !loaded.profile.some(
+          (fact) =>
+            fact.axis === 'vat.status' &&
+            fact.value === 'normal_vat' &&
+            fact.effectiveFrom >= first &&
+            fact.effectiveFrom <= end,
+        )
+      )
         problems.push({
           code: 'NOT_VAT_PAYER',
           message: 'Declarația D394 o depun persoanele înregistrate în scopuri de TVA.',

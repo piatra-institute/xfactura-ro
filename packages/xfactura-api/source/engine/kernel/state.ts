@@ -34,6 +34,7 @@ import type {
   PostedEntry,
   AccountTurnover,
   AssetState,
+  ProfitPosting,
   ProfileFact,
   ReadPlan,
   ReadSetEntry,
@@ -43,8 +44,10 @@ import type {
 import { itemLinesKey, partyStatusKey, turnoverKey } from 'xfactura-core/kernel';
 import type { LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
+import { entryStands } from './ledger';
 import {
   assetEvents,
+  assetFiscal,
   assets,
   documents,
   entries,
@@ -62,6 +65,7 @@ import {
   payrollRuns,
   profileFacts,
   proposals,
+  proposalVersions,
   scheduleRows,
   taxEntries,
   treasuryAccounts,
@@ -364,13 +368,55 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
       for (const item of items)
         item.history = rows.filter((row) => row.itemId === item.id).map((row) => row.entryId);
     }
+    // What opened each item: never changes, so the item's version covers it.
+    if (query.origins && items.length) {
+      const rows = await tx
+        .select({
+          itemId: openItems.id,
+          treatmentId: proposals.treatmentId,
+          subject: proposals.subjectKey,
+          date: entries.date,
+          tag: sql<string | null>`(select l.item from ${lines} l
+            where l.company_id = ${openItems.companyId} and l.entry_id = ${openItems.originEntryId}
+              and l.open_item_id = ${openItems.id} order by l.line_no limit 1)`,
+        })
+        .from(openItems)
+        .innerJoin(
+          entries,
+          and(eq(entries.companyId, openItems.companyId), eq(entries.id, openItems.originEntryId)),
+        )
+        .innerJoin(
+          proposals,
+          and(eq(proposals.companyId, entries.companyId), eq(proposals.id, entries.proposalId)),
+        )
+        .where(
+          and(
+            eq(openItems.companyId, companyId),
+            inArray(
+              openItems.id,
+              items.map((item) => item.id),
+            ),
+          ),
+        );
+      for (const item of items) {
+        const row = rows.find((candidate) => candidate.itemId === item.id);
+        if (row)
+          item.origin = {
+            treatmentId: row.treatmentId,
+            subject: row.subject,
+            date: date(row.date),
+            tag: row.tag,
+          };
+      }
+    }
     for (const item of items) {
       const known = itemMap.get(item.id);
-      if (!known || item.schedule || item.history)
+      if (!known || item.schedule || item.history || item.origin)
         itemMap.set(item.id, {
           ...item,
           ...(known?.schedule && !item.schedule ? { schedule: known.schedule } : {}),
           ...(known?.history && !item.history ? { history: known.history } : {}),
+          ...(known?.origin && !item.origin ? { origin: known.origin } : {}),
         });
     }
   }
@@ -757,6 +803,14 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
       )
       .where(and(eq(lines.companyId, companyId), isNotNull(lines.item), like(lines.account, '28%')))
       .groupBy(lines.item, lines.account);
+    // Each asset's latest fiscal basis (art. 28): a new version changes what the tax deducts.
+    const bases = new Map<string, typeof assetFiscal.$inferSelect>();
+    for (const row of await tx
+      .select()
+      .from(assetFiscal)
+      .where(eq(assetFiscal.companyId, companyId))
+      .orderBy(asc(assetFiscal.version)))
+      bases.set(row.assetId, row);
     let marks = 0;
     let last = 0;
     for (const card of cards) {
@@ -765,10 +819,12 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
       );
       marks += row?.count ?? 0;
       last = Math.max(last, row?.last ?? 0);
+      const basis = bases.get(card.id);
       assetMap.set(card.id, {
         id: card.id,
         number: card.number,
         name: card.name,
+        catalogCode: card.catalogCode,
         account: card.account,
         depreciationAccount: card.depreciationAccount,
         expenseAccount: card.expenseAccount,
@@ -777,6 +833,18 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
         commissionedOn: card.commissionedOn as LocalDate,
         disposedOn: (disposals.get(card.id) as LocalDate | undefined) ?? null,
         depreciated: row?.bani ?? 0n,
+        fiscal: basis
+          ? {
+              version: basis.version,
+              method: basis.method,
+              value: basis.valueBani,
+              lifeMonths: basis.lifeMonths,
+              firstYearPercent: basis.firstYearPercent,
+              m1: basis.m1,
+              newAsset: basis.newAsset,
+              evidenceId: basis.evidenceId,
+            }
+          : null,
       });
     }
     // The register and the depreciation booked for it: a new asset, a disposal or a posted
@@ -784,7 +852,62 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
     readSet.push({
       kind: 'assets',
       id: 'register',
-      version: `${cards.length}/${disposals.size}/${marks}/${last}`,
+      version: `${cards.length}/${disposals.size}/${marks}/${last}/${[...bases.values()].reduce((sum, item) => sum + item.version, 0)}`,
+    });
+  }
+
+  // The profit tax's own postings that stand, and the prior-year corrections: their positions
+  // are what the next computation starts from (earlier quarters, the years' loss vintages).
+  const profitPostings: ProfitPosting[] = [];
+  if (plan.profitPostings) {
+    const rows = await tx
+      .select({
+        entryId: entries.id,
+        seq: entries.seq,
+        date: entries.date,
+        treatmentId: proposals.treatmentId,
+        subject: proposals.subjectKey,
+        effect: proposalVersions.effect,
+      })
+      .from(entries)
+      .innerJoin(
+        proposals,
+        and(eq(proposals.companyId, entries.companyId), eq(proposals.id, entries.proposalId)),
+      )
+      .innerJoin(
+        proposalVersions,
+        and(
+          eq(proposalVersions.companyId, entries.companyId),
+          eq(proposalVersions.proposalId, entries.proposalId),
+          eq(proposalVersions.version, entries.version),
+        ),
+      )
+      .where(
+        and(
+          eq(entries.companyId, companyId),
+          inArray(proposals.treatmentId, ['tax.profit', 'correction.priorYear']),
+          entryStands('"acc_entries"'),
+        ),
+      )
+      .orderBy(asc(entries.seq));
+    for (const row of rows) {
+      const effect = JSON.parse(row.effect ?? '{}') as {
+        explanation?: { details?: { position?: unknown } };
+      };
+      profitPostings.push({
+        entryId: row.entryId,
+        treatmentId: row.treatmentId,
+        subject: row.subject,
+        date: date(row.date),
+        seq: Number(row.seq),
+        position: (effect.explanation?.details?.position ?? null) as ProfitPosting['position'],
+      });
+    }
+    // Any posting of either, or a reversal of one, changes the count or the last sequence.
+    readSet.push({
+      kind: 'profitPostings',
+      id: 'tax.profit',
+      version: `${rows.length}/${rows.at(-1)?.seq ?? 0}`,
     });
   }
 
@@ -842,6 +965,7 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
     turnover,
     itemLines: itemLineMap,
     assets: assetMap,
+    profitPostings,
     partyStatus: statusMap,
     // A basis's answers, never a plan's: the proposal adds them (`basisAnswers`).
     answers: new Map(),
@@ -888,6 +1012,9 @@ export function mergeStates(
     turnover: merge(first.loaded.turnover, second.loaded.turnover),
     itemLines: merge(first.loaded.itemLines, second.loaded.itemLines),
     assets: merge(first.loaded.assets, second.loaded.assets),
+    profitPostings: first.loaded.profitPostings.length
+      ? first.loaded.profitPostings
+      : second.loaded.profitPostings,
     partyStatus: merge(first.loaded.partyStatus, second.loaded.partyStatus),
     answers: merge(first.loaded.answers, second.loaded.answers),
   };

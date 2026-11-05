@@ -5,6 +5,7 @@ import { canonical, hashOf } from 'xfactura-core/hash';
 import type { Issue, JsonValue } from 'xfactura-core/kernel';
 import { documentTotals, normalizedNumber } from 'xfactura-core/documents/schemas';
 import { questionOf, type QuestionRequest } from 'xfactura-core/questions/kinds';
+import { externalReturns } from 'xfactura-core/ro/obligations';
 import type { ParameterRegister } from 'xfactura-core/rules';
 import {
   addDays,
@@ -80,6 +81,13 @@ export const workKinds = [
   'obligation.due',
   'determination.missing',
   'threshold.approaching',
+  'profit.unclassified',
+  'asset.fiscalMissing',
+  'profit.correction',
+  'annual.input',
+  'taxaccount.differs',
+  'taxaccount.undistributed',
+  'taxaccount.correction',
   'close.finding',
   'period.unclosed',
   'rule.gap',
@@ -247,6 +255,7 @@ const disposable: Partial<Record<WorkKind, 'person' | 'anyone'>> = {
   'spv.message': 'person',
   'close.finding': 'person',
   'evidence.unused': 'anyone',
+  'taxaccount.differs': 'person',
 };
 
 const itemId = (kind: string, subject: { kind: string; id: string }) =>
@@ -783,31 +792,42 @@ function obligationsDetector(calendar: ObligationsOf): Detector {
             ? [agent('determinations.propose', { year: Number(item.end.slice(0, 4)) })]
             : [agent('questions.ask', item.question as unknown as WorkStep['inputHint'])]
           : [];
+        // A return the company files outside the engine: a person records the filing.
+        const external = externalReturns.includes(item.kind);
         const next: WorkStep[] =
           item.status === 'blocked'
             ? ask
-            : item.status === 'due' || item.status === 'overdue'
-              ? [agent('declarations.prepare', { kind: item.kind, period: item.period })]
-              : item.status === 'rejected'
-                ? [
-                    agent('declarations.prepare', {
-                      kind: item.kind,
-                      period: item.period,
-                      supersedesId: artifactId,
-                    }),
-                  ]
-                : item.status === 'prepared'
+            : external && (item.status === 'due' || item.status === 'overdue')
+              ? [
+                  agent('questions.ask', {
+                    kind: 'obligation.filed',
+                    subject: { kind: 'obligation', id: `${item.kind}/${item.period}` },
+                    params: { kind: item.kind, period: item.period },
+                  }),
+                  human('questions.answer'),
+                ]
+              : item.status === 'due' || item.status === 'overdue'
+                ? [agent('declarations.prepare', { kind: item.kind, period: item.period })]
+                : item.status === 'rejected'
                   ? [
-                      agent('declarations.validate', { artifactId }),
-                      human('declarations.authorize.request', { artifactId }),
+                      agent('declarations.prepare', {
+                        kind: item.kind,
+                        period: item.period,
+                        supersedesId: artifactId,
+                      }),
                     ]
-                  : item.status === 'authorized'
+                  : item.status === 'prepared'
                     ? [
-                        agent('declarations.pdf', { artifactId }),
-                        agent('declarations.importSigned', { artifactId }),
-                        human('declarations.recordSubmission', { artifactId }),
+                        agent('declarations.validate', { artifactId }),
+                        human('declarations.authorize.request', { artifactId }),
                       ]
-                    : [];
+                    : item.status === 'authorized'
+                      ? [
+                          agent('declarations.pdf', { artifactId }),
+                          agent('declarations.importSigned', { artifactId }),
+                          human('declarations.recordSubmission', { artifactId }),
+                        ]
+                      : [];
         return {
           kind: 'obligation.due',
           subject: { kind: 'obligation', id: `${item.kind}|${item.period}` },
@@ -893,11 +913,161 @@ function determinationsDetector(source: DeterminationsOf): Detector {
   };
 }
 
+// The profit tax: accounts to classify, assets without a fiscal basis, prior-year corrections not
+// carried into the corrected year (core ro/profit/agent.ts).
+
+/** An item of the profit tax module, as the worklist reads it. */
+export type ProfitWorkItem = {
+  kind: 'profit.unclassified' | 'asset.fiscalMissing' | 'profit.correction';
+  subject: { kind: string; id: string };
+  severity: 'block' | 'warn';
+  year: number;
+  message: string;
+  details: { [key: string]: JsonValue };
+  next: WorkStep[];
+};
+export type ProfitWorkOf = (
+  tx: Transaction,
+  companyId: string,
+  today: LocalDate,
+) => Promise<ProfitWorkItem[]>;
+
+function profitDetector(source: ProfitWorkOf): Detector {
+  const cursorOf = (item: ProfitWorkItem) => `${item.kind}|${item.subject.kind}:${item.subject.id}`;
+  return {
+    id: 'profit',
+    kinds: ['profit.unclassified', 'asset.fiscalMissing', 'profit.correction'],
+    async list({ tx, companyId, today }, page) {
+      const found = (await source(tx, companyId, today))
+        .sort((a, b) => cursorOf(a).localeCompare(cursorOf(b)))
+        .filter((item) =>
+          page.only !== undefined
+            ? item.subject.id === page.only
+            : page.after === null || cursorOf(item) > page.after,
+        );
+      const items = found.slice(0, page.limit).map((item): Draft => ({
+        kind: item.kind,
+        subject: item.subject,
+        severity: item.severity,
+        due: null,
+        period: String(item.year),
+        message: item.message,
+        details: item.details,
+        next: item.next,
+        cursor: cursorOf(item),
+      }));
+      return { items, next: found.length > page.limit ? items.at(-1)!.cursor : null };
+    },
+  };
+}
+
+// The annual statements: an F30 chapter, the disclosures or an accompanying document a person
+// owes, or a half-year report the engine does not prepare (core ro/annual/agent.ts).
+
+/** An item of the annual statements module, as the worklist reads it. */
+export type AnnualWorkItem = {
+  subjectId: string;
+  severity: 'block' | 'warn';
+  year: number;
+  kind: string;
+  message: string;
+  details: { [key: string]: JsonValue };
+};
+export type AnnualWorkOf = (
+  tx: Transaction,
+  companyId: string,
+  today: LocalDate,
+) => Promise<AnnualWorkItem[]>;
+
+function annualDetector(source: AnnualWorkOf): Detector {
+  return {
+    id: 'annual',
+    kinds: ['annual.input'],
+    async list({ tx, companyId, today }, page) {
+      const found = (await source(tx, companyId, today))
+        .sort((a, b) => a.subjectId.localeCompare(b.subjectId))
+        .filter((item) =>
+          page.only !== undefined
+            ? item.subjectId === page.only
+            : page.after === null || item.subjectId > page.after,
+        );
+      const items = found.slice(0, page.limit).map((item): Draft => ({
+        kind: 'annual.input',
+        subject: { kind: 'annual', id: item.subjectId },
+        severity: item.severity,
+        due: null,
+        period: String(item.year),
+        message: item.message,
+        details: item.details,
+        next:
+          item.kind === 'halfyear'
+            ? []
+            : [
+                agent('annual.ask', { kind: item.kind, year: item.year }),
+                human('questions.answer'),
+              ],
+        cursor: item.subjectId,
+      }));
+      return { items, next: found.length > page.limit ? items.at(-1)!.cursor : null };
+    },
+  };
+}
+
+// The tax account: the statement of the account differing from the books, payments not yet
+// distributed while obligations are due, a filed D100 to correct (core ro/taxaccount/agent.ts).
+
+/** An item of the tax account module, as the worklist reads it. */
+export type TaxAccountWorkItem = {
+  kind: 'taxaccount.differs' | 'taxaccount.undistributed' | 'taxaccount.correction';
+  subject: { kind: string; id: string };
+  severity: 'block' | 'warn';
+  period: string;
+  message: string;
+  details: { [key: string]: JsonValue };
+  next: WorkStep[];
+};
+export type TaxAccountWorkOf = (
+  tx: Transaction,
+  companyId: string,
+  today: LocalDate,
+) => Promise<TaxAccountWorkItem[]>;
+
+function taxAccountDetector(source: TaxAccountWorkOf): Detector {
+  const cursorOf = (item: TaxAccountWorkItem) =>
+    `${item.kind}|${item.subject.kind}:${item.subject.id}`;
+  return {
+    id: 'taxaccount',
+    kinds: ['taxaccount.differs', 'taxaccount.undistributed', 'taxaccount.correction'],
+    async list({ tx, companyId, today }, page) {
+      const found = (await source(tx, companyId, today))
+        .sort((a, b) => cursorOf(a).localeCompare(cursorOf(b)))
+        .filter((item) =>
+          page.only !== undefined
+            ? item.subject.id === page.only
+            : page.after === null || cursorOf(item) > page.after,
+        );
+      const items = found.slice(0, page.limit).map((item): Draft => ({
+        kind: item.kind,
+        subject: item.subject,
+        severity: item.severity,
+        due: null,
+        period: item.period,
+        message: item.message,
+        details: item.details,
+        next: item.next,
+        cursor: cursorOf(item),
+      }));
+      return { items, next: found.length > page.limit ? items.at(-1)!.cursor : null };
+    },
+  };
+}
+
 // Month-close checks of the months not closed, up to the current one.
 
 /** What to do about a close finding, by its code. */
 const findingSteps: Record<string, (month: Month) => WorkStep[]> = {
   UNEXPLAINED_MOVEMENTS: () => [propose('bank.settle')],
+  TAX_STATEMENT_DIFFERS: () => [agent('taxaccount.reconcile')],
   STATEMENT_GAP: () => [
     agent('bank.import'),
     agent('bank.importCsv'),
@@ -1179,7 +1349,8 @@ const documentsDetector: Detector = {
         and(
           eq(documents.companyId, companyId),
           position(documents.id, page),
-          sql`${q(documents.kind)} <> 'contract'`,
+          // Contracts and statements of the tax account book nothing.
+          sql`${q(documents.kind)} not in ('contract', 'tax.statement')`,
           // Once per group: its root stands for it.
           sql`not exists (select 1 from ${documentLinks} g
             where g.company_id = ${q(documents.companyId)} and g.from_id = ${q(documents.id)}
@@ -1208,14 +1379,16 @@ const documentsDetector: Detector = {
         const foreign = row.country !== null && row.country !== 'RO';
         const steps: WorkStep[] = receipt
           ? []
-          : credit
-            ? [propose('invoices.credit', { documentId: row.id })]
-            : foreign
-              ? [
-                  propose('invoices.crossBorder', { documentId: row.id }),
-                  propose('invoices.recognize', { documentId: row.id }),
-                ]
-              : [propose('invoices.recognize', { documentId: row.id })];
+          : row.kind === 'tax.decision'
+            ? [propose('tax.decision', { documentId: row.id })]
+            : credit
+              ? [propose('invoices.credit', { documentId: row.id })]
+              : foreign
+                ? [
+                    propose('invoices.crossBorder', { documentId: row.id }),
+                    propose('invoices.recognize', { documentId: row.id }),
+                  ]
+                : [propose('invoices.recognize', { documentId: row.id })];
         return {
           kind: 'document.unproposed',
           subject: { kind: 'document', id: row.id },
@@ -1494,7 +1667,14 @@ const bankDetector: Detector = {
           reference: row.reference,
           counterparty: row.counterparty,
         },
-        next: [propose('bank.settle', { movementId: row.id })],
+        // A transfer to the State Treasury (an IBAN of bank code TREZ) pays the state: the tax
+        // account distributes it (tax.pay).
+        next: [
+          ...(row.counterpartyAccount?.toUpperCase().slice(4, 8) === 'TREZ'
+            ? [propose('tax.pay', { movementId: row.id })]
+            : []),
+          propose('bank.settle', { movementId: row.id }),
+        ],
         cursor: row.id,
       })),
       next,
@@ -1780,6 +1960,9 @@ export interface WorkSources {
   questionState: QuestionState;
   autonomy: AutonomyWork;
   determinations: DeterminationsOf;
+  profit: ProfitWorkOf;
+  annual: AnnualWorkOf;
+  taxaccount: TaxAccountWorkOf;
 }
 
 /** The detectors in worklist order: decisions and blocked work first, then intake. */
@@ -1790,6 +1973,9 @@ export function workDetectors(sources: WorkSources): Detector[] {
     questionsDetector,
     obligationsDetector(sources.obligations),
     determinationsDetector(sources.determinations),
+    profitDetector(sources.profit),
+    annualDetector(sources.annual),
+    taxAccountDetector(sources.taxaccount),
     closeDetector(sources.closeChecks),
     rulesDetector(sources.register),
     betterSourceDetector,

@@ -1,0 +1,22 @@
+CREATE TABLE `acc_asset_fiscal` (
+	`company_id` text NOT NULL,
+	`asset_id` text NOT NULL,
+	`version` integer NOT NULL,
+	`method` text NOT NULL,
+	`value_bani` integer NOT NULL,
+	`life_months` integer NOT NULL,
+	`first_year_percent` text,
+	`m1` integer NOT NULL,
+	`new_asset` integer NOT NULL,
+	`evidence_id` text NOT NULL,
+	`created_by` text NOT NULL,
+	`created_at` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL,
+	PRIMARY KEY(`company_id`, `asset_id`, `version`),
+	FOREIGN KEY (`company_id`) REFERENCES `acc_companies`(`id`) ON UPDATE no action ON DELETE no action,
+	FOREIGN KEY (`created_by`) REFERENCES `user`(`id`) ON UPDATE no action ON DELETE no action,
+	FOREIGN KEY (`company_id`,`asset_id`) REFERENCES `acc_assets`(`company_id`,`id`) ON UPDATE no action ON DELETE no action,
+	FOREIGN KEY (`company_id`,`evidence_id`) REFERENCES `acc_evidence`(`company_id`,`id`) ON UPDATE no action ON DELETE no action,
+	CONSTRAINT "asset_fiscal_life" CHECK("acc_asset_fiscal"."life_months" between 1 and 1200),
+	CONSTRAINT "asset_fiscal_value" CHECK("acc_asset_fiscal"."value_bani" >= 0),
+	CONSTRAINT "asset_fiscal_first_year" CHECK(("acc_asset_fiscal"."first_year_percent" is null) or ("acc_asset_fiscal"."method" in ('accelerated', 'superaccelerated')))
+);

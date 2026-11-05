@@ -412,7 +412,7 @@ See §1.5: an annual table per source.
 | D300, D394, D390 | VAT payer | existing, unchanged |
 | D301 / art. 317 | non-payer buying EU services | not built (B1) |
 | D100 / D205 | only if the PFA withholds tax at source (open question 6) | existing writers |
-| D406 SAF-T | applicability to individuals is open question 7 | existing writer; the closure lists it UNSUPPORTED (`D406_INDIVIDUAL`) for a PFA, II or IF at the periods a company would file it, until answered: never assumed either way |
+| D406 SAF-T | **not filed**: OPANAF 1783/2021 anexa 5 pct. 4 lit. a)–c) exempts PFA, II and IF in every version (373/2022, 2518/2022, 407/2025; §7.9) | the closure lists no D406 for them |
 | S1005 | **not applicable** (OMFP 170 cap. II pct. 11) | block by `entity.form` |
 | D101, micro tax, dividends | not applicable | block |
 
@@ -514,7 +514,7 @@ See §1.5: an annual table per source.
 4. **VAT-inclusive receipts:** allocating partial receipts and payments of invoices with VAT (pro rata to net and VAT), and rounding.
 5. **Foreign currency:** income in lei at the BNR rate of the previous banking day (OMFP 170 pct. 18). Do exchanges between own currency accounts, or FX differences, create income or expense on a cash basis?
 6. **Withholding at source:** is a PFA "an entity obliged to keep accounting" (art. 72, 84^1), so that it withholds on rent and IP and files D100 and D205?
-7. **D406 SAF-T:** does it apply to PFA, II or IF (OPANAF 1783/2021 scope)?
+7. **D406 SAF-T:** answered by the text (§7.9): PFA, II and IF are exempt (OPANAF 1783/2021 anexa 5 pct. 4 lit. a)–c), as replaced by OPANAF 407/2025). Only whether a PFA on the double-entry option would file (lit. n) is for single-entry entities that opt) stays for the expert, and that option is UNSUPPORTED anyway.
 8. **CASS minimum:** the art. 174 alin. (7)–(8) exceptions, applied per year in the engine; the evidence needed for salary or pension.
 9. **CAS and CASS deduction:** the pro-rata deduction with several sources and with normă sources (art. 118 alin. (2^2)–(2^4)).
 10. **Norm values:** the authoritative source per county; is a preparer-supplied value with the DGRFP PDF as evidence acceptable?
@@ -667,7 +667,7 @@ Built 30 October 2026. Every value is still `extracted`.
 - **Effect:** the D212 for 2025 income is prepared from the engine's own register, no longer from test values.
 - **Still gaps:**
   - 2024 income;
-  - `ro.pit.norma` for 2025. The register reads it only for a source on a norm, so a source in the real system is unaffected.
+  - `ro.pit.norma` for 2025 (sourced since, §7.9). The register reads it only for a source on a norm, so a source in the real system is unaffected.
 
 
 ### 7.8 P4: normă de venit, the family enterprise's members, D204
@@ -702,7 +702,7 @@ Built 30 October 2026. Every value is still `extracted`; nothing is reviewed.
   - this year's gross income above it is a note: real system from next year (`PIT_NORMA_THRESHOLD`);
   - last year's gross income above it blocks this year's norm (`PIT_NORMA_REAL_REQUIRED`). It is read from the books, or from `previousGross` when the books do not hold that year (`PIT_NORMA_PREVIOUS_GROSS`), at last year's BNR average (`previousEurAnnualRate`, else `PIT_EUR_RATE`).
 - The 2-year option lock is P0's (module and trigger).
-- **`ro.pit.norma` for the income of 2025 stays a gap:**
+- **`ro.pit.norma` for the income of 2025 stayed a gap** (sourced since, §7.9, from the portal's 2025 consolidation and OUG 128/2024):
   - OPANAF 2736/2025's instructions state neither a floor nor a threshold;
   - Legea 239/2025 rewrote art. 69 alin. (3) only from the income of 2026, and the earlier wording is not in the sources;
   - when alin. (9) (25,000 EUR) took effect cannot be read from the consolidated text.
@@ -776,3 +776,133 @@ Built 30 October 2026. Every value is still `extracted`; nothing is reviewed.
 - **Norm proration** over 365 days in a leap year too (norme pct. 8 alin. (10)).
 - **The previous year's 25,000 EUR test** uses this year's rule.
 - **Each member of an IF on a norm owes the whole norm** (art. 69 alin. (3), "stabilită pentru fiecare membru asociat"). This is read, not built.
+
+
+### 7.9 Phase 2 PF: several sources, method change, declared income, 2025 norms; D406; quarterly D112
+
+Built 4 November 2026. Every value is still `extracted`; nothing is reviewed.
+
+**Sources added** (snapshots in `.sources/`, registered in core `ro/sources`):
+
+| Id | What | SHA-256 |
+|---|---|---|
+| OPANAF407/2025 | Replaces anexa 5 of OPANAF 1783/2021 (who files D406), MO 310/08.04.2025 | `65c28805d4832feae60ec627c9842c46a9eb48a4aa3a7b348a495ecf2098b082` |
+| OPANAF605/2026 | Form 112 from July 2026, instructions in anexa 6, MO 463/02.06.2026 | `2c7c4a03e9cf14d2b77201d98a9af10d70b22171379d76aab606d0ca971e5e6d` |
+| OUG128/2024 | Art. 69 alin. (9) rewritten, from the income of 2025 (art. II alin. (2)) | `e68d54c6d83da84c93b148fe8445a80f3ca6b8789ffa103547f399c5e98604e8` |
+| LJR/Cod-fiscal-2025 | The Code as the legislative portal consolidated it in 2025, before Legea 239/2025 (official, informative; its exact validity date on the portal not confirmed) | `66e5cc9a6e83c810a5407c163346bf9db576848cb7038df3c3e7c9a4b9d7722c` |
+
+Also downloaded and read, not registered (no parameter cites them): OPANAF 1783/2021's annexes and its consolidation on the portal, OPANAF 373/2022, OPANAF 2518/2022, ANAF's SAF-T guide (2021), FAQ (2022) and communiqué 37/15.01.2025; OPANAF 1699/2021, 2420/2025 and 15/2026 (forms 010/020/070/700); OG 16/2022; the D112 page and validator J27.0.8 (03.11.2026: newer than the pinned kit, not re-pinned here).
+
+**1. Several sources of independent income in a year.**
+- *What the texts say:* the fiscal register is kept per source, in one register (OMFP 3254/2017 art. 3 alin. (3)–(4)); gross income and deductible expenses are recorded per source (art. 4 alin. (1), art. 5 alin. (1)); the D212 has a subsection per source (instructions cap. IV, pct. 3.4); losses are per source (Code art. 118 alin. (4)); CAS and CASS cumulate the sources (art. 148 alin. (3), art. 170 alin. (1)). **No text sets a key for an expense serving several sources.** The profit-tax norms split common costs in proportion to revenue (Title II norms pct. 4 and art. 23 lit. h)); that is an analogy, not a rule for individuals.
+- *Built:*
+  - core `ro/pit/sources.ts`, `attributeSources`: every receipt, payment and non-cash item goes to the source whose account it is booked on. The person states this in `pfa.fiscalRegister`'s `attribution`, with its document: accounts with their analytics, the longest match winning; fixed assets by their account; adjustments by their own `sourceId`.
+  - An expense on a shared account is split by the key the person states (`gross`: by each source's gross income; `fixed`: by stated shares), from the keys the new parameter `ro.pit.sources` admits.
+  - With one source, everything is its own, as before.
+  - *Blocks:*
+    - `PIT_SOURCE_UNATTRIBUTED`: an income or expense with no source, or several sources without an attribution;
+    - `PIT_SHARED_KEY`: a key not admitted, shares not adding to 100%, or a gross-income key without gross income;
+    - `PIT_LIMIT_SOURCES`: a per-person euro limit of art. 68 alin. (5) claimed in two sources.
+  - `PIT_SHARED_EXPENSE` notes that the key is the person's.
+  - Losses are carried per source, and an earlier year of several sources uses the same attribution (`PIT_PRIOR_YEAR` when it cannot).
+  - The old `PIT_SOURCES_MULTIPLE` block is gone. An IF with several sources is still refused (`PIT_IF_SOURCES`; the closure's `IF_SOURCES_MULTIPLE`), because its distribution and D204 per source are not built.
+  - D212 writes one cap11 or cap12 per source in both structures (`activities[]`, `norms[]` beside the single fields): CAS and CASS on the cumulated income, Section 4 summed, each loss offset at 70% of its own source's net income.
+- *Expert question:* `ro.pit.sources` review packet (gross income only, or the person's documented key).
+- *Tests:*
+  - core `test/d212.test.ts`: two activities, an activity beside a norm (weights 0.8), and the loss cap per source;
+  - official `scripts/validators/official-d212.test.ts`: a two-source 2024 return accepted by J13.0.1;
+  - engine `test/engine/pfa-sources.integration.test.ts`: 2025, software and consulting, a shared phone bill by gross income and by fixed shares, the register and the web-form D212 computed by hand (85,000 lei net, CAS 12,150, CASS 8,500, tax 6,435).
+
+**2. A change of method within the year; starting or stopping.**
+- *What the texts say:*
+  - The option for the real system binds 2 years and renews tacitly (art. 69^1). Its 1 January start and the 2-year lock are guarded as before (§7.1).
+  - A norm becomes the real system during the year only when an activity outside the nomenclator is added. From that date the whole activity is in the real system, and the year's net income is the norm's fraction for the days before plus the books' net income after (norme pct. 8 alin. (13); art. 69 alin. (7)).
+  - The norm is reduced for a part year (art. 69 alin. (5); norme pct. 8 alin. (8)–(10)).
+- *Built:*
+  - `segmentsOf` reads each source's methods over the year. A norm source moved to the real system (`realBasis required`) mid-year gets:
+    - its norm prorated over the norm's days, the suspension included;
+    - its receipts in those days as the norm's income part (`normRegister`);
+    - its books from the change.
+  - The result: `PIT_METHOD_CHANGE` is now a note, not a block.
+  - `PIT_NORMA_MIXED` now blocks only when a norm's days overlap another source's real-system days.
+  - The D212 refuses such a source (`D212_METHOD_CHANGE`): how the two periods of one source are presented in the form is not settled, so it waits for the expert.
+- *Tests:* the integration test's tailoring norm until 30 June plus repairs from 1 July. Computed by hand:
+  - norm: 24,795 lei (181/365 of 50,000);
+  - books: 25,000 + 10,000 lei;
+  - CAS 12,150; CASS 5,979;
+  - deductible 7,112 and 3,500;
+  - tax 2,439 + 2,479.
+
+**3. Income the person declares from outside the books.**
+- *Owner's recommended decision, applied:* only the business source, plus income the person declares, marked as declared.
+- *What the texts say:*
+  - CASS on rent, investments and dividends is due from 6 minimum wages, on 6, 12 or 24 wages by the band reached (art. 170 alin. (2)–(3); OPANAF 2736/2025 instr. pct. 51–52).
+  - It lifts the CASS minimum on independent income (art. 174 alin. (7) lit. b)).
+  - It never counts for CAS.
+- *Built:*
+  - Input `declaredIncome[]` (kind rent, investment or dividends; amount; CASS withheld; whether the tax is final at source; evidence).
+  - The new parameter `ro.cass.other` (bands 6/12/24) and core `cassOtherDue`.
+  - The register returns `declared` (`declared: true`) and `contributions.cassOther`, and derives the art. 174 alin. (7) lit. b) exception (`CASS_EXCEPTION_DECLARED`).
+  - The web form's D212 writes Section 3.2.2 as its code does:
+    - rent on row 1.3, investments and dividends on 1.4;
+    - the band, the base, the CASS, what was withheld and both differences;
+    - Section 7 adds them.
+- *Refused:*
+  - declared income whose tax is not final at source (`D212_DECLARED_TAX`): its own subsection, for example rent from an individual (1015), is not written;
+  - Section 3.2.2 in the 2024 structure (`D212_DECLARED`);
+  - other independent income outside the books (`otherIncome`, `D212_OTHER_INCOME`), as before.
+- *Tests:* the integration test's 30,000 lei of dividends give band 1, base 24,300 and CASS 2,430, and appear in the XML and in the summary, marked declared. Rent with `taxSettled: false` is refused.
+
+**4. The 2025 rules for income norms: sourced.**
+- Art. 69 alin. (3) for 2025 is the wording before Legea 239/2025. The portal's 2025 consolidation reads "salariul de bază minim brut pe țară garantat în plată, în vigoare la momentul stabilirii acesteia, înmulțit cu 12". Legea 239/2025 art. XIII alin. (2) lit. b) applies the new wording from the income of 2026.
+- Alin. (9) is OUG 128/2024 art. I pct. 1 (25,000 euro at BNR's annual average of the year of the income), applicable from the income of 2025 (art. II alin. (2)).
+- `ro.pit.norma` 2025 is `{ floorWages: 12, floorWage: 'when_set', realAboveEur: 25000 }`; 2026 has `floorWage: 'january_1'`.
+- For 2025 the norm needs the DGRFP decision's date (`setOn`, else `PIT_NORM_SET_DATE`). The floor is 12 × `ro.payroll.minimum_wage` on that date. A date the register has no wage for (before 2025: the 3,700 lei of 2024 is not in the register) is `RULE_GAP`.
+- *Tests:* the 2025 norm D212 runs now on the engine's own register, no longer on a test fixture. Without the date it gives `PIT_NORM_SET_DATE`; with a November 2024 date, `RULE_GAP`; with January 2025, 44,000 lei.
+
+**5. An IF on a norm: the refusal stays.**
+- *What the texts say:*
+  - the norm is "stabilită pentru fiecare membru asociat" (art. 69 alin. (3));
+  - each member's norm is at least 12 wages and each applies the coefficients to "normei de venit proprii" (norme pct. 8 alin. (5));
+  - nothing is distributed and no D204 is filed (art. 125 alin. (1) lit. c)).
+- Whether a member owes the whole published norm or a share of it is not said. The per-member floor would be redundant if each owed the whole norm.
+- `D212_IF_NORMA` stays. `D204_NORMA` is correct as it is: no D204 is due.
+- *Expert question:* `ro.pit.norma` review packet, with cases computed under both readings.
+
+**6. D212 for 2026 income: `FORMAT_GAP`.**
+- On 4 November 2026, ANAF's D212 page is unchanged: SHA-256 `4b9849d2…`, the same as on 30 October, and the newest package is still `D212Validator_01082025.zip`.
+- The web form is still V-1.8.10 / 15.05.2026.
+- `d212Format(2026)` is null, so `declarations.prepare` reports `FORMAT_GAP`. Everything else is ready:
+  - the 2026 register, CAS and CASS run on the 2026 values;
+  - the CASS cap is 72 wages: the integration test's 400,000 lei give a base of 291,600 and CASS of 29,160.
+
+**7. D406 for PFA, II, IF: not applicable, removed from the closure.**
+- Anexa 5 pct. 4 of OPANAF 1783/2021 lists PFA, II and IF first among the taxpayers that do not file D406. This holds in the original text and in OPANAF 373/2022, 2518/2022 and 407/2025 (current: lit. a)–c)).
+- Lit. q) adds individuals with liberal professions from 8 April 2025.
+- ANAF's guide (p. 7) and communiqué 37/15.01.2025 say the same.
+- `obligation.d406` now cites `OPANAF407/2025:anexa5.pct.4` and lists nothing for a known PFA, II or IF. `D406_INDIVIDUAL` is gone.
+
+**8. The double-entry option: recorded, UNSUPPORTED.**
+- The texts do not settle it: OUG 44/2008 art. 15 ("vor ține contabilitatea în partidă simplă") against OMFP 170/2015 art. 3's "cu excepția cazurilor în care … alte acte normative prevăd expres" (§1.16).
+- `profile.record` now records `books.system = double` for a PFA, II or IF, with its document.
+- The closure derives `books@` as UNSUPPORTED `PFA_DOUBLE_ENTRY`, with that reason and no annual statements (OMFP 170 art. 5).
+- `pfa.fiscalRegister` (so the registers and D212) refuses with `PFA_DOUBLE_ENTRY`.
+
+**T3: the quarterly D112** (art. 80 alin. (2), art. 147 alin. (4)–(11); OPANAF 605/2026 anexa 6 cap. I):
+- *Filing:* a quarterly filer files one D112 per month (art. 147 alin. (5)), each with its own `luna_r`. The XML does not change.
+- *Deadlines:* core `ro/payroll/quarterly.ts` `d112Filing` gives each month's deadline:
+  - after the quarter by default;
+  - sick leave or a contract ended brings that month, and the quarter's months before it, to the 25th after it.
+  - The text says so for the end of insurance in the second month. The engine applies it to sick leave too, the earlier reading (`ro.deadline.D112.quarterly` review packet).
+  - The closure and the calendar use it. The closure reads the events over whole quarters.
+- *Payment:* the payroll posting dates the tax and contributions owed (4315, 4316, 444, 436) by the year's own `payroll.period`: the 25th after the month or the quarter, never moved by alin. (11). The period unknown means no due date.
+- *The monthly option:* "Lunară prin opțiune" on forms 010, 020, 070 or 700 of OPANAF 1699/2021, by 31 January (art. 147 alin. (8)). It is the year's determination as confirmed.
+- *The D112 summary* states the filing (`filing`: period, deadline, the period it counts from, the basis, the event).
+- *Tests:*
+  - core `test/payroll-quarterly.test.ts`;
+  - engine `test/engine/payroll-quarterly.integration.test.ts`: a micro employer's third quarter, all due 26 October 2026; sick leave in August moves July and August to 25 September, and payment stays 26 October; the monthly option; every month, the sick one included, passes DUKIntegrator.
+
+**Agent-ready:** core `ro/pit/agent.ts` and `ro/payroll/agent.ts` (document types, questions, detectors on the existing worklist kinds `obligation.due`, `close.finding`, `rule.gap`, `determination.missing`, no templates), exercised by the two integration tests.
+
+**Expert questions added** (review packets, with cases the engine computes): `ro.deadline.D112.quarterly`, `ro.pit.sources`, `ro.pit.norma`.
+

@@ -16,6 +16,12 @@ import {
   type D406,
   type D406Journal,
 } from '../../packages/xfactura-core/src/ro/saft/d406';
+import {
+  checkD406Assets,
+  writeD406Assets,
+  type D406AssetTransaction,
+  type D406Assets,
+} from '../../packages/xfactura-core/src/ro/saft/assets';
 
 const root = path.join(import.meta.dir, '../..');
 const xsd = path.join(root, '.sources/ANAF_D406/Ro_SAFT_Schema_v249_2025.xsd');
@@ -485,10 +491,129 @@ function period(type: 'L' | 'T', months: [number, number, number], euro = false)
   };
 }
 
+/**
+ * April 2026 with a finance lease's instalment, as the engine books it (a lease settled in lei at
+ * the euro's rate, a car half deducted): principal 300.00 EUR = 1,512.00 lei and interest 403.20
+ * lei, both at 21% (402.19 VAT, split 317.52 / 84.67, half deducted under the 50% code 341104).
+ * The principal releases 1,515.00 from 167 at its carrying amount, in lei; the 3.00 gain goes to
+ * 768 and the 158.76 VAT not deducted on the principal to 635, neither a base line. One rate spans
+ * two accounts: each invoice line keeps the account of its part.
+ */
+function leaseMonth(): D406 {
+  const model = period('L', [4, 4, 4]);
+  model.accounts.push(
+    { code: '167', description: 'Alte împrumuturi și datorii asimilate', opening: '-100000.00' },
+    { code: '2133', description: 'Mijloace de transport', opening: '100000.00' },
+    { code: '404', description: 'Furnizori de imobilizări', opening: '0' },
+    {
+      code: '635',
+      description: 'Cheltuieli cu alte impozite și taxe',
+      standard: '635',
+      opening: '0',
+    },
+    { code: '666', description: 'Cheltuieli privind dobânzile', opening: '0' },
+    { code: '768', description: 'Alte venituri financiare', opening: '0' },
+  );
+  model.accounts.sort((a, b) => (a.code < b.code ? -1 : 1));
+  model.suppliers.push({ ...model.suppliers[0]!, account: '404', opening: '0' });
+  model.products.push(
+    { code: 'LS-CAPITAL', description: 'Rata de capital', kind: 'services', unit: 'C62' },
+    { code: 'LS-DOBANDA', description: 'Dobânda', kind: 'services', unit: 'C62' },
+  );
+  const half = (base: string, amount: string) => [{ type: '300', code: '341104', base, amount }];
+  model.journals[1]!.transactions.push({
+    id: 'CP-LS-0001',
+    date: '2026-04-01',
+    description: 'Factura LS-0001 Furnizor Test SRL',
+    lines: [
+      {
+        id: 'CP-LS-1',
+        account: '167',
+        side: 'debit',
+        amount: '1515.00',
+        document: 'LS-0001',
+        description: 'Rata de capital',
+        tax: half('1512.00', '317.52'),
+      },
+      {
+        id: 'CP-LS-2',
+        account: '635',
+        side: 'debit',
+        amount: '158.76',
+        document: 'LS-0001',
+        description: 'TVA nededusă',
+      },
+      {
+        id: 'CP-LS-3',
+        account: '768',
+        side: 'credit',
+        amount: '3.00',
+        document: 'LS-0001',
+        description: 'Diferență de curs la rata de leasing',
+      },
+      {
+        id: 'CP-LS-4',
+        account: '666',
+        side: 'debit',
+        amount: '445.53',
+        document: 'LS-0001',
+        description: 'Dobânda',
+        tax: half('403.20', '84.67'),
+      },
+      {
+        id: 'CP-LS-5',
+        account: '4426',
+        side: 'debit',
+        amount: '201.10',
+        document: 'LS-0001',
+        description: 'TVA deductibilă',
+      },
+      {
+        id: 'CP-LS-6',
+        account: '404',
+        side: 'credit',
+        amount: '2317.39',
+        supplier,
+        document: 'LS-0001',
+        description: 'Furnizor Test SRL',
+      },
+    ],
+  });
+  const line = (
+    account: string,
+    product: string,
+    description: string,
+    net: string,
+    vat: string,
+  ) => ({
+    account,
+    product,
+    description,
+    quantity: '1',
+    unitPrice: net,
+    amount: net,
+    tax: half(net, vat),
+  });
+  model.purchaseInvoices.push({
+    number: 'LS-0001',
+    party: supplier,
+    account: '404',
+    date: '2026-04-01',
+    type: '380',
+    transaction: 'CP-LS-0001',
+    lines: [
+      line('167', 'LS-CAPITAL', 'Rata de capital', '1512.00', '317.52'),
+      line('666', 'LS-DOBANDA', 'Dobânda', '403.20', '84.67'),
+    ],
+  });
+  return model;
+}
+
 const files: Record<string, D406> = {
   'month-2026-10': period('L', [10, 10, 10]),
   'month-2026-10-eur': period('L', [10, 10, 10], true),
   'quarter-2026-q3': period('T', [7, 8, 9]),
+  'month-2026-04-lease': leaseMonth(),
 };
 
 /** xmllint against the published XSD, whose target namespace is D406T's; the periodic file is in
@@ -571,7 +696,7 @@ describe('official D406 validation', () => {
   });
 
   validator(
-    'DUKIntegrator accepts the monthly, euro and quarterly files without errors or warnings',
+    'DUKIntegrator accepts the monthly, euro, quarterly and lease files without errors or warnings',
     async () => {
       const results = await validateAnaf(
         'D406',
@@ -596,6 +721,246 @@ describe('official D406 validation', () => {
       expect(results.conversion).toBe('ok');
       expect(results['wrong-total']).toBe('ok');
       expect(results.unbalanced).toBe('ok');
+    },
+    180_000,
+  );
+});
+
+/**
+ * The financial year 2026's fixed-asset register: a laptop bought in August (6,000.00 over 36
+ * months, from September: 166.67, 166.66, 166.67, 166.67), a car held all year (60,000.00 over 60 months, 9,000.00
+ * depreciated by 2025) and a machine sold on 15 June (12,000.00 over 48 months, 3,000.00 by 2025,
+ * 1,500.00 to June, sold for 9,000.00: a gain of 1,500.00 on its net 7,500.00).
+ */
+function assetsYear(): D406Assets {
+  const own = { id: '0018547290', name: 'Exemplu Servicii SRL', address: periodic.company.address };
+  const vendor = {
+    id: supplier,
+    name: 'Furnizor Test SRL',
+    address: { street: 'Str. Morii', number: '2', city: 'Brăila', county: 'RO-BR', country: 'RO' },
+  };
+  const monthly = (
+    asset: string,
+    amount: string,
+    months: string[],
+    first: number,
+  ): D406AssetTransaction[] =>
+    months.map((date, index) => ({
+      id: `AM-${asset}-${date.slice(0, 7)}`,
+      asset,
+      type: '30',
+      description: 'Amortizare',
+      date,
+      supplier: own,
+      transaction: `AM-${first + index}`,
+      cost: '0.00',
+      bookValue: `-${amount}`,
+      amount: `-${amount}`,
+    }));
+  const ends = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, index) => {
+      const month = from + index;
+      const day = new Date(Date.UTC(2026, month, 0)).getUTCDate();
+      return `2026-${String(month).padStart(2, '0')}-${day}`;
+    });
+  return {
+    year: { start: '2026-01-01', end: '2026-12-31' },
+    created: '2027-03-10',
+    software: periodic.software,
+    company: periodic.company,
+    presentation: { percentage: 'percent', disposal: 'gross' },
+    accounts: [
+      { code: '2131', description: 'Echipamente tehnologice', opening: '12000.00', closing: '0' },
+      {
+        code: '2133',
+        description: 'Mijloace de transport',
+        opening: '60000.00',
+        closing: '60000.00',
+      },
+      {
+        code: '214',
+        description: 'Mobilier, aparatură birotică',
+        opening: '0',
+        closing: '6000.00',
+      },
+      {
+        code: '2813',
+        description: 'Amortizarea instalațiilor',
+        opening: '-12000.00',
+        closing: '-21000.00',
+      },
+      {
+        code: '2814',
+        description: 'Amortizarea altor imobilizări',
+        opening: '0',
+        closing: '-666.67',
+      },
+    ],
+    assets: [
+      {
+        id: 'MF-001',
+        account: '214',
+        depreciationAccount: '2814',
+        description: 'Laptop',
+        supplier: vendor,
+        acquired: '2026-08-10',
+        commissioned: '2026-08-10',
+        catalogCode: '2.2.9',
+        lifeMonths: 36,
+        costBegin: '0.00',
+        depreciationBegin: '0.00',
+        addition: '6000.00',
+        disposal: '0.00',
+        depreciation: '666.67',
+        depreciationRemoved: '0.00',
+      },
+      {
+        id: 'MF-002',
+        account: '2133',
+        depreciationAccount: '2813',
+        description: 'Autoturism',
+        acquired: '2025-03-02',
+        commissioned: '2025-03-02',
+        catalogCode: '2.3.2.1.1',
+        lifeMonths: 60,
+        costBegin: '60000.00',
+        depreciationBegin: '9000.00',
+        addition: '0.00',
+        disposal: '0.00',
+        depreciation: '12000.00',
+        depreciationRemoved: '0.00',
+      },
+      {
+        id: 'MF-003',
+        account: '2131',
+        depreciationAccount: '2813',
+        description: 'Utilaj',
+        supplier: vendor,
+        acquired: '2024-12-10',
+        commissioned: '2024-12-10',
+        catalogCode: '2.1.16.1',
+        lifeMonths: 48,
+        costBegin: '12000.00',
+        depreciationBegin: '3000.00',
+        addition: '0.00',
+        disposal: '12000.00',
+        depreciation: '1500.00',
+        depreciationRemoved: '4500.00',
+      },
+    ],
+    transactions: [
+      {
+        id: 'IN-MF-001',
+        asset: 'MF-001',
+        type: '10',
+        description: 'Achiziție',
+        date: '2026-08-10',
+        supplier: vendor,
+        transaction: 'CP-12',
+        cost: '6000.00',
+        bookValue: '6000.00',
+        amount: '6000.00',
+      },
+      ...monthly('MF-001', '166.67', ends(9, 9), 109),
+      ...monthly('MF-001', '166.66', ends(10, 10), 110),
+      ...monthly('MF-001', '166.67', ends(11, 12), 111),
+      ...monthly('MF-002', '1000.00', ends(1, 12), 1),
+      ...monthly('MF-003', '250.00', ends(1, 6), 13),
+      {
+        id: 'OUT-MF-003',
+        asset: 'MF-003',
+        type: '20',
+        description: 'Vânzare',
+        date: '2026-06-15',
+        supplier: own,
+        transaction: 'IM-3',
+        cost: '0.00',
+        bookValue: '-7500.00',
+        amount: '1500.00',
+      },
+    ],
+  };
+}
+const periodic = period('L', [10, 10, 10]);
+
+/** The annual file in the schema's d406 namespace, through the same retargeted copy of the XSD. */
+const annualFiles = () => ({
+  'assets-2026': writeD406Assets(assetsYear()),
+  'assets-2026-fraction-net': writeD406Assets({
+    ...assetsYear(),
+    presentation: { percentage: 'fraction', disposal: 'net' },
+  }),
+});
+
+describe('official D406 annual assets file', () => {
+  test('checkD406Assets accepts the register and refuses one that disagrees with its accounts', () => {
+    expect(checkD406Assets(assetsYear())).toEqual([]);
+    const missing = assetsYear();
+    missing.assets.pop();
+    missing.transactions = missing.transactions.filter((item) => item.asset !== 'MF-003');
+    expect(checkD406Assets(missing).map((check) => check.code)).toEqual([
+      'D406A_REGISTER',
+      'D406A_REGISTER',
+    ]);
+    const short = { ...assetsYear(), year: { start: '2026-06-10', end: '2026-12-31' } };
+    expect(checkD406Assets(short).map((check) => check.code)).toContain('D406A_YEAR');
+    const depreciation = assetsYear();
+    depreciation.transactions = depreciation.transactions.slice(0, -2);
+    expect(checkD406Assets(depreciation).map((check) => check.code)).toEqual([
+      'D406A_TRANSACTIONS',
+      'D406A_TRANSACTIONS',
+    ]);
+  });
+
+  test('writes the values as ANAF answers and examples read them', async () => {
+    const xml = writeD406Assets(assetsYear());
+    const machine = xml.slice(xml.indexOf('<nsSAFT:AssetID>MF-003'));
+    for (const [element, value] of [
+      ['AcquisitionAndProductionCostsBegin', '12000.00'],
+      ['AcquisitionAndProductionCostsEnd', '0.00'],
+      ['AssetLifeYear', '4'],
+      ['AssetDisposal', '-12000.00'],
+      ['BookValueBegin', '9000.00'],
+      ['DepreciationPercentage', '25.00'],
+      ['DepreciationForPeriod', '-1500.00'],
+      ['AccumulatedDepreciation', '0.00'],
+      ['BookValueEnd', '0.00'],
+    ])
+      expect(machine).toContain(`<nsSAFT:${element}>${value}</nsSAFT:${element}>`);
+    expect(xml).toContain('<nsSAFT:HeaderComment>A</nsSAFT:HeaderComment>');
+    expect(xml).toContain(
+      '<nsSAFT:NumberOfAssetTransactions>24</nsSAFT:NumberOfAssetTransactions>',
+    );
+    expect(annualFiles()['assets-2026-fraction-net']).toContain(
+      '<nsSAFT:DepreciationPercentage>0.2500</nsSAFT:DepreciationPercentage>',
+    );
+  });
+
+  schema('the annual files are valid against ANAF schema 2.4.9', async () => {
+    const files = annualFiles();
+    expect(await schemaErrors(files)).toEqual(
+      Object.fromEntries(Object.keys(files).map((name) => [name, []])),
+    );
+  });
+
+  validator(
+    'DUKIntegrator accepts the annual files, and rejects a short year, an unknown movement and assets in a monthly file',
+    async () => {
+      const xml = writeD406Assets(assetsYear());
+      const results = await validateAnaf(
+        'D406',
+        {
+          ...annualFiles(),
+          short: mutate(xml, '<nsSAFT:SelectionStartDate>', '2026-01-01', '2026-06-01'),
+          movement: mutate(xml, '<nsSAFT:AssetTransactionType>', '10', '15'),
+          monthly: mutate(xml, '<nsSAFT:HeaderComment>', 'A<', 'L<'),
+        },
+        saftDuk,
+      );
+      expect([results['assets-2026'], results['assets-2026-fraction-net']]).toEqual(['ok', 'ok']);
+      expect(results.short).toContain('Tipul declaratiei A nu corespunde cu perioada declarata');
+      expect(results.movement).toContain("valoarea '15' nu se afla in lista");
+      expect(results.monthly).toContain("elementul 'AssetID' a depasit numarul maxim de aparitii");
     },
     180_000,
   );

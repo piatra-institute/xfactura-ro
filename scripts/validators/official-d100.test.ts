@@ -55,6 +55,10 @@ const declarations: Record<string, D100> = {
     ],
     { period: { year: 2026, month: 10 } },
   ),
+  // Q3 2026 of a profit taxpayer in the quarterly system (103, model 8#), and a quarter that owed
+  // nothing (cumulated tax already declared).
+  'profit-q3': declaration([{ kind: 'profit', tax: 4704 }]),
+  'profit-q2-nil': declaration([{ kind: 'profit', tax: 0 }], { period: { year: 2026, month: 6 } }),
   // Q4 2026 dated as the validator requires, 25 June of the next year.
   'micro-q4-june': declaration([{ kind: 'micro', tax: 900, fourthQuarterDue: 'june' }], {
     period: { year: 2026, month: 12 },
@@ -106,6 +110,17 @@ describe('official D100 validation', () => {
         ['605', 85n, 85n],
       ]);
       expect(calculateD100(declarations['micro-q3']!).controlSum).toBe(2400n);
+      expect(amounts('profit-q3')).toEqual([['103', 4704n, 4704n]]);
+      expect(calculateD100(declarations['profit-q3']!).lines[0]).toMatchObject({
+        dueDate: '2026-10-25',
+        paymentNumber: '10103010926251026000039',
+      });
+      // The fourth quarter is the annual return's (D101), never a D100 line.
+      expect(
+        checkD100(
+          declaration([{ kind: 'profit', tax: 10 }], { period: { year: 2026, month: 12 } }),
+        ).map((check) => check.code),
+      ).toContain('D100_QUARTER');
       expect(calculateD100(declarations.dividends!).controlSum).toBe(12_800n);
       const results = await validateAnaf(
         'D100',

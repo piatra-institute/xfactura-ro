@@ -104,6 +104,23 @@ const declarations: Record<string, D212> = {
       offsetLoss: 0,
     },
   }),
+  // Two sources in the real system (instructions cap. IV: a subsection per source): 45,988 +
+  // 15,000 = 60,988 lei, CAS on 12 wages (39,600), CASS 6,099, taxable 44,989, tax 4,499.
+  'two-sources': declaration({
+    activities: [
+      {
+        caen: '6201',
+        seat: 'Str. Lunga nr. 12, Galati',
+        authorization: { number: '77/2021', date: '2021-05-10' },
+        gross: 20_000,
+        deductible: 5000,
+        carriedLosses: 0,
+        offsetLoss: 0,
+      },
+    ],
+    cass: { base: 60_988, due: 6099, minimumDifference: 0 },
+    tax: { deductibleCas: 9900, deductibleCass: 6099, due: 4499 },
+  }),
   // On a norm, started on 2 December 2024 (the structure's Subsection 2 is for those only):
   // 40,000 × 1.10 × 0.80 = 35,200 lei, × 30/365 days = 2,893 lei; CASS on 6 × 3,300 lei.
   norm: normDeclaration(),

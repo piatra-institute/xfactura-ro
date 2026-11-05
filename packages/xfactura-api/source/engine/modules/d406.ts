@@ -63,6 +63,7 @@ import {
 } from '../db/schema';
 import { justifyingDocuments } from '../kernel/reports';
 import { loadState, mergeStates } from '../kernel/state';
+import { assetsAuthorization, assetsInputs, disposalsOption, prepareAssets } from './d406-assets';
 import { periodStart, sellerDetails } from './d300';
 import type { DeclarationKind, DeclarationProblem } from './declarations';
 import { Sealer } from './payroll';
@@ -86,12 +87,19 @@ export const d406Options = z
     /** What the customers' advances (419) are for: the advance invoices' lines are reported as
      * goods or services. */
     advances: z.enum(['goods', 'services']).optional(),
+    /** The annual assets file: how each asset that left the register in the year left it. */
+    disposals: disposalsOption,
   })
   .strict();
 
 /** ANAF's validator parameters with the 21% and 11% codes apply from the 2025-07 periods;
  * earlier periods are not pinned. */
 const firstPeriod = '2025-07';
+/** The annual assets file is pinned from the financial year 2025: the kit's validator (J2.2.8)
+ * takes it, and it is the first year small taxpayers report whole (OPANAF nr. 1.783/2021 anexa
+ * nr. 5 pct. 1.1 lit. d), as OPANAF nr. 407/2025 restates it). */
+const firstAssetsYear = 2025;
+const annual = (period: string) => /^\d{4}$/.test(period);
 
 /**
  * The trade partners' accounts (OMFP 1802/2014): customers on 4111, 418 (facturi de întocmit)
@@ -131,6 +139,97 @@ function prorate(total: bigint, weights: readonly bigint[]): bigint[] {
   );
   parts[largest]! += residue;
   return parts;
+}
+
+/** A part of an invoice's allocation, as `invoices.recognize` and `invoices.credit` take it. */
+type Part = {
+  account: string;
+  vat: string;
+  amount: string;
+  lease?: string;
+  vatExpense?: string;
+};
+/** A finance lease's instalment part: its principal on 167, repaying the lease named. */
+const isLeasePart = (part: Part) => syntheticOf(part.account) === '167' && part.lease !== undefined;
+/** The exchange difference a lease's principal books with it (the functions of accounts 167,
+ * 668/768 and 665/765; `invoices.recognize`). */
+const leaseDifference = /^(668|768|6651|7651)$/;
+
+/**
+ * The base lines of an entry among its candidates (lines neither a partner's nor VAT), one per
+ * part, in the parts' order. A finance lease's part books after its own line on 167 the VAT it
+ * does not deduct (its `vatExpense`) and the exchange difference of its principal (668/768, or
+ * 6651/7651): those carry no VAT, so they are no base line. Without a lease part every candidate
+ * is a base line, as the parts were booked one line each. Undefined when the lines do not follow
+ * the parts.
+ */
+function baseLinesOf(
+  candidates: readonly { index: number; account: string }[],
+  parts: readonly Part[] | undefined,
+): { bases: number[]; releases: Set<number> } | undefined {
+  if (!parts?.some(isLeasePart))
+    return { bases: candidates.map((line) => line.index), releases: new Set() };
+  const bases: number[] = [];
+  const releases = new Set<number>();
+  let next = 0;
+  let lease: Part | undefined;
+  for (const line of candidates) {
+    const part = parts[next];
+    if (part && line.account === part.account) {
+      bases.push(line.index);
+      lease = isLeasePart(part) ? part : undefined;
+      if (lease) releases.add(line.index);
+      next += 1;
+    } else if (
+      !lease ||
+      (line.account !== lease.vatExpense && !leaseDifference.test(syntheticOf(line.account)))
+    )
+      return undefined;
+  }
+  return next === parts.length ? { bases, releases } : undefined;
+}
+
+/**
+ * The parts a lease invoice's lines belong to, within each VAT category: the one way to group
+ * the category's lines so that each part's lines add up to its amount. Undefined when there is
+ * none, or more than one that would put a line on another account (the lines cannot be told
+ * apart), or too many lines to try.
+ */
+function linesByAmount(
+  lines: readonly { key: string; amount: bigint }[],
+  parts: readonly { key: string; amount: bigint; account: string }[],
+): number[] | undefined {
+  const result: number[] = lines.map(() => -1);
+  for (const key of new Set(lines.map((line) => line.key))) {
+    const members = lines.flatMap((line, index) => (line.key === key ? [index] : []));
+    const candidates = parts.flatMap((part, index) => (part.key === key ? [index] : []));
+    if (!candidates.length || candidates.length ** members.length > 4096) return undefined;
+    const found = new Map<string, number[]>();
+    const choice: number[] = [];
+    const visit = (position: number) => {
+      if (found.size > 1) return;
+      if (position === members.length) {
+        const sums = candidates.map((part) =>
+          members.reduce(
+            (sum, line, index) => (choice[index] === part ? sum + lines[line]!.amount : sum),
+            0n,
+          ),
+        );
+        if (sums.every((sum, index) => sum === parts[candidates[index]!]!.amount))
+          found.set(choice.map((part) => parts[part]!.account).join('|'), [...choice]);
+        return;
+      }
+      for (const part of candidates) {
+        choice[position] = part;
+        visit(position + 1);
+      }
+    };
+    visit(0);
+    if (found.size !== 1) return undefined;
+    const [assigned] = [...found.values()];
+    members.forEach((line, index) => (result[line] = assigned![index]!));
+  }
+  return result;
 }
 
 /** The engine's journals, as the file describes and groups them (Type, up to nine characters). */
@@ -341,16 +440,24 @@ async function booksOf(tx: Transaction, companyId: string, period: string) {
       return id ? [[row.entryId, id] as const] : [];
     }),
   );
-  // Invoices split over accounts: each part's VAT category and amount, in the lines' order.
+  // Invoices split over accounts: each part's account, VAT category and amount, in the lines'
+  // order, and for a finance lease's part its lease and the account of the VAT it does not deduct.
   const allocations = new Map(
     treatments.flatMap((row) => {
-      const parts = input.get(row.entryId)!.allocations as
-        { vat: string; amount: string }[] | undefined;
+      const parts = input.get(row.entryId)!.allocations as Part[] | undefined;
       return (row.treatmentId === 'invoices.recognize' || row.treatmentId === 'invoices.credit') &&
         parts
         ? [[row.entryId, parts] as const]
         : [];
     }),
+  );
+  // Tax withheld at source (dividends, interest): ANAF wants it under its WHT codes.
+  const withholdings = new Set(
+    treatments.flatMap((row) =>
+      row.treatmentId === 'dividends.withhold' || row.treatmentId === 'loans.withhold'
+        ? [row.entryId]
+        : [],
+    ),
   );
   const movementOf = new Map(
     treatments.flatMap((row) =>
@@ -474,6 +581,7 @@ async function booksOf(tx: Transaction, companyId: string, period: string) {
     periodTaxes,
     recognized,
     allocations,
+    withholdings,
     movementOf,
     items,
     loaded: state.loaded,
@@ -506,16 +614,36 @@ export function d406Declaration(
   const sealer = new Sealer(secret);
   return {
     kind: 'D406',
-    description: 'Fișierul standard de control fiscal (D406, SAF-T), lunar sau trimestrial',
+    description:
+      'Fișierul standard de control fiscal (D406, SAF-T): lunar sau trimestrial, și anual pentru active',
     tax: null,
-    period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2]|Q[1-4])$/),
+    // A month or a quarter (L, T), or the financial year of the assets file (A).
+    period: z.string().regex(/^\d{4}(-(0[1-9]|1[0-2]|Q[1-4]))?$/),
     format(period) {
+      if (annual(period))
+        return Number(period) >= firstAssetsYear ? `D406 A ${d406Namespace}` : null;
       return periodStart(period).slice(0, 7) >= firstPeriod ? `D406 ${d406Namespace}` : null;
     },
     options: d406Options,
-    inputs: async (tx, companyId, period) => (await booksOf(tx, companyId, period)).inputs,
+    inputs: async (tx, companyId, period) =>
+      annual(period)
+        ? assetsInputs(tx, companyId, period)
+        : (await booksOf(tx, companyId, period)).inputs,
+    authorization: (tx, companyId, artifact) =>
+      annual(artifact.period)
+        ? assetsAuthorization(tx, companyId, artifact.period)
+        : Promise.resolve([]),
     async prepare(tx, companyId, period, raw) {
       const options = d406Options.parse(raw);
+      if (annual(period))
+        return prepareAssets(
+          tx,
+          companyId,
+          period,
+          options,
+          await rules(tx, companyId),
+          bucharestDate(clock()),
+        );
       const books = await booksOf(tx, companyId, period);
       const { loaded, end, inputs } = books;
       const problems: DeclarationProblem[] = [];
@@ -561,6 +689,11 @@ export function d406Declaration(
         problem(
           'D406_CONTACT',
           'Completați persoana de contact pentru ANAF: prenumele, numele și telefonul.',
+        );
+      if (options.disposals)
+        problem(
+          'D406_OPTION',
+          'Ieșirile mijloacelor fixe (disposals) se indică doar pentru fișierul anual al activelor.',
         );
 
       // Accounts of classes 1–7, with the standard account chosen where ANAF subdivides one.
@@ -822,6 +955,7 @@ export function d406Declaration(
         );
       };
       const entryVat = new Map<string, Awaited<ReturnType<typeof vatOf>>>();
+      const entryBases = new Map<string, (typeof books.periodLines)[number][]>();
       for (const header of books.headers) {
         const journal = journals[header.journalCode];
         if (!journal) {
@@ -836,19 +970,47 @@ export function d406Declaration(
         const document = documentNumber(header.id, header.number);
         const vat = await vatOf(header.id, header.number);
         entryVat.set(header.id, vat);
-        // The base of an entry's VAT is its first line that is neither a partner's nor VAT.
-        const base = own.findIndex(isBase);
-        if (vat.length && base < 0)
+        if (books.withholdings.has(header.id))
+          problem(
+            'D406_WHT',
+            `Nota ${header.number} reține impozit la sursă: ANAF îl cere cu codurile WHT (TaxType 604, 150, 605 și TaxCode-ul cotei) pe linia plății, ceea ce fișierul nu raportează încă.`,
+          );
+        // An invoice split over accounts or rates has a base line per part, in the parts' order:
+        // each VAT goes to the lines of its category, shared by their amounts. Otherwise the base
+        // of an entry's VAT is its first line that is neither a partner's nor VAT.
+        const parts = books.allocations.get(header.id);
+        const found = baseLinesOf(
+          own.flatMap((line, index) => (isBase(line) ? [{ index, account: line.account }] : [])),
+          parts,
+        );
+        if (!found)
+          problem(
+            'D406_SPLIT',
+            `Nota ${header.number}: liniile ei nu urmează părțile facturii, iar TVA nu se poate atribui.`,
+          );
+        const { bases, releases } = found ?? { bases: [], releases: new Set<number>() };
+        entryBases.set(
+          header.id,
+          bases.map((index) => own[index]!),
+        );
+        const base = bases[0] ?? -1;
+        if (found && vat.length && base < 0)
           problem(
             'D406_TAX_LINE',
             `Nota ${header.number} are TVA, dar nicio linie pe care să se raporteze baza.`,
           );
-        // An invoice split over accounts or rates has a base line per part, in the parts' order:
-        // each VAT goes to the lines of its category, shared by their amounts.
-        const bases = own.flatMap((line, index) => (isBase(line) ? [index] : []));
+        // A lease's principal leaves 167 at its carrying amount, not at the invoice's rate: its
+        // line is written in lei, as the invoice's lines are.
+        const currencyOf = (line: (typeof own)[number], index: number) =>
+          line.currency && line.currencyMinor && !releases.has(index)
+            ? {
+                code: line.currency,
+                amount: formatMoney(line.currencyMinor, line.currency),
+                rate: line.fxRate ?? '',
+              }
+            : undefined;
         const taxFor = new Map<number, D406Tax[]>();
         if (vat.length && bases.length > 1) {
-          const parts = books.allocations.get(header.id);
           const keys = parts?.map((part) => part.vat) ?? vat.map(({ tax }) => categoryOf(tax));
           if (keys.length !== bases.length)
             problem(
@@ -873,25 +1035,32 @@ export function d406Declaration(
               });
               const shares = prorate(tax.baseBani, weights);
               const amounts = prorate(tax.taxBani, weights);
+              // A line kept in its currency gives its VAT in that currency too, shared the same way.
+              const minors =
+                tax.currency && tax.taxMinor !== null ? prorate(tax.taxMinor, weights) : undefined;
               members.forEach(({ index }, k) =>
                 taxFor.set(index, [
                   ...(taxFor.get(index) ?? []),
-                  { type: '300', code, base: lei(shares[k]!), amount: lei(amounts[k]!) },
+                  {
+                    type: '300',
+                    code,
+                    base: lei(shares[k]!),
+                    amount: lei(amounts[k]!),
+                    ...(minors && currencyOf(own[index]!, index)
+                      ? { currencyAmount: formatMoney(minors[k]!, tax.currency!) }
+                      : {}),
+                  },
                 ]),
               );
             }
         }
         const transactionLines = own.map((line, index): D406Line => {
-          const currency =
-            line.currency && line.currencyMinor
-              ? {
-                  code: line.currency,
-                  amount: formatMoney(line.currencyMinor, line.currency),
-                  rate: line.fxRate ?? '',
-                }
-              : undefined;
+          const currency = currencyOf(line, index);
           const named = partner(line);
           const item = line.openItemId ? books.items.get(line.openItemId) : undefined;
+          // Lines without VAT, payroll's among them, carry TaxType 000 and TaxCode 000000: for
+          // taxes other than VAT and those withheld at source (WHT) ANAF recommends the generic
+          // code (Întrebări și răspunsuri SAF-T v1.2, MF.TT.2, opțiunea 2).
           const tax: D406Tax[] =
             bases.length > 1
               ? (taxFor.get(index) ?? [])
@@ -974,7 +1143,9 @@ export function d406Declaration(
         }
         const own = linesOf.get(header.id) ?? [];
         const partnerLine = own.find((line) => isCounterparty(line) && partnerOf(line.account));
-        const baseLine = own.find(isBase);
+        // The base lines the ledger's VAT went on, one per part.
+        const bases = entryBases.get(header.id) ?? [];
+        const baseLine = bases[0];
         const item = partnerLine ? books.items.get(partnerLine.openItemId!) : undefined;
         const party = item ? ids.get(item.partyId) : undefined;
         if (!partnerLine || !baseLine || !party) continue;
@@ -988,19 +1159,38 @@ export function d406Declaration(
         }
         // Each UBL line goes to the account its VAT category was booked on: the category's only
         // part, or, for a split invoice, the part of its category and sign (a negative line is an
-        // advance deducted) when they all share one account.
+        // advance deducted) when they all share one account. A lease's instalment books one rate
+        // on 167 and 666: each line goes to the part its amount makes up.
         const norm = (key: string) =>
           key.replace(/^S-(.+)$/, (_, rate: string) => `S-${Number(rate)}`);
-        const bases = own.filter(isBase);
         const parts = books.allocations.get(header.id);
+        const lease = parts?.some(isLeasePart) ?? false;
         const keys = (parts?.map((part) => part.vat) ?? vat.map(({ tax }) => categoryOf(tax))).map(
           norm,
         );
         const lineKey = (line: (typeof invoice.lines)[number]) =>
           norm(line.vat.category === 'S' ? `S-${line.vat.rate}` : line.vat.category);
-        const lineAccounts = invoice.lines.map((line) => {
+        let byAmount: number[] | undefined;
+        if (lease && parts && keys.length === bases.length)
+          try {
+            byAmount = linesByAmount(
+              invoice.lines.map((line) => ({
+                key: lineKey(line),
+                amount: parseMoney(line.netAmount, invoice.currency),
+              })),
+              parts.map((part, j) => ({
+                key: keys[j]!,
+                amount: parseMoney(part.amount, invoice.currency),
+                account: bases[j]!.account,
+              })),
+            );
+          } catch {
+            byAmount = undefined;
+          }
+        const lineAccounts = invoice.lines.map((line, index) => {
           if (bases.length === 1) return baseLine.account;
           if (keys.length !== bases.length) return undefined;
+          if (byAmount) return bases[byAmount[index]!]!.account;
           let members = bases.flatMap((base, j) => (keys[j] === lineKey(line) ? [j] : []));
           const negative = line.netAmount.startsWith('-') !== (invoice.typeCode === '381');
           const signed = parts
@@ -1017,10 +1207,13 @@ export function d406Declaration(
           );
           continue;
         }
+        // A finance lease's instalments are services (Codul fiscal art. 271 alin. (3) lit. a)).
         const kinds = lineAccounts.map((account) =>
           /^419/.test(account!)
             ? options.advances
-            : productKinds.find(([pattern]) => pattern.test(account!))?.[1],
+            : lease && /^(167|666)/.test(account!)
+              ? 'services'
+              : productKinds.find(([pattern]) => pattern.test(account!))?.[1],
         );
         const unknown = lineAccounts.find((_, index) => !kinds[index]);
         if (unknown) {
@@ -1035,8 +1228,11 @@ export function d406Declaration(
         // A credit note's lines are positive in the UBL and negative in the books (red storno).
         const sign = invoice.typeCode === '381' ? -1n : 1n;
         const foreign = invoice.currency !== 'RON';
-        const rate = (baseLine.currency ? baseLine.fxRate : partnerLine.fxRate) ?? '';
-        const withCurrency = Boolean(baseLine.currency);
+        // A lease's principal line keeps the lease's rate, not the invoice's: the partner's line
+        // gives it.
+        const rateLine = lease ? partnerLine : baseLine;
+        const rate = (rateLine.currency ? rateLine.fxRate : partnerLine.fxRate) ?? '';
+        const withCurrency = Boolean(rateLine.currency);
         if (foreign && !/^\d+(\.\d+)?$/.test(rate)) {
           problem(
             'D406_INVOICE',

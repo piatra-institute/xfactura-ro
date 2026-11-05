@@ -10,13 +10,20 @@ import {
 describe('question kinds', () => {
   test('each kind says what it asks, to whom it applies and how long an answer holds', () => {
     expect(questionKindIds.sort()).toEqual([
+      'annual.disclosures',
+      'annual.document',
+      'annual.informative',
       'choice',
       'deferral.schedule',
       'determination.confirm',
       'evidence.missing',
       'micro.conditions',
+      'obligation.filed',
       'payroll.absences',
       'profile.fact',
+      'profit.account',
+      'profit.losses',
+      'vat.refund',
       'vehicle.use',
       'year.figures',
     ]);

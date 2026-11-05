@@ -7,6 +7,8 @@ import { normalizePlate } from '../questions/kinds';
 import { recognitionInput, registration } from '../ro/treatments/invoices';
 import { deferralInput } from '../ro/treatments/deferrals';
 import { settlementInput } from '../ro/treatments/settlement';
+import { taxTypes } from '../ro/taxaccount/obligations';
+import { taxPaymentInput } from '../ro/taxaccount/treatments';
 import { addMonths, monthOf, type LocalDate } from '../time';
 import { invoiceDocumentSchema } from '../ubl/invoice-document';
 
@@ -19,7 +21,12 @@ import { invoiceDocumentSchema } from '../ubl/invoice-document';
  */
 
 /** The treatments a template can drive, and the subjects each reads. */
-export const templateTreatments = ['invoices.recognize', 'deferrals.defer', 'bank.settle'] as const;
+export const templateTreatments = [
+  'invoices.recognize',
+  'deferrals.defer',
+  'bank.settle',
+  'tax.pay',
+] as const;
 export type TemplateTreatment = (typeof templateTreatments)[number];
 
 /** What a template applies to, by treatment: a document kind, or a movement's direction. */
@@ -27,11 +34,14 @@ export const templateDocumentKinds: Record<TemplateTreatment, readonly string[]>
   'invoices.recognize': ['invoice.received', 'invoice.issued'],
   'deferrals.defer': ['invoice.received', 'invoice.issued'],
   'bank.settle': ['movement.paid', 'movement.received'],
+  'tax.pay': ['movement.paid'],
 };
 
 /** Whether a treatment's templates read documents or bank movements. */
 export const subjectKindOf = (treatment: TemplateTreatment) =>
-  treatment === 'bank.settle' ? ('movement' as const) : ('document' as const);
+  treatment === 'bank.settle' || treatment === 'tax.pay'
+    ? ('movement' as const)
+    : ('document' as const);
 
 export const templateScope = z
   .object({
@@ -48,6 +58,11 @@ export const templateScope = z
   .refine((scope) => templateDocumentKinds[scope.treatment].includes(scope.documentKind), {
     message: 'Tipul de document nu corespunde tratamentului.',
     path: ['documentKind'],
+  })
+  .refine((scope) => scope.treatment !== 'tax.pay' || scope.partyId !== undefined, {
+    message:
+      'Șablonul unei plăți către stat numește autoritatea (ANAF) ale cărei obligații le stinge.',
+    path: ['partyId'],
   });
 export type TemplateScope = z.infer<typeof templateScope>;
 
@@ -146,10 +161,16 @@ export const settlementMapping = z.discriminatedUnion('settle', [
     })
     .strict(),
 ]);
+/** `tax.pay`: where the payment goes, the single account or a tax's own account; the engine
+ * distributes it, never the template. */
+export const taxPaymentMapping = z
+  .object({ to: z.union([z.literal('single'), z.enum(taxTypes)]) })
+  .strict();
 export const templateMappings = {
   'invoices.recognize': recognitionMapping,
   'deferrals.defer': deferralMapping,
   'bank.settle': settlementMapping,
+  'tax.pay': taxPaymentMapping,
 } as const;
 
 /** A template as it is applied: its scope and its mapping, checked against its treatment. */
@@ -309,6 +330,19 @@ export function applyTemplate(template: TemplateDefinition, subject: TemplateSub
         }),
       };
     }
+    case 'tax.pay': {
+      const { movement } = subject as MovementSubject;
+      const mapping = taxPaymentMapping.parse(template.mapping);
+      if (!scope.partyId) return { ok: false, reason: 'party' };
+      return {
+        ok: true,
+        input: taxPaymentInput.parse({
+          movementId: movement.id,
+          authorityId: scope.partyId,
+          to: mapping.to,
+        }),
+      };
+    }
     case 'bank.settle': {
       const { movement, openItems } = subject as MovementSubject;
       const mapping = settlementMapping.parse(template.mapping);
@@ -356,6 +390,7 @@ const parsers: Record<TemplateTreatment, z.ZodType> = {
   'invoices.recognize': recognitionInput,
   'deferrals.defer': deferralInput,
   'bank.settle': settlementInput,
+  'tax.pay': taxPaymentInput,
 };
 
 /** What a mapping fixes of an input, compared without reading the document or movement. */
@@ -393,6 +428,14 @@ function fixedFields(treatment: TemplateTreatment, mapping: unknown, input: unkn
     case 'deferrals.defer': {
       const fixed = deferralMapping.parse(mapping);
       return value.account === fixed.account && value.months === fixed.months;
+    }
+    case 'tax.pay': {
+      const fixed = taxPaymentMapping.parse(mapping);
+      return (
+        value.to === fixed.to &&
+        (value.designations as unknown[]).length === 0 &&
+        (value.dueDates as unknown[]).length === 0
+      );
     }
     case 'bank.settle': {
       const fixed = settlementMapping.parse(mapping);

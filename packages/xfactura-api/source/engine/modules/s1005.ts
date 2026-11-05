@@ -2,36 +2,60 @@ import { and, asc, eq, gte, lte, ne, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Party } from 'xfactura-core/einvoice';
 import { DomainError } from 'xfactura-core/errors';
-import type { ReadSetEntry } from 'xfactura-core/kernel';
+import type { JsonValue, ReadSetEntry } from 'xfactura-core/kernel';
+import type { DraftFacts } from 'xfactura-core/ro/annual/documents';
+import type { AnnualPreparerQuality, Cells, StatementCheck } from 'xfactura-core/ro/annual/form';
+import {
+  s1003InformativeSpec,
+  s1005InformativeSpec,
+  type InformativeSpec,
+} from 'xfactura-core/ro/annual/informative';
+import {
+  checkS1003,
+  completeS1003,
+  s1003ComputedCells,
+  s1003Format,
+  writeS1003,
+  type S1003,
+} from 'xfactura-core/ro/annual/s1003';
+import { s1003Formulas, s1003FromLedger } from 'xfactura-core/ro/annual/s1003-accounts';
 import {
   checkS1005,
   completeS1005,
+  s1005ComputedCells,
   s1005Counties,
+  s1005F30Rows,
   s1005Format,
   writeS1005,
   type S1005,
   type S1005Address,
-  type S1005Cells,
-  type S1005F10Row,
-  type S1005F20Row,
-  type S1005F30Row,
   type S1005F40Row,
-  type S1005PreparerQuality,
 } from 'xfactura-core/ro/annual/s1005';
 import { s1005F40FromLedger } from 'xfactura-core/ro/annual/s1005-assets';
 import {
   s1005Columns,
   s1005Formulas,
   s1005FromLedger,
+  type S1005Formula,
   type S1005LedgerEntry,
   type S1005LedgerRows,
+  type S1005LedgerYear,
 } from 'xfactura-core/ro/annual/s1005-accounts';
 import { booksSystemOf } from 'xfactura-core/ro/entity';
 import { counties } from 'xfactura-core/ro/geo';
 import type { LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
-import { companies, entries, fiscalYears, lines } from '../db/schema';
+import { companies, entries, fiscalYears, lines, profileFacts } from '../db/schema';
 import { loadState } from '../kernel/state';
+import {
+  activitySince,
+  addressLine,
+  disclosuresOf,
+  documentsOf,
+  informativeOf,
+  signatureProblems,
+  type SignatureRole,
+} from './annual';
 import { sellerDetails } from './d300';
 import type { DeclarationKind, DeclarationProblem } from './declarations';
 
@@ -118,8 +142,9 @@ export const s1005Options = z
           .strict(),
       )
       .default({}),
-    /** The rows the books do not hold yet: F20 rd. 01a and F30 outside chapter XIX (employees,
-     * receivables and debts by kind, …). */
+    /** The rows neither the books nor F30's chapter questions hold: F20 rd. 01a (the turnover of
+     * the main activity) and, for S1005, F30 chapter XIX's rows without accounts (167a, the
+     * affiliated parts, the calamities' kinds). */
     informative: z.object({ F20: rows.optional(), F30: rows.optional() }).strict().default({}),
     /** F40 col. 4: the part of a row's reductions that is dismantling and scrapping, in lei,
      * for each row with reductions. */
@@ -136,6 +161,54 @@ export const s1005Options = z
   })
   .strict();
 type Options = z.infer<typeof s1005Options>;
+
+type Model = S1005 | S1003;
+
+/** What differs between the statements of microentities (S1005) and small entities (S1003). */
+type StatementConfig = {
+  kind: 'S1005' | 'S1003';
+  description: string;
+  format: (year: number) => { namespace: string };
+  fromLedger: (year: S1005LedgerYear) => S1005LedgerRows;
+  /** The rows the books' accounts give: never typed in. */
+  formulas: readonly S1005Formula[];
+  informative: InformativeSpec;
+  /** F30 rows typed in through `informative.F30` (S1005 chapter XIX without accounts). */
+  manualF30: (row: string) => boolean;
+  complete: (model: Model) => Model;
+  check: (model: Model) => StatementCheck[];
+  write: (model: Model) => string;
+  /** F20's net profit and loss rows, and the turnover row. */
+  result: { profit: string; loss: string };
+};
+
+const s1005Config: StatementConfig = {
+  kind: 'S1005',
+  description: 'Situații financiare anuale ale microentităților (S1005)',
+  format: s1005Format,
+  fromLedger: s1005FromLedger,
+  formulas: s1005Formulas,
+  informative: s1005InformativeSpec(s1005F30Rows, s1005ComputedCells('F30')),
+  manualF30: (row) => s1005F30Rows.find((spec) => spec.row === row)?.chapter === 'XIX',
+  complete: (model) => completeS1005(model as S1005),
+  check: (model) => checkS1005(model as S1005),
+  write: (model) => writeS1005(model as S1005),
+  result: { profit: '08', loss: '09' },
+};
+
+const s1003Config: StatementConfig = {
+  kind: 'S1003',
+  description: 'Situații financiare anuale ale entităților mici (S1003)',
+  format: s1003Format,
+  fromLedger: s1003FromLedger,
+  formulas: s1003Formulas,
+  informative: s1003InformativeSpec(s1003ComputedCells('F30')),
+  manualF30: () => false,
+  complete: (model) => completeS1003(model as S1003),
+  check: (model) => checkS1003(model as S1003),
+  write: (model) => writeS1003(model as S1003),
+  result: { profit: '69', loss: '70' },
+};
 
 const always = '1900-01-01';
 const signed = (debit: bigint, credit: bigint): S1005LedgerEntry => {
@@ -250,7 +323,9 @@ async function financialYear(tx: Transaction, companyId: string, end: string) {
   return row;
 }
 
-async function inputsOf(tx: Transaction, companyId: string, year: string) {
+/** What a statement is computed from: every line up to the year's end, the company's
+ * details, and the answers and contracts its F30 and drafts read. */
+async function inputsOf(tx: Transaction, companyId: string, config: StatementConfig, year: string) {
   // Every line up to the year's end: any posting, reversal or late entry makes it stale.
   const { readSet } = await loadState(tx, companyId, {
     turnover: [
@@ -262,9 +337,19 @@ async function inputsOf(tx: Transaction, companyId: string, year: string) {
     ],
   });
   const seller = await sellerDetails(tx, companyId);
+  const current = await financialYear(tx, companyId, `${year}-12-31`);
+  const extra: ReadSetEntry[] = [];
+  if (current) {
+    extra.push(
+      ...(await informativeOf(tx, companyId, config.kind, current, config.informative)).inputs,
+    );
+    const disclosures = await disclosuresOf(tx, companyId, config.kind, Number(year));
+    if (disclosures.input) extra.push(disclosures.input);
+  }
   const inputs: ReadSetEntry[] = [
     ...readSet,
     ...(seller ? [{ kind: 'party' as const, id: seller.partyId, version: seller.hash }] : []),
+    ...extra,
   ];
   return { seller, inputs };
 }
@@ -272,7 +357,7 @@ async function inputsOf(tx: Transaction, companyId: string, year: string) {
 const plain = (value: string) => value.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
 
 /** codTT of a Romanian county (ISO 3166-2:RO), by its name in the form's list. */
-function countyCode(subdivision: string | undefined) {
+export function countyCode(subdivision: string | undefined) {
   const name = subdivision ? counties[subdivision] : undefined;
   if (!name) return undefined;
   return s1005Counties.find(
@@ -282,7 +367,7 @@ function countyCode(subdivision: string | undefined) {
 
 /** The registered office from the company's address: its lines as the street, Bucharest's
  * sector when the address names one. */
-function addressOf(details: Party): S1005Address {
+export function addressOf(details: Party): S1005Address {
   const { lines: street, city } = details.address;
   const sector = /\bsector(?:ul)?\s*([1-6])\b/i.exec([city, ...street].join(' '))?.[1];
   return {
@@ -292,45 +377,8 @@ function addressOf(details: Party): S1005Address {
   };
 }
 
-const accountRows = new Set(s1005Formulas.map((formula) => `${formula.form}.${formula.row}`));
-const toCells = (values: (number | null)[]): S1005Cells =>
+const toCells = (values: (number | null)[]): Cells =>
   values.map((value) => (value === null ? undefined : value));
-
-/** The informative rows as cells, refusing the rows the books give. */
-function informativeRows<Row extends string>(
-  form: 'F20' | 'F30',
-  given: Record<string, (number | null)[]> | undefined,
-  problems: DeclarationProblem[],
-) {
-  const result: Partial<Record<Row, S1005Cells>> = {};
-  for (const [row, values] of Object.entries(given ?? {})) {
-    if (accountRows.has(`${form}.${row}`))
-      problems.push({
-        code: 'S1005_BOOKS_ROW',
-        message: `${form} rd. ${row} se calculează din registre; nu se completează manual.`,
-      });
-    else result[row as Row] = toCells(values);
-  }
-  return result;
-}
-
-/** The account rows given for the previous year, refusing the others. */
-function previousRows<Row extends string>(
-  form: 'F20' | 'F30',
-  given: Record<string, number>,
-  problems: DeclarationProblem[],
-) {
-  const result: Partial<Record<Row, number>> = {};
-  for (const [row, value] of Object.entries(given)) {
-    if (!accountRows.has(`${form}.${row}`))
-      problems.push({
-        code: 'S1005_PREVIOUS',
-        message: `${form} rd. ${row} nu este un rând din conturi; dați-l în informative.`,
-      });
-    else result[row as Row] = value;
-  }
-  return result;
-}
 
 function withRows(ledger: S1005LedgerEntry[], choices: Options['rows']): S1005LedgerEntry[] {
   return ledger.map((entry) => {
@@ -342,48 +390,65 @@ function withRows(ledger: S1005LedgerEntry[], choices: Options['rows']): S1005Le
     return {
       ...entry,
       rows: {
-        ...(choice.F10 ? { F10: choice.F10 as S1005F10Row } : {}),
-        ...(choice.F20 ? { F20: choice.F20 as S1005F20Row } : {}),
-        ...(choice.F30 ? { F30: choice.F30 as S1005F30Row } : {}),
+        ...(choice.F10 ? { F10: choice.F10 as never } : {}),
+        ...(choice.F20 ? { F20: choice.F20 as never } : {}),
+        ...(choice.F30 ? { F30: choice.F30 as never } : {}),
       },
     };
   });
 }
 
+async function policiesOf(tx: Transaction, companyId: string, end: string) {
+  const rows = await tx
+    .select()
+    .from(profileFacts)
+    .where(eq(profileFacts.companyId, companyId))
+    .orderBy(asc(profileFacts.effectiveFrom), asc(profileFacts.createdAt));
+  const policies: Record<string, string> = {};
+  for (const row of rows)
+    if (row.axis.startsWith('policy.') && row.effectiveFrom <= end) policies[row.axis] = row.value;
+  return policies;
+}
+
+const lei = (cells: Cells | undefined, column: number) => cells?.[column - 1] ?? 0;
+
 /**
- * The annual financial statements of a microentity (S1005) from the books of a financial year
- * ending on 31 December: the balance sheet (F10) from the closing balances, the profit and loss
- * account (F20) and F30 chapter XIX from the year's turnover of classes 6 and 7 without the
- * closing into 121. The previous year's column is the engine's previous financial year when it
- * keeps one; otherwise its balance sheet is the year's opening entries and its profit and loss
- * account the rows filed for it. F40 comes from the same balances and the year's movements of the
- * fixed-asset accounts. The identification, the rows of accounts the form spreads over several
- * rows, the scrapped part of F40's reductions and the informative rows the books do not hold are
- * the preparer's.
+ * A company's annual statements from the books of a financial year ending on 31 December: the
+ * balance sheet (F10) from the closing balances, the profit and loss account (F20) from the year's
+ * turnover of classes 6 and 7 without the closing into 121 (and, for S1005, F30 chapter XIX from
+ * the same), F30 from the registers and the chapters a person answered, F40 from the balances and
+ * the year's movements of the fixed-asset accounts. The previous year's column is the engine's
+ * previous financial year when it keeps one; otherwise its balance sheet is the year's opening
+ * entries and its profit and loss account the rows filed for it. The identification, the rows of
+ * accounts the form spreads over several rows, the scrapped part of F40's reductions and the rows
+ * no register holds are the preparer's. The summary keeps the signatures and the facts the
+ * accompanying documents are drafted from, which authorization checks.
  */
-export function s1005Declaration(): DeclarationKind {
+function statementDeclaration(config: StatementConfig): DeclarationKind {
+  const accountRows = new Set(config.formulas.map((formula) => `${formula.form}.${formula.row}`));
   return {
-    kind: 'S1005',
-    description: 'Situații financiare anuale ale microentităților (S1005)',
+    kind: config.kind,
+    description: config.description,
     tax: null,
     period: z.string().regex(/^\d{4}$/),
     format(year) {
       try {
-        return `S1005 ${s1005Format(Number(year)).namespace}`;
+        return `${config.kind} ${config.format(Number(year)).namespace}`;
       } catch {
         return null;
       }
     },
     options: s1005Options,
-    inputs: async (tx, companyId, year) => (await inputsOf(tx, companyId, year)).inputs,
+    inputs: async (tx, companyId, year) => (await inputsOf(tx, companyId, config, year)).inputs,
     async prepare(tx, companyId, year, raw) {
       const options = s1005Options.parse(raw);
       const problems: DeclarationProblem[] = [];
-      const { seller, inputs } = await inputsOf(tx, companyId, year);
+      const { seller, inputs } = await inputsOf(tx, companyId, config, year);
       const fail = () => ({ xml: '', inputs, problems, summary: null });
       // Single-entry books draw up no annual statements (OMFP nr. 170/2015 cap. II pct. 11).
       const { loaded } = await loadState(tx, companyId, { profile: true });
-      if (booksSystemOf(loaded.profile, `${year}-12-31` as LocalDate) === 'single') {
+      const end = `${year}-12-31` as LocalDate;
+      if (booksSystemOf(loaded.profile, end) === 'single') {
         problems.push({
           code: 'SINGLE_ENTRY_EXCLUDED',
           message:
@@ -391,6 +456,24 @@ export function s1005Declaration(): DeclarationKind {
         });
         return fail();
       }
+      // No activity since the company was set up: the inactivity declaration instead (Legea
+      // 82/1991 art. 36 alin. (2)), which a person states; never assumed from empty books.
+      const inactive = loaded.profile.filter(
+        (fact) => fact.axis === 'activity.none' && fact.effectiveFrom <= end,
+      );
+      const stated = inactive.at(-1)?.value;
+      if (stated === 'yes') {
+        problems.push({
+          code: 'INACTIVE',
+          message: `Compania a declarat că nu a desfășurat activitate de la înființare: pentru ${year} se depune declarația de inactivitate (S1046), nu situații financiare.`,
+        });
+        return fail();
+      }
+      if (stated === undefined && !(await activitySince(tx, companyId, end)))
+        problems.push({
+          code: 'ACTIVITY_UNKNOWN',
+          message: `Registrele nu au venituri sau cheltuieli până la 31.12.${year}: indicați dacă societatea a desfășurat activitate de la înființare (fapt activity.none); fără activitate se depune S1046.`,
+        });
       if (!seller)
         problems.push({
           code: 'SELLER_DETAILS',
@@ -408,7 +491,7 @@ export function s1005Declaration(): DeclarationKind {
         rows.issues
           .filter((issue) => issue.severity === 'error')
           .map((issue) => ({ code: issue.code, message: `${prefix}${issue.message}` }));
-      const books = s1005FromLedger({
+      const books = config.fromLedger({
         closing: withRows(
           await balances(tx, companyId, { from: always, to: current!.to }),
           options.rows,
@@ -427,8 +510,20 @@ export function s1005Declaration(): DeclarationKind {
         to: current!.to,
         journal: 'DESCHIDERE',
       });
+      const previousRows = (form: 'F20' | 'F30', given: Record<string, number>) => {
+        const result: Record<string, number> = {};
+        for (const [row, value] of Object.entries(given)) {
+          if (!accountRows.has(`${form}.${row}`))
+            problems.push({
+              code: `${config.kind}_PREVIOUS`,
+              message: `${form} rd. ${row} nu este un rând din conturi; dați-l în informative.`,
+            });
+          else result[row] = value;
+        }
+        return result;
+      };
       if (before) {
-        const rows = s1005FromLedger({
+        const rows = config.fromLedger({
           closing: withRows(
             await balances(tx, companyId, { from: always, to: before.to }),
             options.rows,
@@ -440,26 +535,26 @@ export function s1005Declaration(): DeclarationKind {
         openingLei = rows.closing;
         if (options.previous)
           problems.push({
-            code: 'S1005_PREVIOUS',
+            code: `${config.kind}_PREVIOUS`,
             message: `Exercițiul ${Number(year) - 1} este în registre; rândurile lui nu se dau manual.`,
           });
       } else if (opening.length) {
-        const rows = s1005FromLedger({ closing: withRows(opening, options.rows), turnover: [] });
+        const rows = config.fromLedger({ closing: withRows(opening, options.rows), turnover: [] });
         problems.push(...ledgerProblems(rows, 'Soldurile de deschidere: '));
         openingLei = rows.closing;
         if (!options.previous)
           problems.push({
-            code: 'S1005_PREVIOUS',
+            code: `${config.kind}_PREVIOUS`,
             message: `Exercițiul ${Number(year) - 1} nu este în registre: indicați rândurile F20 și F30 din conturi ale situațiilor financiare depuse pentru el (previous).`,
           });
         previous = {
           F10: rows.F10,
-          F20: previousRows<S1005F20Row>('F20', options.previous?.F20 ?? {}, problems),
-          F30: previousRows<S1005F30Row>('F30', options.previous?.F30 ?? {}, problems),
+          F20: previousRows('F20', options.previous?.F20 ?? {}),
+          F30: previousRows('F30', options.previous?.F30 ?? {}),
         };
       } else if (options.previous)
         problems.push({
-          code: 'S1005_PREVIOUS',
+          code: `${config.kind}_PREVIOUS`,
           message: 'Registrele nu au solduri de deschidere: exercițiul este primul al companiei.',
         });
 
@@ -467,13 +562,40 @@ export function s1005Declaration(): DeclarationKind {
       const county = countyCode(details.address.subdivision);
       if (county === undefined)
         problems.push({
-          code: 'S1005_COUNTY',
+          code: `${config.kind}_COUNTY`,
           message: 'Județul sediului social nu este în nomenclatorul formularului.',
         });
-      const informative = {
-        F20: informativeRows<S1005F20Row>('F20', options.informative.F20, problems),
-        F30: informativeRows<S1005F30Row>('F30', options.informative.F30, problems),
-      };
+      // The rows no register holds, typed in: F20 rd. 01a and (S1005) chapter XIX's rows without
+      // accounts; every other F30 row comes from the books or its chapter's question.
+      const manual = { F20: {} as Record<string, Cells>, F30: {} as Record<string, Cells> };
+      for (const form of ['F20', 'F30'] as const)
+        for (const [row, values] of Object.entries(options.informative[form] ?? {})) {
+          if (accountRows.has(`${form}.${row}`))
+            problems.push({
+              code: `${config.kind}_BOOKS_ROW`,
+              message: `${form} rd. ${row} se calculează din registre; nu se completează manual.`,
+            });
+          else if (form === 'F30' && !config.manualF30(row))
+            problems.push({
+              code: `${config.kind}_BOOKS_ROW`,
+              message: `F30 rd. ${row} se citește din registre sau se dă la întrebarea capitolului lui (annual.informative).`,
+            });
+          else manual[form][row] = toCells(values);
+        }
+      // F30 from the registers and the answered chapters.
+      const informative = await informativeOf(
+        tx,
+        companyId,
+        config.kind,
+        current!,
+        config.informative,
+      );
+      for (const request of informative.missing)
+        problems.push({
+          code: 'F30_CHAPTER',
+          message: `F30 capitolul ${(request.params as { chapter: string }).chapter}: răspundeți la întrebarea annual.informative ${request.subject.id} (annual.ask).`,
+        });
+      problems.push(...informative.issues);
       const assets = s1005F40FromLedger({
         opening: openingLei,
         closing: books.closing,
@@ -492,7 +614,7 @@ export function s1005Declaration(): DeclarationKind {
       const [company] = await tx.select().from(companies).where(eq(companies.id, companyId));
       const columns = s1005Columns({ ...(previous ? { previous } : {}), current: books });
       const { phone, address, ...entity } = options.entity;
-      const model: S1005 = {
+      const model = {
         year: Number(year),
         entity: {
           ...entity,
@@ -505,38 +627,90 @@ export function s1005Declaration(): DeclarationKind {
         administrator: options.administrator,
         preparer: {
           ...options.preparer,
-          quality: options.preparer.quality as S1005PreparerQuality,
+          quality: options.preparer.quality as AnnualPreparerQuality,
         },
         ...(options.audit ? { audit: options.audit } : {}),
         ...(options.internalAudit !== undefined ? { internalAudit: options.internalAudit } : {}),
         approved: options.approved,
         F10: columns.F10,
-        F20: { ...columns.F20, ...informative.F20 },
-        F30: { ...columns.F30, ...informative.F30 },
+        F20: { ...columns.F20, ...manual.F20 },
+        F30: {
+          ...(config.kind === 'S1005' ? columns.F30 : {}),
+          ...informative.rows,
+          ...manual.F30,
+        },
         F40: assets.F40,
-      };
-      let completed: S1005;
+      } as Model;
+      let completed: Model;
       try {
-        completed = completeS1005(model);
+        completed = config.complete(model);
       } catch (error) {
         if (!(error instanceof DomainError)) throw error;
         problems.push({ code: error.code, message: error.message });
         return fail();
       }
-      const checks = checkS1005(completed);
+      const checks = config.check(completed);
       problems.push(
         ...checks
           .filter((check) => check.severity === 'error')
           .map((check) => ({ code: check.code, message: `${check.path}: ${check.message}` })),
       );
       if (problems.length) return fail();
+
+      const F10 = completed.F10 as Record<string, Cells | undefined>;
+      const F20 = completed.F20 as Record<string, Cells | undefined>;
+      const F30 = completed.F30 as Record<string, Cells | undefined>;
+      const profit = lei(F20[config.result.profit], 2);
+      const loss = lei(F20[config.result.loss], 2);
+      const reserve = books.closing
+        .filter((item) => item.account.startsWith('129'))
+        .reduce((sum, item) => sum + item.lei, 0);
+      const draft: DraftFacts = {
+        statement: config.kind,
+        year: Number(year),
+        company: {
+          name: details.name,
+          cui: company!.cui,
+          tradeRegister: options.entity.tradeRegister,
+          address: addressLine(details),
+          form: loaded.profile.filter((fact) => fact.axis === 'entity.form').at(-1)?.value ?? 'srl',
+        },
+        administrator: options.administrator,
+        preparer: { name: options.preparer.name, quality: options.preparer.quality },
+        turnover: [F20['01']?.[0], lei(F20['01'], 2)],
+        result: profit - loss,
+        previousResult: F20[config.result.profit]?.[0] ?? undefined,
+        equity: lei(F10['46'], 2),
+        totalAssets: lei(F10['04'], 2) + lei(F10['09'], 2) + lei(F10['10'], 2),
+        debts: lei(F10['13'], 2) + lei(F10['16'], 2),
+        legalReserve: reserve,
+        capital: lei(F10['30'], 2),
+        employees: { average: lei(F30['19'], 2), atEnd: lei(F30['20'], 2) },
+        fixedAssets: completed.F40 as Record<string, Cells | undefined>,
+        policies: await policiesOf(tx, companyId, end),
+        disclosures: (await disclosuresOf(tx, companyId, config.kind, Number(year))).answer,
+        branch: options.entity.branch,
+      };
+      const signatures: SignatureRole[] = [
+        { role: 'administrator', name: options.administrator },
+        {
+          role: 'accountant',
+          name: options.preparer.name,
+          quality: options.preparer.quality,
+          ...(options.preparer.membership ? { membership: options.preparer.membership } : {}),
+          ...(options.preparer.cif ? { cif: options.preparer.cif } : {}),
+        },
+      ];
       return {
-        xml: writeS1005(completed),
+        xml: config.write(completed),
         inputs,
         problems,
         summary: {
           year: Number(year),
           previous: before ? 'books' : opening.length ? 'opening' : 'none',
+          signatures,
+          ...(options.audit ? { audit: { kind: options.audit.kind } } : {}),
+          draft: JSON.parse(JSON.stringify(draft)) as JsonValue,
           warnings: [
             ...books.issues.filter((issue) => issue.severity === 'warning'),
             ...checks.filter((check) => check.severity === 'warning'),
@@ -544,5 +718,26 @@ export function s1005Declaration(): DeclarationKind {
         },
       };
     },
+    async authorization(tx, companyId, { period, summary }) {
+      const prepared = (summary ?? {}) as {
+        signatures?: SignatureRole[];
+        audit?: { kind: 'statutory' | 'voluntary' | 'censors' };
+        draft?: DraftFacts;
+      };
+      const problems = await signatureProblems(tx, companyId, Number(period), prepared.signatures);
+      if (!prepared.draft) return problems;
+      const { statuses } = await documentsOf(tx, companyId, prepared.draft, prepared.audit);
+      for (const status of statuses)
+        if (!status.supplied)
+          problems.push({
+            code: 'DOCUMENT_MISSING',
+            message: `${status.title}: lipsește documentul semnat (întrebarea annual.document ${status.request.subject.id}, annual.ask).`,
+          });
+      return problems;
+    },
   };
 }
+
+export const s1005Declaration = () => statementDeclaration(s1005Config);
+export const s1003Declaration = () => statementDeclaration(s1003Config);
+export const statementConfigs = { S1005: s1005Config, S1003: s1003Config };

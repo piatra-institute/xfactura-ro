@@ -65,6 +65,7 @@ const appendOnly = [
   'acc_payroll_lines',
   'acc_assets',
   'acc_asset_events',
+  'acc_asset_fiscal',
   'acc_anaf_connections',
   'acc_party_cnps',
   'acc_party_status',
@@ -1016,7 +1017,7 @@ const payrollChecks = {
   ] satisfies Check[],
 };
 
-const assetChecks: Record<'cards' | 'events', Check[]> = {
+const assetChecks: Record<'cards' | 'events' | 'fiscal', Check[]> = {
   cards: [
     {
       code: 'asset_accounts',
@@ -1035,6 +1036,14 @@ const assetChecks: Record<'cards' | 'events', Check[]> = {
         OR EXISTS (
           SELECT 1 FROM acc_asset_events WHERE company_id = NEW.company_id AND asset_id = NEW.asset_id AND kind = 'disposed')
         OR NEW.date < (SELECT commissioned_on FROM acc_assets WHERE company_id = NEW.company_id AND id = NEW.asset_id)`,
+    },
+  ],
+  fiscal: [
+    {
+      code: 'asset_fiscal_version',
+      rule: "An asset's fiscal bases are numbered from 1 without gaps; the latest holds.",
+      violation: `NEW.version <> 1 + COALESCE((
+          SELECT max(version) FROM acc_asset_fiscal WHERE company_id = NEW.company_id AND asset_id = NEW.asset_id), 0)`,
     },
   ],
 };
@@ -1600,6 +1609,11 @@ const triggers: Trigger[] = [
     name: 'inv_asset_event_guard',
     on: 'BEFORE INSERT ON acc_asset_events',
     checks: assetChecks.events,
+  },
+  {
+    name: 'inv_asset_fiscal_guard',
+    on: 'BEFORE INSERT ON acc_asset_fiscal',
+    checks: assetChecks.fiscal,
   },
   {
     name: 'inv_payroll_line_guard',

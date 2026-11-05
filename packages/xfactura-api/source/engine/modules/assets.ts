@@ -2,8 +2,16 @@ import { and, asc, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireCondition } from 'xfactura-core/errors';
 import { formatMoney, parseMoney } from 'xfactura-core/money';
+import { fiscalMethods } from 'xfactura-core/ro/profit';
 import { invoiceKinds } from 'xfactura-core/ro/treatments/invoices';
-import { assetEvents, assets, documents, evidence, ledgerAccounts } from '../db/schema';
+import {
+  assetEvents,
+  assetFiscal,
+  assets,
+  documents,
+  evidence,
+  ledgerAccounts,
+} from '../db/schema';
 import { appendAudit, type Actor, type Commands } from '../kernel/commands';
 import { loadState } from '../kernel/state';
 
@@ -15,6 +23,44 @@ export const disposalInput = z
     evidenceId: z.uuid(),
   })
   .strict();
+
+export const fiscalInput = z
+  .object({
+    assetId: z.uuid(),
+    /** The fiscal method (Codul fiscal art. 28): linear, degressive, accelerated,
+     * superaccelerated (new assets of subgroups 2.1 and 2.4 put into use in 2026), deducted in
+     * full when put into use (safety, medical offices, below the value limit), or none. */
+    method: z.enum(fiscalMethods),
+    /** The fiscal value at entry, in lei (art. 7 pct. 44–45), the non-deductible VAT included. */
+    value: z.string().regex(/^(0|[1-9]\d{0,15})(\.\d{1,2})?$/),
+    /** The normal life within the catalogue's range, in months; the card's fiscal life when
+     * omitted. */
+    lifeMonths: z.number().int().min(1).max(1200).optional(),
+    /** For the accelerated methods: the share of the value taken in the first year, a
+     * percentage no higher than the law's. */
+    firstYearPercent: z
+      .string()
+      .regex(/^(0|[1-9]\d?)(\.\d{1,2})?$/)
+      .optional(),
+    /** An M1 passenger car (at most 9 seats) not used as art. 28 alin. (14) excepts: its
+     * depreciation is deductible up to 1,500 lei a month. */
+    m1: z.boolean(),
+    /** A new asset, for the superaccelerated method. */
+    newAsset: z.boolean().default(false),
+    /** The asset card with its fiscal regime, the decision for an accelerated method, what
+     * excepts an M1 car. */
+    evidenceId: z.uuid(),
+  })
+  .strict()
+  .refine(
+    (input) =>
+      (input.firstYearPercent === undefined) ===
+      !['accelerated', 'superaccelerated'].includes(input.method),
+    {
+      message: 'Partea primului an se indică pentru metodele accelerate, și doar pentru ele.',
+      path: ['firstYearPercent'],
+    },
+  );
 
 export const assetInput = z
   .object({
@@ -163,6 +209,53 @@ export class Assets {
     });
   }
 
+  /** Records an asset's fiscal basis (art. 28): a new version replaces the earlier from the next
+   * computation of the profit tax. */
+  recordFiscal(actor: Actor, key: string, input: z.infer<typeof fiscalInput>) {
+    return this.commands.run(actor, key, 'assets.recordFiscal', input, 'write', async (tx) => {
+      const [card] = await tx
+        .select()
+        .from(assets)
+        .where(and(eq(assets.companyId, actor.companyId), eq(assets.id, input.assetId)));
+      requireCondition(card, 'ASSET', 'Mijlocul fix nu există.', 404);
+      const [file] = await tx
+        .select({ id: evidence.id })
+        .from(evidence)
+        .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.id, input.evidenceId)));
+      requireCondition(file, 'EVIDENCE', 'Documentul justificativ nu este disponibil.', 404);
+      const [last] = await tx
+        .select({ version: assetFiscal.version })
+        .from(assetFiscal)
+        .where(
+          and(eq(assetFiscal.companyId, actor.companyId), eq(assetFiscal.assetId, input.assetId)),
+        )
+        .orderBy(desc(assetFiscal.version))
+        .limit(1);
+      const version = (last?.version ?? 0) + 1;
+      await tx.insert(assetFiscal).values({
+        companyId: actor.companyId,
+        assetId: input.assetId,
+        version,
+        method: input.method,
+        valueBani: parseMoney(input.value, 'RON'),
+        lifeMonths: input.lifeMonths ?? card.fiscalLifeMonths,
+        firstYearPercent: input.firstYearPercent ?? null,
+        m1: input.m1,
+        newAsset: input.newAsset,
+        evidenceId: input.evidenceId,
+        createdBy: actor.actorId,
+      });
+      await appendAudit(tx, {
+        companyId: actor.companyId,
+        actorId: actor.actorId,
+        ...(actor.agentId ? { agentId: actor.agentId } : {}),
+        action: 'assets.fiscalRecorded',
+        body: { assetId: input.assetId, version, method: input.method },
+      });
+      return { assetId: input.assetId, version };
+    });
+  }
+
   /** The register with each asset's depreciation booked and remaining value. */
   list(actor: Actor) {
     return this.commands.db.read(async (tx) => {
@@ -191,6 +284,17 @@ export class Assets {
           fiscalLifeMonths: card.fiscalLifeMonths,
           commissionedOn: asset.commissionedOn,
           disposedOn: asset.disposedOn,
+          fiscal: asset.fiscal
+            ? {
+                version: asset.fiscal.version,
+                method: asset.fiscal.method,
+                value: formatMoney(asset.fiscal.value, 'RON'),
+                lifeMonths: asset.fiscal.lifeMonths,
+                firstYearPercent: asset.fiscal.firstYearPercent,
+                m1: asset.fiscal.m1,
+                newAsset: asset.fiscal.newAsset,
+              }
+            : null,
         };
       });
     });

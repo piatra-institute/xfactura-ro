@@ -16,7 +16,8 @@ import { isValidCnp, isValidCui } from '../identifiers';
  * reporting year 2025, so 25 January; the validator still requires 25 June of the next year. The
  * caller chooses (fourthQuarterDue).
  *
- * Covered: the micro-enterprise income tax of a quarter (121), the dividend tax withheld from
+ * Covered: the micro-enterprise income tax of a quarter (121), the profit tax of the first three
+ * quarters of the quarterly system (103, model 8#), the dividend tax withheld from
  * individuals (604) and Romanian companies (150), and the tax withheld on interest paid to
  * individuals (605, nomenclature position 7: art. 97 and 132, monthly, due the 25th of the next
  * month, model 1#); any other obligation of the nomenclature as
@@ -34,6 +35,7 @@ import { isValidCnp, isValidCui } from '../identifiers';
  * (cod_bugetar: 20470101 replaced by 5503, padded with X to ten characters) and wording. */
 export const d100Obligations = [
   ['121', '5503XXXXXX', 'Impozit pe veniturile microîntreprinderilor'],
+  ['103', '5503XXXXXX', 'Impozit pe profit datorat de persoane juridice române'],
   ['604', '5503XXXXXX', 'Impozit pe veniturile din dividende distribuite PF'],
   ['150', '5503XXXXXX', 'Impozit pe dividende distribuite PJ'],
   ['605', '5503XXXXXX', 'Impozit pe veniturile din dobânzi'],
@@ -88,6 +90,15 @@ export type D100OtherObligation = {
   minimumTax?: boolean;
 };
 
+export type D100ProfitTax = {
+  /** 103, art. 13 and 41 Cod fiscal: the profit tax of a quarter of the quarterly system (the
+   * first three: the fourth is the annual return's, D101), declared for the quarter's last month,
+   * due the 25th of the next (25LU), model 8#. */
+  kind: 'profit';
+  /** suma_dat: the quarter's tax as the books hold it (691 = 4411, `tax.profit`), whole lei. */
+  tax: number;
+};
+
 export type D100InterestTax = {
   /** 605, art. 97 alin. (2) Cod fiscal: interest paid to individuals under civil contracts. */
   kind: 'interest';
@@ -96,7 +107,8 @@ export type D100InterestTax = {
   withheld: number;
 };
 
-export type D100Obligation = D100MicroTax | D100DividendTax | D100InterestTax | D100OtherObligation;
+export type D100Obligation =
+  D100MicroTax | D100ProfitTax | D100DividendTax | D100InterestTax | D100OtherObligation;
 
 export type D100Contact = {
   /** adresa, adrR */
@@ -171,6 +183,7 @@ const maxLines = 1300;
 // Dedicated kinds, and obligations whose header fields this module does not write.
 const reservedCodes: Readonly<Record<string, string>> = {
   '121': 'se declară ca impozit pe veniturile microîntreprinderilor (kind micro)',
+  '103': 'se declară ca impozit pe profit (kind profit)',
   '150': 'se declară ca impozit pe dividende (kind dividends)',
   '604': 'se declară ca impozit pe dividende (kind dividends)',
   '605': 'se declară ca impozit pe dobânzi (kind interest)',
@@ -307,6 +320,15 @@ function inputProblems(model: D100): Problem[] {
       case 'interest':
         amount(`${path}.withheld`, obligation.withheld, 'Impozitul reținut');
         return;
+      case 'profit':
+        amount(`${path}.tax`, obligation.tax, 'Impozitul pe profit');
+        if (!model.dissolution && ![3, 6, 9].includes(model.period.month))
+          problem(
+            'D100_QUARTER',
+            path,
+            'Impozitul pe profit se declară pentru ultima lună a trimestrelor I–III (martie, iunie, septembrie); al trimestrului IV se declară prin declarația anuală 101.',
+          );
+        return;
       case 'other':
         if (!/^[1-9]\d{2}$/.test(obligation.code))
           problem('D100_CODE', `${path}.code`, 'Codul obligației are trei cifre.');
@@ -336,7 +358,7 @@ function inputProblems(model: D100): Problem[] {
         problem(
           'D100_KIND',
           path,
-          'Obligația este impozitul microîntreprinderii, impozitul pe dividende, impozitul pe dobânzi sau altă obligație din nomenclator.',
+          'Obligația este impozitul microîntreprinderii, impozitul pe profit, impozitul pe dividende, impozitul pe dobânzi sau altă obligație din nomenclator.',
         );
     }
   });
@@ -379,6 +401,19 @@ function line(model: D100, obligation: D100Obligation): D100Line {
       const code = obligation.beneficiary === 'individual' ? '604' : '150';
       return {
         ...dated(code, nextMonth25(period)),
+        budgetCode: '5503XXXXXX',
+        due,
+        deductible: 0n,
+        payable: due,
+        refund: 0n,
+        minimumTax: false,
+      };
+    }
+    case 'profit': {
+      // Model 8#: suma_plata = suma_dat.
+      const due = big(obligation.tax);
+      return {
+        ...dated('103', nextMonth25(period)),
         budgetCode: '5503XXXXXX',
         due,
         deductible: 0n,

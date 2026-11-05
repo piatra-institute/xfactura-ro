@@ -1,4 +1,9 @@
 import type { ParameterVersion } from '../../rules';
+import { annualClauses, annualSources } from './annual';
+import { nonpayerClauses, nonpayerSources } from './nonpayers';
+import { taxAccountClauses, taxAccountSources } from './taxaccount';
+import { profitClauses, profitSources } from './profit';
+import { saftClauses, saftSources } from './saft';
 
 /**
  * Where the engine's Romanian rules come from. A source is a legal act or an official
@@ -54,12 +59,22 @@ export const legalSources: readonly LegalSource[] = [
   {
     id: 'L207/2015',
     kind: 'act',
-    title: 'Legea nr. 207/2015 privind Codul de procedură fiscală',
+    title:
+      'Legea nr. 207/2015 privind Codul de procedură fiscală (forma consolidată pe portalul legislativ, actualizată până la 08.08.2026)',
     issuer: 'Parlamentul României',
-    publication: null,
-    urls: [],
+    publication: 'Monitorul Oficial nr. 547 din 23 iulie 2015',
+    // The portal's page is dynamic and refuses automated access: the hash is the copy kept in
+    // .sources/.
+    urls: ['https://legislatie.just.ro/Public/DetaliiDocument/312603'],
     fetch: false,
-    snapshots: [],
+    snapshots: [
+      {
+        url: 'https://legislatie.just.ro/Public/DetaliiDocument/312603',
+        sha256: '688ac5103375910fff2a3d2ac7e58ea8bccb6987b8edacb509d8ae50545a6d2c',
+        retrievedOn: '2026-11-04',
+        mediaType: 'text/html',
+      },
+    ],
   },
   {
     id: 'L141/2025',
@@ -336,6 +351,80 @@ export const legalSources: readonly LegalSource[] = [
         sha256: 'c6fd52add135682f57f54c1e2e174553962c1d94f392fc989632597106177a65',
         retrievedOn: '2026-10-30',
         mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
+    id: 'OPANAF407/2025',
+    kind: 'act',
+    title:
+      'Ordinul președintelui ANAF nr. 407/2025 pentru modificarea anexei nr. 5 la OPANAF nr. 1.783/2021 (categoriile de contribuabili care transmit D406 și cele exceptate)',
+    issuer: 'ANAF',
+    publication: 'Monitorul Oficial nr. 310 din 8 aprilie 2025',
+    urls: ['https://static.anaf.ro/static/10/Anaf/legislatie/OPANAF_407_2025.pdf'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/legislatie/OPANAF_407_2025.pdf',
+        sha256: '65c28805d4832feae60ec627c9842c46a9eb48a4aa3a7b348a495ecf2098b082',
+        retrievedOn: '2026-11-04',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
+    id: 'OPANAF605/2026',
+    kind: 'act',
+    title:
+      'Ordinul comun ANAF/CNPP/CNAS/ANOFM nr. 605/95/928/2.314/2026 pentru aprobarea formularului 112 (de la declararea veniturilor lunii iulie 2026), cu instrucțiunile de completare (anexa nr. 6)',
+    issuer: 'ANAF, CNPP, CNAS, ANOFM',
+    publication: 'Monitorul Oficial nr. 463 din 2 iunie 2026',
+    urls: ['https://static.anaf.ro/static/10/Anaf/legislatie/OPANAF_605_2026.pdf'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/legislatie/OPANAF_605_2026.pdf',
+        sha256: '2c7c4a03e9cf14d2b77201d98a9af10d70b22171379d76aab606d0ca971e5e6d',
+        retrievedOn: '2026-11-04',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
+    id: 'OUG128/2024',
+    kind: 'act',
+    title:
+      'OUG nr. 128/2024 pentru modificarea și completarea Legii nr. 227/2015 privind Codul fiscal și măsuri specifice pentru digitalizare (art. 69 alin. (9) de la veniturile anului 2025)',
+    issuer: 'Guvernul României',
+    publication: 'Monitorul Oficial nr. 1125 din 11 noiembrie 2024',
+    urls: ['https://static.anaf.ro/static/10/Anaf/legislatie/OUG_128_2024.pdf'],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/legislatie/OUG_128_2024.pdf',
+        sha256: 'e68d54c6d83da84c93b148fe8445a80f3ca6b8789ffa103547f399c5e98604e8',
+        retrievedOn: '2026-11-04',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
+    // The portal's consolidated form of 2025 (before Legea nr. 239/2025): official but
+    // informative; its validity date on the portal was not confirmed (mid-2025 by its content).
+    id: 'LJR/Cod-fiscal-2025',
+    kind: 'official_document',
+    title:
+      'Codul fiscal (Legea nr. 227/2015), forma consolidată din 2025 a portalului legislatie.just.ro (înainte de Legea nr. 239/2025)',
+    issuer: 'Ministerul Justiției (portalul legislativ)',
+    publication: null,
+    urls: ['https://legislatie.just.ro/Public/DetaliiDocument/301684'],
+    fetch: false,
+    snapshots: [
+      {
+        url: 'https://legislatie.just.ro/Public/DetaliiDocument/301684',
+        sha256: '66e5cc9a6e83c810a5407c163346bf9db576848cb7038df3c3e7c9a4b9d7722c',
+        retrievedOn: '2026-11-04',
+        mediaType: 'text/html',
       },
     ],
   },
@@ -802,6 +891,11 @@ export const legalSources: readonly LegalSource[] = [
       },
     ],
   },
+  ...annualSources,
+  ...profitSources,
+  ...nonpayerSources,
+  ...taxAccountSources,
+  ...saftSources,
 ];
 
 export const clauses: readonly Clause[] = [
@@ -1383,6 +1477,22 @@ export const clauses: readonly Clause[] = [
       'CASS pentru veniturile din activități independente se datorează la o bază anuală egală cu suma veniturilor nete sau a normelor de venit, de cel mult 72 de salarii minime brute pe țară; pierderile fiscale nu se iau în considerare.',
   },
   {
+    id: 'ANAF/Cod-fiscal-consolidat:norme.art.69.pct.8(5)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'normele metodologice, titlul IV pct. 8 alin. (5)',
+    status: 'located',
+    summary:
+      'Într-o asociere fără personalitate juridică, norma anuală de venit a fiecărui asociat nu poate fi mai mică de 12 salarii minime (în vigoare la stabilirea ei); fiecare membru aplică criteriile de corecție normei de venit proprii.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.170(2)-(3)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 170 alin. (2)–(3)',
+    status: 'located',
+    summary:
+      'CASS pentru veniturile de la art. 155 alin. (1) lit. c)–h) (drepturi de proprietate intelectuală, asocieri cu persoane juridice, cedarea folosinței bunurilor, investiții, agricultură, alte surse) se datorează dacă venitul cumulat este de cel puțin 6 salarii minime, la o bază de 6, 12 sau 24 de salarii minime după pragul atins.',
+  },
+  {
     id: 'ANAF/Cod-fiscal-consolidat:art.174(1)-(8)',
     source: 'ANAF/Cod-fiscal-consolidat',
     locator: 'art. 174 alin. (1), (2), (6), (7) și (8)',
@@ -1513,6 +1623,14 @@ export const clauses: readonly Clause[] = [
       'Declarația se depune până la 25 mai inclusiv a anului următor celui de realizare a veniturilor; pentru opțiunea de plată a CASS, oricând în cursul anului.',
   },
   {
+    id: 'OPANAF2736/2025:instr.pct.51-52',
+    source: 'OPANAF2736/2025',
+    locator: 'anexa nr. 2 (instrucțiuni), pct. 51–52',
+    status: 'located',
+    summary:
+      'Pentru veniturile din drepturi de proprietate intelectuală, asocieri cu persoane juridice, cedarea folosinței bunurilor, investiții și alte surse, încadrarea în plafonul de 6, 12 sau 24 de salarii minime (4.050 lei în 2025) se face prin cumularea lor; baza anuală este plafonul atins, CASS 10% din ea (secțiunea 3.2.2).',
+  },
+  {
     id: 'OPANAF2736/2025:instr.pct.49.1.5',
     source: 'OPANAF2736/2025',
     locator: 'anexa nr. 2 (instrucțiuni), cap. I, secțiunea a 3-a, subsecțiunea a 2-a, pct. 49.1.5',
@@ -1583,6 +1701,14 @@ export const clauses: readonly Clause[] = [
     status: 'located',
     summary:
       'Registrul de evidență fiscală îl completează cei impuși în sistem real (cei cu norme de venit numai partea de venituri), anual, cu totalurile, pe fiecare sursă din fiecare categorie de venit, înainte de depunerea declarației.',
+  },
+  {
+    id: 'OMFP3254/2017:art.3-5',
+    source: 'OMFP3254/2017',
+    locator: 'art. 3 alin. (3)–(4), art. 4 alin. (1), art. 5 alin. (1)',
+    status: 'located',
+    summary:
+      'Registrul de evidență fiscală se ține pe fiecare sursă de venit din fiecare categorie; cu mai multe surse, evidența se ține pe fiecare sursă în același registru; venitul brut și cheltuielile deductibile se înregistrează pe fiecare sursă. Ordinul nu spune cum se împart cheltuielile comune mai multor surse.',
   },
   {
     id: 'OMFP3254/2017:art.4-5',
@@ -1993,6 +2119,46 @@ export const clauses: readonly Clause[] = [
       'D406 se transmite lunar sau trimestrial, după perioada fiscală de TVA (trimestrial pentru cei neînregistrați în scopuri de TVA), până în ultima zi calendaristică a lunii următoare perioadei.',
   },
   {
+    id: 'OPANAF407/2025:anexa5.pct.4',
+    source: 'OPANAF407/2025',
+    locator: 'anexa nr. 5 pct. 4 lit. a)–c), n), q) (anexa nr. 5 la OPANAF nr. 1.783/2021)',
+    status: 'located',
+    summary:
+      'Nu au obligația de a depune D406 (SAF-T): PFA, întreprinderile individuale și întreprinderile familiale, alături de persoanele fizice cu profesii liberale și entitățile care țin contabilitatea în partidă simplă; scutirea PFA, II și IF este în toate versiunile anexei (OPANAF nr. 1.783/2021, 373/2022, 2.518/2022).',
+  },
+  {
+    id: 'OPANAF605/2026:anexa6.cap.I',
+    source: 'OPANAF605/2026',
+    locator: 'anexa nr. 6 cap. I „Termenul de depunere a declarației”',
+    status: 'located',
+    summary:
+      'Plătitorii de la art. 80 alin. (2) depun D112 trimestrial, câte o declarație pentru fiecare lună a trimestrului, până la 25 a lunii următoare trimestrului; în luna unui concediu medical sau a încetării calității de asigurat declarația se depune până la 25 a lunii următoare, iar la încetarea în luna a doua se depun și declarația primei luni, și a celei de-a doua.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.147(11)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 147 alin. (11)',
+    status: 'located',
+    summary:
+      'În trimestrul în care un salariat are concediu medical sau îi încetează calitatea de asigurat, D112 se depune până la 25 a lunii următoare evenimentului; declarațiile perioadei rămase din trimestru, după trimestru; la încetarea în luna a doua se depun atât declarația primei luni, cât și a celei de-a doua.',
+  },
+  {
+    id: 'OUG128/2024:art.I.pct.1',
+    source: 'OUG128/2024',
+    locator: 'art. I pct. 1 (art. 69 alin. (9) din Codul fiscal) și art. II alin. (2)',
+    status: 'located',
+    summary:
+      'Contribuabilul pe normă de venit cu un venit brut anual de peste 25.000 euro în anul fiscal anterior, la cursul mediu anual BNR al anului de realizare, trece la sistemul real din anul următor; se aplică de la veniturile anului 2025.',
+  },
+  {
+    id: 'LJR/Cod-fiscal-2025:art.69(3)',
+    source: 'LJR/Cod-fiscal-2025',
+    locator: 'art. 69 alin. (3), în forma de dinainte de Legea nr. 239/2025',
+    status: 'located',
+    summary:
+      'Norma de venit a fiecărei activități nu poate fi mai mică decât salariul de bază minim brut pe țară în vigoare la momentul stabilirii ei, înmulțit cu 12; în asociere, norma se stabilește pentru fiecare membru.',
+  },
+  {
     id: 'OUG59/2005:art.1(1)',
     source: 'OUG59/2005',
     locator: 'art. 1 alin. (1), modificat prin Legea nr. 15/2006, și nota C.T.C.E. de sub el',
@@ -2302,6 +2468,11 @@ export const clauses: readonly Clause[] = [
     summary:
       'Totalul activelor din criteriile de mărime este valoarea totală a activelor de la literele A–C ale activului bilanțului (active imobilizate, active circulante, cheltuieli în avans).',
   },
+  ...annualClauses,
+  ...profitClauses,
+  ...nonpayerClauses,
+  ...taxAccountClauses,
+  ...saftClauses,
 ];
 
 const sourceById = new Map(legalSources.map((source) => [source.id, source]));

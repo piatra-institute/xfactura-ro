@@ -2,7 +2,10 @@ import { hashOf } from '../../hash';
 import type { ProfileFact } from '../../kernel';
 import type { QuestionRequest } from '../../questions/kinds';
 import { individualForms, type EntityForm } from '../entity';
+import { euVatPrefixes } from '../geo';
 import type { ObligationKind } from '../obligations';
+import { d112Filing } from '../payroll/quarterly';
+import { d406Begun, type D406StartAt } from '../saft/applicability';
 import {
   confirmQuestion,
   factQuestion,
@@ -22,7 +25,7 @@ import {
  * gap, never a pass. Each item records the rule and the slots, with their basis, it came from.
  */
 
-export const CLOSURE_VERSION = 'ro-closure@2';
+export const CLOSURE_VERSION = 'ro-closure@4';
 
 export type ClosureStatus = 'ELIGIBLE' | 'NEEDS_EVIDENCE' | 'UNSUPPORTED';
 
@@ -43,8 +46,17 @@ export interface ClosureBooks {
   euServiceMonths: readonly string[];
   /** Months with dividend tax withheld. */
   dividendMonths: readonly string[];
-  /** Invoices received from suppliers outside Romania. */
-  foreignPurchases: readonly { month: string; documentId: string; country: string }[];
+  /** Invoices received from suppliers outside Romania; `reverseCharge` when booked as services
+   * under the general rule (an RC-… tax entry). */
+  foreignPurchases: readonly {
+    month: string;
+    documentId: string;
+    country: string;
+    reverseCharge?: boolean;
+  }[];
+  /** The services bought from abroad with the VAT owed by the company (RC-… output entries), by
+   * tax point: outside VAT they are declared in D301 (art. 324). */
+  reverseCharges?: readonly { date: string; documentId: string; code: string }[];
   /** Months with lines on stock accounts (class 3). */
   stockMonths: readonly string[];
   /** Months with sponsorship expenses (6582). */
@@ -53,6 +65,9 @@ export interface ClosureBooks {
   payrollWithoutContractMonths: readonly string[];
   /** A PFA's, II's or IF's income sources, per year. */
   incomeSources: readonly { year: string; count: number; real: boolean }[];
+  /** The years (YYYY) a fixed asset was held: a card of the register, or a balance or movement
+   * on a tangible asset account (21x). */
+  assetYears: readonly string[];
 }
 
 export interface ClosureInput {
@@ -65,6 +80,9 @@ export interface ClosureInput {
   /** The fingerprint each yearly fact was confirmed against, by `<axis>/<year>`. */
   confirmed: Readonly<Record<string, string>>;
   books: ClosureBooks;
+  /** `ro.d406.start` for each month of the years the range touches (`d406StartOf`): from when
+   * each taxpayer category files D406, or the rule gap. */
+  d406Start: Readonly<Record<string, D406StartAt>>;
 }
 
 export interface Need {
@@ -282,6 +300,41 @@ const factNeed = (emit: Emitter, axis: string, message: string) =>
     question: { kind: 'profile.fact', subject: { kind: 'profile', id: axis }, params: { axis } },
   });
 
+const previousDay = (date: string) =>
+  new Date(Date.parse(`${date}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+
+/**
+ * A determination that holds until changed (`vat.status`, `vat.eu`) against the recorded fact at
+ * a month's end: the need to confirm it when they differ and nobody confirmed this computation;
+ * null when they agree, or before the computed value starts.
+ */
+function heldConflict(
+  input: ClosureInput,
+  emit: Emitter,
+  axis: 'vat.status' | 'vat.eu',
+  month: string,
+  label: string,
+): string | null {
+  const year = Number(month.slice(0, 4));
+  const end = lastDay(month);
+  const determination = input.determinations.find(
+    (item) => item.axis === axis && item.year === year && item.status === 'proposed',
+  );
+  if (!determination || end < determination.effectiveFrom) return null;
+  const computed =
+    determination.changes.filter((change) => change.effectiveFrom <= end).at(-1)?.value ??
+    determination.value;
+  const recorded = recordedAt(input.facts, axis, end);
+  if (computed === recorded || input.confirmed[`${axis}/${year}`] === determination.fingerprint)
+    return null;
+  return emit.need({
+    code: 'DETERMINATION_CONFLICT',
+    fact: `${axis}/${year}`,
+    message: `${label} înregistrat pentru ${month} („${recorded ?? '—'}”) diferă de calcul („${computed}”): ${determination.summary}`,
+    question: confirmQuestion(determination),
+  });
+}
+
 /** The months of the range. */
 function monthsOf(interval: ClosureInput['interval']) {
   const months: string[] = [];
@@ -396,12 +449,35 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
     });
     rules.push({
       id: `fact.books.system@${month}`,
-      clauses: ['OUG44/2008:art.15'],
+      clauses: ['OUG44/2008:art.15', 'OMFP170/2015:art.2-5'],
       reads: [`form@${month}`],
       derives: [`books@${month}`],
       run(read, emit) {
         const form = read(`form@${month}`);
         const recorded = recordedAt(facts, 'books.system', end);
+        // A PFA's, II's or IF's option for double entry (OMFP nr. 170/2015 art. 3–5) against OUG
+        // nr. 44/2008 art. 15 ("vor ține contabilitatea în partidă simplă"): recorded, not covered.
+        if (
+          recorded === 'double' &&
+          form.state === 'known' &&
+          individualForms.includes(form.value as EntityForm)
+        ) {
+          emit.derive(`books@${month}`, {
+            state: 'unsupported',
+            triggers: [
+              emit.unsupported({
+                trigger: 'PFA_DOUBLE_ENTRY',
+                message:
+                  'O PFA, II sau IF a înregistrat opțiunea pentru contabilitatea în partidă dublă: OUG nr. 44/2008 art. 15 prevede partida simplă, OMFP nr. 170/2015 art. 3 admite opțiunea „cu excepția cazurilor în care … alte acte normative prevăd expres” partida simplă; registrele în partidă dublă ale unei persoane fizice nu sunt acoperite.',
+                missingCapabilities: ['PFA_DOUBLE_ENTRY'],
+                evidenceIds: [],
+                resolution:
+                  'Expertul contabil decide dacă opțiunea este admisă; până atunci registrele în partidă dublă se țin în afara aplicației, atribuit explicit.',
+              }),
+            ],
+          });
+          return;
+        }
         emit.derive(
           `books@${month}`,
           recorded
@@ -418,21 +494,46 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
     });
     rules.push({
       id: `fact.vat.status@${month}`,
-      clauses: [],
+      clauses: [`${CODE}:art.316(1)(b),(1^1)`, `${CODE}:art.310(7)`],
       reads: [],
       derives: [`vat@${month}`],
       run(_read, emit) {
         const value = recordedAt(facts, 'vat.status', end);
+        // A registration the threshold made due, or a deregistration, that the recorded facts
+        // contradict: asked, never assumed either way. Without the year's `vat.status`
+        // determination, the threshold's crossing alone asks for the registration.
+        const year = Number(month.slice(0, 4));
+        const crossed = input.determinations
+          .find((item) => item.axis === 'vat.threshold' && item.year === year)
+          ?.changes.find((change) => change.value === 'exceeded' && change.effectiveFrom <= end);
+        const conflict =
+          value &&
+          (input.determinations.some((item) => item.axis === 'vat.status' && item.year === year)
+            ? heldConflict(input, emit, 'vat.status', month, 'Regimul TVA')
+            : crossed && value !== 'normal_vat'
+              ? emit.need({
+                  code: 'DETERMINATION_CONFLICT',
+                  fact: 'vat.status',
+                  message: `Plafonul de scutire este depășit la ${crossed.effectiveFrom}: înregistrarea în scopuri de TVA se solicită cel târziu atunci și este valabilă de la această dată (art. 316 alin. (1) lit. b), alin. (1^1) lit. b)); regimul înregistrat este „${value}”.`,
+                  question: {
+                    kind: 'profile.fact',
+                    subject: { kind: 'profile', id: 'vat.status' },
+                    params: { axis: 'vat.status', from: crossed.effectiveFrom },
+                  },
+                })
+              : null);
         emit.derive(
           `vat@${month}`,
-          value
-            ? { state: 'known', value, basis: 'fapt vat.status' }
-            : {
-                state: 'unknown',
-                needs: [
-                  factNeed(emit, 'vat.status', 'Regimul TVA al companiei nu este înregistrat.'),
-                ],
-              },
+          conflict
+            ? { state: 'unknown', needs: [conflict] }
+            : value
+              ? { state: 'known', value, basis: 'fapt vat.status' }
+              : {
+                  state: 'unknown',
+                  needs: [
+                    factNeed(emit, 'vat.status', 'Regimul TVA al companiei nu este înregistrat.'),
+                  ],
+                },
         );
       },
     });
@@ -470,31 +571,22 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
           return;
         }
         const value = recordedAt(facts, 'vat.eu', end);
+        // The special code the books' EU services require (determination `vat.eu`), against the
+        // recorded fact: a conflict is asked. With the code, D301 and D390 are covered.
+        const conflict = heldConflict(input, emit, 'vat.eu', month, 'Codul de TVA art. 317');
         emit.derive(
           `vatEu@${month}`,
-          !value
-            ? {
-                state: 'unknown',
-                needs: [
-                  factNeed(
-                    emit,
-                    'vat.eu',
-                    'Nu este înregistrat dacă firma neplătitoare de TVA are cod de TVA pentru operațiuni intracomunitare (art. 317).',
-                  ),
-                ],
-              }
-            : value === 'special'
+          conflict
+            ? { state: 'unknown', needs: [conflict] }
+            : !value
               ? {
-                  state: 'unsupported',
-                  triggers: [
-                    emit.unsupported({
-                      trigger: 'VAT_ART317',
-                      message:
-                        'Firma are cod de TVA pentru operațiuni intracomunitare (art. 317): decontul special (D301) nu este acoperit.',
-                      missingCapabilities: ['VAT_ART317', 'D301'],
-                      evidenceIds: [],
-                      resolution: 'Acoperire revizuită pentru art. 317 și D301.',
-                    }),
+                  state: 'unknown',
+                  needs: [
+                    factNeed(
+                      emit,
+                      'vat.eu',
+                      'Nu este înregistrat dacă firma neplătitoare de TVA are cod de TVA pentru operațiuni intracomunitare (art. 317).',
+                    ),
                   ],
                 }
               : { state: 'known', value, basis: 'fapt vat.eu' },
@@ -565,9 +657,57 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
     });
 
     // Returns.
+    // Leaving VAT during the month (art. 310 alin. (7), art. 316 alin. (13)): the last return
+    // covers the period up to the day before the cancellation, whatever the VAT period, and is due
+    // by the 25th of the month after the one the decision was communicated in.
+    const lastReturns = (emit: Emitter) => {
+      const cancelled = facts
+        .filter(
+          (fact) =>
+            fact.axis === 'vat.status' &&
+            fact.value !== 'normal_vat' &&
+            fact.effectiveFrom >= `${month}-01` &&
+            fact.effectiveFrom <= end &&
+            recordedAt(facts, 'vat.status', previousDay(fact.effectiveFrom)) === 'normal_vat',
+        )
+        .at(-1);
+      if (!cancelled) return;
+      const last = previousDay(cancelled.effectiveFrom);
+      const lastMonth = last.slice(0, 7);
+      const kind = recordedAt(facts, 'vat.period', last);
+      if (!kind) {
+        const need = factNeed(
+          emit,
+          'vat.period',
+          'Perioada fiscală de TVA de dinaintea anulării înregistrării nu este înregistrată.',
+        );
+        for (const item of ['D300', 'D394'] as const)
+          emit.obligation({
+            kind: item,
+            deadline: item,
+            period: lastMonth,
+            deadlinePeriod: month,
+            state: 'needs_evidence',
+            blockers: [need],
+          });
+        return;
+      }
+      const quarterly = kind === 'quarterly';
+      // A monthly period ended the month before: that month's own return is the last one.
+      if (lastMonth !== month && (!quarterly || isQuarterEnd(lastMonth))) return;
+      for (const item of ['D300', 'D394'] as const)
+        emit.obligation({
+          kind: item,
+          deadline: item,
+          period: quarterly ? quarterLabel(lastMonth) : lastMonth,
+          deadlinePeriod: month,
+          state: 'applies',
+          blockers: [],
+        });
+    };
     rules.push({
       id: `obligation.vat@${month}`,
-      clauses: [`${CODE}:art.323(1)`, 'OPANAF2328/2016:art.I'],
+      clauses: [`${CODE}:art.323(1)`, 'OPANAF2328/2016:art.I', `${CODE}:art.316(11)(g),(13)`],
       reads: [`vat@${month}`, `vatPeriod@${month}`],
       derives: [],
       run(read, emit) {
@@ -589,7 +729,11 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
             });
           return;
         }
-        if (vat.value !== 'normal_vat' || period.state !== 'known') return;
+        if (vat.value !== 'normal_vat') {
+          lastReturns(emit);
+          return;
+        }
+        if (period.state !== 'known') return;
         const quarterly = period.value === 'quarterly';
         if (quarterly && !isQuarterEnd(month)) return;
         const label = quarterly ? quarterLabel(month) : month;
@@ -605,14 +749,61 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
       },
     });
     rules.push({
+      id: `fact.d406.start@${month}`,
+      clauses: ['OPANAF407/2025:anexa5.pct.1-2'],
+      reads: [`form@${month}`],
+      derives: [`d406Begun@${month}`],
+      run(read, emit) {
+        const form = read(`form@${month}`);
+        const at = input.d406Start[month];
+        emit.derive(
+          `d406Begun@${month}`,
+          form.state !== 'known'
+            ? form
+            : individualForms.includes(form.value as EntityForm)
+              ? { state: 'known', value: 'exempt', basis: 'PFA, II sau IF (anexa nr. 5 pct. 4)' }
+              : !at || 'gap' in at
+                ? {
+                    state: 'unsupported',
+                    triggers: [
+                      emit.unsupported({
+                        trigger: 'RULE_GAP',
+                        message: `Data de la care se depune D406 nu este în registru pentru ${month}: ${at && 'gap' in at ? at.gap : 'ro.d406.start'}`,
+                        missingCapabilities: ['ro.d406.start'],
+                        evidenceIds: [],
+                        resolution: 'Parametrul ro.d406.start revizuit pentru perioadă.',
+                      }),
+                    ],
+                  }
+                : (() => {
+                    const begun = d406Begun(facts, at.start, end);
+                    return begun.state === 'known'
+                      ? {
+                          state: 'known' as const,
+                          value: begun.value ? 'yes' : 'no',
+                          basis: begun.basis,
+                        }
+                      : {
+                          state: 'unknown' as const,
+                          needs: [factNeed(emit, 'taxpayer.category', begun.message)],
+                        };
+                  })(),
+        );
+      },
+    });
+    rules.push({
       id: `obligation.d406@${month}`,
-      clauses: ['OPANAF1783/2021:anexa4.pct.1-4'],
-      reads: [`vat@${month}`, `vatPeriod@${month}`, `form@${month}`],
+      clauses: ['OPANAF1783/2021:anexa4.pct.1-4', 'OPANAF407/2025:anexa5.pct.4'],
+      reads: [`vat@${month}`, `vatPeriod@${month}`, `form@${month}`, `d406Begun@${month}`],
       derives: [],
       run(read, emit) {
         const vat = read(`vat@${month}`);
         const period = read(`vatPeriod@${month}`);
         const form = read(`form@${month}`);
+        // Before the company's category files (anexa nr. 5 pct. 1.1), no D406; while that is
+        // unknown, it waits on the category.
+        const begun = read(`d406Begun@${month}`);
+        if (begun.state === 'known' && begun.value === 'no') return;
         // A company's D406: with each VAT period, quarterly outside VAT; each month while the VAT
         // status or period is unknown (it decides the period, never whether D406 is due).
         const quarterly =
@@ -634,30 +825,29 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
           due = { period: quarterLabel(month), state: 'applies', blockers: [] };
         if (!due) return;
         const item = { kind: 'D406', deadline: 'D406', deadlinePeriod: null } as const;
+        if (
+          form.state === 'known' &&
+          !individualForms.includes(form.value as EntityForm) &&
+          begun.state !== 'known'
+        ) {
+          emit.obligation({
+            ...item,
+            period: due.period,
+            state:
+              due.state === 'unsupported' || begun.state === 'unsupported'
+                ? 'unsupported'
+                : 'needs_evidence',
+            blockers: [...new Set([...due.blockers, ...blockersOf(begun)])],
+          });
+          return;
+        }
         if (form.state === 'known' && !individualForms.includes(form.value as EntityForm)) {
           emit.obligation({ ...item, ...due });
           return;
         }
-        if (form.state === 'known') {
-          // Whether SAF-T reaches a PFA, II or IF is open (docs/PFA_II_IF.md §5, question 7):
-          // never assumed either way, a named gap until the expert contabil answers.
-          const trigger = emit.unsupported({
-            trigger: 'D406_INDIVIDUAL',
-            message:
-              'Dacă D406 (SAF-T) se aplică unei PFA, II sau IF este o întrebare deschisă pentru expertul contabil (sfera OPANAF nr. 1783/2021): aplicația nu presupune nici că se depune, nici că nu se depune.',
-            missingCapabilities: ['D406_INDIVIDUAL_SCOPE'],
-            evidenceIds: [],
-            resolution:
-              'Expertul contabil răspunde dacă OPANAF nr. 1783/2021 se aplică PFA, II și IF; până atunci, D406 se ține în afara aplicației, atribuit explicit.',
-          });
-          emit.obligation({
-            ...item,
-            period: due.period,
-            state: 'unsupported',
-            blockers: [trigger, ...due.blockers],
-          });
-          return;
-        }
+        // A PFA, II or IF does not file D406: OPANAF nr. 1.783/2021 anexa nr. 5 pct. 4 lit. a)–c)
+        // exempts them in every version (OPANAF nr. 373/2022, 2.518/2022 and 407/2025).
+        if (form.state === 'known') return;
         // The form unknown: a company's return or an open question, it waits on the form.
         emit.obligation({
           ...item,
@@ -670,28 +860,44 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
     if (books.euServiceMonths.includes(month))
       rules.push({
         id: `obligation.d390@${month}`,
-        clauses: ['OPANAF591/2016:anexa4.pct.1.1'],
+        clauses: ['OPANAF591/2016:anexa4.pct.1.1', `${CODE}:art.325(1)`],
         reads: [`vat@${month}`, `vatEu@${month}`],
         derives: [],
         run(read, emit) {
           const vat = read(`vat@${month}`);
+          const code = read(`vatEu@${month}`);
+          // Outside VAT, D390 is the art. 317 code holder's (art. 325 alin. (1)).
           if (vat.state === 'known' && vat.value !== 'normal_vat') {
+            if (code.state === 'known' && code.value === 'special') {
+              emit.obligation({
+                kind: 'D390',
+                deadline: 'D390',
+                period: month,
+                deadlinePeriod: null,
+                state: 'applies',
+                blockers: [],
+              });
+              return;
+            }
             emit.obligation({
               kind: 'D390',
-              deadline: null,
+              deadline: code.state === 'known' ? null : 'D390',
               period: month,
               deadlinePeriod: null,
-              state: 'unsupported',
-              blockers: [
-                emit.unsupported({
-                  trigger: 'EU_SERVICES_NON_VAT',
-                  message: `Servicii intracomunitare în ${month} ale unei firme neînregistrate în scopuri de TVA: înregistrarea după art. 317, D301 și D390 nu sunt acoperite.`,
-                  missingCapabilities: ['VAT_ART317', 'D301', 'D390'],
-                  evidenceIds: [],
-                  resolution:
-                    'Acoperire revizuită pentru art. 317 sau tratarea acestor operațiuni în afara aplicației, atribuită explicit.',
-                }),
-              ],
+              state: code.state === 'known' ? 'unsupported' : 'needs_evidence',
+              blockers:
+                code.state === 'known'
+                  ? [
+                      emit.unsupported({
+                        trigger: 'EU_SERVICES_NON_VAT',
+                        message: `Servicii intracomunitare în ${month} ale unei firme neînregistrate în scopuri de TVA, fără cod de TVA după art. 317: codul se solicita înaintea operațiunii (art. 317 alin. (1) lit. b)–c)); fără el D390 nu se poate depune.`,
+                        missingCapabilities: ['VAT_ART317_REGISTRATION'],
+                        evidenceIds: [],
+                        resolution:
+                          'Solicitați codul de TVA art. 317 și înregistrați-l (vat.eu special, cu documentul), sau tratați operațiunile în afara aplicației, atribuit explicit.',
+                      }),
+                    ]
+                  : blockersOf(code),
             });
             return;
           }
@@ -702,6 +908,30 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
             deadlinePeriod: null,
             state: vat.state === 'known' ? 'applies' : 'needs_evidence',
             blockers: vat.state === 'unknown' ? vat.needs : [],
+          });
+        },
+      });
+    const special = (books.reverseCharges ?? []).filter(
+      (item) =>
+        item.date.startsWith(month) && recordedAt(facts, 'vat.status', item.date) !== 'normal_vat',
+    );
+    if (special.length)
+      rules.push({
+        id: `obligation.d301@${month}`,
+        clauses: [`${CODE}:art.307(2)`, `${CODE}:art.324(1)-(2)`, 'OPANAF592/2016:anexa2.pct.I'],
+        reads: [`vat@${month}`],
+        derives: [],
+        run(read, emit) {
+          // The VAT a non-payer owes on services bought from abroad: the special return, whether
+          // or not it holds the art. 317 code (OPANAF nr. 592/2016, section 4).
+          const vat = read(`vat@${month}`);
+          emit.obligation({
+            kind: 'D301',
+            deadline: 'D301',
+            period: month,
+            deadlinePeriod: null,
+            state: vat.state === 'unsupported' ? 'unsupported' : 'applies',
+            blockers: vat.state === 'unsupported' ? vat.triggers : [],
           });
         },
       });
@@ -732,14 +962,19 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
           });
           return;
         }
-        // A quarterly filer declares each month after the quarter, except the months with sick
-        // leave or a contract ended (art. 147 alin. (11)).
-        const quarterly = period.value === 'quarterly' && !books.payrollEventMonths.includes(month);
+        // A quarterly filer declares each month after the quarter; sick leave or a contract
+        // ended brings that month, and the quarter's months before it, to the 25th after it (art.
+        // 147 alin. (11), `d112Filing`).
+        const filing = d112Filing(
+          month,
+          period.value === 'quarterly' ? 'quarterly' : 'monthly',
+          books.payrollEventMonths,
+        );
         emit.obligation({
           kind: 'D112',
-          deadline: quarterly ? 'D112.quarterly' : 'D112',
+          deadline: filing.deadline,
           period: month,
-          deadlinePeriod: quarterly ? quarterLabel(month) : null,
+          deadlinePeriod: filing.counted === month ? null : filing.counted,
           state: 'applies',
           blockers: [],
         });
@@ -748,7 +983,7 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
     if (isQuarterEnd(month))
       rules.push({
         id: `obligation.income_tax@${month}`,
-        clauses: [`${CODE}:art.56(1)`],
+        clauses: [`${CODE}:art.56(1)`, `${CODE}:art.41(1)`, `${CODE}:art.42(1)`],
         reads: [`incomeTax@${month}`],
         derives: [],
         run(read, emit) {
@@ -772,22 +1007,54 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
               blockers: tax.needs,
             });
           else if (tax.state === 'known' && tax.value === 'profit') {
-            const trigger = emit.unsupported({
-              trigger: 'PROFIT_TAX',
-              message:
-                'Impozitul pe profit (plățile trimestriale, D101 și registrul de evidență fiscală) nu este încă acoperit.',
-              missingCapabilities: ['PROFIT_TAX', 'D101'],
-              evidenceIds: [],
-              resolution: 'Modulul impozitului pe profit (P1) sau ținerea lui în afara aplicației.',
-            });
-            if (month.endsWith('-12'))
+            // The system of declaring and paying (art. 41): quarterly by law after a micro year
+            // (alin. (6) lit. d)), else the company's option; the annual system with prepayments
+            // is not covered.
+            const microBefore =
+              recordedAt(facts, 'income_tax', `${year - 1}-12-31`) === 'micro' ||
+              recordedAt(facts, 'income_tax', `${year}-01-01`) === 'micro';
+            const system = recordedAt(facts, 'profit.system', end);
+            const blockers =
+              system === 'annual'
+                ? [
+                    emit.unsupported({
+                      trigger: 'PROFIT_ANNUAL_SYSTEM',
+                      message:
+                        'Sistemul anual de declarare și plată a impozitului pe profit, cu plăți anticipate trimestriale (art. 41 alin. (2)–(3), (8)–(10^1)), nu este acoperit.',
+                      missingCapabilities: ['PROFIT_PREPAYMENTS'],
+                      evidenceIds: [],
+                      resolution:
+                        'Sistemul trimestrial (art. 41 alin. (1)) sau calculul plăților anticipate în afara aplicației.',
+                    }),
+                  ]
+                : !system && !microBefore
+                  ? [
+                      factNeed(
+                        emit,
+                        'profit.system',
+                        'Nu este înregistrat sistemul de declarare și plată a impozitului pe profit: trimestrial (art. 41 alin. (1)) sau anual cu plăți anticipate (alin. (2)).',
+                      ),
+                    ]
+                  : [];
+            const state =
+              system === 'annual' ? 'unsupported' : blockers.length ? 'needs_evidence' : 'applies';
+            if (!month.endsWith('-12'))
+              emit.obligation({
+                kind: 'D100',
+                deadline: 'D100.profit',
+                period: month,
+                deadlinePeriod: null,
+                state,
+                blockers,
+              });
+            else
               emit.obligation({
                 kind: 'D101',
-                deadline: null,
+                deadline: 'D101',
                 period: month.slice(0, 4),
                 deadlinePeriod: null,
-                state: 'unsupported',
-                blockers: [trigger],
+                state,
+                blockers,
               });
           }
         },
@@ -856,13 +1123,16 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
               state: 'applies',
               blockers: [],
             });
-          if ((sources?.count ?? 0) > 1)
+          // Several sources of a PFA or II are kept per source (pfa.fiscalRegister, D212); an IF's
+          // distribution and D204 per source are not.
+          if (form.value === 'if' && (sources?.count ?? 0) > 1)
             emit.unsupported({
-              trigger: 'PFA_SOURCES_MULTIPLE',
-              message: `Mai multe surse de venit în ${year}: registrul de evidență fiscală și D212 pentru mai multe surse nu sunt acoperite.`,
-              missingCapabilities: ['PIT_SOURCES_MULTIPLE'],
+              trigger: 'IF_SOURCES_MULTIPLE',
+              message: `Întreprinderea familială are mai multe surse de venit în ${year}: distribuirea pe surse și D204 pentru mai multe surse nu sunt acoperite.`,
+              missingCapabilities: ['IF_SOURCES_MULTIPLE'],
               evidenceIds: [],
-              resolution: 'Acoperirea mai multor surse (PF) sau ținerea lor în afara aplicației.',
+              resolution:
+                'Acoperirea mai multor surse ale unei IF sau ținerea lor în afara aplicației.',
             });
         },
       });
@@ -876,23 +1146,49 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
             const system = read(`books@${month}`);
             emit.derive(
               `size@${year}`,
-              system.state !== 'known'
-                ? system
-                : system.value === 'single'
-                  ? { state: 'known', value: 'none', basis: 'partidă simplă' }
-                  : yearlySlot(input, emit, 'size.category', month, 'Categoria de mărime'),
+              system.state === 'unsupported' && system.triggers.includes('PFA_DOUBLE_ENTRY')
+                ? {
+                    state: 'known',
+                    value: 'none',
+                    basis:
+                      'PFA, II sau IF: fără situații financiare anuale (OMFP nr. 170/2015 art. 5)',
+                  }
+                : system.state !== 'known'
+                  ? system
+                  : system.value === 'single'
+                    ? { state: 'known', value: 'none', basis: 'partidă simplă' }
+                    : yearlySlot(input, emit, 'size.category', month, 'Categoria de mărime'),
             );
           },
         });
         rules.push({
           id: `obligation.statements@${year}`,
-          clauses: ['L82/1991:art.36(1)(a)', 'OMF2036/2025:anexa1.pct.2.1-2.3'],
+          clauses: [
+            'L82/1991:art.36(1)(a)',
+            'L82/1991:art.36(2)',
+            'OMF2036/2025:anexa1.pct.2.1-2.3',
+            'OMF2036/2025:anexa1.pct.2.2',
+          ],
           reads: [`size@${year}`],
           derives: [],
           run(read, emit) {
             const size = read(`size@${year}`);
             const period = String(year);
             if (size.state === 'known' && size.value === 'none') return;
+            // A company a person states has carried out no activity since it was set up files the
+            // inactivity declaration instead of statements (art. 36 alin. (2)); the statements'
+            // preparation asks the fact when the books show no activity.
+            if (recordedAt(input.facts, 'activity.none', `${year}-12-31`) === 'yes') {
+              emit.obligation({
+                kind: 'S1046',
+                deadline: 'S1046',
+                period,
+                deadlinePeriod: null,
+                state: 'applies',
+                blockers: [],
+              });
+              return;
+            }
             if (size.state === 'known' && size.value === 'micro')
               emit.obligation({
                 kind: 'S1005',
@@ -903,22 +1199,15 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
                 blockers: [],
               });
             else if (size.state === 'known' && size.value === 'small')
+              // S1003 (Y2): its package is pinned for 2025; a year without one is the
+              // declaration's FORMAT_GAP when prepared, as S1005's is.
               emit.obligation({
-                kind: 'SF.small',
-                deadline: 'S1005',
+                kind: 'S1003',
+                deadline: 'S1003',
                 period,
                 deadlinePeriod: null,
-                state: 'unsupported',
-                blockers: [
-                  emit.unsupported({
-                    trigger: 'SMALL_ENTITY_STATEMENTS',
-                    message: `În ${year} compania este entitate mică: situațiile financiare ale entităților mici nu sunt încă acoperite.`,
-                    missingCapabilities: ['ANNUAL_STATEMENTS_SMALL'],
-                    evidenceIds: [],
-                    resolution:
-                      'Modulul situațiilor entităților mici (Y2) sau întocmirea lor în afara aplicației.',
-                  }),
-                ],
+                state: 'applies',
+                blockers: [],
               });
             else
               emit.obligation({
@@ -937,34 +1226,155 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
           },
         });
       }
+      // The annual assets file (D406 Active) of a company holding fixed assets, for a financial
+      // year its D406 obligation covers whole (OPANAF nr. 1.783/2021 anexa nr. 4 pct. 1, 7–8;
+      // ANAF's clarification of 14.11.2022), by the statements' deadline. ANAF's validator takes
+      // only a year of twelve months.
+      if (
+        books.financialYearEnds.includes(`${year}-12-31`) &&
+        books.assetYears.includes(String(year))
+      )
+        rules.push({
+          id: `obligation.d406.assets@${year}`,
+          clauses: ['OPANAF1783/2021:anexa4.pct.1,7-8', 'ANAF/D406_Clarificare_2022:precizari'],
+          reads: [`form@${month}`],
+          derives: [],
+          run(read, emit) {
+            const form = read(`form@${month}`);
+            if (form.state === 'known' && individualForms.includes(form.value as EntityForm))
+              return;
+            const period = String(year);
+            const item = {
+              kind: 'D406',
+              deadline: 'D406.assets' as const,
+              period,
+              deadlinePeriod: null,
+            };
+            if (form.state !== 'known') {
+              emit.obligation({
+                ...item,
+                state: form.state === 'unsupported' ? 'unsupported' : 'needs_evidence',
+                blockers: blockersOf(form),
+              });
+              return;
+            }
+            // The year from its first day in the books: a first year begun later is shorter.
+            const opens =
+              first !== null && first > `${year}-01` ? books.firstDay! : `${year}-01-01`;
+            if (opens > `${year}-01-01`) {
+              emit.obligation({
+                ...item,
+                state: 'unsupported',
+                blockers: [
+                  emit.unsupported({
+                    trigger: 'D406_ASSETS_SHORT_YEAR',
+                    message: `Primul exercițiu financiar (${opens} – ${year}-12-31) are mai puțin de 12 luni: validatorul ANAF primește declarația D406 pentru active doar pentru 12 luni, iar raportarea unui exercițiu mai scurt nu este stabilită.`,
+                    missingCapabilities: ['D406_ASSETS_SHORT_YEAR'],
+                    evidenceIds: [],
+                    resolution:
+                      'Răspunsul ANAF sau al expertului contabil pentru exercițiul scurt; până atunci declarația se pregătește în afara aplicației.',
+                  }),
+                ],
+              });
+              return;
+            }
+            const at = input.d406Start[`${year}-01`];
+            if (!at || 'gap' in at) {
+              emit.obligation({
+                ...item,
+                state: 'unsupported',
+                blockers: [
+                  emit.unsupported({
+                    trigger: 'RULE_GAP',
+                    message: `Data de la care se depune D406 nu este în registru pentru ${year}-01: ${at && 'gap' in at ? at.gap : 'ro.d406.start'}`,
+                    missingCapabilities: ['ro.d406.start'],
+                    evidenceIds: [],
+                    resolution: 'Parametrul ro.d406.start revizuit pentru perioadă.',
+                  }),
+                ],
+              });
+              return;
+            }
+            const begun = d406Begun(facts, at.start, opens);
+            if (begun.state === 'unknown') {
+              emit.obligation({
+                ...item,
+                state: 'needs_evidence',
+                blockers: [factNeed(emit, 'taxpayer.category', begun.message)],
+              });
+              return;
+            }
+            // A year begun before the obligation is not reported (the clarification).
+            if (begun.value) emit.obligation({ ...item, state: 'applies', blockers: [] });
+          },
+        });
     }
   }
 
   // Cases the engine does not cover, from the books and the determinations.
   for (const year of years) {
     const inYear = months.filter((month) => month.startsWith(String(year)));
+    // Changes of regime and the D700 that declares them (art. 55): entering the micro-enterprise
+    // regime on 1 January (alin. (2)), leaving it from 1 January (alin. (5)) or during the year,
+    // from the quarter a condition failed (art. 52, alin. (1) and (5)). The year before the books
+    // is not read: its regime is not the books' to know.
+    const before = `${year - 1}-12`;
+    const previousRead = months.includes(before) ? [`incomeTax@${before}`] : [];
     rules.push({
       id: `scope.income_tax.transition@${year}`,
-      clauses: [`${CODE}:art.52(1),(5)`],
-      reads: inYear.map((month) => `incomeTax@${month}`),
+      clauses: [
+        `${CODE}:art.52(1),(5)`,
+        `${CODE}:art.48(1)-(2^1)`,
+        `${CODE}:art.55(2)`,
+        `${CODE}:art.55(1),(5)`,
+      ],
+      reads: [...previousRead, ...inYear.map((month) => `incomeTax@${month}`)],
       derives: [],
       run(read, emit) {
-        const values = new Set(
-          inYear
-            .map((month) => read(`incomeTax@${month}`))
-            .flatMap((slot) => (slot.state === 'known' ? [slot.value] : [])),
+        const slots = inYear.map((month) => ({ month, slot: read(`incomeTax@${month}`) }));
+        const known = slots.flatMap(({ month, slot }) =>
+          slot.state === 'known' && (slot.value === 'micro' || slot.value === 'profit')
+            ? [{ month, value: slot.value }]
+            : [],
         );
-        const exit = input.determinations.find(
-          (item) => item.axis === 'income_tax' && item.year === year && item.changes.length,
-        );
-        if ((values.has('micro') && values.has('profit')) || exit)
-          emit.unsupported({
-            trigger: 'MICRO_PROFIT_TRANSITION',
-            message: `În ${year} compania trece de la impozitul micro la impozitul pe profit în cursul anului: calculul impozitului pe profit de la trimestrul ieșirii nu este acoperit.`,
-            missingCapabilities: ['MICRO_PROFIT_TRANSITION', 'PROFIT_TAX'],
-            evidenceIds: [],
-            resolution: 'Modulul trecerii de la micro la profit (P2).',
+        const firstOfBooks = first !== null && first > `${year - 1}-12`;
+        const previous = previousRead.length
+          ? read(previousRead[0]!)
+          : firstOfBooks
+            ? null
+            : ({
+                state: 'known',
+                value: recordedAt(facts, 'income_tax', `${year - 1}-12-31`) ?? '',
+                basis: 'fapt income_tax',
+              } as const);
+        const january = known.find((item) => item.month === `${year}-01`);
+        const d700 = (deadline: ObligationKind, counted: string | null) =>
+          emit.obligation({
+            kind: 'D700',
+            deadline,
+            period: String(year),
+            deadlinePeriod: counted,
+            state: 'applies',
+            blockers: [],
           });
+        if (january && previous?.state === 'known') {
+          if (previous.value === 'profit' && january.value === 'micro')
+            d700('D700.micro_entry', String(year - 1));
+          if (previous.value === 'micro' && january.value === 'profit')
+            d700('D700.micro_exit_january', String(year - 1));
+        }
+        for (let index = 1; index < known.length; index++) {
+          const [from, to] = [known[index - 1]!, known[index]!];
+          if (from.value === 'micro' && to.value === 'profit') d700('D700.micro_exit', null);
+          if (from.value === 'profit' && to.value === 'micro')
+            emit.unsupported({
+              trigger: 'MICRO_ENTRY_MIDYEAR',
+              message: `Impozitul micro înregistrat din ${to.month} după impozitul pe profit în cursul anului ${year}: o microîntreprindere nu poate intra în sistem în cursul anului (art. 48 alin. (2)–(2^1)); faptul income_tax trebuie corectat.`,
+              missingCapabilities: ['INCOME_TAX_REGIME'],
+              evidenceIds: [],
+              resolution: 'Corectați faptul income_tax cu documentul care îl susține (D700).',
+            });
+        }
       },
     });
     rules.push({
@@ -1023,20 +1433,46 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
     if (purchases.length)
       rules.push({
         id: `scope.foreign.purchases@${month}`,
-        clauses: [`${CODE}:art.317`],
-        reads: [`vat@${month}`],
+        clauses: [`${CODE}:art.317(1)`, `${CODE}:art.307(2)`, `${CODE}:norme.art.317.pct.90(4)`],
+        reads: [`vat@${month}`, `vatEu@${month}`],
         derives: [],
         run(read, emit) {
           const vat = read(`vat@${month}`);
+          const code = read(`vatEu@${month}`);
           if (vat.state === 'known' && vat.value === 'normal_vat') return;
-          emit.unsupported({
-            trigger: 'FOREIGN_SERVICE_PURCHASE',
-            message: `Achiziții de la furnizori din afara României în ${month} (${[...new Set(purchases.map((item) => item.country))].join(', ')}) ale unei firme neînregistrate în scopuri de TVA: înregistrarea după art. 317, D301 și D390 nu sunt acoperite.`,
-            missingCapabilities: ['VAT_ART317', 'D301', 'D390'],
-            evidenceIds: purchases.map((item) => item.documentId),
-            resolution:
-              'Acoperire revizuită sau procesarea acestor facturi în afara aplicației, atribuită explicit.',
-          });
+          // Covered: services under the general rule booked with the VAT owed (D301), from
+          // outside the Union, or from it with the art. 317 code. Not covered: an invoice not
+          // booked so (goods, other place-of-supply rules), or EU services without the code.
+          const unbooked = purchases.filter((item) => item.reverseCharge !== true);
+          const uncoded =
+            code.state === 'known' && code.value !== 'special'
+              ? purchases.filter(
+                  (item) =>
+                    item.reverseCharge === true &&
+                    euVatPrefixes[item.country] !== undefined &&
+                    item.country !== 'RO',
+                )
+              : [];
+          const countries = (items: typeof purchases) =>
+            [...new Set(items.map((item) => item.country))].join(', ');
+          if (unbooked.length)
+            emit.unsupported({
+              trigger: 'FOREIGN_SERVICE_PURCHASE',
+              message: `Facturi de la furnizori din afara României în ${month} (${countries(unbooked)}) ale unei firme neînregistrate în scopuri de TVA, neînregistrate ca servicii după regula generală (invoices.crossBorder): bunurile și celelalte reguli privind locul prestării nu sunt acoperite.`,
+              missingCapabilities: ['FOREIGN_PURCHASE_TREATMENT'],
+              evidenceIds: unbooked.map((item) => item.documentId),
+              resolution:
+                'Înregistrați serviciile după regula generală (invoices.crossBorder, cu TVA datorată prin D301) sau procesați facturile în afara aplicației, atribuit explicit.',
+            });
+          if (uncoded.length)
+            emit.unsupported({
+              trigger: 'FOREIGN_SERVICE_PURCHASE',
+              message: `Servicii de la prestatori din alte state membre în ${month} (${countries(uncoded)}) ale unei firme fără cod de TVA după art. 317: codul se solicita înaintea primirii lor (art. 317 alin. (1) lit. c)); TVA se datorează oricum și se declară în D301.`,
+              missingCapabilities: ['VAT_ART317_REGISTRATION'],
+              evidenceIds: uncoded.map((item) => item.documentId),
+              resolution:
+                'Solicitați codul de TVA art. 317 și înregistrați-l (vat.eu special, cu documentul), sau tratați operațiunile în afara aplicației, atribuit explicit.',
+            });
         },
       });
   }
@@ -1059,10 +1495,10 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
       if (books.sponsorshipMonths.length)
         emit.unsupported({
           trigger: 'SPONSORSHIP',
-          message: `Sponsorizări (6582) în ${books.sponsorshipMonths.join(', ')}: creditul fiscal pentru sponsorizare și declarația 107 nu sunt acoperite.`,
-          missingCapabilities: ['SPONSORSHIP_CREDIT', 'D107'],
+          message: `Sponsorizări (6582) în ${books.sponsorshipMonths.join(', ')}: impozitul pe profit scade sponsorizarea în limitele legii, dar declarația informativă privind beneficiarii (D107, art. 42 alin. (3)) nu este acoperită.`,
+          missingCapabilities: ['D107'],
           evidenceIds: [],
-          resolution: 'Modulul impozitului pe profit (P1) sau ținerea lor în afara aplicației.',
+          resolution: 'Declarația 107, întocmită în afara aplicației, atribuită explicit.',
         });
       if (books.payrollWithoutContractMonths.length)
         emit.unsupported({

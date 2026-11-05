@@ -55,6 +55,7 @@ describe('D100 obligations, namespace and payment number', () => {
   test('lists the codes computed here with the nomenclature wording and budget code', () => {
     expect(d100Obligations).toEqual([
       ['121', '5503XXXXXX', 'Impozit pe veniturile microîntreprinderilor'],
+      ['103', '5503XXXXXX', 'Impozit pe profit datorat de persoane juridice române'],
       ['604', '5503XXXXXX', 'Impozit pe veniturile din dividende distribuite PF'],
       ['150', '5503XXXXXX', 'Impozit pe dividende distribuite PJ'],
       ['605', '5503XXXXXX', 'Impozit pe veniturile din dobânzi'],

@@ -51,6 +51,16 @@ export interface DeclarationKind {
    * 2025, filed only through ANAF's web form): its returns are checked by the module's own
    * controls, never reach `validated_official`, and so cannot be authorized. */
   officialValidation?(period: string): boolean;
+  /**
+   * What authorizing the return needs beyond ANAF's validation, each a blocking finding: the
+   * annual statements' signature roles (Legea 82/1991 art. 28 alin. (10)–(13)) and the
+   * accompanying documents a person must supply. `summary` is the one `prepare` returned.
+   */
+  authorization?(
+    tx: Transaction,
+    companyId: string,
+    artifact: { period: string; summary: JsonValue },
+  ): Promise<DeclarationProblem[]>;
 }
 
 export const prepareInput = z
@@ -411,7 +421,25 @@ export class Declarations {
           .where(and(eq(artifacts.companyId, companyId), eq(artifacts.id, artifactId)));
         requireCondition(row, 'NOT_FOUND', 'Declarația nu există.', 404);
         const step = await latestStep(tx, companyId, row.id);
-        const current = hashOf(await this.kind(row.kind).inputs(tx, companyId, row.period));
+        const kind = this.kind(row.kind);
+        const current = hashOf(await kind.inputs(tx, companyId, row.period));
+        const [prepared] = await tx
+          .select({ detail: artifactEvents.detail })
+          .from(artifactEvents)
+          .where(
+            and(
+              eq(artifactEvents.companyId, companyId),
+              eq(artifactEvents.artifactId, row.id),
+              eq(artifactEvents.state, 'prepared'),
+            ),
+          )
+          .limit(1);
+        const required = kind.authorization
+          ? await kind.authorization(tx, companyId, {
+              period: row.period,
+              summary: prepared?.detail ? (JSON.parse(prepared.detail) as JsonValue) : null,
+            })
+          : [];
         const findings = [
           ...(step?.state === 'validated_official'
             ? []
@@ -425,6 +453,7 @@ export class Declarations {
                     'Registrele s-au schimbat de la pregătire; pregătiți declarația din nou.',
                 },
               ]),
+          ...required,
         ];
         return {
           blocking: findings.length > 0,

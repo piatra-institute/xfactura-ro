@@ -1,5 +1,6 @@
 import { z, type ZodType } from 'zod';
 import type { Issue, JsonValue } from '../kernel';
+import { annualDisclosures, annualDocument, annualInformative } from '../ro/annual/questions';
 import { isLocalDate } from '../time';
 
 /*
@@ -457,6 +458,13 @@ export const microConditionsAnswer = z
     established: day.nullable(),
     /** Art. 52 alin. (2): the day the previous year's statements became late, if they did. */
     lateStatementsFrom: day.nullable(),
+    /** Art. 52 alin. (4): the day the company started an activity art. 47 alin. (3) excludes
+     * during the year, if it did. */
+    excludedActivityFrom: day.nullable().optional(),
+    /** Art. 52 alin. (7): the day a shareholder holding over 25% came to hold over 25% of other
+     * micro-enterprises during the year and the shareholders chose this one to leave, if they
+     * did. */
+    shareholdersExitFrom: day.nullable().optional(),
     /** Art. 47 alin. (1^1): the linked enterprises, with their revenues. */
     linked: z
       .array(
@@ -495,10 +503,195 @@ const microConditions = define({
   params: z.object({ year }).strict(),
   answer: () => microConditionsAnswer,
   prompt: (_subject, params) =>
-    `Pentru impozitul pe veniturile microîntreprinderilor în ${params.year} (Codul fiscal art. 47–48 și 52): capitalul este deținut de stat sau de o unitate administrativ-teritorială? Societatea este în dizolvare? Desfășoară o activitate exclusă (bănci, asigurări, piața de capital, jocuri de noroc, petrol și gaze)? Asociații cu peste 25% dețin și alte microîntreprinderi și au stabilit-o pe aceasta? Situațiile financiare au fost depuse în termen? Are un contract de administrare sau mandat plătit cel puțin cu salariul minim? Ce întreprinderi legate are (peste 25%) și ce venituri au? Atașați certificatul constatator și registrul asociaților.`,
+    `Pentru impozitul pe veniturile microîntreprinderilor în ${params.year} (Codul fiscal art. 47–48 și 52): capitalul este deținut de stat sau de o unitate administrativ-teritorială? Societatea este în dizolvare? Desfășoară o activitate exclusă (bănci, asigurări, piața de capital, jocuri de noroc, petrol și gaze)? Asociații cu peste 25% dețin și alte microîntreprinderi și au stabilit-o pe aceasta? Situațiile financiare au fost depuse în termen? Are un contract de administrare sau mandat plătit cel puțin cu salariul minim? Ce întreprinderi legate are (peste 25%) și ce venituri au? A început în cursul anului o activitate exclusă, sau au stabilit asociații ieșirea ei din sistem pentru că dețin și alte microîntreprinderi (art. 52 alin. (4), (7)), și de la ce dată? Atașați certificatul constatator și registrul asociaților.`,
   evidence: (answer) => answer.evidenceIds,
   period: (params) => String(params.year),
 });
+
+/** An account of classes 6 or 7, analytic or synthetic, as the chart spells it. */
+const accountCode = z.string().regex(/^[67]\d{1,3}(\.[A-Z0-9_-]{1,24})*$/);
+/** The natures of `profit/accounts.ts`, repeated here so the questions stay free of the tax
+ * module; a core test checks the two lists agree. */
+export const profitNatures = [
+  'protocol',
+  'advertising',
+  'social',
+  'fine',
+  'contract_penalty',
+  'sponsorship',
+  'vehicle',
+  'deductible',
+  'nondeductible',
+  'dividend_ro',
+  'nontaxable',
+  'taxable',
+] as const;
+/** The clauses a person may give for a non-deductible expense or a non-taxable revenue: the
+ * letters of art. 25 alin. (4) and art. 23 the bridge knows. */
+export const profitClassificationClauses = [
+  'art.25(4)(c)',
+  'art.25(4)(d)',
+  'art.25(4)(e)',
+  'art.25(4)(f)',
+  'art.25(4)(g)',
+  'art.25(4)(h)',
+  'art.25(4)(j)',
+  'art.25(4)(k)',
+  'art.23(c)',
+  'art.23(d)',
+  'art.23(g)',
+  'art.23(o)',
+  'art.23(s)',
+] as const;
+
+/**
+ * What an expense or revenue account is for the profit tax, when its deductibility depends on
+ * facts the books do not hold (protocol or advertising on 623, a fine or a contractual penalty
+ * on 6581, a sponsorship or another donation on 6582, a vehicle's costs): the person who knows
+ * says it once per account, and every computation reads the same answer until it changes.
+ */
+const profitAccount = define({
+  id: 'profit.account',
+  summary:
+    "What an expense or revenue account is for the profit tax when the law treats it by facts the books do not hold (protocol or advertising, a fine or a contractual penalty, a sponsorship, a vehicle's costs, dividends from a Romanian company): the classification holds for every quarter until it changes; a sponsorship cites its contract and the beneficiary's entry in ANAF's register.",
+  holds: 'untilChanged',
+  subjects: ['account'],
+  params: z.object({ account: accountCode }).strict(),
+  answer: () =>
+    z
+      .object({
+        nature: z.enum(profitNatures),
+        /** The road vehicle whose costs the account holds (its registration). */
+        vehicle: z.string().trim().min(4).max(16).optional(),
+        /** For a non-deductible expense or a non-taxable revenue: the letter of the law. */
+        clause: z.enum(profitClassificationClauses).optional(),
+        /** Contracts, decisions, ANAF's register of beneficiaries. */
+        evidenceIds: z.array(z.uuid()).max(20).default([]),
+      })
+      .strict()
+      .refine((value) => (value.nature === 'vehicle') === (value.vehicle !== undefined), {
+        message: 'Vehiculul se indică doar pentru cheltuielile cu vehicule, și acolo obligatoriu.',
+        path: ['vehicle'],
+      })
+      .refine(
+        (value) =>
+          (value.nature === 'nondeductible' || value.nature === 'nontaxable') ===
+          (value.clause !== undefined),
+        {
+          message:
+            'O cheltuială nedeductibilă sau un venit neimpozabil se încadrează la o literă a legii (clause), și doar ele.',
+          path: ['clause'],
+        },
+      )
+      .refine((value) => value.nature !== 'sponsorship' || value.evidenceIds.length > 0, {
+        message:
+          'Sponsorizarea se scade din impozit doar cu contractul de sponsorizare și, pentru o entitate nonprofit, înscrierea ei în Registrul entităților pentru care se acordă deduceri fiscale.',
+        path: ['evidenceIds'],
+      }),
+  prompt: (subject) =>
+    `Ce reprezintă pentru impozitul pe profit cheltuielile sau veniturile din contul ${subject.id}? De exemplu: protocol sau reclamă (623), amenzi și penalități datorate autorităților sau penalități contractuale (6581), sponsorizare potrivit Legii nr. 32/1994 sau altă donație (6582), cheltuieli cu un vehicul (indicați numărul de înmatriculare), dividende de la o persoană juridică română (761). Răspunsul se aplică tuturor calculelor până îl schimbați.`,
+  evidence: (value) => value.evidenceIds,
+});
+export type ProfitAccountAnswer = z.infer<ReturnType<typeof profitAccount.answer>>;
+
+/** A tax loss as the returns filed before the engine's books declared it (D101 rd. 40^1). */
+const lossVintage = z
+  .object({
+    year: year,
+    /** The loss the year's return declared, in lei. */
+    amount,
+    /** What was still to recover at the start of the books, in lei. */
+    remaining: amount,
+  })
+  .strict();
+
+/**
+ * The tax losses carried into the engine's first year from the returns filed before it (Codul
+ * fiscal art. 31): each year's loss and what remained to recover, with the D101 returns as
+ * evidence; or that there are none. A loss the engine's own annual computation declares is read
+ * from the books, never asked.
+ */
+const profitLosses = define({
+  id: 'profit.losses',
+  summary:
+    "The tax losses carried into the books' first year from the annual profit tax returns (D101) filed before it, each year's loss and what was left to recover, with those returns as evidence; or that there are none.",
+  holds: 'untilChanged',
+  subjects: ['company'],
+  params: z.object({ asOf: day }).strict(),
+  answer: () =>
+    z
+      .object({
+        vintages: z
+          .array(lossVintage)
+          .max(10)
+          .refine((items) => new Set(items.map((item) => item.year)).size === items.length, {
+            message: 'Fiecare an se indică o singură dată.',
+          }),
+        /** The D101 returns of those years, or the statement that there were none. */
+        evidenceIds: z.array(z.uuid()).min(1).max(20),
+      })
+      .strict(),
+  prompt: (_subject, params) =>
+    `Ce pierderi fiscale de recuperat avea compania la ${params.asOf}, din declarațiile 101 depuse pentru anii anteriori? Pentru fiecare an: pierderea declarată (rd. 40^1) și cât mai rămăsese de recuperat. Atașați declarațiile, sau precizați că nu există pierderi.`,
+  evidence: (value) => value.evidenceIds,
+});
+export type ProfitLossesAnswer = z.infer<ReturnType<typeof profitLosses.answer>>;
+
+/**
+ * A return the engine does not prepare (D700, the declaration of the fiscal vector's changes),
+ * filed by the company through ANAF's portal: the person records its registration number and the
+ * receipt, and the calendar shows it filed.
+ */
+const obligationFiled = define({
+  id: 'obligation.filed',
+  summary:
+    "A return the engine does not prepare (D700) filed by the company through ANAF's portal: the registration number, the date and the receipt, which mark it filed on the calendar.",
+  holds: 'once',
+  subjects: ['obligation'],
+  params: z
+    .object({
+      kind: z.string().regex(/^D\d{3}$/),
+      period: z.string().regex(/^\d{4}(-(0[1-9]|1[0-2]|Q[1-4]))?$/),
+    })
+    .strict(),
+  answer: () =>
+    z
+      .object({
+        registrationNumber: z.string().trim().min(1).max(60),
+        submittedOn: day,
+        /** ANAF's receipt (recipisa) or the filed form. */
+        evidenceId: z.uuid(),
+      })
+      .strict(),
+  prompt: (_subject, params) =>
+    `Declarația ${params.kind} pentru ${params.period} se depune în afara aplicației (portalul ANAF). Indicați numărul de înregistrare, data depunerii și atașați recipisa.`,
+  evidence: (value) => [value.evidenceId],
+});
+export type ObligationFiledAnswer = z.infer<ReturnType<typeof obligationFiled.answer>>;
+
+/**
+ * A VAT period's negative balance of at least 5,000 lei: refunded, on the D300's request (the
+ * return is the refund request, Codul fiscal art. 303 alin. (7)), or carried forward to the next
+ * period. The company's choice, a person's to make; the D300 is prepared with it.
+ */
+const vatRefund = define({
+  id: 'vat.refund',
+  summary:
+    "Whether a VAT period's negative balance of at least 5,000 lei is claimed back on its D300 (a refund request, which ANAF settles, usually with a later inspection: Codul fiscal art. 303 alin. (7)) or carried forward to the next period.",
+  holds: 'once',
+  subjects: ['vatPeriod'],
+  params: z
+    .object({
+      /** The negative balance the return shows (rd. 45), in lei. */
+      balance: amount,
+    })
+    .strict(),
+  answer: () => z.object({ choice: z.enum(['refund', 'carry_forward']) }).strict(),
+  prompt: (subject, params) =>
+    `Decontul de TVA pentru ${subject.id} are un sold negativ de ${params.balance} lei. Solicitați rambursarea lui prin decont (ANAF o soluționează, de regulă cu inspecție fiscală ulterioară) sau îl reportați în decontul perioadei următoare (Codul fiscal art. 303 alin. (7))?`,
+  evidence: () => [],
+});
+export type VatRefundAnswer = z.infer<ReturnType<typeof vatRefund.answer>>;
 
 /** Every kind of question, by id. */
 export const questionKinds = {
@@ -511,6 +704,13 @@ export const questionKinds = {
   'determination.confirm': determinationConfirm,
   'year.figures': yearFigures,
   'micro.conditions': microConditions,
+  'profit.account': profitAccount,
+  'profit.losses': profitLosses,
+  'obligation.filed': obligationFiled,
+  'vat.refund': vatRefund,
+  'annual.informative': annualInformative,
+  'annual.disclosures': annualDisclosures,
+  'annual.document': annualDocument,
 } as const;
 export type QuestionKindId = keyof typeof questionKinds;
 export const questionKindIds = Object.keys(questionKinds) as [QuestionKindId, ...QuestionKindId[]];

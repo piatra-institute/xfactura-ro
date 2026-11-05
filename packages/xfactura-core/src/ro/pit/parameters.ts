@@ -49,6 +49,10 @@ export const normaRule = z
   .object({
     /** A norm is at least this many minimum wages in force on 1 January of the income year. */
     floorWages: wages,
+    /** Which minimum wage the floor counts: the one in force on 1 January of the income year
+     * (art. 69 alin. (3) from the income of 2026), or the one in force when the DGRFP set the norm
+     * (the earlier wording, "în vigoare la momentul stabilirii acesteia"). */
+    floorWage: z.enum(['january_1', 'when_set']),
     /** Gross income above this many euro (BNR's annual average) makes the real system mandatory
      * from the next year. */
     realAboveEur: eur,
@@ -76,6 +80,29 @@ export const cassRule = z
   })
   .strict();
 export type CassRule = z.infer<typeof cassRule>;
+
+export const cassOtherRule = z
+  .object({
+    /** Art. 170 alin. (2)–(3): CASS on the income of art. 155 alin. (1) lit. c)–h) (intellectual
+     * property, rent, investments, other sources) is due from the first of these multiples of the
+     * minimum wage, on a base of the band reached, ascending. */
+    bandWages: z.array(wages).min(1).max(5),
+  })
+  .strict();
+export type CassOtherRule = z.infer<typeof cassOtherRule>;
+
+export const sourcesRule = z
+  .object({
+    /** How an expense common to several sources of one person may be split among them, as the
+     * person states it with its document: `gross`, in proportion to each source's gross income;
+     * `fixed`, by stated shares. No text sets a key (an expert question). */
+    sharedKeys: z
+      .array(z.enum(['gross', 'fixed']))
+      .min(1)
+      .max(2),
+  })
+  .strict();
+export type SourcesRule = z.infer<typeof sourcesRule>;
 
 export const cassOptionRule = z
   .object({
@@ -148,6 +175,16 @@ export const pitDefinitions: ParameterDefinition[] = [
     'ro.cass.independent',
     cassRule,
     'Baza minimă și plafonul CASS pentru veniturile din activități independente, în salarii minime.',
+  ),
+  yearly(
+    'ro.cass.other',
+    cassOtherRule,
+    'Pragurile și bazele CASS pentru veniturile din drepturi de proprietate intelectuală, cedarea folosinței bunurilor, investiții și alte surse (art. 155 alin. (1) lit. c)–h)), în salarii minime.',
+  ),
+  yearly(
+    'ro.pit.sources',
+    sourcesRule,
+    'Cheile admise pentru repartizarea cheltuielilor comune mai multor surse de venit ale aceleiași persoane.',
   ),
   yearly(
     'ro.cass.option',
@@ -228,10 +265,17 @@ export const pitVersions: ParameterVersion[] = [
     },
     [code('art.68(5)-(6)'), code('art.68(7)'), code('norme.art.68.pct.7(6)-(7)')],
   ),
-  version('ro.pit.norma', { floorWages: 12, realAboveEur: '25000' }, [
+  version('ro.pit.norma', { floorWages: 12, floorWage: 'january_1', realAboveEur: '25000' }, [
     code('art.69(3),(9)'),
     'L239/2025:art.XII.pct.6',
     'L239/2025:art.XIII',
+  ]),
+  // Income of 2025: art. 69 alin. (3) before Legea nr. 239/2025 (the portal's 2025 consolidated
+  // Code; the new wording applies from the income of 2026, art. XIII alin. (2) lit. b)), and alin.
+  // (9) as OUG nr. 128/2024 rewrote it from the income of 2025.
+  income2025('ro.pit.norma', { floorWages: 12, floorWage: 'when_set', realAboveEur: '25000' }, [
+    'LJR/Cod-fiscal-2025:art.69(3)',
+    'OUG128/2024:art.I.pct.1',
   ]),
   version('ro.pit.natures', defaultCatalogue, [
     code('art.68(2)-(3)'),
@@ -314,4 +358,13 @@ export const pitVersions: ParameterVersion[] = [
     '2025-12-31',
   ),
   version('ro.cass.option', { baseWages: 6 }, [code('art.180(2)')]),
+  // Art. 170 alin. (2)–(3): 6, 12 and 24 minimum wages; the same bands in the D212 for 2025's
+  // income (OPANAF nr. 2.736/2025 instr. pct. 51–52).
+  income2025('ro.cass.other', { bandWages: [6, 12, 24] }, ['OPANAF2736/2025:instr.pct.51-52']),
+  version('ro.cass.other', { bandWages: [6, 12, 24] }, [code('art.170(2)-(3)')]),
+  // The register is kept per source (OMFP nr. 3.254/2017 art. 3 alin. (3)–(4), art. 4 alin. (1),
+  // art. 5 alin. (1)); no text says how an expense serving several sources is split: the person
+  // states a key, from those admitted here (`ro.pit.sources` review packet).
+  income2025('ro.pit.sources', { sharedKeys: ['gross', 'fixed'] }, ['OMFP3254/2017:art.3-5']),
+  version('ro.pit.sources', { sharedKeys: ['gross', 'fixed'] }, ['OMFP3254/2017:art.3-5']),
 ];

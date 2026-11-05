@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, gte, lte, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Party } from 'xfactura-core/einvoice';
 import type { ReadSetEntry } from 'xfactura-core/kernel';
@@ -14,10 +14,17 @@ import {
   type D112SickPercent,
 } from 'xfactura-core/ro/declarations/d112';
 import { counties } from 'xfactura-core/ro/geo';
-import type { MinimumExemption } from 'xfactura-core/ro/payroll';
+import { d112Filing, quarterMonths, type MinimumExemption } from 'xfactura-core/ro/payroll';
 import { addDays, type LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
-import { companies, employees, employmentTerms, payrollLines } from '../db/schema';
+import {
+  companies,
+  employees,
+  employmentTerms,
+  payrollLines,
+  payrollRunEvents,
+  payrollRuns,
+} from '../db/schema';
 import { loadState } from '../kernel/state';
 import { sellerDetails } from './d300';
 import type { DeclarationKind, DeclarationProblem } from './declarations';
@@ -62,6 +69,57 @@ async function inputsOf(tx: Transaction, companyId: string, month: string) {
     ...(seller ? [{ kind: 'party' as const, id: seller.partyId, version: seller.hash }] : []),
   ];
   return { run: runId ? loaded.payrollRuns.get(runId) : undefined, runId, seller, inputs };
+}
+
+/**
+ * When the month's D112 is due, by the year's own `payroll.period` fact (art. 147 alin. (1),
+ * (4)–(5)) and the quarter's sick leave and contracts ended (alin. (11)); null when the year's
+ * period is not recorded. The XML is the same either way: a quarterly filer files one return per
+ * month (alin. (5); OPANAF nr. 605/2026 anexa nr. 6 cap. I).
+ */
+export async function d112FilingOf(tx: Transaction, companyId: string, month: string) {
+  const year = month.slice(0, 4);
+  const { loaded } = await loadState(tx, companyId, { profile: true });
+  let period: 'monthly' | 'quarterly' | null = null;
+  for (const fact of loaded.profile)
+    if (
+      fact.axis === 'payroll.period' &&
+      fact.effectiveFrom >= `${year}-01-01` &&
+      fact.effectiveFrom <= `${month}-31`
+    )
+      period = fact.value as 'monthly' | 'quarterly';
+  if (!period) return null;
+  const months = quarterMonths(month);
+  const sick = await tx
+    .selectDistinct({ month: payrollRuns.month })
+    .from(payrollLines)
+    .innerJoin(
+      payrollRuns,
+      and(
+        eq(payrollRuns.companyId, payrollLines.companyId),
+        eq(payrollRuns.id, payrollLines.runId),
+      ),
+    )
+    .where(
+      and(
+        eq(payrollLines.companyId, companyId),
+        gte(payrollRuns.month, months[0]!),
+        lte(payrollRuns.month, months[2]!),
+        sql`${payrollLines.input} LIKE '%"sick":%'`,
+        sql`not exists (select 1 from ${payrollRunEvents} e where e.company_id = ${payrollRuns.companyId}
+          and e.run_id = ${payrollRuns.id} and e.state = 'superseded')`,
+      ),
+    );
+  const ends = (
+    await tx
+      .select({ end: employmentTerms.endDate })
+      .from(employmentTerms)
+      .where(eq(employmentTerms.companyId, companyId))
+  ).flatMap((row) =>
+    row.end && months.includes(row.end.slice(0, 7)) ? [row.end.slice(0, 7)] : [],
+  );
+  const filing = d112Filing(month, period, [...sick.map((row) => row.month), ...ends]);
+  return { period, ...filing };
 }
 
 /**
@@ -311,7 +369,12 @@ export function d112Declaration(secret: string): DeclarationKind {
         xml: problems.length ? '' : writeD112(model),
         inputs,
         problems,
-        summary: { month, insured: insured.length, runId: runId! },
+        summary: {
+          month,
+          insured: insured.length,
+          runId: runId!,
+          filing: await d112FilingOf(tx, companyId, month),
+        },
       };
     },
   };

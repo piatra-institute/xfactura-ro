@@ -23,7 +23,9 @@ import {
   type ExtractedBody,
   type ExtractedKind,
   type ReceiptDocument,
+  isTaxKind,
 } from 'xfactura-core/documents/schemas';
+import type { TaxDecisionDocument, TaxStatementDocument } from 'xfactura-core/ro/taxaccount';
 import { isValidCnp } from 'xfactura-core/ro/identifiers';
 import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
 import { bucharestDate, daysBetween, type LocalDate } from 'xfactura-core/time';
@@ -255,6 +257,8 @@ async function counterpartyOf(
   ids: Ids,
 ) {
   let party: { name: string; taxId: string; country: string } | undefined;
+  // ANAF's documents are the authority's, whose party the booking names (`authorityId`).
+  if (isTaxKind(kind)) return null;
   if (isInvoiceKind(kind)) {
     const invoice = body as InvoiceDocument;
     party = isIssuedKind(kind) ? invoice.customer : invoice.supplier;
@@ -272,7 +276,9 @@ async function counterpartyOf(
 const docDateOf = (kind: string, body: ExtractedBody) =>
   kind === documentKinds.contract
     ? (body as ContractDocument).date
-    : (body as InvoiceDocument | ReceiptDocument).issueDate;
+    : kind === documentKinds.taxStatement
+      ? (body as TaxStatementDocument).asOf
+      : (body as InvoiceDocument | ReceiptDocument | TaxDecisionDocument).issueDate;
 
 /** Documents of every source, and the extractions agents record. */
 export class Documents {
@@ -466,8 +472,8 @@ export class Documents {
         origin: 'extracted',
         docDate: docDateOf(input.kind, body),
         partyId: await counterpartyOf(tx, actor, input.kind, body, company!.cui, this.commands.ids),
-        currency: body.currency,
-        number: body.number,
+        currency: 'currency' in body ? body.currency : 'RON',
+        number: 'number' in body ? body.number : null,
         identityKey: documentIdentity(input.kind, body, company!.cui),
         authority: 'extracted',
         checks: canonical(checks),

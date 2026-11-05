@@ -519,7 +519,7 @@ export class Autonomy {
         join acc_entries e on e.company_id = q.company_id and e.proposal_id = q.id
         join acc_lines l on l.company_id = e.company_id and l.entry_id = e.id and l.party_id is not null
           and l.open_item_id is not null
-        where q.company_id = ${companyId} and q.treatment_id = 'bank.settle' and ${entryStands('e')}
+        where q.company_id = ${companyId} and q.treatment_id in ('bank.settle', 'tax.pay') and ${entryStands('e')}
         group by q.id
       )
       select b.treatment_id, b.party_id, b.kind, count(*) as posted, count(distinct b.period) as months,
@@ -540,13 +540,15 @@ export class Autonomy {
       // The latest posting's account to start from, with its vehicle when it named one (the
       // deduction then follows the answer about it); a settlement matches by invoice number.
       const mapping: JsonValue =
-        row.treatment_id === 'bank.settle'
-          ? { settle: 'openItem', match: 'number' }
-          : typeof input.account !== 'string'
-            ? null
-            : typeof input.vehicle === 'string'
-              ? { account: input.account, vehicle: input.vehicle }
-              : { account: input.account, deduction: input.deduction ?? 'full' };
+        row.treatment_id === 'tax.pay'
+          ? { to: typeof input.to === 'string' ? input.to : 'single' }
+          : row.treatment_id === 'bank.settle'
+            ? { settle: 'openItem', match: 'number' }
+            : typeof input.account !== 'string'
+              ? null
+              : typeof input.vehicle === 'string'
+                ? { account: input.account, vehicle: input.vehicle }
+                : { account: input.account, deduction: input.deduction ?? 'full' };
       return {
         treatment: row.treatment_id,
         partyId: row.party_id,

@@ -23,6 +23,7 @@ import {
   type YearFigures,
 } from '../src/ro/determinations';
 import { roRegister } from '../src/ro/register';
+import { d406Begun, d406StartOf } from '../src/ro/saft/applicability';
 import { clause } from '../src/ro/sources';
 import { RuleContext } from '../src/rules';
 import type { LocalDate } from '../src/time';
@@ -254,6 +255,19 @@ describe('micro-enterprise or profit tax', () => {
     expect(result.changes[0]).toMatchObject({ effectiveFrom: '2026-07-01' });
   });
 
+  test('an excluded activity started, or the shareholders choosing it to leave: profit from that quarter', () => {
+    const exit = (overrides: Partial<MicroConditionsAnswer>) =>
+      determineIncomeTax(context({ micro: books(conditions(overrides)) }), rules());
+    // Art. 52 alin. (4) and (7): the quarter it happened in.
+    expect(exit({ excludedActivityFrom: '2026-05-10' }).changes[0]).toMatchObject({
+      value: 'profit',
+      effectiveFrom: '2026-04-01',
+    });
+    const holdings = exit({ shareholdersExitFrom: '2026-08-01' });
+    expect(holdings.changes[0]).toMatchObject({ value: 'profit', effectiveFrom: '2026-07-01' });
+    expect(holdings.clauses).toContain('ANAF/Cod-fiscal-consolidat:art.52(4),(6)-(7)');
+  });
+
   test('a PFA is not a micro-enterprise; a year before the rule is a RULE_GAP', () => {
     expect(
       determineIncomeTax(context({ facts: [fact('entity.form', 'pfa', '2020-01-01')] }), rules())
@@ -281,7 +295,8 @@ describe('VAT period and D112 period', () => {
         rules(),
       ).value,
     ).toBe('monthly');
-    // Registered during the year: the period follows the registration, asked.
+    // Registered during the year: the turnover before registration, recalculated for a whole
+    // year (art. 322 alin. (4)); none here, so quarterly from the registration.
     const registered = determineVatPeriod(
       context({
         facts: [
@@ -292,7 +307,11 @@ describe('VAT period and D112 period', () => {
       }),
       rules(),
     );
-    expect(registered.status).toBe('needs_evidence');
+    expect(registered).toMatchObject({
+      status: 'proposed',
+      value: 'quarterly',
+      effectiveFrom: '2026-05-01',
+    });
   });
 
   test('D112: quarterly for a micro-enterprise under 3 employees on average, monthly at 3', () => {
@@ -399,7 +418,7 @@ describe('VAT thresholds', () => {
     { date: '2026-09-15' as LocalDate, exemption: lei('150000'), vat: 0n },
     { date: '2026-10-05' as LocalDate, exemption: lei('50000'), vat: 0n },
   ];
-  test('art. 310: the day the threshold is crossed, UNSUPPORTED from then', () => {
+  test('art. 310: the day the threshold is crossed, registration due and valid from then', () => {
     const result = determineVatThreshold(
       context({
         facts: nonPayer,
@@ -407,8 +426,12 @@ describe('VAT thresholds', () => {
       }),
       rules(),
     );
-    expect(result.status).toBe('unsupported');
-    expect(result.unsupported?.trigger).toBe('VAT_THRESHOLD_EXCEEDED');
+    expect(result).toMatchObject({
+      status: 'proposed',
+      value: 'under',
+      changes: [{ value: 'exceeded', effectiveFrom: '2026-10-05' }],
+      unsupported: null,
+    });
     expect(result.inputs.crossed).toBe('2026-10-05');
     expect(
       determineVatThreshold(
@@ -493,7 +516,15 @@ const noBooks: ClosureBooks = {
   sponsorshipMonths: [],
   payrollWithoutContractMonths: [],
   incomeSources: [],
+  assetYears: [],
 };
+/** `ro.d406.start` for every month of 2025–2026, as the engine reads it. */
+const d406Start = d406StartOf(
+  rules(),
+  [2025, 2026].flatMap((year) =>
+    Array.from({ length: 12 }, (_, index) => `${year}-${String(index + 1).padStart(2, '0')}`),
+  ),
+);
 /** A non-VAT services SRL on micro tax, no employees, with every fact known. */
 const known = [
   fact('entity.form', 'srl', '2020-01-01'),
@@ -522,6 +553,7 @@ function closure(overrides: Partial<ClosureInput> = {}, determinationFacts = kno
     ).filter((item) => item.axis !== 'income_tax'),
     confirmed: {},
     books: noBooks,
+    d406Start,
     ...overrides,
   });
 }
@@ -545,8 +577,9 @@ describe('obligation closure', () => {
       'vat@2026-09=non_vat (fapt vat.status)',
       'vatPeriod@2026-09=none (neplătitor de TVA)',
       'form@2026-09=srl (fapt entity.form)',
+      'd406Begun@2026-09=yes (toate categoriile de contribuabili, de la 2025-01-01 (anexa nr. 5 pct. 1.1 lit. d)–g)))',
     ]);
-    expect(d406.clauses).toEqual(['OPANAF1783/2021:anexa4.pct.1-4']);
+    expect(d406.clauses).toEqual(['OPANAF1783/2021:anexa4.pct.1-4', 'OPANAF407/2025:anexa5.pct.4']);
     expect(result.trace.length).toBeGreaterThan(0);
     // Every clause a rule cites is registered.
     for (const rule of closureRules({
@@ -559,7 +592,9 @@ describe('obligation closure', () => {
         euServiceMonths: ['2026-03'],
         dividendMonths: ['2026-04'],
         foreignPurchases: [{ month: '2026-05', documentId: 'd', country: 'IE' }],
+        assetYears: ['2026'],
       },
+      d406Start,
     }))
       for (const id of rule.clauses) expect(clause(id)).toBeDefined();
   });
@@ -575,7 +610,7 @@ describe('obligation closure', () => {
     expect(result.unsupported).toEqual([
       expect.objectContaining({
         trigger: 'FOREIGN_SERVICE_PURCHASE',
-        missingCapabilities: ['VAT_ART317', 'D301', 'D390'],
+        missingCapabilities: ['FOREIGN_PURCHASE_TREATMENT'],
         evidenceIds: ['invoice-ie'],
       }),
     ]);
@@ -595,9 +630,16 @@ describe('obligation closure', () => {
       }),
       rules(),
     );
+    // Registration is due from the crossing day: the returns wait on it, asked.
     const result = closure({ determinations: [crossing] });
-    expect(result.status).toBe('UNSUPPORTED');
-    expect(result.unsupported.map((item) => item.trigger)).toContain('VAT_THRESHOLD_EXCEEDED');
+    expect(result.status).toBe('NEEDS_EVIDENCE');
+    expect(result.needs).toContainEqual(
+      expect.objectContaining({
+        code: 'DETERMINATION_CONFLICT',
+        fact: 'vat.status',
+        question: expect.objectContaining({ params: { axis: 'vat.status', from: '2026-08-03' } }),
+      }),
+    );
     // VAT on collection: the ceiling crossed while the recorded regime stays on it.
     const payer = [
       ...known.filter((item) => !item.axis.startsWith('vat.')),
@@ -698,20 +740,93 @@ describe('obligation closure', () => {
     expect(carried.needs.map((need) => need.fact)).toContain('income_tax/2026');
   });
 
-  test('profit tax and a mid-year exit from micro are UNSUPPORTED', () => {
-    const profit = closure({
-      facts: [
-        ...known.filter((item) => item.axis !== 'income_tax'),
-        fact('income_tax', 'profit', '2026-01-01'),
-      ],
+  test('profit tax: D100 for quarters I–III and D101 for the year, once the system is known', () => {
+    const facts = [
+      ...known.filter((item) => item.axis !== 'income_tax'),
+      fact('income_tax', 'profit', '2026-01-01'),
+    ];
+    // Not after a micro year: the quarterly system (art. 41 alin. (1)) or the option for the
+    // annual one is the company's fact.
+    const unknown = closure({ facts });
+    expect(unknown.status).toBe('NEEDS_EVIDENCE');
+    expect(lines(unknown)).toEqual(
+      expect.arrayContaining(['D100 2026-09 needs_evidence', 'D101 2026 needs_evidence']),
+    );
+    expect(unknown.needs.find((need) => need.fact === 'profit.system')).toMatchObject({
+      code: 'FACT_UNKNOWN',
+      question: { kind: 'profile.fact', subject: { id: 'profit.system' } },
     });
-    expect(profit.unsupported.map((item) => item.trigger)).toEqual(['PROFIT_TAX']);
-    expect(lines(profit)).toContain('D101 2026 unsupported');
-    const exit = closure({ facts: [...known, fact('income_tax', 'profit', '2026-10-01')] });
-    expect(exit.unsupported.map((item) => item.trigger)).toContain('MICRO_PROFIT_TRANSITION');
+    const quarterly = closure({
+      facts: [...facts, fact('profit.system', 'quarterly', '2026-01-01')],
+    });
+    expect(quarterly.status).toBe('ELIGIBLE');
+    expect(lines(quarterly)).toEqual(
+      expect.arrayContaining(['D100 2026-09 applies', 'D101 2026 applies']),
+    );
+    expect(quarterly.obligations.find((item) => item.kind === 'D101')).toMatchObject({
+      deadline: 'D101',
+      period: '2026',
+    });
+    expect(quarterly.obligations.find((item) => item.kind === 'D100')?.deadline).toBe(
+      'D100.profit',
+    );
+    const annual = closure({ facts: [...facts, fact('profit.system', 'annual', '2026-01-01')] });
+    expect(annual.unsupported.map((item) => item.trigger)).toEqual(['PROFIT_ANNUAL_SYSTEM']);
   });
 
-  test('a quarterly D112: each month after the quarter, except a month with sick leave', () => {
+  test('leaving micro in the year: micro D100 before, D101 for the rest, and the D700 that declares it', () => {
+    const exit = closure({ facts: [...known, fact('income_tax', 'profit', '2026-10-01')] });
+    expect(exit.status).toBe('ELIGIBLE');
+    expect(lines(exit)).toEqual(
+      expect.arrayContaining(['D100 2026-09 applies', 'D101 2026 applies', 'D700 2026 applies']),
+    );
+    expect(exit.obligations.find((item) => item.kind === 'D100')?.deadline).toBe('D100.micro');
+    expect(exit.obligations.find((item) => item.kind === 'D700')).toMatchObject({
+      deadline: 'D700.micro_exit',
+      deadlinePeriod: null,
+      rule: 'scope.income_tax.transition@2026',
+    });
+    expect(exit.unsupported).toEqual([]);
+  });
+
+  test("entering micro on 1 January: the previous year's D101 and the D700 by 31 March", () => {
+    const facts = [
+      ...known.filter((item) => item.axis !== 'income_tax' && item.axis !== 'size.category'),
+      fact('income_tax', 'profit', '2025-01-01'),
+      fact('income_tax', 'micro', '2026-01-01'),
+      fact('profit.system', 'quarterly', '2025-01-01'),
+      fact('size.category', 'micro', '2025-01-01'),
+      fact('size.category', 'micro', '2026-01-01'),
+    ];
+    const entry = closure({
+      interval: { from: '2025-12', to: '2026-03' },
+      facts,
+      books: {
+        ...noBooks,
+        firstDay: '2025-01-01',
+        financialYearEnds: ['2025-12-31', '2026-12-31'],
+      },
+    });
+    expect(lines(entry)).toEqual(
+      expect.arrayContaining(['D101 2025 applies', 'D100 2026-03 applies', 'D700 2026 applies']),
+    );
+    expect(entry.obligations.find((item) => item.kind === 'D700')).toMatchObject({
+      deadline: 'D700.micro_entry',
+      deadlinePeriod: '2025',
+    });
+    // Profit again within the year is no entry: a micro-enterprise cannot enter mid-year.
+    const midyear = closure({
+      interval: { from: '2026-01', to: '2026-12' },
+      facts: [
+        ...facts,
+        fact('income_tax', 'profit', '2026-04-01'),
+        fact('income_tax', 'micro', '2026-07-01'),
+      ],
+    });
+    expect(midyear.unsupported.map((item) => item.trigger)).toContain('MICRO_ENTRY_MIDYEAR');
+  });
+
+  test('a quarterly D112: each month after the quarter, except a month with sick leave and the months before it', () => {
     const facts = [
       ...known.filter((item) => item.axis !== 'employer'),
       fact('employer', 'yes', '2026-01-01'),
@@ -720,7 +835,8 @@ describe('obligation closure', () => {
     const result = closure({ facts, books: { ...noBooks, payrollEventMonths: ['2026-08'] } });
     const d112 = result.obligations.filter((item) => item.kind === 'D112');
     expect(d112.map((item) => [item.period, item.deadline, item.deadlinePeriod])).toEqual([
-      ['2026-07', 'D112.quarterly', '2026-Q3'],
+      // Art. 147 alin. (11): August's sick leave brings July with it, to 25 September.
+      ['2026-07', 'D112', '2026-08'],
       ['2026-08', 'D112', null],
       ['2026-09', 'D112.quarterly', '2026-Q3'],
       ['2026-10', 'D112.quarterly', '2026-Q4'],
@@ -817,7 +933,7 @@ describe('obligation closure', () => {
     );
   });
 
-  test('a single-entry PFA: no S1005, no D101 nor micro tax, and D406 a named gap', () => {
+  test('a single-entry PFA: no S1005, no D101 nor micro tax, and no D406 (OPANAF nr. 1.783/2021 anexa nr. 5 pct. 4)', () => {
     // Even a profit-tax fact recorded by mistake: income tax follows the form (title IV).
     const facts = [
       ...known.filter(
@@ -827,31 +943,18 @@ describe('obligation closure', () => {
       fact('income_tax', 'profit', '2026-01-01'),
     ];
     const result = closure({ facts });
-    expect(result.status).toBe('UNSUPPORTED');
-    expect(lines(result)).toEqual([
-      'D406 2026-Q3 unsupported',
-      'D212 2026 applies',
-      'D406 2026-Q4 unsupported',
-    ]);
-    expect(result.obligations[0]).toMatchObject({
-      rule: 'obligation.d406@2026-09',
-      blockers: ['D406_INDIVIDUAL'],
-      facts: expect.arrayContaining(['form@2026-09=pfa (fapt entity.form)']),
-    });
-    expect(result.unsupported).toEqual([
-      expect.objectContaining({
-        trigger: 'D406_INDIVIDUAL',
-        missingCapabilities: ['D406_INDIVIDUAL_SCOPE'],
-        rule: 'obligation.d406@2026-09',
-        message: expect.stringContaining('OPANAF nr. 1783/2021'),
-        resolution: expect.stringContaining('Expertul contabil răspunde'),
-      }),
-    ]);
+    expect(result.status).toBe('ELIGIBLE');
+    expect(lines(result)).toEqual(['D212 2026 applies']);
+    expect(result.unsupported).toEqual([]);
+    // The D406 rule read the form and listed nothing: PFA, II and IF are exempt.
+    expect(result.trace.find((item) => item.rule === 'obligation.d406@2026-09')?.read).toEqual(
+      expect.arrayContaining(['form@2026-09=pfa (fapt entity.form)']),
+    );
     // The statements follow the books: single entry has none (OMFP nr. 170/2015 cap. II pct. 11).
     expect(result.trace.find((item) => item.rule === 'fact.size.category@2026')?.produced).toEqual([
       'size@2026=none (partidă simplă)',
     ]);
-    // A VAT-paying PFA: D300 and D394 as for any payer, D406 the same gap each period.
+    // A VAT-paying PFA: D300 and D394 as for any payer, and still no D406.
     const payer = closure({
       facts: [
         ...facts.filter((item) => !item.axis.startsWith('vat.')),
@@ -864,7 +967,6 @@ describe('obligation closure', () => {
     expect(lines(payer).filter((line) => line.includes(' 2026-07 '))).toEqual([
       'D300 2026-07 applies',
       'D394 2026-07 applies',
-      'D406 2026-07 unsupported',
     ]);
   });
 
@@ -913,5 +1015,100 @@ describe('agent-ready', () => {
       'threshold.approaching',
     ]);
     expect(agent.templates).toEqual([]);
+  });
+});
+
+describe('D406 by taxpayer category and the annual assets file', () => {
+  const start = d406StartOf(rules(), ['2024-06']);
+  const at = start['2024-06']!;
+  if ('gap' in at) throw new Error(at.gap);
+  const category = (value: string, from: string) => fact('taxpayer.category', value, from);
+
+  test('from 1 January 2025 every category files; before it, the category decides', () => {
+    const begun = (facts: ProfileFact[], date: string) => {
+      const result = d406Begun(facts, at.start, date);
+      return result.state === 'known' ? result.value : 'unknown';
+    };
+    expect(begun([], '2025-01-01')).toBe(true);
+    expect(begun([], '2024-06-30')).toBe('unknown');
+    expect(begun([], '2021-12-31')).toBe(false);
+    expect(begun([category('small', '2020-01-01')], '2024-06-30')).toBe(false);
+    expect(begun([category('large', '2020-01-01')], '2022-01-31')).toBe(true);
+    // Large from 1 January 2022 only (lit. b)): from 1 July 2022.
+    expect(begun([category('large', '2022-01-01')], '2022-06-30')).toBe(false);
+    expect(begun([category('large', '2022-01-01')], '2022-07-31')).toBe(true);
+    expect(begun([category('medium', '2020-01-01')], '2023-01-31')).toBe(true);
+    // Medium in 2021, small from 2023: the medium date never came while medium (pct. 1.2 a)).
+    expect(
+      begun([category('medium', '2020-01-01'), category('small', '2023-01-01')], '2024-06-30'),
+    ).toBe(false);
+    // Once begun, it continues (pct. 2): large in 2022, small from 2023.
+    expect(
+      begun([category('large', '2020-01-01'), category('small', '2023-01-01')], '2024-06-30'),
+    ).toBe(true);
+  });
+
+  test('books before 2025 ask the category; a small taxpayer files from 2025', () => {
+    const before = closure({
+      interval: { from: '2024-10', to: '2025-03' },
+      books: { ...noBooks, firstDay: '2024-01-01', financialYearEnds: ['2024-12-31'] },
+      d406Start: d406StartOf(
+        rules(),
+        ['2024', '2025'].flatMap((year) =>
+          Array.from({ length: 12 }, (_, index) => `${year}-${String(index + 1).padStart(2, '0')}`),
+        ),
+      ),
+    });
+    expect(lines(before).filter((line) => line.startsWith('D406'))).toEqual([
+      'D406 2024-Q4 needs_evidence',
+      'D406 2025-Q1 applies',
+    ]);
+    expect(before.needs.map((need) => need.fact)).toContain('taxpayer.category');
+    const small = closure(
+      {
+        interval: { from: '2024-10', to: '2025-03' },
+        books: { ...noBooks, firstDay: '2024-01-01', financialYearEnds: ['2024-12-31'] },
+        d406Start: d406StartOf(
+          rules(),
+          ['2024', '2025'].flatMap((year) =>
+            Array.from(
+              { length: 12 },
+              (_, index) => `${year}-${String(index + 1).padStart(2, '0')}`,
+            ),
+          ),
+        ),
+      },
+      [...known, category('small', '2020-01-01')],
+    );
+    expect(lines(small).filter((line) => line.startsWith('D406'))).toEqual([
+      'D406 2025-Q1 applies',
+    ]);
+    // A month the rule does not reach is a gap, never a guess.
+    expect(closure({ d406Start: {} }).unsupported.map((item) => item.trigger)).toContain(
+      'RULE_GAP',
+    );
+  });
+
+  test('the annual assets file applies to a company holding fixed assets for a whole year', () => {
+    const held = closure({ books: { ...noBooks, assetYears: ['2026'] } });
+    expect(
+      held.obligations.find((item) => item.period === '2026' && item.kind === 'D406'),
+    ).toMatchObject({
+      deadline: 'D406.assets',
+      state: 'applies',
+      rule: 'obligation.d406.assets@2026',
+    });
+    expect(lines(closure()).filter((line) => line === 'D406 2026 applies')).toEqual([]);
+    // A first year from 10 June has fewer than twelve months: the validator refuses it.
+    const short = closure({
+      books: { ...noBooks, assetYears: ['2026'], firstDay: '2026-06-10' },
+    });
+    expect(short.unsupported.map((item) => item.trigger)).toContain('D406_ASSETS_SHORT_YEAR');
+    // A PFA files no D406 at all.
+    const pfa = closure({ books: { ...noBooks, assetYears: ['2026'] } }, [
+      ...known.filter((item) => item.axis !== 'entity.form'),
+      fact('entity.form', 'pfa', '2020-01-01'),
+    ]);
+    expect(lines(pfa).filter((line) => line.startsWith('D406'))).toEqual([]);
   });
 });

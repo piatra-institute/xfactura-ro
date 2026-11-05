@@ -82,8 +82,8 @@ async function posted(
   }));
 }
 
-/** The obligations of a month from the books: the quarter's micro tax in its last month, and the
- * dividend and interest tax withheld in the month. */
+/** The obligations of a month from the books: the quarter's micro or profit tax in its last month,
+ * and the dividend and interest tax withheld in the month. */
 async function obligationsOf(tx: Transaction, companyId: string, month: string) {
   const [year, number] = [Number(month.slice(0, 4)), Number(month.slice(5, 7))];
   const end = `${month}-31`;
@@ -106,6 +106,18 @@ async function obligationsOf(tx: Transaction, companyId: string, month: string) 
     from: `${month}-01`,
     to: end,
   });
+  // The profit tax of quarters I–III, posted from the quarter's end within the year (memoranda
+  // when nothing was due).
+  const profit =
+    number % 3 === 0 && number < 12
+      ? (
+          await posted(tx, companyId, {
+            treatmentId: 'tax.profit',
+            from: `${month}-01`,
+            to: `${year}-12-31`,
+          })
+        ).filter((row) => row.input.period === quarter && !row.input.rectification)
+      : [];
   // The tax each entry booked: on 446 when withheld, on 4418 for the micro tax.
   const taxes = new Map<string, bigint>();
   for (const [rows, account] of [
@@ -125,7 +137,24 @@ async function obligationsOf(tx: Transaction, companyId: string, month: string) 
         );
       taxes.set(row.entryId, line?.bani ?? 0n);
     }
-  return { micro, dividends, interest, taxes };
+  // The profit tax: what each posting credited to 4411 (nothing for a memorandum).
+  for (const row of profit) {
+    const booked = await tx
+      .select({ side: lines.side, bani: lines.bani })
+      .from(lines)
+      .where(
+        and(
+          eq(lines.companyId, companyId),
+          eq(lines.entryId, row.entryId),
+          eq(lines.account, '4411'),
+        ),
+      );
+    taxes.set(
+      row.entryId,
+      booked.reduce((sum, line) => sum + (line.side === 'C' ? line.bani : -line.bani), 0n),
+    );
+  }
+  return { micro, dividends, interest, profit, taxes };
 }
 
 /**
@@ -149,9 +178,9 @@ export function d100Declaration(): DeclarationKind {
     },
     options: d100Options,
     async inputs(tx, companyId, month) {
-      const { micro, dividends, interest } = await obligationsOf(tx, companyId, month);
+      const { micro, dividends, interest, profit } = await obligationsOf(tx, companyId, month);
       const { readSet } = await loadState(tx, companyId, {
-        entries: [...micro, ...dividends, ...interest].map((row) => row.entryId),
+        entries: [...micro, ...dividends, ...interest, ...profit].map((row) => row.entryId),
       });
       const seller = await sellerDetails(tx, companyId);
       const inputs: ReadSetEntry[] = [
@@ -164,7 +193,11 @@ export function d100Declaration(): DeclarationKind {
       const options = d100Options.parse(raw);
       const problems: DeclarationProblem[] = [];
       const inputs = await this.inputs(tx, companyId, month);
-      const { micro, dividends, interest, taxes } = await obligationsOf(tx, companyId, month);
+      const { micro, dividends, interest, profit, taxes } = await obligationsOf(
+        tx,
+        companyId,
+        month,
+      );
       const seller = await sellerDetails(tx, companyId);
       if (!seller)
         problems.push({
@@ -196,6 +229,17 @@ export function d100Declaration(): DeclarationKind {
             ? { fourthQuarterDue: options.fourthQuarterDue }
             : {}),
         });
+      }
+      // The profit tax of the quarter (103): what its computations booked, in whole lei.
+      if (profit.length) {
+        const tax = profit.reduce((sum, row) => sum + taxes.get(row.entryId)!, 0n);
+        if (tax < 0n || tax % 100n)
+          problems.push({
+            code: 'D100_PROFIT',
+            message:
+              'Impozitul pe profit înregistrat pentru trimestru este negativ sau are subdiviziuni de leu.',
+          });
+        obligations.push({ kind: 'profit', tax: Number(tax / 100n) });
       }
       for (const beneficiary of ['individual', 'company'] as const) {
         const own = dividends.filter(

@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import path from 'node:path';
 import { parseScaled } from 'xfactura-core/money';
+import * as saftAgent from 'xfactura-core/ro/saft/agent';
 import { sourceXml, type XmlElement } from 'xfactura-core/xml';
 import {
   AnafKits,
@@ -831,4 +832,546 @@ describe('D406 from the books', () => {
     },
     120_000,
   );
+});
+
+// A finance lease settled in lei at the euro's rate (as financing.integration.test.ts books it):
+// a car of 20,000.00 EUR × 5.0000 from 2 March, half its VAT deducted (used privately too), the
+// advance invoiced on 2 March, revalued at 5.0500 on 31 March, April's instalment at 5.0400:
+// principal 300.00 EUR = 1,512.00 lei and interest 403.20 lei at 21% (402.19 VAT, split 317.52 /
+// 84.67, half deducted); the principal releases 1,515.00 from 167, a 3.00 gain on 768, and the
+// VAT not deducted on it (158.76) goes to 635.
+const leaseRates = `<?xml version="1.0" encoding="utf-8"?>
+<DataSet xmlns="http://www.bnr.ro/xsd"><Header><Publisher>National Bank of Romania</Publisher><PublishingDate>2026-04-30</PublishingDate><MessageType>DR</MessageType></Header>
+<Body><Subject>Reference rates</Subject><OrigCurrency>RON</OrigCurrency>
+<Cube date="2026-03-02"><Rate currency="EUR">5.0000</Rate></Cube>
+<Cube date="2026-03-31"><Rate currency="EUR">5.0500</Rate></Cube>
+<Cube date="2026-04-01"><Rate currency="EUR">5.0400</Rate></Cube>
+</Body></DataSet>`;
+
+async function leaseApril(validator?: DeclarationValidator) {
+  const books = await company('monthly', validator);
+  const { s, document, file, sell } = books;
+  await s.invoke(s.owner, 'fx.importBnr', { evidenceId: await file('bnr.xml', leaseRates) });
+  await sell('2026-04-10', [service('1000')]);
+  const lessor = await s.party('Leasing Exemplu IFN SA', '26000039');
+  const record = (await s.evidence('pv-predare-primire.pdf')).id;
+  const car = await s.invoke<{ id: string }>(s.owner, 'assets.register', {
+    number: 'MF-1',
+    name: 'Autoturism',
+    catalogCode: '2.3.2.1.1',
+    account: '2133',
+    depreciationAccount: '2813',
+    value: '100000.00',
+    lifeMonths: 60,
+    fiscalLifeMonths: 60,
+    commissionedOn: '2026-03-02',
+    evidenceId: record,
+  });
+  const lease = (
+    await s.book('leases.commence', {
+      date: '2026-03-02',
+      lessorId: lessor.id,
+      evidenceId: record,
+      assetId: car.id,
+      currency: 'EUR',
+      value: '20000.00',
+      settlement: 'lei',
+      instalments: [
+        { due: '2026-03-02', principal: '4000.00' },
+        { due: '2026-04-01', principal: '300.00', interest: '80.00' },
+        { due: '2026-05-01', principal: '301.20', interest: '78.80' },
+        { due: '2029-03-01', principal: '15398.80' },
+      ],
+    })
+  ).effect!.openItems[0]!;
+  const asked = await s.invoke<{ id: string }>(s.owner, 'questions.ask', {
+    kind: 'vehicle.use',
+    subject: { kind: 'vehicle', id: 'GL-10-LSG' },
+    params: {},
+  });
+  await s.invoke(s.owner, 'questions.answer', {
+    questionId: asked.id,
+    value: { use: 'mixed', from: '2026-01-01' },
+  });
+  const basis = { answers: [asked.id] };
+  const leasePart = (amount: string, principal: string) => ({
+    account: '167',
+    vat: 'S-21',
+    amount,
+    lease: lease.id,
+    principal,
+    deduction: 'limited',
+    vehicle: 'GL-10-LSG',
+    vatExpense: '635',
+  });
+  const recognize = async (documentId: string, allocations: unknown[]) => {
+    const proposal = await s.invoke<ProposalView>(s.owner, 'proposals.propose', {
+      treatment: 'invoices.recognize',
+      input: { documentId, allocations },
+      basis,
+    });
+    await s.post(await s.approve(proposal));
+    return proposal;
+  };
+  const advance = await document({
+    number: 'LS-AVANS',
+    counterparty: '26000039',
+    date: '2026-03-02',
+    net: '20000.00',
+    tax: '4200.00',
+    gross: '24200.00',
+    lines: [{ rate: '21', net: '20000.00', name: 'Avans leasing' }],
+  });
+  await recognize(advance.id, [leasePart('20000.00', '4000.00')]);
+  await s.book('fx.revalue', { date: '2026-03-31' });
+  await s.book('assets.depreciate', { month: '2026-04' });
+  const instalment = await document({
+    number: 'LS-0001',
+    counterparty: '26000039',
+    date: '2026-04-01',
+    net: '1915.20',
+    tax: '402.19',
+    gross: '2317.39',
+    lines: [
+      { rate: '21', net: '1512.00', name: 'Rata de capital' },
+      { rate: '21', net: '403.20', name: 'Dobânda' },
+    ],
+  });
+  const split = await recognize(instalment.id, [
+    leasePart('1512.00', '300.00'),
+    { account: '666', vat: 'S-21', amount: '403.20', deduction: 'limited', vehicle: 'GL-10-LSG' },
+  ]);
+  return { ...books, split, options: { contact, accounts: { '635': '635' } } };
+}
+
+/** The year 2026's register: a laptop bought in March (6,000.00 over 36 months, depreciated
+ * from April) and a machine bought in January (12,000.00 over 48 months, 250.00 a month from
+ * February) scrapped on 15 June, its June depreciated by the company's policy. */
+async function assetsYear(validator?: DeclarationValidator) {
+  const books = await company('monthly', validator);
+  const { s, buy, sell } = books;
+  await s.invoke(s.owner, 'profile.record', {
+    axis: 'entity.form',
+    value: 'srl',
+    effectiveFrom: '2026-01-01',
+    evidenceId: (await s.evidence('certificat-onrc.pdf')).id,
+  });
+  await s.invoke(s.owner, 'profile.record', {
+    axis: 'policy.assets.disposal_month',
+    value: 'included',
+    effectiveFrom: '2026-01-01',
+    evidenceId: (await s.evidence('politici-contabile.pdf')).id,
+  });
+  const register = async (
+    number: string,
+    name: string,
+    account: string,
+    depreciationAccount: string,
+    value: string,
+    lifeMonths: number,
+    commissionedOn: string,
+    documentId: string,
+  ) =>
+    s.invoke<{ id: string }>(s.owner, 'assets.register', {
+      number,
+      name,
+      catalogCode: '2.2.9',
+      account,
+      depreciationAccount,
+      value,
+      lifeMonths,
+      fiscalLifeMonths: lifeMonths,
+      commissionedOn,
+      documentId,
+      evidenceId: (await s.evidence(`pv-${number}.pdf`)).id,
+    });
+  const machine = await buy(
+    {
+      number: 'F-UTILAJ',
+      counterparty: '26000020',
+      date: '2026-01-20',
+      net: '12000.00',
+      tax: '2520.00',
+      gross: '14520.00',
+    },
+    '2131',
+  );
+  const scrapped = await register(
+    'MF-002',
+    'Utilaj',
+    '2131',
+    '2813',
+    '12000.00',
+    48,
+    '2026-01-20',
+    machine.documentId,
+  );
+  const laptop = await buy(
+    {
+      number: 'F-LAPTOP',
+      counterparty: '26000039',
+      date: '2026-03-05',
+      net: '6000.00',
+      tax: '1260.00',
+      gross: '7260.00',
+    },
+    '214',
+  );
+  await register('MF-001', 'Laptop', '214', '2814', '6000.00', 36, '2026-03-05', laptop.documentId);
+  await sell('2026-03-10', [service('1000')]);
+  await s.invoke(s.owner, 'assets.dispose', {
+    assetId: scrapped.id,
+    date: '2026-06-15',
+    evidenceId: (await s.evidence('pv-casare.pdf')).id,
+  });
+  for (let month = 2; month <= 12; month++)
+    await s.book('assets.depreciate', { month: `2026-${String(month).padStart(2, '0')}` });
+  await s.book('assets.derecognize', { assetId: scrapped.id });
+  return books;
+}
+
+describe('D406 for a finance lease and the annual assets file', () => {
+  test("reports a lease's instalment: one rate on 167 and 666, the exchange difference and the VAT not deducted without VAT", async () => {
+    const { s, prepare, options } = await leaseApril();
+    const file = await fileOf(s, await prepare('2026-04', options));
+    const transaction = children(file, 'Transaction').find((node) =>
+      children(node, 'TransactionLine').some(
+        (line) => value(line, 'SourceDocumentID') === 'LS-0001',
+      ),
+    )!;
+    expect(
+      children(transaction, 'TransactionLine').map((line) => {
+        const amount = children(line, 'DebitAmount')[0] ?? children(line, 'CreditAmount')[0]!;
+        const tax = children(line, 'TaxInformation')[0]!;
+        return [
+          value(line, 'AccountID'),
+          value(amount, 'Amount'),
+          value(amount, 'CurrencyCode'),
+          value(tax, 'TaxCode'),
+          value(tax, 'TaxBase') ?? null,
+          value(children(tax, 'TaxAmount')[0]!, 'Amount'),
+        ];
+      }),
+    ).toEqual([
+      // The principal leaves 167 at its carrying amount: in lei.
+      ['167', '1515.00', 'RON', '341104', '1512.00', '317.52'],
+      ['635', '158.76', 'RON', '000000', null, '0.00'],
+      ['768', '3.00', 'RON', '000000', null, '0.00'],
+      ['666', '445.53', 'RON', '341104', '403.20', '84.67'],
+      ['4426', '201.10', 'RON', '000000', null, '0.00'],
+      ['404', '2317.39', 'RON', '000000', null, '0.00'],
+    ]);
+    const invoice = children(file, 'Invoice').find(
+      (node) => value(node, 'InvoiceNo') === 'LS-0001',
+    )!;
+    expect(
+      children(invoice, 'InvoiceLine').map((line) => [
+        value(line, 'AccountID'),
+        value(line, 'GoodsServicesID'),
+        value(children(line, 'InvoiceLineAmount')[0]!, 'Amount'),
+        value(children(children(line, 'TaxInformation')[0]!, 'TaxAmount')[0]!, 'Amount'),
+      ]),
+    ).toEqual([
+      ['167', '02', '1512.00', '317.52'],
+      ['666', '02', '403.20', '84.67'],
+    ]);
+    const totals = children(invoice, 'InvoiceDocumentTotals')[0]!;
+    expect([value(totals, 'NetTotal'), value(totals, 'GrossTotal')]).toEqual([
+      '1915.20',
+      '2317.39',
+    ]);
+  });
+
+  official(
+    "a month with a lease's instalment passes ANAF's SAF-T validator",
+    async () => {
+      const { prepare, options } = await leaseApril(kits());
+      const prepared = await prepare('2026-04', options);
+      expect([prepared.state, prepared.steps.at(-1)?.detail ?? null]).toEqual([
+        'validated_official',
+        null,
+      ]);
+    },
+    120_000,
+  );
+
+  test('writes the year’s register as the annual assets file, asks how a disposal left, and waits on the periodic files', async () => {
+    const { s, prepare } = await assetsYear();
+    const refused = await s.refused(prepare('2026', { contact }));
+    expect(
+      (refused?.details as { problems: { code: string }[] }).problems.map((item) => item.code),
+    ).toEqual(['D406A_DISPOSAL_KIND']);
+    const prepared = await prepare('2026', { contact, disposals: { 'MF-002': { kind: 'scrap' } } });
+    expect([prepared.state, prepared.format]).toEqual([
+      'prepared',
+      'D406 A mfp:anaf:dgti:d406:declaratie:v1',
+    ]);
+    const file = await fileOf(s, prepared);
+    expect([
+      value(children(file, 'Header')[0]!, 'HeaderComment'),
+      children(file, 'SelectionStartDate')[0]!.text,
+      children(file, 'SelectionEndDate')[0]!.text,
+    ]).toEqual(['A', '2026-01-01', '2026-12-31']);
+    // The accounts of the assets, with the year's balances.
+    expect(
+      children(file, 'Account').map((account) => [
+        value(account, 'AccountID'),
+        balance(account, 'Opening'),
+        balance(account, 'Closing'),
+      ]),
+    ).toEqual([
+      ['2131', 0n, 0n],
+      ['214', 0n, 600000n],
+      ['2813', 0n, 0n],
+      ['2814', 0n, -150000n],
+    ]);
+    const asset = (id: string) =>
+      children(file, 'Asset').find((node) => value(node, 'AssetID') === id)!;
+    const valuation = (id: string, field: string) =>
+      value(children(asset(id), 'Valuation')[0]!, field);
+    expect(
+      [
+        'AcquisitionAndProductionCostsBegin',
+        'AcquisitionAndProductionCostsEnd',
+        'AssetAddition',
+        'AssetDisposal',
+        'DepreciationForPeriod',
+        'AccumulatedDepreciation',
+        'BookValueEnd',
+        'DepreciationPercentage',
+      ].map((field) => [valuation('MF-001', field), valuation('MF-002', field)]),
+    ).toEqual([
+      ['0.00', '0.00'],
+      ['6000.00', '0.00'],
+      ['6000.00', '12000.00'],
+      ['0.00', '-12000.00'],
+      ['-1500.00', '-1250.00'],
+      ['-1500.00', '0.00'],
+      ['4500.00', '0.00'],
+      ['33.33', '25.00'],
+    ]);
+    expect(value(children(asset('MF-001'), 'AssetSupplier')[0]!, 'SupplierID')).toBe('0026000039');
+    // A purchase each, a depreciation per month booked, the scrapping at its net value.
+    const movements = children(file, 'AssetTransaction').map((node) => [
+      value(node, 'AssetID'),
+      value(node, 'AssetTransactionType'),
+      value(children(node, 'AssetTransactionValuation')[0]!, 'BookValueOnTransaction'),
+    ]);
+    expect(value(children(file, 'AssetTransactions')[0]!, 'NumberOfAssetTransactions')).toBe('17');
+    expect(movements.filter(([, type]) => type !== '30')).toEqual([
+      ['MF-002', '10', '12000.00'],
+      ['MF-001', '10', '6000.00'],
+      ['MF-002', '50', '-10750.00'],
+    ]);
+    expect(movements.filter(([id, type]) => id === 'MF-002' && type === '30')).toHaveLength(5);
+
+    // ANAF takes the annual file after the year's periodic ones: March's, prepared, waits.
+    await prepare('2026-03', { contact });
+    const request = await s.invoke<ActionView>(s.owner, 'declarations.authorize.request', {
+      artifactId: prepared.id,
+    });
+    expect(
+      (request.preview as { findings: { code: string }[] }).findings.map((item) => item.code),
+    ).toContain('D406A_PERIODIC');
+  });
+
+  test('lists the annual assets file in the calendar by the statements’ deadline', async () => {
+    const { s } = await assetsYear();
+    const rows = await s.list<{
+      kind: string;
+      period: string;
+      deadline: string;
+      due: string | null;
+      basis: { rule: string };
+    }>(s.owner, 'obligations.calendar', { from: '2026-12', to: '2026-12', today: '2026-12-15' });
+    expect(rows.find((row) => row.kind === 'D406' && row.period === '2026')).toMatchObject({
+      deadline: 'D406.assets',
+      // 150 days after 31 December 2026 is Sunday 30 May 2027.
+      due: '2027-05-31',
+      basis: { rule: 'obligation.d406.assets@2026' },
+    });
+    // Agent-ready: the worklist raises the calendar's returns (obligation.due), and the rules
+    // they enforce are the rows' deadlines.
+    expect(saftAgent.detectors.map((item) => item.kind)).toEqual(['obligation.due']);
+    for (const row of rows.filter((item) => item.kind === 'D406'))
+      expect(saftAgent.detectors[0]!.rules).toContain(`ro.deadline.${row.deadline}`);
+    expect(saftAgent.questions.map((item) => item.kind)).toEqual(['profile.fact']);
+    expect(saftAgent.documentTypes.map((item) => item.id)).toEqual([
+      'anaf.category',
+      'asset.disposal',
+    ]);
+    expect(saftAgent.templates).toEqual([]);
+  });
+
+  official(
+    "the annual assets file passes ANAF's SAF-T validator",
+    async () => {
+      const { prepare } = await assetsYear(kits());
+      const prepared = await prepare('2026', {
+        contact,
+        disposals: { 'MF-002': { kind: 'scrap' } },
+      });
+      expect([
+        prepared.state,
+        prepared.steps.at(-1)?.actor,
+        prepared.steps.at(-1)?.detail ?? null,
+      ]).toEqual(['validated_official', saftKitId, null]);
+    },
+    120_000,
+  );
+});
+
+/** A synthetic CNP with a valid control digit. */
+function cnpOf(body: string) {
+  const weights = [2, 7, 9, 1, 4, 6, 3, 5, 8, 2, 7, 9];
+  const control =
+    weights.reduce((sum, weight, index) => sum + weight * Number(body[index]), 0) % 11;
+  return `${body}${control === 10 ? 1 : control}`;
+}
+
+/** October 2026 of a monthly payer with one employee on the minimum wage (4,325.00 gross: CAS
+ * 1,031.00, CASS 413.00, tax 182.00, CAM 93.00, as payroll.integration.test.ts computes them),
+ * one sale and one purchase. */
+async function payrollOctober(validator?: DeclarationValidator) {
+  const books = await company('monthly', validator);
+  const { s, sell, buy } = books;
+  await s.invoke(s.owner, 'profile.record', {
+    axis: 'employer',
+    value: 'yes',
+    effectiveFrom: '2026-01-01',
+    evidenceId: (await s.evidence('employer.pdf')).id,
+  });
+  const anaf = await s.invoke<{ id: string }>(s.owner, 'parties.create', {
+    kind: 'ro_public_institution',
+    country: 'RO',
+    name: 'ANAF',
+  });
+  const employee = await s.invoke<{ id: string }>(s.owner, 'payroll.employees.record', {
+    lastName: 'Popescu',
+    firstName: 'Ana',
+    cnp: cnpOf('290050112345'),
+    healthFund: 'RO-GL',
+  });
+  await s.invoke(s.owner, 'payroll.contracts.record', {
+    employeeId: employee.id,
+    number: 'CIM-1',
+    startDate: '2026-01-05',
+    effectiveFrom: '2026-01-05',
+    dailyHours: 8,
+    mainJob: true,
+    occupation: '251201',
+    baseSalary: '4325',
+  });
+  const run = await s.invoke<{ id: string }>(s.owner, 'payroll.runs.prepare', {
+    month: '2026-10',
+    workingDays: 22,
+  });
+  await s.book('payroll.recognize', {
+    runId: run.id,
+    month: '2026-10',
+    round: 1,
+    authorityId: anaf.id,
+  });
+  await sell('2026-10-10', [service('1000')]);
+  await buy(
+    {
+      number: 'F-200',
+      counterparty: '26000020',
+      date: '2026-10-05',
+      net: '500.00',
+      tax: '105.00',
+      gross: '605.00',
+    },
+    '628',
+  );
+  return books;
+}
+
+describe('D406 taxes other than VAT', () => {
+  test("payroll's lines carry the generic TaxType 000, as ANAF recommends for taxes other than VAT and WHT", async () => {
+    const { s, prepare } = await payrollOctober();
+    const file = await fileOf(
+      s,
+      await prepare('2026-10', { contact, accounts: { '646': '6461' } }),
+    );
+    const salaries = children(file, 'Journal').find(
+      (node) => value(node, 'JournalID') === 'SALARII',
+    )!;
+    const taxes = children(salaries, 'TransactionLine').map((line) => {
+      const tax = children(line, 'TaxInformation')[0]!;
+      return [
+        value(line, 'AccountID'),
+        value(tax, 'TaxType'),
+        value(tax, 'TaxCode'),
+        value(children(tax, 'TaxAmount')[0]!, 'Amount'),
+      ];
+    });
+    expect(taxes.map(([account]) => account)).toEqual([
+      '641',
+      '421',
+      '421',
+      '4315',
+      '4316',
+      '444',
+      '646',
+      '436',
+    ]);
+    expect(new Set(taxes.map(([, type, code, amount]) => `${type} ${code} ${amount}`))).toEqual(
+      new Set(['000 000000 0.00']),
+    );
+  });
+
+  official(
+    "a month with payroll passes ANAF's SAF-T validator",
+    async () => {
+      const { prepare } = await payrollOctober(kits());
+      const prepared = await prepare('2026-10', { contact, accounts: { '646': '6461' } });
+      expect([prepared.state, prepared.steps.at(-1)?.detail ?? null]).toEqual([
+        'validated_official',
+        null,
+      ]);
+    },
+    120_000,
+  );
+
+  test('refuses a month with tax withheld at source: its WHT codes are not reported yet', async () => {
+    const { s, prepare } = await september();
+    await s.book(
+      'ledger.general',
+      journal(
+        (await s.evidence('rezultat-reportat.pdf')).id,
+        [
+          { account: '5121', side: 'D', amount: '50000.00' },
+          { account: '1171', side: 'C', amount: '50000.00' },
+        ],
+        { date: '2026-01-02' },
+      ),
+    );
+    const anaf = await s.invoke<{ id: string }>(s.owner, 'parties.create', {
+      kind: 'ro_public_institution',
+      country: 'RO',
+      name: 'ANAF',
+    });
+    const person = await s.invoke<{ id: string }>(s.owner, 'parties.create', {
+      kind: 'ro_individual',
+      country: 'RO',
+      name: 'Popescu Ana',
+    });
+    const distributed = await s.book('dividends.distribute', {
+      date: '2026-09-20',
+      evidenceId: (await s.evidence('hotarare-aga.pdf')).id,
+      shareholders: [{ partyId: person.id, amount: '10000.00' }],
+    });
+    await s.book('dividends.withhold', {
+      distributionEntryId: distributed.entry!.id,
+      openItem: distributed.effect!.openItems[0]!.id,
+      date: '2026-09-25',
+      gross: '10000.00',
+      authorityId: anaf.id,
+    });
+    const refused = await s.refused(prepare('2026-09', { contact, accounts: { '623': '6231' } }));
+    expect(
+      (refused?.details as { problems: { code: string }[] }).problems.map((item) => item.code),
+    ).toEqual(['D406_WHT']);
+  });
 });

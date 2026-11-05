@@ -667,7 +667,8 @@ describe('D212 on a norm (Subsection 2) and for a member of an association', () 
     expect(
       errors(onNorm({}, { tax: { deductibleCas: 0, deductibleCass: 0, due: 100 } })),
     ).toContain('D212_SECTION4');
-    expect(errors({ ...onNorm(), activity })).toEqual(['D212_SOURCE']);
+    // An activity beside the norm is a second source: CAS and CASS then count both.
+    expect(errors({ ...onNorm(), activity })).toEqual(['D212_CAS', 'D212_CASS']);
     // CAS and CASS count the norm: 50,000 lei reach 12 minimum wages.
     expect(
       errors(
@@ -728,5 +729,132 @@ describe('D212 on a norm (Subsection 2) and for a member of an association', () 
     expect(
       errors({ ...member, activity: { ...member.activity!, gross: 150_000, deductible: 30_000 } }),
     ).toEqual(['D212_ASSOCIATION']);
+  });
+});
+
+describe('D212 with several sources and income declared from outside the books', () => {
+  // Two activities in the real system: 120,000 + 30,000 = 150,000 lei net (CAS on 24 wages,
+  // 97,200; CASS on 150,000 at 10%), a second activity's loss carried at 70% of its own net.
+  const second: D212Activity = {
+    caen: '7022',
+    seat: 'Str. Alta nr. 3, Cluj-Napoca',
+    authorization: { number: 'F12/999/2024', date: '2024-03-01' },
+    gross: 40_000,
+    deductible: 10_000,
+    carriedLosses: 25_000,
+    offsetLoss: 21_000,
+  };
+  // Recalculated: 120,000 + (30,000 − 21,000) = 129,000; CAS and CASS weights 1 (no norm):
+  // 129,000 − 24,300 − 15,000 = 89,700; tax 8,970.
+  const two = (overrides: Partial<D212> = {}) =>
+    declaration({
+      activities: [second],
+      cass: { base: 150_000, due: 15_000, minimumDifference: 0 },
+      tax: { deductibleCas: 24_300, deductibleCass: 15_000, due: 8970 },
+      ...overrides,
+    });
+
+  test('one cap11 per source; CAS, CASS and Section 4 on their sum', () => {
+    expect(errors(two())).toEqual([]);
+    const xml = writeD212(two());
+    expect([...xml.matchAll(/<cap11 /g)]).toHaveLength(2);
+    const caps = [...xml.matchAll(/<cap11 ([^>]*)\/>/g)].map((match) =>
+      Object.fromEntries([...match[1]!.matchAll(/([\w:-]+)="([^"]*)"/g)].map((m) => [m[1], m[2]])),
+    );
+    expect(
+      caps.map((cap) => [
+        cap.caen,
+        cap.venit_net_anual,
+        cap.pierdere_compensata,
+        cap.venit_recalculat,
+      ]),
+    ).toEqual([
+      ['6201', '120000', '0', '120000'],
+      ['7022', '30000', '21000', '9000'],
+    ]);
+    expect(values(xml, 'oblig_realizat')).toMatchObject({
+      cas_total_ven: '150000',
+      cass_total_ven_ai: '150000',
+      real_venit_net_recalculat_ai: '129000',
+      real_cas_venit_net_ai: '150000',
+      real_cas_pondere_ai: '1.00000',
+      real_venit_net_impozabil_ai: '89700',
+      real_impozit_datorat_ai: '8970',
+      dif_de_plata: String(8970 + 24_300 + 15_000),
+    });
+    // The second source's loss offset is capped at 70% of its own net income, not the sum's.
+    expect(errors(two({ activities: [{ ...second, offsetLoss: 25_000 }] }))).toContain('D212_LOSS');
+  });
+
+  test('a norm beside an activity weighs the real system’s share of the cumulated income', () => {
+    const norm: D212Norm = {
+      association: false,
+      caen: '4520',
+      seat: 'Str. Garaj nr. 1, Cluj-Napoca',
+      authorization: { number: 'F12/111/2022', date: '2022-01-10' },
+      norm: 30_000,
+      adjusted: 30_000,
+      net: 30_000,
+      tax: 3000,
+    };
+    // 120,000 + 30,000 = 150,000 cumulated; the weight of the real system is 0.8: CAS
+    // deductible 0.8 × 24,300 = 19,440, CASS 0.8 × 15,000 = 12,000; 120,000 − 31,440 = 88,560,
+    // tax 8,856; Section 7: 8,856 + 3,000.
+    const model = declaration({
+      norms: [norm],
+      cass: { base: 150_000, due: 15_000, minimumDifference: 0 },
+      tax: { deductibleCas: 19_440, deductibleCass: 12_000, due: 8856 },
+    });
+    expect(errors(model)).toEqual([]);
+    const xml = writeD212(model);
+    expect(values(xml, 'oblig_realizat')).toMatchObject({
+      real_cas_pondere_ai: '0.80000',
+      'real_cas-deduc_ai': '19440',
+      'real_cass-deductibil_ai': '12000',
+      real_venit_net_impozabil_ai: '88560',
+      oblimpoz_real_total: '11856',
+    });
+    expect(values(xml, 'd212')).toMatchObject({ bifa111: '1', bifa112: '1', bifa14: '1' });
+  });
+
+  test('Section 3.2.2: rent and dividends declared, on the band reached, and its differences', () => {
+    // 30,000 + 20,000 = 50,000 lei: at least 12 wages (48,600), base 48,600, CASS 4,860; 1,000
+    // withheld by a payer: 3,860 more due.
+    const model = declaration({
+      cassOther: { rent: 30_000, investment: 20_000, base: 48_600, due: 4860, withheld: 1000 },
+    });
+    expect(errors(model)).toEqual([]);
+    const realized = values(writeD212(model), 'oblig_realizat');
+    expect(realized).toMatchObject({
+      cass_ven_cfb: '30000',
+      cass_ven_inv: '20000',
+      cass_total_ven: '50000',
+      cass_baza: '48600',
+      cass_anuala: '4860',
+      cass_datorat: '4860',
+      cass_retinut: '1000',
+      cass_dif_plus: '3860',
+      cass_dif_minus: '0',
+      bifa_cass_real: '2',
+      bifa_cass_datorat_dpi: '1',
+      oblcass_real_difPlus_ai: '12000',
+      oblcass_real_difPlus_dpi: '3860',
+      cass_plus: '15860',
+      dif_de_plata: String(8370 + 24_300 + 12_000 + 3860),
+    });
+    expect(errors({ ...model, cassOther: { ...model.cassOther!, base: 24_300 } })).toContain(
+      'D212_CASS_OTHER',
+    );
+    // Below 6 wages the form clears the block: nothing written, nothing due.
+    const low = declaration({
+      cassOther: { rent: 10_000, investment: 0, base: 0, due: 0, withheld: 0 },
+    });
+    expect(errors(low)).toEqual([]);
+    expect(values(writeD212(low), 'oblig_realizat')).toMatchObject({ bifa_cass_datorat_dpi: '0' });
+    expect(writeD212(low)).not.toContain('cass_ven_cfb');
+    // The 2024 structure is not written with it.
+    expect(errors({ ...declaration({ year: 2024 }), cassOther: model.cassOther })).toContain(
+      'D212_DECLARED',
+    );
   });
 });

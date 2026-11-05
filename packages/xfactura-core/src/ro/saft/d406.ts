@@ -28,8 +28,9 @@ import { taxTypes, vatTaxCodes } from './data/tax';
  * PurchaseInvoices and Payments (each written when the period has some) and the empty
  * MovementOfGoods. Left out, as the structure allows for L and T: Taxonomies (never reported),
  * PhysicalStock, Owners' entries, MovementTypeTable entries and stock movements (the on-demand
- * file C), Assets and AssetTransactions (the annual file A), analysis codes, segmented (modal)
- * files, withholding tax on payments and the files of non-residents (NL, NT).
+ * file C), Assets and AssetTransactions (the annual file A, written by `assets.ts`), analysis
+ * codes, segmented (modal) files, withholding tax on payments and the files of non-residents
+ * (NL, NT).
  *
  * Where ANAF's documents differ, this module follows the validator: AccountID is an integer
  * (analytical accounts are written as digits, 4111.01 as 411101); BaseRate is a fraction of 1;
@@ -317,7 +318,7 @@ export function d406PartyId(identity: D406PartyIdentity): string {
 const euCountries = new Set(Object.values(euVatPrefixes).filter((code) => code !== 'RO'));
 
 /** Why a CustomerID/SupplierID does not follow the structure's codes, or undefined. */
-function partyIdError(id: string, customer: boolean): string | undefined {
+export function partyIdError(id: string, customer: boolean): string | undefined {
   if (id.length > 35) return 'are cel mult 35 de caractere';
   const kind = id.slice(0, 2);
   const rest = id.slice(2);
@@ -726,7 +727,8 @@ function amountStructure(
   );
 }
 
-function address(value: D406Address, name = 'Address') {
+/** AddressStructure, as Address, BillingAddress or PostalAddress. */
+export function address(value: D406Address, name = 'Address') {
   return element(
     name,
     null,
@@ -763,14 +765,181 @@ const noTax: D406Tax = { type: '000', code: '000000', amount: '0' };
 
 /** Opening/closing balance elements: the side of the balance's sign, or the account's usual side
  * for a zero balance, always as a positive amount. */
-function balance(prefix: 'Opening' | 'Closing', cents: bigint, creditWhenZero: boolean) {
+export function balance(prefix: 'Opening' | 'Closing', cents: bigint, creditWhenZero: boolean) {
   const credit = cents < 0n || (cents === 0n && creditWhenZero);
   return leaf(`${prefix}${credit ? 'Credit' : 'Debit'}Balance`, text(credit ? -cents : cents));
 }
 
 /** Names every element in the namespace, under ANAF's prefix nsSAFT. */
-function prefixed(node: XmlNode): XmlNode {
+export function prefixed(node: XmlNode): XmlNode {
   return { ...node, name: `nsSAFT:${node.name}`, children: node.children.map(prefixed) };
+}
+
+/** What every file's Header holds: the file's creation, the software and the company. */
+export type D406HeaderInput = Pick<D406, 'created' | 'software' | 'company'>;
+
+/** The Header of a file of type `comment` (L, T, A) for its selection, in the schema's order. */
+export function headerElement(
+  model: D406HeaderInput,
+  selection: { start: string; end: string },
+  comment: string,
+) {
+  const { company } = model;
+  const vatRegistered = company.vatRegime === '100010' || company.vatRegime === '100040';
+  return element(
+    'Header',
+    null,
+    leaf('AuditFileVersion', '2.0'),
+    leaf('AuditFileCountry', 'RO'),
+    leaf('AuditFileRegion', company.address.county),
+    leaf('AuditFileDateCreated', model.created),
+    leaf('SoftwareCompanyName', model.software.company),
+    leaf('SoftwareID', model.software.name),
+    leaf('SoftwareVersion', model.software.version),
+    element(
+      'Company',
+      null,
+      leaf('RegistrationNumber', vatRegistered ? `RO${company.cui}` : company.cui),
+      leaf('Name', company.name),
+      address(company.address),
+      element(
+        'Contact',
+        null,
+        element(
+          'ContactPerson',
+          null,
+          leaf('FirstName', company.contact.firstName),
+          leaf('LastName', company.contact.lastName),
+        ),
+        leaf('Telephone', company.contact.phone),
+        leaf('Email', company.contact.email),
+      ),
+      element(
+        'TaxRegistration',
+        null,
+        leaf('TaxRegistrationNumber', company.cui),
+        leaf('TaxType', company.vatRegime),
+        leaf('TaxAuthority', 'ANAF'),
+      ),
+      company.ibans.map((iban) => element('BankAccount', null, leaf('IBANNumber', iban))),
+    ),
+    leaf('DefaultCurrencyCode', 'RON'),
+    element(
+      'SelectionCriteria',
+      null,
+      leaf('SelectionStartDate', selection.start),
+      leaf('SelectionEndDate', selection.end),
+    ),
+    leaf('HeaderComment', comment),
+    leaf('SegmentIndex', '1'),
+    leaf('TotalSegmentsInsequence', '1'),
+    leaf('TaxAccountingBasis', 'A'),
+  );
+}
+
+type ErrorOf = (code: string, path: string, message: string) => void;
+
+/** A text field's presence and length. */
+export function checkText(
+  error: ErrorOf,
+  path: string,
+  value: string | undefined,
+  label: string,
+  max: number,
+  required = false,
+) {
+  if (value === undefined || !value.trim()) {
+    if (required) error('D406_TEXT', path, `Completați ${label}.`);
+  } else if (value.length > max)
+    error('D406_TEXT', path, `Câmpul ${label} are cel mult ${max} caractere.`);
+}
+
+/** A date written as AAAA-LL-ZZ. */
+export function checkDate(error: ErrorOf, path: string, value: string | undefined, label: string) {
+  if (value !== undefined && !isDate(value))
+    error('D406_DATE', path, `${label} se scrie ca dată AAAA-LL-ZZ.`);
+}
+
+/** An AddressStructure's fields, country and county. */
+export function checkAddress(error: ErrorOf, path: string, value: D406Address) {
+  checkText(error, `${path}.street`, value.street, 'strada', 70);
+  checkText(error, `${path}.number`, value.number, 'numărul', 18);
+  checkText(error, `${path}.details`, value.details, 'detaliile adresei', 70);
+  checkText(error, `${path}.city`, value.city, 'localitatea', 35, true);
+  checkText(error, `${path}.postalCode`, value.postalCode, 'codul poștal', 18);
+  if (!/^[A-Z]{2}$/.test(value.country))
+    error('D406_ADDRESS', `${path}.country`, 'Țara se scrie prin codul ISO din două litere.');
+  if (value.county !== undefined) {
+    if (value.country !== 'RO')
+      error(
+        'D406_ADDRESS',
+        `${path}.county`,
+        'Județul (Region) se completează doar pentru adrese din România.',
+      );
+    else if (!counties[value.county])
+      error(
+        'D406_ADDRESS',
+        `${path}.county`,
+        `Județul ${value.county} nu există în nomenclatorul ISO3166-1A2 - RO Dept Codes.`,
+      );
+  }
+}
+
+/** The Header's checks: the creation date, the software and the company. */
+export function checkHeader(error: ErrorOf, model: D406HeaderInput) {
+  checkDate(error, 'created', model.created, 'Data creării fișierului');
+  checkText(
+    error,
+    'software.company',
+    model.software.company,
+    'producătorul programului',
+    70,
+    true,
+  );
+  checkText(error, 'software.name', model.software.name, 'numele programului', 256, true);
+  checkText(error, 'software.version', model.software.version, 'versiunea programului', 18, true);
+  const { company } = model;
+  if (!/^\d{2,10}$/.test(company.cui) || !isValidCui(company.cui))
+    error(
+      'D406_CUI',
+      'company.cui',
+      'Codul de identificare fiscală al companiei nu este valid; se scrie fără RO.',
+    );
+  checkText(error, 'company.name', company.name, 'denumirea companiei', 70, true);
+  checkAddress(error, 'company.address', company.address);
+  checkText(
+    error,
+    'company.contact.firstName',
+    company.contact.firstName,
+    'prenumele persoanei de contact',
+    35,
+    true,
+  );
+  checkText(
+    error,
+    'company.contact.lastName',
+    company.contact.lastName,
+    'numele persoanei de contact',
+    70,
+    true,
+  );
+  checkText(error, 'company.contact.phone', company.contact.phone, 'telefonul', 18, true);
+  checkText(error, 'company.contact.email', company.contact.email, 'e-mailul', 70);
+  if (!company.ibans.length)
+    error('D406_BANK', 'company.ibans', 'Se declară cel puțin un cont bancar (IBAN) al companiei.');
+  company.ibans.forEach((iban, index) => {
+    if (
+      !/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(iban) ||
+      (iban.startsWith('RO') && iban.length !== 24)
+    )
+      error('D406_BANK', `company.ibans.${index}`, `IBAN-ul ${iban} nu are formatul ISO 13616.`);
+  });
+  if (!vatRegimes[company.vatRegime])
+    error(
+      'D406_REGIME',
+      'company.vatRegime',
+      'Regimul de TVA se alege din Nomenclator_Regim_fiscal.',
+    );
 }
 
 /**
@@ -782,8 +951,6 @@ export function writeD406(model: D406): string {
   const blocking = checkD406(model).find((check) => check.severity === 'error');
   if (blocking) throw new DomainError(blocking.code, blocking.message);
   const calculation = calculateD406(model);
-  const { company } = model;
-  const vatRegistered = company.vatRegime === '100010' || company.vatRegime === '100040';
   const accountIds = new Map(calculation.accounts.map((account) => [account.code, account.id!]));
   const accountId = (code: string) => accountIds.get(code)!;
   const own = calculation.companyId;
@@ -891,55 +1058,7 @@ export function writeD406(model: D406): string {
     );
   };
 
-  const header = element(
-    'Header',
-    null,
-    leaf('AuditFileVersion', '2.0'),
-    leaf('AuditFileCountry', 'RO'),
-    leaf('AuditFileRegion', company.address.county),
-    leaf('AuditFileDateCreated', model.created),
-    leaf('SoftwareCompanyName', model.software.company),
-    leaf('SoftwareID', model.software.name),
-    leaf('SoftwareVersion', model.software.version),
-    element(
-      'Company',
-      null,
-      leaf('RegistrationNumber', vatRegistered ? `RO${company.cui}` : company.cui),
-      leaf('Name', company.name),
-      address(company.address),
-      element(
-        'Contact',
-        null,
-        element(
-          'ContactPerson',
-          null,
-          leaf('FirstName', company.contact.firstName),
-          leaf('LastName', company.contact.lastName),
-        ),
-        leaf('Telephone', company.contact.phone),
-        leaf('Email', company.contact.email),
-      ),
-      element(
-        'TaxRegistration',
-        null,
-        leaf('TaxRegistrationNumber', company.cui),
-        leaf('TaxType', company.vatRegime),
-        leaf('TaxAuthority', 'ANAF'),
-      ),
-      company.ibans.map((iban) => element('BankAccount', null, leaf('IBANNumber', iban))),
-    ),
-    leaf('DefaultCurrencyCode', 'RON'),
-    element(
-      'SelectionCriteria',
-      null,
-      leaf('SelectionStartDate', calculation.period.start),
-      leaf('SelectionEndDate', calculation.period.end),
-    ),
-    leaf('HeaderComment', model.type),
-    leaf('SegmentIndex', '1'),
-    leaf('TotalSegmentsInsequence', '1'),
-    leaf('TaxAccountingBasis', 'A'),
-  );
+  const header = headerElement(model, calculation.period, model.type);
 
   const masterFiles = element(
     'MasterFiles',
@@ -1197,39 +1316,10 @@ export function checkD406(model: D406): D406Check[] {
     label: string,
     max: number,
     required = false,
-  ) => {
-    if (value === undefined || !value.trim()) {
-      if (required) error('D406_TEXT', path, `Completați ${label}.`);
-    } else if (value.length > max)
-      error('D406_TEXT', path, `Câmpul ${label} are cel mult ${max} caractere.`);
-  };
-  const date = (path: string, value: string | undefined, label: string) => {
-    if (value !== undefined && !isDate(value))
-      error('D406_DATE', path, `${label} se scrie ca dată AAAA-LL-ZZ.`);
-  };
-  const addressCheck = (path: string, value: D406Address) => {
-    textField(`${path}.street`, value.street, 'strada', 70);
-    textField(`${path}.number`, value.number, 'numărul', 18);
-    textField(`${path}.details`, value.details, 'detaliile adresei', 70);
-    textField(`${path}.city`, value.city, 'localitatea', 35, true);
-    textField(`${path}.postalCode`, value.postalCode, 'codul poștal', 18);
-    if (!/^[A-Z]{2}$/.test(value.country))
-      error('D406_ADDRESS', `${path}.country`, 'Țara se scrie prin codul ISO din două litere.');
-    if (value.county !== undefined) {
-      if (value.country !== 'RO')
-        error(
-          'D406_ADDRESS',
-          `${path}.county`,
-          'Județul (Region) se completează doar pentru adrese din România.',
-        );
-      else if (!counties[value.county])
-        error(
-          'D406_ADDRESS',
-          `${path}.county`,
-          `Județul ${value.county} nu există în nomenclatorul ISO3166-1A2 - RO Dept Codes.`,
-        );
-    }
-  };
+  ) => checkText(error, path, value, label, max, required);
+  const date = (path: string, value: string | undefined, label: string) =>
+    checkDate(error, path, value, label);
+  const addressCheck = (path: string, value: D406Address) => checkAddress(error, path, value);
 
   // Period and header.
   const { year, month } = model.period;
@@ -1249,50 +1339,7 @@ export function checkD406(model: D406): D406Check[] {
       'period',
       'Fișierul trimestrial se depune pentru trimestre calendaristice: luna perioadei este 3, 6, 9 sau 12.',
     );
-  date('created', model.created, 'Data creării fișierului');
-  textField('software.company', model.software.company, 'producătorul programului', 70, true);
-  textField('software.name', model.software.name, 'numele programului', 256, true);
-  textField('software.version', model.software.version, 'versiunea programului', 18, true);
-  const { company } = model;
-  if (!/^\d{2,10}$/.test(company.cui) || !isValidCui(company.cui))
-    error(
-      'D406_CUI',
-      'company.cui',
-      'Codul de identificare fiscală al companiei nu este valid; se scrie fără RO.',
-    );
-  textField('company.name', company.name, 'denumirea companiei', 70, true);
-  addressCheck('company.address', company.address);
-  textField(
-    'company.contact.firstName',
-    company.contact.firstName,
-    'prenumele persoanei de contact',
-    35,
-    true,
-  );
-  textField(
-    'company.contact.lastName',
-    company.contact.lastName,
-    'numele persoanei de contact',
-    70,
-    true,
-  );
-  textField('company.contact.phone', company.contact.phone, 'telefonul', 18, true);
-  textField('company.contact.email', company.contact.email, 'e-mailul', 70);
-  if (!company.ibans.length)
-    error('D406_BANK', 'company.ibans', 'Se declară cel puțin un cont bancar (IBAN) al companiei.');
-  company.ibans.forEach((iban, index) => {
-    if (
-      !/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(iban) ||
-      (iban.startsWith('RO') && iban.length !== 24)
-    )
-      error('D406_BANK', `company.ibans.${index}`, `IBAN-ul ${iban} nu are formatul ISO 13616.`);
-  });
-  if (!vatRegimes[company.vatRegime])
-    error(
-      'D406_REGIME',
-      'company.vatRegime',
-      'Regimul de TVA se alege din Nomenclator_Regim_fiscal.',
-    );
+  checkHeader(error, model);
 
   for (const problem of inputProblems(model)) error(problem.code, problem.path, problem.message);
 

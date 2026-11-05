@@ -469,7 +469,7 @@ export const vatExemptionSpec: ReviewSpec = {
   },
   question:
     'Pentru plafonul de 395.000 lei (art. 310 alin. (2) și (6)), o prestare efectuată în decembrie și facturată în ianuarie intră în cifra de afaceri a anului în care a fost efectuată sau a celui în care a fost facturată și înregistrată?',
-  context: [],
+  context: ['ANAF/Cod-fiscal-consolidat:art.310(4)-(5)'],
   cases: [
     exemptionCase(
       'Servicii sub plafon',
@@ -494,6 +494,7 @@ export const vatExemptionSpec: ReviewSpec = {
     'Data de la care plafonul este 395.000 lei (înainte 300.000 lei) nu se citește din textul consolidat ANAF, care arată doar forma în vigoare; actul care l-a modificat nu este în .sources/. Versiunea începe la 01.01.2026; anii anteriori sunt RULE_GAP.',
     'Veniturile din 70x sunt măsura livrărilor unei firme neplătitoare: facturile ei nu au înregistrări de TVA. Un venit din 708 care nu este o livrare (o refacturare de cheltuieli, de pildă) intră în cifră.',
     'Operațiunile scutite fără drept de deducere de la art. 292 alin. (2) lit. a), b), e) și f), care intră în cifra de afaceri dacă nu sunt accesorii, nu sunt categorii tratate de motor.',
-    'Depășirea în cursul anului face înregistrarea obligatorie (art. 316): motorul o arată ca neacoperită (UNSUPPORTED) până la modulul neplătitorilor (V1).',
+    'Depășirea în cursul anului face înregistrarea obligatorie (art. 316 alin. (1) lit. b)): motorul propune vat.status plătitor de la ziua depășirii (alin. (1^1) lit. b)) și calculează TVA datorată pentru înregistrarea întârziată (vat.registration, vat.lateRegistration).',
+    'O firmă nou-înființată în cursul anului cumulează de la prima zi a primului exercițiu financiar, cu plafonul întreg (art. 310 alin. (5)).',
   ],
 };

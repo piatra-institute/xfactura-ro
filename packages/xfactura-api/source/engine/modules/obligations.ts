@@ -1,11 +1,12 @@
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
-import { obligationDue, type ObligationKind } from 'xfactura-core/ro/obligations';
+import { externalReturns, obligationDue, type ObligationKind } from 'xfactura-core/ro/obligations';
 import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
 import type { LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
 import { artifactEvents, artifacts } from '../db/schema';
 import { closureOf } from './determinations';
+import { standing as answered } from './questions';
 
 const month = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
 export const calendarInput = z
@@ -169,6 +170,16 @@ export async function obligationsCalendar(
   }
   const due = [...chosen.values()];
   const filed = await standing(tx, companyId, [...new Set(due.map((item) => item.kind))]);
+  // A return filed outside the engine counts as filed once a person recorded it.
+  for (const item of due.filter((row) => externalReturns.includes(row.kind))) {
+    const found = await answered(tx, companyId, {
+      kind: 'obligation.filed',
+      subject: { kind: 'obligation', id: `${item.kind}/${item.period}` },
+      params: { kind: item.kind, period: item.period },
+    });
+    if (found.answered)
+      filed.set(`${item.kind}|${item.period}`, { artifactId: '', state: 'submitted' });
+  }
   return (
     due
       .map((item): ObligationView => {
@@ -184,7 +195,7 @@ export async function obligationsCalendar(
           nominal: null,
           due: null,
           status: artifact ? statusOf(artifact.state) : 'blocked',
-          artifactId: artifact?.artifactId ?? null,
+          artifactId: artifact?.artifactId || null,
           versions: [],
           gap,
           conflict: null,
@@ -218,7 +229,7 @@ export async function obligationsCalendar(
             nominal: deadline.nominal,
             due: deadline.due,
             status: artifact ? statusOf(artifact.state) : today > deadline.due ? 'overdue' : 'due',
-            artifactId: artifact?.artifactId ?? null,
+            artifactId: artifact?.artifactId || null,
             versions: deadline.versions,
             gap: null,
             conflict:

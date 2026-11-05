@@ -437,6 +437,7 @@ function assign(
   formulas: readonly S1005Formula[],
   entries: readonly { entry: S1005LedgerEntry; lei: bigint; path: string }[],
   issues: S1005MappingIssue[],
+  prefix: string,
 ): Map<string, bigint> {
   const sums = new Map<string, bigint>(formulas.map((formula) => [formula.row, 0n]));
   const add = (row: string, value: bigint) => sums.set(row, sums.get(row)! + value);
@@ -467,7 +468,7 @@ function assign(
       );
       if (!chosen) {
         issues.push({
-          code: 'S1005_ROW',
+          code: `${prefix}_ROW`,
           severity: 'error',
           path,
           message: `Contul ${entry.account} nu se raportează în ${form} rd. ${wanted}${places.length ? ` (rândurile lui: ${places.map((p) => p.formula.row).join(', ')})` : ''}.`,
@@ -477,7 +478,7 @@ function assign(
     } else if (places.length === 1) chosen = places[0];
     else if (places.length === 0) {
       issues.push({
-        code: 'S1005_UNMAPPED',
+        code: `${prefix}_UNMAPPED`,
         severity: 'error',
         path,
         message: `Contul ${entry.account} (${lei} lei) nu apare în niciun rând al ${form} cu soldul sau rulajul lui.`,
@@ -485,7 +486,7 @@ function assign(
       continue;
     } else {
       issues.push({
-        code: 'S1005_SPLIT',
+        code: `${prefix}_SPLIT`,
         severity: 'error',
         path,
         message: `Contul ${entry.account} se repartizează între rândurile ${places.map((p) => p.formula.row).join(', ')} din ${form}: indicați rândul (rows.${form}).`,
@@ -527,11 +528,33 @@ const sum = (values: readonly bigint[]) => values.reduce((total, value) => total
  * of F20 (F10_F20_1–4) whenever the ledger does.
  */
 export function s1005FromLedger(year: S1005LedgerYear): S1005LedgerRows {
+  return annualFromLedger(year, {
+    prefix: 'S1005',
+    F10: s1005F10Formulas,
+    F20: s1005F20Formulas,
+    F30: s1005F30Formulas,
+  });
+}
+
+/**
+ * The same for any statement whose rows have account formulas: S1003 reads F10 with S1005's
+ * formulas, F20 with its own (the profit and loss account in full) and no F30 account rows.
+ */
+export function annualFromLedger(
+  year: S1005LedgerYear,
+  sets: {
+    prefix: string;
+    F10: readonly S1005Formula[];
+    F20: readonly S1005Formula[];
+    F30: readonly S1005Formula[];
+  },
+): S1005LedgerRows {
+  const prefix = sets.prefix;
   const issues: S1005MappingIssue[] = [];
   const valid = (entry: S1005LedgerEntry, path: string) => {
     if (!/^[1-9]\d{2}[0-9.]*$/.test(entry.account)) {
       issues.push({
-        code: 'S1005_ACCOUNT',
+        code: `${prefix}_ACCOUNT`,
         severity: 'error',
         path,
         message: `Contul ${entry.account} nu este un cont din planul de conturi.`,
@@ -545,7 +568,7 @@ export function s1005FromLedger(year: S1005LedgerYear): S1005LedgerRows {
       entry.credit < 0n
     ) {
       issues.push({
-        code: 'S1005_AMOUNT',
+        code: `${prefix}_AMOUNT`,
         severity: 'error',
         path,
         message: `Contul ${entry.account}: debitul și creditul sunt sume în bani, nenegative.`,
@@ -561,7 +584,7 @@ export function s1005FromLedger(year: S1005LedgerYear): S1005LedgerRows {
       if (!valid(entry, path)) return false;
       if (classOf(entry.account) === '6' || classOf(entry.account) === '7') return true;
       issues.push({
-        code: 'S1005_TURNOVER',
+        code: `${prefix}_TURNOVER`,
         severity: 'warning',
         path,
         message: `Rulajul contului ${entry.account} nu intră în contul de profit și pierdere (clasele 6 și 7); a fost ignorat.`,
@@ -576,7 +599,7 @@ export function s1005FromLedger(year: S1005LedgerYear): S1005LedgerRows {
       if ('12345'.includes(accountClass)) return true;
       if ((accountClass === '6' || accountClass === '7') && entry.debit !== entry.credit)
         issues.push({
-          code: 'S1005_NOT_CLOSED',
+          code: `${prefix}_NOT_CLOSED`,
           severity: 'error',
           path,
           message: `Contul ${entry.account} are sold la închiderea exercițiului; conturile de venituri și cheltuieli se închid în 121.`,
@@ -600,14 +623,14 @@ export function s1005FromLedger(year: S1005LedgerYear): S1005LedgerRows {
 
   if (sum(balances) !== 0n)
     issues.push({
-      code: 'S1005_UNBALANCED',
+      code: `${prefix}_UNBALANCED`,
       severity: 'error',
       path: 'closing',
       message: `Soldurile claselor 1–5 nu se echilibrează: debitoare minus creditoare = ${sum(balances)} bani.`,
     });
   if (turnover.length && closing.length && sum(result) !== sum(flow))
     issues.push({
-      code: 'S1005_RESULT',
+      code: `${prefix}_RESULT`,
       severity: 'error',
       path: 'closing',
       message: `Soldul contului 121 (${-sum(result)} bani) nu este rezultatul din rulajele claselor 6 și 7 (${-sum(flow)} bani).`,
@@ -625,9 +648,11 @@ export function s1005FromLedger(year: S1005LedgerYear): S1005LedgerRows {
     >;
   return {
     closing: closingEntries.map(({ entry, lei }) => ({ account: entry.account, lei: Number(lei) })),
-    F10: toNumbers<S1005F10Row>(assign('F10', s1005F10Formulas, closingEntries, issues)),
-    F20: toNumbers<S1005F20Row>(assign('F20', s1005F20Formulas, turnoverEntries, issues)),
-    F30: toNumbers<S1005F30Row>(assign('F30', s1005F30Formulas, turnoverEntries, issues)),
+    F10: toNumbers<S1005F10Row>(assign('F10', sets.F10, closingEntries, issues, prefix)),
+    F20: toNumbers<S1005F20Row>(assign('F20', sets.F20, turnoverEntries, issues, prefix)),
+    F30: sets.F30.length
+      ? toNumbers<S1005F30Row>(assign('F30', sets.F30, turnoverEntries, issues, prefix))
+      : {},
     issues,
   };
 }

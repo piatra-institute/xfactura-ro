@@ -5,9 +5,16 @@ import type { InvoiceDocument } from '../ubl/invoice-document';
 import { taxPointOf } from '../ro/treatments/invoices';
 import { Amount } from '../values';
 import {
+  taxDocumentCitations,
+  taxDocumentProblems,
+  type TaxDecisionDocument,
+  type TaxStatementDocument,
+} from '../ro/taxaccount/documents';
+import {
   documentKinds,
   isInvoiceKind,
   isIssuedKind,
+  isTaxKind,
   normalizedNumber,
   normalizedTaxId,
   type Citation,
@@ -133,6 +140,12 @@ export function companyParty(
       return { ok: false, message: 'Bonul poartă codul fiscal al altui cumpărător.' };
     return { ok: true };
   }
+  if (isTaxKind(kind)) {
+    const document = body as TaxDecisionDocument | TaxStatementDocument;
+    return own(document.taxpayer.taxId)
+      ? { ok: true }
+      : { ok: false, message: 'Documentul ANAF privește alt contribuabil decât compania.' };
+  }
   const contract = body as ContractDocument;
   const ours = contract.parties.filter((party) => own(party.taxId, party.country));
   return ours.length === 1
@@ -187,6 +200,23 @@ export function checkDocument(context: CheckContext): {
       ]),
     );
     checks.push(singleDate(receipt.issueDate, context.today));
+  } else if (isTaxKind(kind)) {
+    const problems = taxDocumentProblems(kind, body);
+    checks.push(
+      problems.length
+        ? failed('TOTALS', problems.join(' '), problems)
+        : passed('TOTALS', 'Sumele documentului se potrivesc.'),
+    );
+    const document = body as TaxDecisionDocument | TaxStatementDocument;
+    checks.push(
+      taxIdCheck([
+        { taxId: document.taxpayer.taxId, country: 'RO' },
+        ...('issuer' in document && document.issuer.taxId
+          ? [{ taxId: document.issuer.taxId, country: 'RO' }]
+          : []),
+      ]),
+    );
+    checks.push(singleDate('asOf' in document ? document.asOf : document.issueDate, context.today));
   } else {
     const contract = body as ContractDocument;
     checks.push(
@@ -205,7 +235,7 @@ export function checkDocument(context: CheckContext): {
       ...citation,
       ...verifyCitation(context.pages, citation, valueAt(body, field)),
     }));
-  checks.push(citationCheck(citations, requiredCitations(kind)));
+  checks.push(citationCheck(citations, requiredCitations(kind, body)));
   return { checks, citations };
 }
 
@@ -451,7 +481,8 @@ function datesOutcome(problems: string[]) {
 // Citations
 
 /** The fields every extraction of a kind must cite: what identifies it and what it costs. */
-export function requiredCitations(kind: string): string[] {
+export function requiredCitations(kind: string, body?: unknown): string[] {
+  if (isTaxKind(kind)) return body === undefined ? [] : taxDocumentCitations(kind, body);
   if (kind === documentKinds.receipt)
     return ['issueDate', 'number', 'seller.taxId', 'totals.gross', 'totals.tax'];
   if (kind === documentKinds.contract) return ['date', 'effectiveFrom'];
@@ -502,7 +533,12 @@ export type ValueKind = 'money' | 'rate' | 'date' | 'taxId' | 'iban' | 'code' | 
 /** What kind of value a field holds, from its path. */
 export function valueKind(field: string): ValueKind {
   const last = field.split('.').at(-1)!;
-  if (/^(issueDate|taxPointDate|deliveryDate|dueDate|date|effectiveFrom|effectiveTo)$/.test(last))
+  if (
+    /^(issueDate|taxPointDate|deliveryDate|dueDate|date|effectiveFrom|effectiveTo|communicatedOn|asOf)$/.test(
+      last,
+    ) ||
+    /^lines\.\d+\.(from|to)$/.test(field)
+  )
     return 'date';
   if (/^(taxId|buyerTaxId)$/.test(last)) return 'taxId';
   if (/^payeeIbans\.\d+$/.test(field) || last === 'iban') return 'iban';
@@ -510,7 +546,8 @@ export function valueKind(field: string): ValueKind {
   if (/^(number|register|originalInvoiceNumber)$/.test(field)) return 'code';
   if (
     /^totals\.\w+$/.test(field) ||
-    /^(taxes|lines)\.\d+\.(base|tax|gross|net)$/.test(field) ||
+    /^(taxes|lines)\.\d+\.(base|tax|gross|net|amount)$/.test(field) ||
+    /^rows\.\d+\.(opening|debit|credit|balance)$/.test(field) ||
     /^(vatAccountingTotal|value|recurring\.amount|amount|opening|closing)$/.test(field)
   )
     return 'money';

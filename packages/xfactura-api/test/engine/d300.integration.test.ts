@@ -105,10 +105,12 @@ describe('D300 from the books', () => {
       });
       await s.invoke(s.reviewer, 'actions.execute', { id: request.id });
       await book({ number: 'V-5', direction: 'sale', date: '2026-10-05' }, '704');
+      // October carries September's 6,300 lei unless refunded: carrying it forward is the
+      // company's choice (art. 303 alin. (7)).
       const october = await s.invoke<Artifact>(s.owner, 'declarations.prepare', {
         kind: 'D300',
         period: '2026-10',
-        options,
+        options: { ...options, refundRequested: false },
       });
       if (refundRequested) expect(rows(october).R38_2).toBeUndefined();
       else expect(rows(october).R38_2).toBe(6300);

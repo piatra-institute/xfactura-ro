@@ -1462,6 +1462,62 @@ export const assetEvents = sqliteTable(
   ],
 );
 
+/**
+ * A fixed asset's fiscal basis (Codul fiscal art. 28), apart from its book depreciation: the
+ * method, the fiscal value, the normal life and whether it is a capped M1 car, with the document
+ * that decided them. Versioned: a later version replaces the earlier from the next computation.
+ */
+export const assetFiscal = sqliteTable(
+  'acc_asset_fiscal',
+  {
+    companyId: companyId(),
+    assetId: text('asset_id').notNull(),
+    version: counter('version').notNull(),
+    method: text('method', {
+      enum: [
+        'linear',
+        'degressive',
+        'accelerated',
+        'superaccelerated',
+        'full_safety',
+        'full_medical',
+        'full_low_value',
+        'none',
+      ],
+    }).notNull(),
+    /** The fiscal value at entry. */
+    valueBani: bani('value_bani').notNull(),
+    /** The normal life chosen within the catalogue's range, in months. */
+    lifeMonths: counter('life_months').notNull(),
+    /** The share of the value taken in the first year (the accelerated methods), a percentage. */
+    firstYearPercent: text('first_year_percent'),
+    /** An M1 passenger car whose depreciation art. 28 alin. (14) caps monthly. */
+    m1: integer('m1', { mode: 'boolean' }).notNull(),
+    /** A new asset (the superaccelerated method). */
+    newAsset: integer('new_asset', { mode: 'boolean' }).notNull(),
+    evidenceId: text('evidence_id').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.assetId, t.version] }),
+    foreignKey({
+      columns: [t.companyId, t.assetId],
+      foreignColumns: [assets.companyId, assets.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.evidenceId],
+      foreignColumns: [evidence.companyId, evidence.id],
+    }),
+    check('asset_fiscal_life', sql`${t.lifeMonths} between 1 and 1200`),
+    check('asset_fiscal_value', sql`${t.valueBani} >= 0`),
+    check(
+      'asset_fiscal_first_year',
+      sql`(${t.firstYearPercent} is null) or (${t.method} in ('accelerated', 'superaccelerated'))`,
+    ),
+  ],
+);
+
 /** The CNP of an individual partner (a shareholder, a buyer), sealed, for the declarations that
  * must carry it; the party itself keeps only its hash. */
 export const partyCnps = sqliteTable(

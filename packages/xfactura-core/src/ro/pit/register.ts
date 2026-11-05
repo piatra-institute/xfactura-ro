@@ -1,7 +1,7 @@
 import type { Issue } from '../../kernel';
 import { allocate, divRound, formatMoney, parseScaled } from '../../money';
 import { natureOf, type LimitKey, type NatureCode } from './natures';
-import type { CasRule, CassRule, LossRule, PitLimits } from './parameters';
+import type { CasRule, CassOtherRule, CassRule, LossRule, PitLimits } from './parameters';
 
 /**
  * The Registrul de evidență fiscală (OMFP nr. 3.254/2017) and the annual tax and contributions of
@@ -343,6 +343,34 @@ export function cassDue(
     return { cap, minimum, base: capped, due: own, minimumDifference: 0n };
   const due = toLeu(percentOf(minimum, params.rate), params.rounding);
   return { cap, minimum, base: minimum, due, minimumDifference: due - own };
+}
+
+/**
+ * CASS on the income of art. 155 alin. (1) lit. c)–h) (rent, investments, dividends, as the person
+ * declares them; art. 170 alin. (2)–(3)): nothing below the first band; otherwise on a base of the
+ * highest band reached, less what payers withheld (D212 sec. 3.2.2 rd. 6–8). `band` counts from 1;
+ * 0 below the first.
+ */
+export function cassOtherDue(
+  input: { cumulated: bigint; withheld: bigint },
+  params: { minimumWage: bigint; rate: string; rule: CassOtherRule; rounding: Rounding },
+) {
+  const bands = [...params.rule.bandWages]
+    .sort((a, b) => a - b)
+    .map((count) => params.minimumWage * BigInt(count));
+  let band = 0;
+  bands.forEach((floor, index) => {
+    if (input.cumulated >= floor) band = index + 1;
+  });
+  const base = band ? bands[band - 1]! : 0n;
+  const due = base ? toLeu(percentOf(base, params.rate), params.rounding) : 0n;
+  return {
+    band,
+    base,
+    due,
+    plus: max(due - input.withheld, 0n),
+    minus: max(input.withheld - due, 0n),
+  };
 }
 
 /**

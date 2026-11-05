@@ -288,8 +288,6 @@ describe('PFA profile and income sources', () => {
           evidenceId: certificate,
         }),
       );
-    // Whether a PFA may keep double entry is open: refused until the expert answers.
-    expect((await record('books.system', 'double'))?.code).toBe('BOOKS_SYSTEM_FORM');
     expect((await record('income_tax', 'micro'))?.code).toBe('PROFILE_FORM');
     expect((await record('entity.form', 'srl', '2027-01-01'))?.code).toBe('ENTITY_FORM_CHANGE');
     // A change of form while the activity continues (art. 68 alin. (7^1)) is allowed.
@@ -328,6 +326,33 @@ describe('PFA profile and income sources', () => {
         )
       )?.code,
     ).toBe('INCOME_SOURCE_FORM');
+  });
+
+  test('the option for double entry is recorded, and reported as not covered with its reason', async () => {
+    const { s, certificate } = await pfa();
+    // OUG nr. 44/2008 art. 15 against OMFP nr. 170/2015 art. 3: the person's option is kept as
+    // stated, with its document; the books it asks for are UNSUPPORTED, never assumed either way.
+    await s.invoke(s.owner, 'profile.record', {
+      axis: 'books.system',
+      value: 'double',
+      effectiveFrom: '2026-01-01',
+      evidenceId: certificate,
+    });
+    const closure = await s.invoke<{
+      status: string;
+      unsupported: { trigger: string; message: string }[];
+      obligations: { kind: string }[];
+    }>(s.viewer, 'closure.evaluate', { from: '2026-01', to: '2026-12' });
+    expect(closure.status).toBe('UNSUPPORTED');
+    expect(closure.unsupported.map((item) => item.trigger)).toContain('PFA_DOUBLE_ENTRY');
+    expect(
+      closure.unsupported.find((item) => item.trigger === 'PFA_DOUBLE_ENTRY')!.message,
+    ).toContain('OUG nr. 44/2008 art. 15');
+    // No annual statements for an individual either way (OMFP nr. 170/2015 art. 5).
+    expect(closure.obligations.filter((item) => /^(S1005|SF\.)/.test(item.kind))).toEqual([]);
+    expect((await s.refused(s.invoke(s.owner, 'pfa.fiscalRegister', { year: 2026 })))?.code).toBe(
+      'PFA_DOUBLE_ENTRY',
+    );
   });
 
   test('a norm moves to the real system by option from 1 January and keeps it 2 years', async () => {
@@ -400,6 +425,8 @@ describe('PFA profile and income sources', () => {
       'ro.cass.independent/2026-01-01',
       'ro.cass.option/2025-01-01',
       'ro.cass.option/2026-01-01',
+      'ro.cass.other/2025-01-01',
+      'ro.cass.other/2026-01-01',
       'ro.cass.rate/2025-01-01',
       'ro.cass.rate/2026-01-01',
       'ro.fx.rate_date.accounting/single/2024-01-01',
@@ -411,11 +438,14 @@ describe('PFA profile and income sources', () => {
       'ro.pit.loss/2026-01-01',
       'ro.pit.natures/2025-01-01',
       'ro.pit.natures/2026-01-01',
+      'ro.pit.norma/2025-01-01',
       'ro.pit.norma/2026-01-01',
       'ro.pit.rate/2025-01-01',
       'ro.pit.rate/2026-01-01',
       'ro.pit.rounding/2025-01-01',
       'ro.pit.rounding/2026-01-01',
+      'ro.pit.sources/2025-01-01',
+      'ro.pit.sources/2026-01-01',
     ]);
     for (const item of pit) {
       expect(item.status).toBe('extracted');
@@ -1470,13 +1500,9 @@ describe('D212 from the books', () => {
     180_000,
   );
 
-  test('income of 2025 on a norm: the web form’s cap12; the 2025 norm rule is a gap', async () => {
-    const run = async (register?: ParameterRegister) => {
-      const context = await onNorm({
-        year: 2025,
-        ...(register ? { register } : {}),
-        declarationValidator: unused,
-      });
+  test('income of 2025 on a norm: the web form’s cap12; the floor counts the wage when the norm was set', async () => {
+    const run = async () => {
+      const context = await onNorm({ year: 2025, declarationValidator: unused });
       const holder = await context.s.invoke<{ id: string }>(context.s.owner, 'parties.create', {
         kind: 'ro_individual',
         country: 'RO',
@@ -1490,15 +1516,24 @@ describe('D212 from the books', () => {
       const options = {
         holderPartyId: holder.id,
         taxpayer: { lastName: 'Popescu', firstName: 'Ion', address: 'Str. Exemplu nr. 2, Iași' },
-        register: { norms: [context.norm()] },
+        register: { norms: [{ ...context.norm(), setOn: '2025-01-10' }] },
       };
       return { ...context, options };
     };
-    // The engine's register has no norm rule (floor, threshold) for the income of 2025.
-    const gap = await run();
-    expect((await gap.s.refused(prepare(gap.s, '2025', gap.options)))?.code).toBe('RULE_GAP');
-    // With the 2026 rule as a test fixture: 44,000 lei, no CAS, CASS 4,400, tax 4,400.
-    const { s, options } = await run(fixtures(2025));
+    const { s, options } = await run();
+    // For 2025 the floor is 12 minimum wages in force when the DGRFP set the norm (art. 69 alin.
+    // (3) before Legea nr. 239/2025): its date is needed, and a date the register has no wage for
+    // is a rule gap, never a guess.
+    const { setOn: _setOn, ...undated } = options.register.norms[0]!;
+    const withoutDate = { ...options, register: { norms: [undated] } };
+    expect((await s.refused(prepare(s, '2025', withoutDate)))?.code).toBe('PIT_NORM_SET_DATE');
+    const before = {
+      ...options,
+      register: { norms: [{ ...options.register.norms[0]!, setOn: '2024-11-20' }] },
+    };
+    expect((await s.refused(prepare(s, '2025', before)))?.code).toBe('RULE_GAP');
+    // Set on 10 January 2025 (4,050 lei): 50,000 lei +10% −20% = 44,000 lei, no CAS, CASS 4,400,
+    // tax 4,400.
     const prepared = await prepare(s, '2025', options);
     expect(prepared.state).toBe('prepared');
     const xml = await xmlOf(s, prepared);

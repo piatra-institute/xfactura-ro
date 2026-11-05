@@ -42,6 +42,7 @@ export const d204Options = z
       adjustments: [],
       norms: [],
       previousGross: [],
+      declaredIncome: [],
     }),
     /** A rectifying return (with `supersedesId`). */
     rectifies: z.boolean().optional(),

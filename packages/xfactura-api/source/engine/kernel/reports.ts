@@ -120,6 +120,10 @@ const documentTypes: Record<string, string> = {
   'year.legalReserve': 'Notă contabilă de închidere',
   'year.transferResult': 'Hotărârea asociaților',
   'fx.revalue': 'Notă de calcul reevaluare',
+  'tax.pay': 'Extras de cont',
+  'tax.distribute': 'Fișa pe plătitor / notă de distribuire',
+  'tax.decision': 'Decizie ANAF',
+  'tax.statement': 'Fișa pe plătitor',
 };
 
 /** The synthetic account of an analytical one (4111.01 is kept on 4111). */

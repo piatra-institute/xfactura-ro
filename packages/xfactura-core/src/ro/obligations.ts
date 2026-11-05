@@ -6,6 +6,7 @@ import { workingDaysBetween } from './calendar';
 /** The returns the engine prepares, by the deadline that applies to them. */
 export const obligationKinds = [
   'D300',
+  'D301',
   'D390',
   'D394',
   'D112',
@@ -14,11 +15,23 @@ export const obligationKinds = [
   'D100.dividends',
   'D205',
   'D406',
+  'D406.assets',
   'S1005',
+  'S1003',
+  'S1046',
   'D212',
   'D204',
+  'D100.profit',
+  'D101',
+  'D700.micro_entry',
+  'D700.micro_exit',
+  'D700.micro_exit_january',
 ] as const;
 export type ObligationKind = (typeof obligationKinds)[number];
+
+/** Returns the company files outside the engine, through ANAF's portal: the engine computes when
+ * they are due, and a person records the filing (`obligation.filed`). */
+export const externalReturns: readonly string[] = ['D700'];
 
 const deadlineKinds = [
   /** A day of the month after the period's last month, or that month's last day when it is
@@ -30,12 +43,13 @@ const deadlineKinds = [
   z.object({ kind: z.literal('february_last_day') }).strict(),
   /** A number of days after the period's last day. */
   z.object({ kind: z.literal('days_after'), days: z.number().int().min(1).max(366) }).strict(),
-  /** A day of the year after the period's (D212's 25 May). */
+  /** A day of the year after the period's (D212's 25 May), or of a later year (`years`). */
   z
     .object({
       kind: z.literal('next_year_date'),
       month: z.number().int().min(1).max(12),
       day: z.number().int().min(1).max(31),
+      years: z.number().int().min(2).max(3).optional(),
     })
     .strict(),
 ] as const;
@@ -118,6 +132,14 @@ const day25 = { kind: 'next_month_day', day: 25 };
 /** The deadlines as the texts read on 30.10.2026 give them. */
 export const obligationVersions: ParameterVersion[] = [
   version('ro.deadline.D300', day25, ['ANAF/Cod-fiscal-consolidat:art.323(1)'], '2016-01-01'),
+  // The special return of a person not registered under art. 316: the 25th of the month after
+  // the one in which the VAT becomes chargeable, only for the months it does.
+  version(
+    'ro.deadline.D301',
+    day25,
+    ['ANAF/Cod-fiscal-consolidat:art.324(1)-(2)', 'OPANAF592/2016:anexa2.pct.II'],
+    '2026-01-01',
+  ),
   version('ro.deadline.D390', day25, ['OPANAF591/2016:anexa4.pct.1.1'], '2016-01-01'),
   version(
     'ro.deadline.D394',
@@ -158,11 +180,95 @@ export const obligationVersions: ParameterVersion[] = [
     ['OPANAF1783/2021:anexa4.pct.1-4'],
     '2022-01-01',
   ),
+  // The annual assets file (D406 Active): by the annual statements' deadline (anexa nr. 4 pct. 1
+  // and 7), so with their two readings for 2025 and the law's 150 days from 2026 (S1005, S1003).
+  ...(() => {
+    const assets = ['OPANAF1783/2021:anexa4.pct.1,7-8', 'ANAF/D406_Clarificare_2022:precizari'];
+    return [
+      {
+        ...version(
+          'ro.deadline.D406.assets',
+          {
+            kind: 'conflict',
+            readings: [
+              {
+                deadline: { kind: 'days_after', days: 150 },
+                clauses: [...assets, 'L82/1991:art.36(1)(a)'],
+                text: 'OPANAF nr. 1.783/2021, anexa nr. 4 pct. 1 și 7: activele se raportează până la termenul de depunere a situațiilor financiare; Legea contabilității nr. 82/1991, art. 36 alin. (1) lit. a): în termen de 150 de zile de la încheierea exercițiului financiar.',
+              },
+              {
+                deadline: { kind: 'next_year_date', month: 5, day: 31 },
+                clauses: [...assets, 'OMF2036/2025:anexa1.pct.3.1(1)(a)'],
+                text: 'OPANAF nr. 1.783/2021, anexa nr. 4 pct. 1 și 7: activele se raportează până la termenul de depunere a situațiilor financiare; OMF nr. 2.036/2025, anexa nr. 1 pct. 3.1 alin. (1) lit. a): până la 31 mai inclusiv a exercițiului următor.',
+              },
+            ],
+          },
+          [...assets, 'L82/1991:art.36(1)(a)', 'OMF2036/2025:anexa1.pct.3.1(1)(a)'],
+          '2025-01-01',
+        ),
+        to: date('2025-12-31'),
+      },
+      version(
+        'ro.deadline.D406.assets',
+        { kind: 'days_after', days: 150 },
+        [...assets, 'L82/1991:art.36(1)(a)'],
+        '2026-01-01',
+      ),
+    ];
+  })(),
+  // The annual statements of a company (L31/1990), micro (S1005) or small (S1003): Legea
+  // contabilității gives 150 days from the year's end, OMF nr. 2.036/2025 (financial year 2025)
+  // 31 May of the next year. The engine does not settle it: both readings are shown, the earlier
+  // to file by (30 May, or 31 May in a leap year). OMF nr. 2.036/2025 orders the statements of
+  // 2025 only (it repealed OMF nr. 107/2025, which ordered 2024's); no order is published for
+  // 2026's, so from 2026 the law's 150 days stand alone until one is.
+  ...(['S1005', 'S1003'] as const).flatMap((kind) => [
+    version(
+      `ro.deadline.${kind}`,
+      { kind: 'days_after', days: 150 },
+      ['L82/1991:art.36(1)(a)'],
+      '2026-01-01',
+    ),
+    {
+      ...version(
+        `ro.deadline.${kind}`,
+        {
+          kind: 'conflict',
+          readings: [
+            {
+              deadline: { kind: 'days_after', days: 150 },
+              clauses: ['L82/1991:art.36(1)(a)'],
+              text: 'Legea contabilității nr. 82/1991, art. 36 alin. (1) lit. a): societățile depun situațiile financiare anuale în termen de 150 de zile de la încheierea exercițiului financiar.',
+            },
+            {
+              deadline: { kind: 'next_year_date', month: 5, day: 31 },
+              clauses: ['OMF2036/2025:anexa1.pct.3.1(1)(a)'],
+              text: 'OMF nr. 2.036/2025, anexa nr. 1 pct. 3.1 alin. (1) lit. a): societățile reglementate de Legea nr. 31/1990 depun până la data de 31 mai inclusiv a exercițiului financiar următor celui de raportare.',
+            },
+          ],
+        },
+        ['L82/1991:art.36(1)(a)', 'OMF2036/2025:anexa1.pct.3.1(1)(a)'],
+        '2025-01-01',
+      ),
+      to: date('2025-12-31'),
+    },
+  ]),
+  // The inactivity declaration: 60 days from the year's end, in the law and, for 2025, in the
+  // order.
+  {
+    ...version(
+      'ro.deadline.S1046',
+      { kind: 'days_after', days: 60 },
+      ['L82/1991:art.36(2)', 'OMF2036/2025:anexa1.pct.3.3'],
+      '2025-01-01',
+    ),
+    to: date('2025-12-31'),
+  },
   version(
-    'ro.deadline.S1005',
-    { kind: 'days_after', days: 150 },
-    ['L82/1991:art.36(1)(a)'],
-    '2025-01-01',
+    'ro.deadline.S1046',
+    { kind: 'days_after', days: 60 },
+    ['L82/1991:art.36(2)'],
+    '2026-01-01',
   ),
   // Income of 2025 (OPANAF nr. 2.736/2025) and, as the Code reads now, of 2026.
   version(
@@ -245,8 +351,8 @@ function nominalOf(deadline: SingleDeadline, period: { start: LocalDate; end: Lo
         ? lastDayOf(year + 1, 2)
         : deadline.kind === 'next_year_date'
           ? ([
-              lastDayOf(year + 1, deadline.month),
-              `${year + 1}-${pad(deadline.month)}-${pad(deadline.day)}`,
+              lastDayOf(year + (deadline.years ?? 1), deadline.month),
+              `${year + (deadline.years ?? 1)}-${pad(deadline.month)}-${pad(deadline.day)}`,
             ].sort()[0]! as LocalDate)
           : addDays(period.end, deadline.days);
 }

@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Party } from 'xfactura-core/einvoice';
-import { vatPeriodOf, type ReadSetEntry } from 'xfactura-core/kernel';
+import { profileAt, vatPeriodOf, type ReadSetEntry } from 'xfactura-core/kernel';
 import {
   checkD390,
   d390Countries,
@@ -61,7 +61,11 @@ async function inputsOf(tx: Transaction, companyId: string, month: string) {
     ...parties.readSet,
     ...(seller ? [{ kind: 'party' as const, id: seller.partyId, version: seller.hash }] : []),
   ];
-  return { entries, parties: parties.loaded.parties, seller, inputs };
+  // Outside VAT the statement is the art. 317 code holder's (art. 325 alin. (1)).
+  const registered =
+    profileAt(loaded, 'vat.status', end) === 'normal_vat' ||
+    profileAt(loaded, 'vat.eu', end) === 'special';
+  return { entries, parties: parties.loaded.parties, seller, inputs, registered };
 }
 
 /** The recapitulative statement (D390 VIES) of a month's intra-Community operations. */
@@ -79,7 +83,13 @@ export function d390Declaration(
     async prepare(tx, companyId, month, raw) {
       const options = d390Options.parse(raw);
       const problems: DeclarationProblem[] = [];
-      const { entries, parties, seller, inputs } = await inputsOf(tx, companyId, month);
+      const { entries, parties, seller, inputs, registered } = await inputsOf(tx, companyId, month);
+      if (!registered)
+        problems.push({
+          code: 'D390_NO_CODE',
+          message:
+            'Firma nu este înregistrată în scopuri de TVA (art. 316) și nu are cod de TVA după art. 317: declarația recapitulativă o depun doar persoanele înregistrate (art. 325 alin. (1)); solicitați codul art. 317 și înregistrați-l (vat.eu special).',
+        });
       if (!seller)
         problems.push({
           code: 'SELLER_DETAILS',

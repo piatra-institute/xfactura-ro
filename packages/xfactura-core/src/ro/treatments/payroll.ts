@@ -10,7 +10,9 @@ import {
 } from '../../kernel';
 import { divRound, formatMoney, parseScaled } from '../../money';
 import { RuleGapError } from '../../rules';
-import { monthEnd, monthStart, type Month } from '../../time';
+import { monthEnd, monthStart, type LocalDate, type Month } from '../../time';
+import { obligationDue } from '../obligations';
+import { payrollPaymentPeriod, type PayrollPeriod } from '../payroll/quarterly';
 
 const block = (code: string, message: string, path?: string): Issue => ({
   code,
@@ -92,6 +94,39 @@ export const payrollRecognition: Treatment<PayrollInput> = {
       );
     if (issues.length) return { effect: null, issues };
 
+    // When the tax and contributions are paid: by the 25th after the month, or after the quarter
+    // for a quarterly payer (art. 80 alin. (2), art. 146 alin. (3), art. 168 alin. (3), art.
+    // 220^6 alin. (1)), by the year's own `payroll.period` fact; unknown (no due date) without it.
+    const year = Number(input.month.slice(0, 4));
+    let period: PayrollPeriod | null = null;
+    for (const fact of loaded.profile)
+      if (
+        fact.axis === 'payroll.period' &&
+        fact.effectiveFrom >= `${year}-01-01` &&
+        fact.effectiveFrom <= date
+      )
+        period = fact.value as PayrollPeriod;
+    let dueDate: LocalDate | undefined;
+    if (period) {
+      const paid = payrollPaymentPeriod(input.month, period);
+      const months = paid.counted.includes('Q')
+        ? Number(paid.counted.slice(-1)) * 3
+        : Number(input.month.slice(5, 7));
+      const last = `${year}-${String(months).padStart(2, '0')}` as Month;
+      const first = paid.counted.includes('Q')
+        ? (`${year}-${String(months - 2).padStart(2, '0')}` as Month)
+        : last;
+      try {
+        dueDate = obligationDue(
+          paid.deadline,
+          { start: monthStart(first), end: monthEnd(last) },
+          rules,
+        ).due;
+      } catch (error) {
+        if (!(error instanceof RuleGapError)) throw error;
+        return { effect: null, issues: [block('RULE_GAP', error.message)] };
+      }
+    }
     const authority = (ref: string, account: string): OpenItemSpec => ({
       ref,
       kind: 'tax.payable',
@@ -100,6 +135,7 @@ export const payrollRecognition: Treatment<PayrollInput> = {
       currency: 'RON',
       normalSide: 'C',
       mayReverse: false,
+      ...(dueDate ? { dueDate } : {}),
     });
     const openItems: OpenItemSpec[] = [];
     // The sick pay the fund bears is a claim on it (4382), recovered on the employer's request
@@ -218,6 +254,8 @@ export const payrollRecognition: Treatment<PayrollInput> = {
         details: {
           month: input.month,
           round: input.round,
+          payrollPeriod: period,
+          taxDue: dueDate ?? null,
           vouchers: formatMoney(
             total((line) => line.vouchers),
             'RON',

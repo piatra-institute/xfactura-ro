@@ -1,6 +1,7 @@
 // ANAF code lists for invoices, payments, units of measure and VAT regimes.
 // Extracted from ANAF RO_SAFT_SchemaDefCod_05.02.2026.xlsx (sha256 d0981202182438e4597ff3bc27d2c41dec06c60bc32b86620c1de29a9cb8436d),
-// sheets Nom_Tipuri_facturi (the six codes S.I.9 allows), Nom_Mecanisme_plati, Unitati_masura (a subset of common units) and Nomenclator_Regim_fiscal.
+// sheets Nom_Tipuri_facturi (the six codes S.I.9 allows), Nom_Mecanisme_plati, Unitati_masura (a subset of common units), Nomenclator_Regim_fiscal
+// and Nomenclator imobilizari.
 
 /** InvoiceType: the codes the structure allows (S.I.9). */
 export const invoiceTypes: Readonly<Record<string, string>> = {
@@ -209,4 +210,22 @@ export const vatRegimes: Readonly<Record<string, string>> = {
   '100040':
     'Persoană impozabilă înregistrată în scopuri de TVA, ce aplică sistemul de TVA la încasare',
   '100050': 'Persoană neimpozabilă',
+};
+
+/** AssetTransactionType (SD.AT.5): the asset movements of sheet Nomenclator imobilizari; any other
+ * value is a fatal error that rejects the file. */
+export const assetTransactionTypes: Readonly<Record<string, string>> = {
+  '10': 'Achiziție',
+  '20': 'Vânzare',
+  '30': 'Amortizare',
+  '40': 'Transfer intern',
+  '50': 'Casare mijloace fixe',
+  '60': 'Reevaluare negativă',
+  '70': 'Reevaluare pozitivă',
+  '80': 'Plus de inventar',
+  '90': 'Minus de inventar',
+  '100': 'Ajustare de valoare negativă',
+  '110': 'Reversare ajustare de valoare',
+  '120': 'Bunuri acordate cu titlu gratuit',
+  '130': 'Alte tranzacții',
 };

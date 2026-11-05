@@ -9,6 +9,7 @@ import {
   d212Format,
   writeD212,
   type D212,
+  type D212Activity,
   type D212Norm,
   type NormCriterion,
 } from 'xfactura-core/ro/declarations/d212';
@@ -50,6 +51,7 @@ export const d212Options = z
       adjustments: [],
       norms: [],
       previousGross: [],
+      declaredIncome: [],
     }),
     /** Chapter II: the option to pay CASS in the filing year (art. 180), after a loss (B) or a
      * zero net income (C) in the income year. */
@@ -117,17 +119,22 @@ const statusIssues = new Set(['CAS_STATUS_UNSTATED', 'CASS_EXCEPTION_UNSTATED'])
  * The Declarația unică (D212) for an income year of a PFA's or an II's holder, or of a family
  * enterprise's member, from the fiscal register (pfa.fiscalRegister) and the profile; what the
  * books do not hold (the holder's identity, domicile and account, the CASS option, a member's own
- * situation for CAS and CASS and the registered association contract) comes from the options. One
- * source of independent income: in the real system (cap11), or on a norm (cap12, the place's norm
- * and coefficients as the preparer gave them with the DGRFP's publication). A member declares the
- * net income or loss the enterprise distributed to them (art. 122 alin. (4)), with their own losses
- * carried and their own CAS and CASS. Refused, never guessed: several sources, income outside these
- * books, a change of form in the year, and an enterprise's members on a norm (each member's own
- * norm is not modelled). The CNP is opened from its seal for the XML only.
+ * situation for CAS and CASS and the registered association contract) comes from the options. Each
+ * source of independent income in the books is a subsection: in the real system (cap11), or on a
+ * norm (cap12, the place's norm and coefficients as the preparer gave them with the DGRFP's
+ * publication). A member declares the net income or loss the enterprise distributed to them (art.
+ * 122 alin. (4)), with their own losses carried and their own CAS and CASS. Income the person
+ * declares from outside the books (rent, investments, dividends) is written, marked as declared in
+ * the summary, only for its CASS (Section 3.2.2, web form). Refused, never guessed: other
+ * independent income outside these books (`otherIncome`), declared income whose tax is not final
+ * at source, a change of form in the year, a change of method within the year (computed by the
+ * register; its presentation in the form is open), and an enterprise's members on a norm. The CNP
+ * is opened from its seal for the XML only.
  *
  * The income of 2024 is written in ANAF's structure D212_A1.0.3 and validated by DUKIntegrator
  * (J13.0.1); the income of 2025 in the web form's structure, for which ANAF publishes no
- * validator (`officialValidation` false): such a return stops at `prepared`.
+ * validator (`officialValidation` false): such a return stops at `prepared`. The income of 2026
+ * has no structure yet (`FORMAT_GAP`): ANAF had published none on 4 November 2026.
  */
 export function d212Declaration(
   secret: string,
@@ -237,37 +244,77 @@ export function d212Declaration(
       for (const issue of issues)
         if (issue.severity === 'block' || statusIssues.has(issue.code))
           problems.push({ code: issue.code, message: issue.message });
-      const [source] = register.sources;
-      if (register.sources.length !== 1 || !source)
+      const sources = register.sources;
+      if (!sources.length || (member && sources.length !== 1))
         problems.push({
           code: 'D212_SOURCE',
-          message:
-            'D212 se pregătește pentru o singură sursă de venit din activități independente.',
+          message: member
+            ? 'Membrul unei întreprinderi familiale declară aici venitul distribuit dintr-o singură sursă.'
+            : 'Nu există o sursă de venit din activități independente în anul declarat.',
         });
-      else if (source.method === 'norma' && member)
+      else if (member && sources[0]!.norm)
         problems.push({
           code: 'D212_IF_NORMA',
           message:
-            'Membrii unei întreprinderi familiale impuse pe bază de normă declară fiecare norma proprie, cu coeficienții săi (art. 69 alin. (3)); norma pe membru nu este încă disponibilă.',
+            'Membrii unei întreprinderi familiale impuse pe bază de normă declară fiecare norma proprie, cu coeficienții săi (art. 69 alin. (3), norme pct. 8 alin. (5)); dacă norma membrului este norma întreagă a activității sau partea lui este o întrebare pentru expertul contabil: nu este încă disponibilă.',
+        });
+      for (const source of sources)
+        if (source.norm && source.totals)
+          problems.push({
+            code: 'D212_METHOD_CHANGE',
+            message: `${source.name}: norma până la ${source.norm.to} și sistemul real de la ${source.segments.at(-1)!.from} (norme pct. 8 alin. (13)) sunt calculate în registru; cum se declară cele două perioade ale aceleiași surse în D212 nu este încă stabilit (întrebare pentru expertul contabil).`,
+          });
+      // Income declared from outside the books: only its CASS (Section 3.2.2) is written; one whose
+      // income tax is not final at source would need its own subsection, which is not written.
+      const declaredIncome = register.declared;
+      for (const item of declaredIncome.filter((entry) => !entry.taxSettled))
+        problems.push({
+          code: 'D212_DECLARED_TAX',
+          message: `${item.description}: impozitul acestui venit (${item.kind}) se stabilește în propria subsecțiune a declarației, pe care aplicația nu o scrie; declarația se depune pentru el din formularul ANAF.`,
         });
       const contributions = share ? share.contributions : register.contributions;
       const tax = share ? share.tax : register.tax;
-      if (problems.length || !source || !contributions || !tax) return fail();
-      const normData = source.method === 'norma' ? source.norm : undefined;
-      if (source.method === 'norma' && !normData) return fail();
-      if (source.method === 'sistem_real' && !(share ? true : source.totals && source.losses))
+      if (problems.length || !contributions || !tax) return fail();
+      if (
+        sources.some((source) =>
+          source.norm ? false : !(share || (source.totals && source.losses)),
+        )
+      )
         return fail();
 
-      // The source's activity data in force at the year's end.
-      const versions = (await sourceRows(tx, companyId)).filter(
-        (row) => row.sourceId === source.sourceId && row.effectiveFrom <= end,
-      );
-      const activity = versions.at(-1)!;
-      if (!activity.authorizationNumber || !activity.authorizationDate)
-        problems.push({
-          code: 'D212_AUTHORIZATION',
-          message: `${activity.name}: înregistrați numărul și data documentului de autorizare (pfa.sources.record).`,
-        });
+      // Each source's activity data in force at the year's end.
+      const rows = await sourceRows(tx, companyId);
+      const dataOf = (sourceId: string) => {
+        const activity = rows
+          .filter((row) => row.sourceId === sourceId && row.effectiveFrom <= end)
+          .at(-1)!;
+        if (!activity.authorizationNumber || !activity.authorizationDate)
+          problems.push({
+            code: 'D212_AUTHORIZATION',
+            message: `${activity.name}: înregistrați numărul și data documentului de autorizare (pfa.sources.record).`,
+          });
+        const dates = {
+          ...(activity.startedOn >= start ? { startedOn: activity.startedOn } : {}),
+          ...(activity.endedOn && activity.endedOn <= end ? { endedOn: activity.endedOn } : {}),
+          ...(activity.suspendedFrom &&
+          activity.suspendedFrom >= start &&
+          activity.suspendedFrom <= end
+            ? { suspendedOn: activity.suspendedFrom }
+            : {}),
+        };
+        return {
+          activity,
+          place: {
+            caen: activity.caen,
+            seat: activity.place,
+            authorization: {
+              number: activity.authorizationNumber ?? '',
+              date: activity.authorizationDate ?? '',
+            },
+            ...dates,
+          },
+        };
+      };
 
       // The holder's CNP, opened from its seal.
       const [holder] = await tx
@@ -287,15 +334,32 @@ export function d212Declaration(
             'Indicați titularul ca partener persoană fizică, cu CNP-ul înregistrat (parties.recordCnp).',
         });
 
-      // The declared net income and loss: the register's, the member's share, or the norm's.
+      // The declared net income and loss: the sources' net incomes and norms, cumulated, and
+      // their losses; or the member's share.
       const declared = share
         ? {
             net: formatMoney(share.net, LEDGER_CURRENCY),
             loss: formatMoney(share.loss, LEDGER_CURRENCY),
           }
-        : normData
-          ? { net: normData.adjusted, loss: '0.00' }
-          : { net: source.totals!.net, loss: source.totals!.loss };
+        : {
+            net: formatMoney(
+              sources.reduce(
+                (sum, source) =>
+                  sum +
+                  parseMoney(source.totals?.net ?? '0', LEDGER_CURRENCY) +
+                  parseMoney(source.norm?.adjusted ?? '0', LEDGER_CURRENCY),
+                0n,
+              ),
+              LEDGER_CURRENCY,
+            ),
+            loss: formatMoney(
+              sources.reduce(
+                (sum, source) => sum + parseMoney(source.totals?.loss ?? '0', LEDGER_CURRENCY),
+                0n,
+              ),
+              LEDGER_CURRENCY,
+            ),
+          };
 
       // Chapter II: the CASS of the option, on the filing year's minimum wage.
       let cassOption: D212['cassOption'];
@@ -334,83 +398,106 @@ export function d212Declaration(
         }
       }
 
-      // The norm's place (Subsection 2): its coefficients need their criteria.
-      let norm: D212Norm | undefined;
-      if (normData) {
-        const coefficient = (
-          percent: string | null,
-          criterion: NormCriterion | null,
-          label: string,
-        ) => {
-          if (percent === null) return undefined;
-          if (criterion === null) {
-            problems.push({
-              code: 'D212_NORMA_CRITERION',
-              message: `Indicați criteriul (01–13) din care vine coeficientul de ${label} (increaseCriterion, reductionCriterion).`,
-            });
-            return undefined;
-          }
-          return { percent, criterion };
-        };
-        const increase = coefficient(
-          normData.increasePercent,
-          normData.increaseCriterion,
-          'majorare',
-        );
-        const reduction = coefficient(
-          normData.reductionPercent,
-          normData.reductionCriterion,
-          'reducere',
-        );
-        norm = {
-          association: false,
-          caen: activity.caen,
-          seat: activity.place,
-          authorization: {
-            number: activity.authorizationNumber ?? '',
-            date: activity.authorizationDate ?? '',
-          },
-          ...(activity.startedOn >= start ? { startedOn: activity.startedOn } : {}),
-          ...(activity.endedOn && activity.endedOn <= end ? { endedOn: activity.endedOn } : {}),
-          ...(activity.suspendedFrom &&
-          activity.suspendedFrom >= start &&
-          activity.suspendedFrom <= end
-            ? { suspendedOn: activity.suspendedFrom }
-            : {}),
-          ...(normData.activeDays !== null ? { activeDays: normData.activeDays } : {}),
-          ...(normData.interruptedDays !== null
-            ? { interruptedDays: normData.interruptedDays }
-            : {}),
-          norm: lei(normData.norm, 'Norma de venit'),
-          ...(increase ? { increase } : {}),
-          ...(reduction ? { reduction } : {}),
-          adjusted: lei(normData.yearly, 'Norma ajustată'),
-          net: lei(normData.adjusted, 'Venitul net anual din normă'),
-          tax: lei(tax.norma, 'Impozitul pe normă'),
-        };
+      // Each source: in the real system (Subsection 1), or on a norm (Subsection 2), whose
+      // coefficients need their criteria.
+      const activities: D212Activity[] = [];
+      const norms: D212Norm[] = [];
+      for (const source of sources) {
+        const { place } = dataOf(source.sourceId);
+        const normData = source.norm;
+        if (normData) {
+          const coefficient = (
+            percent: string | null,
+            criterion: NormCriterion | null,
+            label: string,
+          ) => {
+            if (percent === null) return undefined;
+            if (criterion === null) {
+              problems.push({
+                code: 'D212_NORMA_CRITERION',
+                message: `Indicați criteriul (01–13) din care vine coeficientul de ${label} (increaseCriterion, reductionCriterion).`,
+              });
+              return undefined;
+            }
+            return { percent, criterion };
+          };
+          const increase = coefficient(
+            normData.increasePercent,
+            normData.increaseCriterion,
+            'majorare',
+          );
+          const reduction = coefficient(
+            normData.reductionPercent,
+            normData.reductionCriterion,
+            'reducere',
+          );
+          norms.push({
+            association: false,
+            ...place,
+            ...(normData.activeDays !== null ? { activeDays: normData.activeDays } : {}),
+            ...(normData.interruptedDays !== null
+              ? { interruptedDays: normData.interruptedDays }
+              : {}),
+            norm: lei(normData.norm, 'Norma de venit'),
+            ...(increase ? { increase } : {}),
+            ...(reduction ? { reduction } : {}),
+            adjusted: lei(normData.yearly, 'Norma ajustată'),
+            net: lei(normData.adjusted, 'Venitul net anual din normă'),
+            tax: lei(normData.tax, 'Impozitul pe normă'),
+          });
+        } else if (share)
+          activities.push({
+            ...place,
+            association: {
+              number: options.association!.number,
+              date: options.association!.date,
+              net: lei(declared.net, 'Venitul net distribuit'),
+              loss: lei(declared.loss, 'Pierderea distribuită'),
+            },
+            carriedLosses: lei(share.losses.available, 'Pierderile reportate'),
+            offsetLoss: lei(share.losses.offset, 'Pierderea compensată'),
+          });
+        else
+          activities.push({
+            ...place,
+            gross: lei(source.totals!.gross, 'Venitul brut'),
+            deductible: lei(source.totals!.deductible, 'Cheltuielile deductibile'),
+            carriedLosses: lei(source.losses!.available, 'Pierderile reportate'),
+            offsetLoss: lei(source.losses!.offset, 'Pierderea compensată'),
+          });
       }
+      // Section 3.2.2: what the person declared, as declared.
+      const other = !share && register.contributions?.cassOther;
+      const cassOther =
+        other && declaredIncome.length
+          ? {
+              rent: lei(
+                formatMoney(
+                  declaredIncome
+                    .filter((item) => item.kind === 'rent')
+                    .reduce((sum, item) => sum + parseMoney(item.amount, LEDGER_CURRENCY), 0n),
+                  LEDGER_CURRENCY,
+                ),
+                'Venitul declarat din cedarea folosinței bunurilor',
+              ),
+              investment: lei(
+                formatMoney(
+                  declaredIncome
+                    .filter((item) => item.kind !== 'rent')
+                    .reduce((sum, item) => sum + parseMoney(item.amount, LEDGER_CURRENCY), 0n),
+                  LEDGER_CURRENCY,
+                ),
+                'Venitul declarat din investiții',
+              ),
+              base: lei(other.base, 'Baza CASS a veniturilor declarate'),
+              due: lei(other.due, 'CASS pe veniturile declarate'),
+              withheld: lei(other.withheld, 'CASS reținută pe veniturile declarate'),
+            }
+          : undefined;
       if (problems.length) return fail();
 
       const casDue = lei(contributions.cas.due, 'CAS datorată');
       const cassDue = lei(contributions.cass.due, 'CASS datorată');
-      const dates = {
-        ...(activity.startedOn >= start ? { startedOn: activity.startedOn } : {}),
-        ...(activity.endedOn && activity.endedOn <= end ? { endedOn: activity.endedOn } : {}),
-        ...(activity.suspendedFrom &&
-        activity.suspendedFrom >= start &&
-        activity.suspendedFrom <= end
-          ? { suspendedOn: activity.suspendedFrom }
-          : {}),
-      };
-      const place = {
-        caen: activity.caen,
-        seat: activity.place,
-        authorization: {
-          number: activity.authorizationNumber!,
-          date: activity.authorizationDate!,
-        },
-        ...dates,
-      };
       const model: D212 = {
         year: income,
         rectifies: {
@@ -427,36 +514,19 @@ export function d212Declaration(
           ...(options.taxpayer.email ? { email: options.taxpayer.email } : {}),
           ...(options.iban ? { iban: options.iban } : {}),
         },
-        ...(norm
-          ? { norm }
-          : share
-            ? {
-                activity: {
-                  ...place,
-                  association: {
-                    number: options.association!.number,
-                    date: options.association!.date,
-                    net: lei(declared.net, 'Venitul net distribuit'),
-                    loss: lei(declared.loss, 'Pierderea distribuită'),
-                  },
-                  carriedLosses: lei(share.losses.available, 'Pierderile reportate'),
-                  offsetLoss: lei(share.losses.offset, 'Pierderea compensată'),
-                },
-              }
-            : {
-                activity: {
-                  ...place,
-                  gross: lei(source.totals!.gross, 'Venitul brut'),
-                  deductible: lei(source.totals!.deductible, 'Cheltuielile deductibile'),
-                  carriedLosses: lei(source.losses!.available, 'Pierderile reportate'),
-                  offsetLoss: lei(source.losses!.offset, 'Pierderea compensată'),
-                },
-              }),
+        ...(activities.length ? { activity: activities[0]! } : {}),
+        ...(activities.length > 1 ? { activities: activities.slice(1) } : {}),
+        ...(norms.length ? { norm: norms[0]! } : {}),
+        ...(norms.length > 1 ? { norms: norms.slice(1) } : {}),
+        ...(cassOther ? { cassOther } : {}),
         casStatus: contributions.cas.status,
         cas: casDue > 0 ? { base: lei(contributions.cas.base, 'Baza CAS'), due: casDue } : null,
+        // The fact, or the income declared from outside the books owing CASS on at least 6 wages
+        // (art. 174 alin. (7) lit. b), the register's CASS_EXCEPTION_DECLARED).
         cassException: member
           ? member.cassException !== 'none'
-          : (profileAt(loaded, 'cass.exception', end) ?? 'none') !== 'none',
+          : (profileAt(loaded, 'cass.exception', end) ?? 'none') !== 'none' ||
+            issues.some((issue) => issue.code === 'CASS_EXCEPTION_DECLARED'),
         cass:
           cassDue > 0
             ? {
@@ -491,7 +561,12 @@ export function d212Declaration(
           anR: format.anR,
           structure: format.structure,
           validator: format.validator,
-          method: source.method,
+          sources: sources.map((source) => ({
+            sourceId: source.sourceId,
+            name: source.name,
+            method: source.norm ? 'norma' : 'sistem_real',
+          })),
+          declared: declaredIncome,
           member: share ? { partyId: share.partyId, quota: share.quota } : null,
           net: declared.net,
           loss: declared.loss,

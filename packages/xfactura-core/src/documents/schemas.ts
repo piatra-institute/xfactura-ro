@@ -3,6 +3,15 @@ import { requireCondition } from '../errors';
 import { hashOf } from '../hash';
 import { invoiceKinds } from '../ro/treatments/invoices';
 import {
+  taxDecisionDocumentSchema,
+  taxDecisionDocumentInput,
+  taxDocumentKinds,
+  taxStatementDocumentSchema,
+  taxStatementDocumentInput,
+  type TaxDecisionDocument,
+  type TaxStatementDocument,
+} from '../ro/taxaccount/documents';
+import {
   extractedInvoiceVersion,
   invoiceDocumentSchema,
   type InvoiceDocument,
@@ -25,6 +34,9 @@ export const documentKinds = {
   /** A fiscal receipt (bon fiscal) the company received. */
   receipt: 'receipt.received',
   contract: 'contract',
+  /** ANAF's decisions and the taxpayer's account statement (ro/taxaccount/documents.ts). */
+  taxDecision: taxDocumentKinds.decision,
+  taxStatement: taxDocumentKinds.statement,
 } as const;
 export type DocumentKind = (typeof documentKinds)[keyof typeof documentKinds];
 /** The kinds `documents.record` accepts. */
@@ -35,6 +47,8 @@ export const extractedKinds = [
   documentKinds.saleCredit,
   documentKinds.receipt,
   documentKinds.contract,
+  documentKinds.taxDecision,
+  documentKinds.taxStatement,
 ] as const;
 export type ExtractedKind = (typeof extractedKinds)[number];
 export const isInvoiceKind = (kind: string) =>
@@ -43,6 +57,8 @@ export const isCreditKind = (kind: string) =>
   kind === invoiceKinds.saleCredit || kind === invoiceKinds.purchaseCredit;
 export const isIssuedKind = (kind: string) =>
   kind === invoiceKinds.sale || kind === invoiceKinds.saleCredit;
+export const isTaxKind = (kind: string) =>
+  kind === documentKinds.taxDecision || kind === documentKinds.taxStatement;
 
 /**
  * Where a document's content comes from, from the strongest:
@@ -299,13 +315,18 @@ export const contractInput = contractDocumentSchema.extend({
   subject: z.string().max(2000).default(''),
 });
 
-export type ExtractedBody = InvoiceDocument | ReceiptDocument | ContractDocument;
+export type ExtractedBody =
+  InvoiceDocument | ReceiptDocument | ContractDocument | TaxDecisionDocument | TaxStatementDocument;
 
 /** The body an extracted document of `kind` is stored with, from what the agent read. */
 export function extractedBody(kind: ExtractedKind, body: unknown): ExtractedBody {
   if (kind === documentKinds.receipt) return receiptDocumentSchema.parse(receiptInput.parse(body));
   if (kind === documentKinds.contract)
     return contractDocumentSchema.parse(contractInput.parse(body));
+  if (kind === documentKinds.taxDecision)
+    return taxDecisionDocumentSchema.parse(taxDecisionDocumentInput.parse(body));
+  if (kind === documentKinds.taxStatement)
+    return taxStatementDocumentSchema.parse(taxStatementDocumentInput.parse(body));
   if (typeof body !== 'object' || body === null || !('parserVersion' in body))
     return extractedInvoiceBody(kind, extractedInvoiceInput.parse(body));
   // The UBL parser's full shape, as `documents.get` returns it, is accepted too.
@@ -372,6 +393,24 @@ export function documentIdentity(kind: string, body: unknown, companyTaxId: stri
       normalizedNumber(contract.number!),
       contract.date,
     ]);
+  }
+  // A decision by its issuer, number and date; a statement by the day its balances are at and
+  // the SPV document it is, so the same statement downloaded twice is one group.
+  if (kind === documentKinds.taxDecision) {
+    const parsed = taxDecisionDocumentSchema.safeParse(body);
+    if (!parsed.success) return null;
+    const decision = parsed.data;
+    return hashOf([
+      'tax.decision',
+      decision.issuer.taxId ? normalizedTaxId(decision.issuer.taxId) : decision.issuer.name,
+      normalizedNumber(decision.number),
+      decision.issueDate,
+    ]);
+  }
+  if (kind === documentKinds.taxStatement) {
+    const parsed = taxStatementDocumentSchema.safeParse(body);
+    if (!parsed.success) return null;
+    return hashOf(['tax.statement', companyTaxId, parsed.data.source, parsed.data.asOf]);
   }
   return null;
 }

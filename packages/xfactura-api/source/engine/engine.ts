@@ -13,6 +13,11 @@ import { settlement } from 'xfactura-core/ro/treatments/settlement';
 import { revaluation } from 'xfactura-core/ro/treatments/revaluation';
 import { vatSettlement } from 'xfactura-core/ro/treatments/vat-settlement';
 import { crossBorderRecognition } from 'xfactura-core/ro/treatments/cross-border';
+import {
+  capitalGoodsAdjustment,
+  lateRegistration,
+} from 'xfactura-core/ro/treatments/vat-registration';
+import { nonpayerDefinitions, nonpayerVersions } from 'xfactura-core/ro/nonpayers';
 import { payrollRecognition } from 'xfactura-core/ro/treatments/payroll';
 import { microTax } from 'xfactura-core/ro/treatments/micro-tax';
 import { assetDepreciation, assetDerecognition } from 'xfactura-core/ro/treatments/assets';
@@ -39,6 +44,17 @@ import { leaseCommencement } from 'xfactura-core/ro/treatments/leases';
 import { etvaDefinitions, etvaVersions } from 'xfactura-core/ro/etva';
 import { pitDefinitions, pitVersions } from 'xfactura-core/ro/pit';
 import { determinationDefinitions, determinationVersions } from 'xfactura-core/ro/determinations';
+import { halfYearDefinitions, halfYearVersions } from 'xfactura-core/ro/annual/half-year';
+import { saftDefinitions, saftVersions } from 'xfactura-core/ro/saft/parameters';
+import { profitDeadlineVersions, profitDefinitions, profitVersions } from 'xfactura-core/ro/profit';
+import { priorYearCorrection, profitTax } from 'xfactura-core/ro/treatments/profit-tax';
+import {
+  taxAccountDefinitions,
+  taxAccountVersions,
+  taxDecision,
+  taxDistribution,
+  taxPayment,
+} from 'xfactura-core/ro/taxaccount';
 import { dividendDistribution, dividendWithholding } from 'xfactura-core/ro/treatments/dividends';
 import { ParameterRegister } from 'xfactura-core/rules';
 import { clause, sourceOf } from 'xfactura-core/ro/sources';
@@ -175,6 +191,8 @@ import type { DeclarationValidator } from './adapters/declaration-validator';
 import { cashVatChecks } from './modules/cash-vat';
 import { d300Declaration } from './modules/d300';
 import { d390Declaration } from './modules/d390';
+import { d301Declaration } from './modules/d301';
+import { registrationInput, Registrations, registrationView } from './modules/nonpayers';
 import { d394Declaration } from './modules/d394';
 import { d406Declaration } from './modules/d406';
 import { d112Declaration } from './modules/d112';
@@ -182,6 +200,15 @@ import { d205Declaration } from './modules/d205';
 import { d212Declaration } from './modules/d212';
 import { d204Declaration } from './modules/d204';
 import { d100Declaration } from './modules/d100';
+import { d101Declaration } from './modules/d101';
+import { Profit, profitWork, profitYearInput } from './modules/profit';
+import {
+  positionInput,
+  reconcileInput,
+  TaxAccount,
+  taxAccountChecks,
+  taxAccountWork,
+} from './modules/taxaccount';
 import { calendarInput, obligationsCalendar, obligationView } from './modules/obligations';
 import {
   closureInput,
@@ -192,7 +219,10 @@ import {
   determinationsView,
   proposeView,
 } from './modules/determinations';
-import { s1005Declaration } from './modules/s1005';
+import { s1003Declaration, s1005Declaration } from './modules/s1005';
+import { s1046Declaration } from './modules/s1046';
+import { annualAskView, annualInput } from './modules/annual';
+import { annualAsk, annualWork } from './modules/annual-work';
 import {
   artifactInput,
   artifactView,
@@ -212,7 +242,7 @@ import {
   runInput,
   termsInput,
 } from './modules/payroll';
-import { assetInput, Assets, disposalInput } from './modules/assets';
+import { assetInput, Assets, disposalInput, fiscalInput } from './modules/assets';
 import { EnterpriseMembers, membersInput } from './modules/enterprise';
 import {
   fiscalRegister,
@@ -387,6 +417,11 @@ export const defaultRegister = () =>
       ...etvaDefinitions,
       ...pitDefinitions,
       ...determinationDefinitions,
+      ...profitDefinitions,
+      ...halfYearDefinitions,
+      ...saftDefinitions,
+      ...taxAccountDefinitions,
+      ...nonpayerDefinitions,
     ],
     [
       ...vatVersions,
@@ -402,6 +437,12 @@ export const defaultRegister = () =>
       ...etvaVersions,
       ...pitVersions,
       ...determinationVersions,
+      ...profitVersions,
+      ...profitDeadlineVersions,
+      ...halfYearVersions,
+      ...saftVersions,
+      ...taxAccountVersions,
+      ...nonpayerVersions,
     ],
   );
 
@@ -455,6 +496,13 @@ export class Engine {
   readonly work: Work;
   /** Yearly determinations and the obligation closure (core ro/determinations). */
   readonly determinations: Determinations;
+  /** A non-payer's registration, the VAT owed for registering late and the cancellation (core
+   * ro/nonpayers). */
+  readonly registrations: Registrations;
+  /** The profit tax's fiscal register and loss vintages (core ro/profit). */
+  readonly profit: Profit;
+  /** The tax account: the state's obligations and claims, and ANAF's statement against them. */
+  readonly taxAccount: TaxAccount;
   /** Booking templates, their predictions and track records. */
   readonly templates: Templates;
   /** The kill switch of automatic posting and the graduation criteria. */
@@ -533,6 +581,13 @@ export class Engine {
       loanAccrual,
       interestWithholding,
       leaseCommencement,
+      profitTax,
+      priorYearCorrection,
+      taxPayment,
+      taxDistribution,
+      taxDecision,
+      lateRegistration,
+      capitalGoodsAdjustment,
       ...(options.treatments ?? []),
     );
     this.templates = new Templates(this.commands, this.proposals);
@@ -553,6 +608,7 @@ export class Engine {
       ...partyStatusChecks,
       ...cashVatChecks((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
       ...pitChecks((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
+      ...taxAccountChecks((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
       ...(options.closeChecks ?? []),
     ];
     this.actions.add(closeHandler(this.closeChecks));
@@ -625,6 +681,7 @@ export class Engine {
     this.declarations.add(
       d300Declaration((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
       d390Declaration((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
+      d301Declaration((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
       d394Declaration((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
       d406Declaration(
         objects,
@@ -635,7 +692,10 @@ export class Engine {
       d112Declaration(secret),
       d205Declaration(secret),
       d100Declaration(),
+      d101Declaration(),
       s1005Declaration(),
+      s1003Declaration(),
+      s1046Declaration(),
       d212Declaration(secret, (tx, companyId) => this.proposals.ruleContext(tx, companyId)),
       d204Declaration(secret, (tx, companyId) => this.proposals.ruleContext(tx, companyId)),
       ...(options.declarations ?? []),
@@ -653,7 +713,19 @@ export class Engine {
       this.proposals.ruleContext(tx, companyId),
     );
     this.questions = new Questions(this.commands, objects, this.clock);
+    this.profit = new Profit(this.commands);
+    this.taxAccount = new TaxAccount(
+      this.commands,
+      (tx, companyId) => this.proposals.ruleContext(tx, companyId),
+      this.clock,
+    );
+    const filedD100 = d100Declaration();
     this.determinations = new Determinations(
+      this.commands,
+      (tx, companyId) => this.proposals.ruleContext(tx, companyId),
+      this.clock,
+    );
+    this.registrations = new Registrations(
       this.commands,
       (tx, companyId) => this.proposals.ruleContext(tx, companyId),
       this.clock,
@@ -692,6 +764,17 @@ export class Engine {
         },
         determinations: async (tx, companyId, today) =>
           determinationItems(tx, companyId, await this.proposals.ruleContext(tx, companyId), today),
+        annual: async (tx, companyId, today) =>
+          annualWork(tx, companyId, today, await this.proposals.ruleContext(tx, companyId)),
+        profit: (tx, companyId, today) => profitWork(tx, companyId, today),
+        taxaccount: async (tx, companyId, today) =>
+          taxAccountWork(
+            tx,
+            companyId,
+            today,
+            await this.proposals.ruleContext(tx, companyId),
+            (tx2, company, period) => filedD100.inputs(tx2, company, period),
+          ),
       }),
       this.clock,
     );
@@ -2059,6 +2142,106 @@ export class Engine {
         run: (actor, key, input) => this.assets.register(actor, key, input),
       }),
       define({
+        id: 'assets.recordFiscal',
+        description:
+          'Înregistrează regimul fiscal al unui mijloc fix (art. 28 din Codul fiscal): metoda de amortizare fiscală, valoarea fiscală, durata normală, plafonul autoturismelor M1.',
+        summary:
+          "Records a fixed asset's fiscal basis (Fiscal Code art. 28): fiscal depreciation method, fiscal value, normal life, the M1 car cap; a new version replaces the earlier.",
+        toolset: 'books',
+        dataClasses: ['books', 'tax', 'evidence'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'write',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: fiscalInput,
+        output: z.looseObject({ assetId: z.string(), version: z.number() }),
+        run: (actor, key, input) => this.assets.recordFiscal(actor, key, input),
+      }),
+      define({
+        id: 'profit.register',
+        description:
+          'Registrul de evidență fiscală al unui an (OMF nr. 808/2026): calculele impozitului pe profit și corecțiile, în ordine cronologică, cu conturile și înregistrările din care provin sumele.',
+        summary:
+          'The fiscal register (Registrul de evidență fiscală, OMF 808/2026) of a year: each profit tax computation and correction in order, with the accounts and entries behind its amounts.',
+        toolset: 'tax',
+        dataClasses: ['books', 'tax'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: profitYearInput,
+        output: page(z.unknown()).extend({
+          year: z.number(),
+          format: z.string(),
+          columns: z.array(z.string()),
+        }),
+        run: (actor, _key, input) => this.profit.register(actor, input),
+      }),
+      define({
+        id: 'profit.losses',
+        description:
+          'Pierderile fiscale de recuperat, pe ani (art. 31 din Codul fiscal): ce a avut fiecare calcul anual la început, ce a recuperat și ce a rămas.',
+        summary:
+          "The tax loss vintages by year (Fiscal Code art. 31): what each year's computation started from, recovered and left.",
+        toolset: 'tax',
+        dataClasses: ['books', 'tax'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: profitYearInput,
+        output: page(z.unknown()).extend({ clauses: z.array(z.string()) }),
+        run: (actor, _key, input) => this.profit.losses(actor, input),
+      }),
+      define({
+        id: 'taxaccount.reconcile',
+        description:
+          'Fișa pe plătitor (situația sintetică din SPV) comparată cu registrele la data ei, pe obligație și perioadă, cu explicația fiecărei diferențe.',
+        summary:
+          "ANAF's statement of the taxpayer's account (fișa pe plătitor) against the books on its day, per obligation and period, each difference explained.",
+        toolset: 'tax',
+        dataClasses: ['books', 'tax'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: reconcileInput,
+        output: page(z.unknown()).extend({
+          documentId: z.string(),
+          asOf: z.string(),
+          source: z.string(),
+          matched: z.boolean(),
+          differences: z.number(),
+        }),
+        run: (actor, _key, input) => this.taxAccount.reconcile(actor, input),
+      }),
+      define({
+        id: 'taxaccount.position',
+        description:
+          'Obligațiile față de stat și creanțele asupra lui la o dată: tipul, perioada, bugetul, categoria, scadența, dacă se plătesc în contul unic, soldul.',
+        summary:
+          'What the company owes the state and is owed by it on a day, per obligation: type, period, budget, category, due date, single account or not, balance.',
+        toolset: 'tax',
+        dataClasses: ['books', 'tax'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: positionInput,
+        output: page(z.unknown()).extend({ date: z.string(), clauses: z.array(z.string()) }),
+        run: (actor, _key, input) => this.taxAccount.position(actor, input),
+      }),
+      define({
         id: 'assets.dispose',
         description:
           'Înregistrează scoaterea din funcțiune a unui mijloc fix (casare, vânzare), cu documentul ei.',
@@ -2333,6 +2516,42 @@ export class Engine {
         input: determinationsInput,
         output: proposeView,
         run: (actor, key, input) => this.determinations.propose(actor, key, input),
+      }),
+      define({
+        id: 'annual.ask',
+        description:
+          'Deschide întrebările situațiilor financiare anuale (S1005, S1003) ale unui exercițiu: capitolele din „Date informative” pe care registrele nu le țin, informațiile notelor explicative și ale declarației, și, după pregătire, documentele însoțitoare semnate.',
+        summary:
+          "Opens a year's annual-statement questions for a person: the F30 chapters the books do not hold, the notes' disclosures and, once prepared, each accompanying document to supply signed.",
+        toolset: 'tax',
+        dataClasses: ['books', 'tax'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'write',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: annualInput,
+        output: annualAskView,
+        run: (actor, key, input) => annualAsk(this.commands, actor, key, input),
+      }),
+      define({
+        id: 'vat.registration',
+        description:
+          'Înregistrarea în scopuri de TVA a unui an: ziua și factura care depășesc plafonul de scutire, înregistrarea datorată și dacă registrele o arată întârziată, TVA datorată pentru perioada în care trebuia aplicat regimul normal (art. 310 alin. (6^1)–(6^2)), ce mai hotărăște o persoană, primul decont și, la anularea înregistrării, ultimul decont și ajustarea bunurilor de capital.',
+        summary:
+          "A year's VAT registration outside VAT: the invoice exceeding the threshold, whether the registration was late and the VAT owed for it, and on a cancellation the last return and the capital goods' adjustment.",
+        toolset: 'tax',
+        dataClasses: ['books', 'tax'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: registrationInput,
+        output: registrationView,
+        run: (actor, _, input) => this.registrations.view(actor, input),
       }),
       define({
         id: 'closure.evaluate',

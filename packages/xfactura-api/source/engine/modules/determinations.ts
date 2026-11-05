@@ -26,6 +26,8 @@ import {
   type YearFigures,
 } from 'xfactura-core/ro/determinations';
 import { euVatPrefixes } from 'xfactura-core/ro/geo';
+import { quarterMonths } from 'xfactura-core/ro/payroll';
+import { d406StartOf } from 'xfactura-core/ro/saft/applicability';
 import {
   microConditionsAnswer,
   type MicroConditionsAnswer,
@@ -36,6 +38,8 @@ import type { RuleContext } from 'xfactura-core/rules';
 import { bucharestDate, type LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
 import {
+  assetEvents,
+  assets,
   documents,
   employmentTerms,
   entries,
@@ -619,12 +623,54 @@ async function activityOf(tx: Transaction, companyId: string, year: number): Pro
     );
     quarters.push(netCredit(rows, (account) => account.startsWith('70')));
   }
+  const first = await firstBooksDay(tx, companyId);
   return {
     year,
     kept: await keeps(tx, companyId, year),
     quarterTurnover: quarters as unknown as YearActivity['quarterTurnover'],
     days: await outputBases(tx, companyId, `${year}-01-01`, `${year}-12-31`),
+    // A first financial year starting within this year: a company set up then (Legea nr.
+    // 82/1991 art. 27 alin. (8)).
+    start:
+      first && first > `${year}-01-01` && first <= `${year}-12-31` ? (first as LocalDate) : null,
+    euServices: await euServicesOf(tx, companyId, year),
   };
+}
+
+/** The year's invoices from suppliers established in another member state, and to customers
+ * there, by date: what needs the art. 317 code outside VAT (art. 317 alin. (1) lit. b)–c)). */
+async function euServicesOf(tx: Transaction, companyId: string, year: number) {
+  const eu = Object.keys(euVatPrefixes).filter((code) => code !== 'RO');
+  const rows = await tx
+    .select({
+      id: documents.id,
+      kind: documents.kind,
+      number: documents.number,
+      date: documents.docDate,
+      country: parties.country,
+    })
+    .from(documents)
+    .innerJoin(
+      parties,
+      and(eq(parties.companyId, documents.companyId), eq(parties.id, documents.partyId)),
+    )
+    .where(
+      and(
+        eq(documents.companyId, companyId),
+        inArray(documents.kind, ['invoice.received', 'invoice.issued']),
+        inArray(parties.country, eu),
+        gte(documents.docDate, `${year}-01-01`),
+        lte(documents.docDate, `${year}-12-31`),
+      ),
+    )
+    .orderBy(asc(documents.docDate), asc(documents.id));
+  return rows.map((row) => ({
+    date: row.date as LocalDate,
+    documentId: row.id,
+    number: row.number ?? row.id,
+    direction: row.kind === 'invoice.received' ? ('purchase' as const) : ('sale' as const),
+    country: row.country,
+  }));
 }
 
 /** The owner's latest answer to `micro.conditions` for a year. */
@@ -711,13 +757,24 @@ const view = (
         fact.effectiveFrom <= `${determination.year}-12-31`,
     )
     .map((fact) => ({ value: fact.value, effectiveFrom: fact.effectiveFrom }));
+  // Recorded from the computation's start: 1 January, or a later day for a value that starts
+  // during the year (a registration, a special code obtained, a company set up).
+  const from =
+    determination.effectiveFrom > `${determination.year}-01-01`
+      ? determination.effectiveFrom
+      : `${determination.year}-01-01`;
   const atStart = yearly
-    ? recordedInYear(facts, determination.axis, determination.year, `${determination.year}-01-01`)
-    : recordedAt(facts, determination.axis, `${determination.year}-01-01`);
+    ? recordedInYear(facts, determination.axis, determination.year, from)
+    : recordedAt(facts, determination.axis, from);
   const computed = [
     { value: determination.value, effectiveFrom: determination.effectiveFrom },
     ...determination.changes,
   ];
+  // A recorded change within the year the computation does not make (a cancellation the law
+  // does not allow) disagrees too, for the axes that hold until changed.
+  const computedAt = (date: string) =>
+    determination.changes.filter((change) => change.effectiveFrom <= date).at(-1)?.value ??
+    (date >= determination.effectiveFrom ? determination.value : undefined);
   const agrees =
     determination.status !== 'proposed'
       ? null
@@ -726,7 +783,13 @@ const view = (
             (yearly
               ? recordedInYear(facts, determination.axis, determination.year, item.effectiveFrom)
               : recordedAt(facts, determination.axis, item.effectiveFrom)) === item.value,
-        ) && atStart !== null;
+        ) &&
+        atStart !== null &&
+        (yearly ||
+          values.every((item) => {
+            const expected = computedAt(item.effectiveFrom);
+            return expected === undefined || expected === item.value;
+          }));
   return {
     ...determination,
     recorded: { values, confirmed: confirmed[key] === determination.fingerprint, agrees },
@@ -793,6 +856,10 @@ async function booksOf(
       .groupBy(sql`substr(${entries.date}, 1, 7)`);
     return rows.map((row) => row.month).sort();
   };
+  // Sick leave and contracts ended over whole quarters: a later month's event brings a quarterly
+  // filer's earlier months forward (art. 147 alin. (11)).
+  const quarterFrom = quarterMonths(range.from)[0]!;
+  const quarterTo = quarterMonths(range.to)[2]!;
   const sick = await tx
     .select({ month: payrollRuns.month })
     .from(payrollLines)
@@ -806,15 +873,17 @@ async function booksOf(
     .where(
       and(
         eq(payrollLines.companyId, companyId),
-        gte(payrollRuns.month, range.from),
-        lte(payrollRuns.month, range.to),
+        gte(payrollRuns.month, quarterFrom),
+        lte(payrollRuns.month, quarterTo),
         sql`${payrollLines.input} LIKE '%"sick":%'`,
         sql`not exists (select 1 from ${payrollRunEvents} e where e.company_id = ${payrollRuns.companyId}
           and e.run_id = ${payrollRuns.id} and e.state = 'superseded')`,
       ),
     );
   const ends = contracts.flatMap((contract) =>
-    contract.end && contract.end >= from && contract.end <= to ? [contract.end.slice(0, 7)] : [],
+    contract.end && contract.end >= `${quarterFrom}-01` && contract.end <= lastDay(quarterTo)
+      ? [contract.end.slice(0, 7)]
+      : [],
   );
   const european = await tx
     .select({ month: sql<string>`substr(${taxEntries.taxPoint}, 1, 7)` })
@@ -846,7 +915,14 @@ async function booksOf(
     )
     .groupBy(sql`substr(${entries.date}, 1, 7)`);
   const foreign = await tx
-    .select({ id: documents.id, date: documents.docDate, country: parties.country })
+    .select({
+      id: documents.id,
+      date: documents.docDate,
+      country: parties.country,
+      reverseCharge: sql<number>`exists (select 1 from ${taxEntries} t
+        where t.company_id = ${documents.companyId} and t.document_id = ${documents.id}
+        and t.code in ('RC-EU-SERV', 'RC-NONEU-SERV'))`,
+    })
     .from(documents)
     .innerJoin(
       parties,
@@ -880,6 +956,47 @@ async function booksOf(
         lte(fiscalYears.to, to),
       ),
     );
+  // The years a fixed asset was held: a card of the register in use, or a tangible asset account
+  // (21x) with a balance or a movement.
+  const cards = await tx
+    .select({ commissionedOn: assets.commissionedOn, disposedOn: assetEvents.date })
+    .from(assets)
+    .leftJoin(
+      assetEvents,
+      and(
+        eq(assetEvents.companyId, assets.companyId),
+        eq(assetEvents.assetId, assets.id),
+        eq(assetEvents.kind, 'disposed'),
+      ),
+    )
+    .where(eq(assets.companyId, companyId));
+  const tangible = await tx
+    .select({ account: lines.account, date: entries.date, side: lines.side, bani: lines.bani })
+    .from(lines)
+    .innerJoin(entries, lineEntry)
+    .where(
+      and(eq(lines.companyId, companyId), lte(entries.date, to), sql`${lines.account} LIKE '21%'`),
+    );
+  const assetYears = years.filter((year) => {
+    if (
+      cards.some(
+        (card) =>
+          card.commissionedOn <= `${year}-12-31` &&
+          (!card.disposedOn || card.disposedOn >= `${year}-01-01`),
+      )
+    )
+      return true;
+    const balances = new Map<string, bigint>();
+    for (const row of tangible) {
+      if (row.date > `${year}-12-31`) continue;
+      if (row.date >= `${year}-01-01`) return true;
+      balances.set(
+        row.account,
+        (balances.get(row.account) ?? 0n) + (row.side === 'D' ? row.bani : -row.bani),
+      );
+    }
+    return [...balances.values()].some((balance) => balance !== 0n);
+  });
   return {
     firstDay,
     financialYearEnds: yearEnds.map((row) => row.to),
@@ -891,7 +1008,32 @@ async function booksOf(
       month: row.date.slice(0, 7),
       documentId: row.id,
       country: row.country,
+      reverseCharge: Boolean(row.reverseCharge),
     })),
+    reverseCharges: (
+      await tx
+        .select({
+          date: taxEntries.taxPoint,
+          documentId: taxEntries.documentId,
+          code: taxEntries.code,
+          base: sql<bigint>`sum(${taxEntries.baseBani})`.mapWith(BigInt),
+        })
+        .from(taxEntries)
+        .where(
+          and(
+            eq(taxEntries.companyId, companyId),
+            eq(taxEntries.tax, 'VAT'),
+            eq(taxEntries.direction, 'output'),
+            inArray(taxEntries.code, ['RC-EU-SERV', 'RC-NONEU-SERV']),
+            gte(taxEntries.taxPoint, from),
+            lte(taxEntries.taxPoint, to),
+          ),
+        )
+        .groupBy(taxEntries.taxPoint, taxEntries.documentId, taxEntries.code)
+    )
+      // A booking reversed in the same period leaves nothing to declare.
+      .filter((row) => row.base !== 0n)
+      .map((row) => ({ date: row.date, documentId: row.documentId ?? '', code: row.code })),
     stockMonths: await monthsOfLines(['3']),
     sponsorshipMonths: await monthsOfLines(['6582']),
     payrollWithoutContractMonths: payrollTax.filter((month) => !employmentMonths.includes(month)),
@@ -914,6 +1056,7 @@ async function booksOf(
         ),
       };
     }),
+    assetYears,
   };
 }
 
@@ -943,12 +1086,18 @@ export function closureOf(
       facts = [...result.context.facts];
       contracts = result.context.contracts;
     }
+    // From when the company's category files D406, for every month of the years the range
+    // touches (the annual assets file reads the year's first month).
+    const months: string[] = [];
+    for (let year = Number(range.from.slice(0, 4)); year <= Number(range.to.slice(0, 4)); year++)
+      for (let month = 1; month <= 12; month++) months.push(`${year}-${pad(month)}`);
     return evaluateClosure({
       interval: range,
       facts,
       determinations,
       confirmed,
       books: await booksOf(tx, companyId, range, contracts, firstDay),
+      d406Start: d406StartOf(rules, months),
     });
   });
 }

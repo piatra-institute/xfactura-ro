@@ -29,6 +29,8 @@ export const determinationAxes = [
   'size.category',
   'vat.threshold',
   'vat.cash',
+  'vat.status',
+  'vat.eu',
 ] as const;
 export type DeterminationAxis = (typeof determinationAxes)[number];
 
@@ -90,6 +92,21 @@ export interface YearActivity {
   /** Each day's supplies in the bases of art. 310 alin. (2) and art. 282 alin. (3^1), not
    * cumulative, in date order. */
   days: readonly { date: LocalDate; exemption: bigint; vat: bigint }[];
+  /** The day the company's first financial year begins, when within this year: a company set up
+   * during the year (Legea nr. 82/1991 art. 27 alin. (8)), whose books hold it from its start. */
+  start?: LocalDate | null;
+  /** Services across the EU border, from the documents: invoices from suppliers established in
+   * another member state and to customers there, by date (art. 317 alin. (1) lit. b)–c)). */
+  euServices?: readonly EuService[];
+}
+
+/** An invoice for services across the EU border, as the documents show it. */
+export interface EuService {
+  date: LocalDate;
+  documentId: string;
+  number: string;
+  direction: 'purchase' | 'sale';
+  country: string;
 }
 
 /** An employment contract as the books record it (the latest terms). */
@@ -725,6 +742,19 @@ export function determineIncomeTax(
           reason: `situațiile financiare nu au fost depuse în termen (${answer.lateStatementsFrom}, art. 52 alin. (2))`,
         });
       }
+      // Alin. (4) and (7): an excluded activity started, or the shareholders' other
+      // micro-enterprises, from the quarter it happened in.
+      for (const [from, text] of [
+        [answer?.excludedActivityFrom, 'a început o activitate exclusă (art. 52 alin. (4))'],
+        [
+          answer?.shareholdersExitFrom,
+          'asociații cu peste 25% dețin și alte microîntreprinderi și au stabilit ieșirea ei (art. 52 alin. (7))',
+        ],
+      ] as const)
+        if (from && from.startsWith(String(year))) {
+          draft.cite(code('art.52(4),(6)-(7)'));
+          exits.push({ quarter: quarterOf(from), reason: `${text} la ${from}` });
+        }
       const first = exits.sort((a, b) => a.quarter - b.quarter)[0];
       if (first) {
         draft.cite(code('art.52(1),(5)'));
@@ -766,23 +796,16 @@ export function determineVatPeriod(
     if (atStart !== 'normal_vat' && atEnd !== 'normal_vat')
       return draft.notApplicable(`Compania nu este înregistrată în scopuri de TVA în ${year}.`);
     draft.cite(code('art.322(2)-(6)'), code('norme.art.322.pct.103(2)-(3)'));
-    if (atStart !== 'normal_vat')
-      return draft.needs(
-        `Compania se înregistrează în scopuri de TVA în cursul anului ${year}: perioada fiscală rezultă din cifra de afaceri declarată la înregistrare (art. 322 alin. (3)–(4)).`,
-        factQuestion('vat.period', year),
-      );
-    const registeredBefore = context.facts.some(
+    if (atStart !== 'normal_vat') return registrationYearPeriod(context, draft);
+    const registeredBefore = context.facts.find(
       (fact) =>
         fact.axis === 'vat.status' &&
         fact.value === 'normal_vat' &&
         fact.effectiveFrom > `${year - 1}-01-01` &&
-        fact.effectiveFrom <= `${year - 1}-12-31`,
+        fact.effectiveFrom <= `${year - 1}-12-31` &&
+        recordedAt(context.facts, 'vat.status', addDays(fact.effectiveFrom, -1)) !== 'normal_vat',
     );
-    if (registeredBefore)
-      return draft.needs(
-        `Compania s-a înregistrat în scopuri de TVA în ${year - 1}: cifra de afaceri efectivă se recalculează pentru un an întreg (art. 322 alin. (5)).`,
-        factQuestion('vat.period', year),
-      );
+    if (registeredBefore) return afterRegistrationPeriod(context, draft, registeredBefore);
     const limit = draft.param<string>('ro.vat.period.limit_eur', 'reporting_period_start', start);
     const turnover = draft.known('previousVatTurnover', context.previous.vatTurnover, money);
     const rate = draft.known('previousEurRate', context.previous.eurRate, (quote) => ({
@@ -807,6 +830,136 @@ export function determineVatPeriod(
       `Perioada fiscală de TVA în ${year}: ${quarterly ? 'trimestrul' : 'luna'} calendaristic${quarterly ? '' : 'ă'}.`,
     );
   });
+}
+
+/** A year's turnover recalculated for a whole calendar year (art. 322 alin. (4)–(5)): in
+ * proportion to the days of activity, or to the calendar months begun, as the register says. */
+function annualized(
+  draft: Draft,
+  turnover: bigint,
+  from: LocalDate,
+  to: LocalDate,
+): { value: bigint; text: string } {
+  const year = Number(from.slice(0, 4));
+  const method = draft.param<'days' | 'months'>(
+    'ro.vat.registration.annualized',
+    'reporting_period_start',
+    from,
+  );
+  if (method === 'months') {
+    const months = Number(to.slice(5, 7)) - Number(from.slice(5, 7)) + 1;
+    return {
+      value: divRound(turnover * 12n, BigInt(months), 'halfAwayFromZero'),
+      text: `${lei(turnover)} lei × 12 / ${months} luni începute`,
+    };
+  }
+  const days = daysBetween(from, to) + 1;
+  const inYear = daysBetween(`${year}-01-01` as LocalDate, `${year}-12-31` as LocalDate) + 1;
+  return {
+    value: divRound(turnover * BigInt(inYear), BigInt(days), 'halfAwayFromZero'),
+    text: `${lei(turnover)} lei × ${inYear} / ${days} zile de activitate`,
+  };
+}
+
+/**
+ * The VAT period of the year a small enterprise registers in (art. 322 alin. (4)): the turnover
+ * obtained before registration, recalculated for a whole calendar year, against the limit at the
+ * BNR rate of the previous 31 December (norme pct. 103 alin. (2)); monthly above it, or after an
+ * intra-Community acquisition of goods before registration.
+ */
+function registrationYearPeriod(context: DeterminationContext, draft: Draft): Determination {
+  const year = context.year;
+  const registration = context.facts
+    .filter(
+      (fact) =>
+        fact.axis === 'vat.status' &&
+        fact.value === 'normal_vat' &&
+        fact.effectiveFrom > `${year}-01-01` &&
+        fact.effectiveFrom <= `${year}-12-31`,
+    )
+    .map((fact) => fact.effectiveFrom)
+    .sort()[0]!;
+  draft.cite(code('art.322(4)-(5)'), code('norme.art.322.pct.103(2)-(3)'));
+  draft.inputs.registration = registration;
+  const from = (context.activity.start ?? `${year}-01-01`) as LocalDate;
+  if (!context.activity.kept && !context.activity.start)
+    return draft.needs(
+      `Compania se înregistrează în scopuri de TVA la ${registration}, iar registrele nu cuprind anul ${year} de la 1 ianuarie: cifra de afaceri obținută până la înregistrare nu se poate recalcula (art. 322 alin. (4)).`,
+      factQuestion('vat.period', year),
+    );
+  const limit = draft.param<string>('ro.vat.period.limit_eur', 'reporting_period_start', from);
+  const rate = draft.known('previousEurRate', context.previous.eurRate, (quote) => ({
+    ...quote,
+  }));
+  const goods = draft.known(
+    'euGoodsAcquisitions',
+    context.current.euGoodsAcquisitions,
+    (value) => value,
+  );
+  if (rate === undefined || goods === undefined)
+    return draft.needs(
+      `Cursul de la 31.12.${year - 1} sau achizițiile din ${year} nu sunt cunoscute.`,
+    );
+  const turnover = context.activity.days
+    .filter((day) => day.date >= from && day.date < registration)
+    .reduce((sum, day) => sum + day.exemption, 0n);
+  const yearly = annualized(draft, turnover, from, addDays(registration as LocalDate, -1));
+  const limitLei = euroInLei(limit, rate);
+  draft.inputs.annualized = money(yearly.value);
+  draft.line(
+    `Înregistrare în scopuri de TVA la ${registration}: cifra de afaceri obținută de la ${from}, recalculată pentru un an întreg, ${yearly.text} = ${lei(yearly.value)} lei, față de ${limit} € × ${rate.rate} (BNR ${rate.date}) = ${lei(limitLei)} lei; ${goods ? 'cu' : 'fără'} achiziții intracomunitare de bunuri în ${year}.`,
+  );
+  draft.line(
+    'O înregistrare din oficiu are luna drept perioadă fiscală în anul înregistrării (norme pct. 103 alin. (1)): decizia de înregistrare o arată.',
+  );
+  const quarterly = yearly.value <= limitLei && !goods;
+  return draft.finish(
+    'proposed',
+    quarterly ? 'quarterly' : 'monthly',
+    registration,
+    `Perioada fiscală de TVA de la ${registration}: ${quarterly ? 'trimestrul' : 'luna'} calendaristic${quarterly ? '' : 'ă'} (art. 322 alin. (4)); primul decont începe la data înregistrării.`,
+  );
+}
+
+/** The year after a registration (art. 322 alin. (5)): the turnover actually obtained in the
+ * registration year from the registration, recalculated for a whole year. */
+function afterRegistrationPeriod(
+  context: DeterminationContext,
+  draft: Draft,
+  registered: ProfileFact,
+): Determination {
+  const year = context.year;
+  const start = `${year}-01-01`;
+  draft.cite(code('art.322(4)-(5)'), code('norme.art.322.pct.103(2)-(3)'));
+  const limit = draft.param<string>('ro.vat.period.limit_eur', 'reporting_period_start', start);
+  const turnover = draft.known('previousVatTurnover', context.previous.vatTurnover, money);
+  const rate = draft.known('previousEurRate', context.previous.eurRate, (quote) => ({
+    ...quote,
+  }));
+  const goods = draft.known(
+    'previousEuGoodsAcquisitions',
+    context.previous.euGoodsAcquisitions,
+    (value) => value,
+  );
+  if (turnover === undefined || rate === undefined || goods === undefined)
+    return draft.needs(`Cifra de afaceri a anului ${year - 1} nu este cunoscută.`);
+  const yearly = annualized(
+    draft,
+    turnover,
+    registered.effectiveFrom,
+    `${year - 1}-12-31` as LocalDate,
+  );
+  const limitLei = euroInLei(limit, rate);
+  draft.line(
+    `Înregistrare în scopuri de TVA la ${registered.effectiveFrom}: cifra de afaceri efectivă a anului ${year - 1} de la înregistrare, recalculată pentru un an întreg, ${yearly.text} = ${lei(yearly.value)} lei, față de ${lei(limitLei)} lei; ${goods ? 'cu' : 'fără'} achiziții intracomunitare de bunuri.`,
+  );
+  const quarterly = yearly.value <= limitLei && !goods;
+  return draft.finish(
+    'proposed',
+    quarterly ? 'quarterly' : 'monthly',
+    start,
+    `Perioada fiscală de TVA în ${year}: ${quarterly ? 'trimestrul' : 'luna'} calendaristic${quarterly ? '' : 'ă'} (art. 322 alin. (5)).`,
+  );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1078,7 +1231,7 @@ export function determineVatThreshold(
 ): Determination {
   const year = context.year;
   const draft = new Draft('vat.threshold', year, rules);
-  const start = `${year}-01-01`;
+  const start = context.activity.start ?? `${year}-01-01`;
   return guarded(draft, () => {
     const atStart = recordedAt(context.facts, 'vat.status', start);
     if (!atStart)
@@ -1091,50 +1244,70 @@ export function determineVatThreshold(
     const threshold = draft.param<string>(
       'ro.vat.exemption.threshold',
       'reporting_period_start',
-      start,
+      `${year}-01-01`,
     );
     draft.cite(code('art.310(1)-(2),(6)'));
-    if (!context.activity.kept)
+    if (!context.activity.kept && !context.activity.start)
       return draft.needs(
         `Registrele nu cuprind anul ${year} de la 1 ianuarie: cifra de afaceri a regimului de scutire nu se poate cumula.`,
         factQuestion('vat.threshold', year),
       );
-    const limit = BigInt(threshold) * 100n;
-    let total = 0n;
-    let crossed: LocalDate | null = null;
-    for (const day of context.activity.days) {
-      if (recordedAt(context.facts, 'vat.status', day.date) === 'normal_vat') break;
-      total += day.exemption;
-      if (total > limit) {
-        crossed = day.date;
-        break;
-      }
+    if (context.activity.start) {
+      // A company set up during the year: the threshold is the whole one (art. 310 alin. (5)),
+      // cumulated from its first day.
+      draft.cite(code('art.310(4)-(5)'), 'L82/1991:art.27(8)');
+      draft.inputs.start = context.activity.start;
+      draft.line(
+        `Firma începe activitatea la ${start} (primul exercițiu financiar începe la înființare, Legea nr. 82/1991 art. 27 alin. (8)): plafonul nu se proporționalizează pentru anul început (art. 310 alin. (5)).`,
+      );
     }
+    const limit = BigInt(threshold) * 100n;
+    const { total, crossed } = exemptionCrossing(context, limit);
     draft.inputs.exemptionTurnover = money(total);
     draft.inputs.crossed = crossed;
     draft.line(
       `Livrări și prestări cu locul în România în ${year}${crossed ? ` până la ${crossed}` : ''}: ${lei(total)} lei, față de plafonul de ${lei(limit)} lei.`,
     );
     if (crossed) {
+      draft.cite(code('art.316(1)(b),(1^1)'));
       draft.changes.push({
         value: 'exceeded',
         effectiveFrom: crossed,
         reason: `plafonul de ${threshold} lei este depășit la ${crossed}: înregistrarea în scopuri de TVA se solicită cel târziu la această dată (art. 310 alin. (6))`,
       });
+      draft.line(
+        `Înregistrarea în scopuri de TVA se solicită cel târziu la ${crossed} (art. 310 alin. (6), art. 316 alin. (1) lit. b)) și este valabilă de la această dată (art. 316 alin. (1^1) lit. b)); regimul normal se aplică începând cu tranzacția care depășește plafonul.`,
+      );
       return draft.finish(
-        'unsupported',
-        null,
+        'proposed',
+        'under',
         start,
-        `Plafonul de scutire este depășit la ${crossed}.`,
-        {
-          trigger: 'VAT_THRESHOLD_EXCEEDED',
-          message: `Cifra de afaceri depășește plafonul de ${threshold} lei la ${crossed}: înregistrarea în scopuri de TVA (art. 316) și taxa datorată pentru înregistrarea întârziată (art. 310 alin. (6^2)) nu sunt acoperite.`,
-          capabilities: ['VAT_ART316_REGISTRATION', 'VAT_LATE_REGISTRATION'],
-        },
+        `Plafonul de scutire este depășit la ${crossed}: înregistrare în scopuri de TVA de la această dată.`,
       );
     }
     return draft.finish('proposed', 'under', start, `Sub plafonul de scutire în ${year}.`);
   });
+}
+
+/**
+ * The day the year's supplies under the exemption (art. 310 alin. (2)) exceed the threshold: the
+ * cumulated bases of the days the company was outside VAT the day before (a registration valid
+ * from the day itself, the one the crossing gives, does not stop the count).
+ */
+export function exemptionCrossing(
+  context: DeterminationContext,
+  limit: bigint,
+): { total: bigint; crossed: LocalDate | null } {
+  let total = 0n;
+  const from = context.activity.start ?? `${context.year}-01-01`;
+  for (const day of context.activity.days) {
+    if (day.date < from) continue;
+    if (recordedAt(context.facts, 'vat.status', addDays(day.date, -1)) === 'normal_vat')
+      return { total, crossed: null };
+    total += day.exemption;
+    if (total > limit) return { total, crossed: day.date };
+  }
+  return { total, crossed: null };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1233,6 +1406,206 @@ export function determineCashVat(context: DeterminationContext, rules: RuleConte
   });
 }
 
+// ---------------------------------------------------------------------------------------------
+// Registered for VAT or not: the registration the threshold makes due, a registration by option
+// and leaving the VAT system (art. 310 alin. (3), (6), (7), art. 316 alin. (1), (1^1), (11))
+
+export function determineVatStatus(
+  context: DeterminationContext,
+  rules: RuleContext,
+): Determination {
+  const year = context.year;
+  const draft = new Draft('vat.status', year, rules);
+  const first = (context.activity.start ?? `${year}-01-01`) as LocalDate;
+  const end = `${year}-12-31`;
+  return guarded(draft, () => {
+    const atStart = recordedAt(context.facts, 'vat.status', first);
+    if (!atStart)
+      return draft.needs(
+        'Regimul TVA al companiei nu este înregistrat (vat.status).',
+        factQuestionFrom('vat.status', first),
+      );
+    draft.inputs.atStart = atStart;
+    const threshold = draft.param<string>(
+      'ro.vat.exemption.threshold',
+      'reporting_period_start',
+      `${year}-01-01`,
+    );
+    const limit = BigInt(threshold) * 100n;
+    const kept = context.activity.kept || Boolean(context.activity.start);
+    const crossing = atStart === 'non_vat' && kept ? exemptionCrossing(context, limit) : null;
+    const recorded = context.facts.filter(
+      (fact) =>
+        fact.axis === 'vat.status' && fact.effectiveFrom > first && fact.effectiveFrom <= end,
+    );
+    let value = atStart;
+    let since: LocalDate = first;
+    const move = (to: string, from: LocalDate, reason: string) => {
+      if (to === value) return;
+      draft.changes.push({ value: to, effectiveFrom: from, reason });
+      value = to;
+      since = from;
+    };
+    draft.line(
+      `La ${first}: ${atStart === 'normal_vat' ? 'înregistrată în scopuri de TVA (art. 316)' : 'neînregistrată în scopuri de TVA'}.`,
+    );
+    const events = [
+      ...(crossing?.crossed ? [{ date: crossing.crossed, kind: 'crossing' as const }] : []),
+      ...recorded.map((fact) => ({
+        date: fact.effectiveFrom,
+        kind: 'fact' as const,
+        value: fact.value,
+      })),
+    ].sort((a, b) => a.date.localeCompare(b.date));
+    for (const event of events) {
+      if (event.kind === 'crossing') {
+        draft.cite(code('art.310(1)-(2),(6)'), code('art.316(1)(b),(1^1)'));
+        draft.inputs.crossed = event.date;
+        draft.line(
+          `Plafonul de scutire de ${threshold} lei este depășit la ${event.date}: înregistrarea se solicită cel târziu atunci și este valabilă de la această dată, inclusiv când se cere sau se face din oficiu mai târziu (art. 316 alin. (1^1) lit. b) și f), art. 310 alin. (6^1)–(6^2)).`,
+        );
+        move(
+          'normal_vat',
+          event.date,
+          `plafonul de scutire este depășit la ${event.date} (art. 310 alin. (6), art. 316 alin. (1^1) lit. b))`,
+        );
+        continue;
+      }
+      if (event.value === 'normal_vat' && crossing?.crossed && event.date > crossing.crossed) {
+        draft.line(
+          `Înregistrarea consemnată de la ${event.date} este după depășirea plafonului (${crossing.crossed}): data înregistrării rămâne data depășirii (art. 310 alin. (6^1) lit. a), (6^2) lit. a)); o decizie cu altă dată (norme pct. 84 alin. (2) lit. c)) se indică cu documentul.`,
+        );
+        continue;
+      }
+      if (event.value === value) continue;
+      if (event.value === 'normal_vat') {
+        draft.cite(code('art.316(1)(b),(1^1)'));
+        draft.line(
+          `Înregistrare prin opțiune consemnată de la ${event.date}: valabilă de la data solicitării (art. 310 alin. (3), art. 316 alin. (1) lit. c), alin. (1^1) lit. c)).`,
+        );
+        move('normal_vat', event.date, 'înregistrare prin opțiune (art. 310 alin. (3))');
+        continue;
+      }
+      // Leaving the VAT system: allowed when neither the previous year nor this one up to the
+      // request exceeded the threshold (art. 310 alin. (7)).
+      draft.cite(code('art.310(7)'), code('art.316(11)(g),(13)'));
+      const previous = draft.known(
+        'previousExemptionTurnover',
+        context.previous.exemptionTurnover,
+        money,
+      );
+      if (previous === undefined)
+        return draft.needs(
+          `Anularea înregistrării de la ${event.date} cere cifra de afaceri a anului ${year - 1} (art. 310 alin. (7)).`,
+        );
+      const current = context.activity.days
+        .filter((item) => item.date >= first && item.date < event.date)
+        .reduce((sum, item) => sum + item.exemption, 0n);
+      draft.inputs.deregistration = { date: event.date, current: money(current) };
+      const eligible = previous <= limit && current <= limit;
+      draft.line(
+        `Anularea înregistrării consemnată de la ${event.date}: cifra de afaceri ${year - 1} ${lei(previous)} lei și ${year} până atunci ${lei(current)} lei, față de plafonul de ${lei(limit)} lei: ${eligible ? 'se poate cere' : 'NU se poate cere'} (art. 310 alin. (7)); ultimul decont se depune până la 25 a lunii următoare comunicării deciziei (art. 316 alin. (13)).`,
+      );
+      if (eligible)
+        move(
+          'non_vat',
+          event.date,
+          'anularea înregistrării pentru regimul special de scutire, de la comunicarea deciziei (art. 310 alin. (7), art. 316 alin. (11) lit. g))',
+        );
+    }
+    draft.inputs.until = since;
+    return draft.finish(
+      'proposed',
+      atStart,
+      first,
+      `Regimul TVA în ${year}: ${atStart === 'normal_vat' ? 'plătitor' : 'neplătitor'} de la ${first}${draft.changes.map((change) => `, ${change.value === 'normal_vat' ? 'plătitor' : 'neplătitor'} de la ${change.effectiveFrom}`).join('')}.`,
+    );
+  });
+}
+
+/**
+ * The special registration of art. 317 (`vat.eu`, `special`) for a company outside VAT that buys
+ * services from a supplier established in another member state, or supplies services there to a
+ * taxable person (alin. (1) lit. b)–c)): due before the first such operation; valid from the
+ * request (norme pct. 90 alin. (4)). Services to or from outside the Union need no code.
+ */
+export function determineVatEu(context: DeterminationContext, rules: RuleContext): Determination {
+  const year = context.year;
+  const draft = new Draft('vat.eu', year, rules);
+  const first = (context.activity.start ?? `${year}-01-01`) as LocalDate;
+  return guarded(draft, () => {
+    const status = (date: string) => recordedAt(context.facts, 'vat.status', date);
+    const outside =
+      status(first) !== 'normal_vat' ||
+      context.facts.some(
+        (fact) =>
+          fact.axis === 'vat.status' &&
+          fact.value !== 'normal_vat' &&
+          fact.effectiveFrom > first &&
+          fact.effectiveFrom <= `${year}-12-31`,
+      );
+    if (!status(first) && !context.facts.some((fact) => fact.axis === 'vat.status'))
+      return draft.needs(
+        'Regimul TVA al companiei nu este înregistrat (vat.status).',
+        factQuestionFrom('vat.status', first),
+      );
+    if (!outside)
+      return draft.notApplicable(
+        `Compania este înregistrată în scopuri de TVA tot anul ${year}: codul art. 316 servește operațiunilor intracomunitare.`,
+      );
+    const services = (context.activity.euServices ?? []).filter(
+      (item) => item.date >= first && status(item.date) !== 'normal_vat',
+    );
+    const recorded = recordedAt(context.facts, 'vat.eu', `${year}-12-31`);
+    if (!services.length) {
+      if (!recorded)
+        return draft.notApplicable(
+          `Registrele nu au servicii intracomunitare ale firmei neînregistrate în ${year}.`,
+        );
+      draft.line(
+        `Nicio factură de servicii intracomunitare în ${year}: faptul consemnat (${recorded}) rămâne.`,
+      );
+      return draft.finish('proposed', recorded, first, `Cod art. 317 în ${year}: ${recorded}.`);
+    }
+    draft.cite(code('art.317(1)'), code('norme.art.317.pct.90(4)'), code('art.325(1)'));
+    const earliest = services[0]!;
+    draft.inputs.firstOperation = {
+      date: earliest.date,
+      documentId: earliest.documentId,
+      direction: earliest.direction,
+    };
+    draft.inputs.operations = services.length;
+    draft.line(
+      `Prima operațiune intracomunitară cu servicii a firmei neînregistrate în ${year}: factura ${earliest.number} din ${earliest.date}, ${earliest.direction === 'purchase' ? `serviciu primit de la un prestator din ${earliest.country} (art. 317 alin. (1) lit. c))` : `serviciu prestat unui beneficiar din ${earliest.country} (art. 317 alin. (1) lit. b))`}; în total ${services.length} facturi.`,
+    );
+    const atFirst = recordedAt(context.facts, 'vat.eu', earliest.date);
+    if (atFirst === 'special') {
+      const since = context.facts
+        .filter((fact) => fact.axis === 'vat.eu' && fact.effectiveFrom <= earliest.date)
+        .at(-1)!.effectiveFrom;
+      const from = since > first ? since : first;
+      draft.line(
+        `Codul de TVA art. 317 este consemnat de la ${since}, înaintea primei operațiuni.`,
+      );
+      return draft.finish(
+        'proposed',
+        'special',
+        from,
+        `Cod art. 317 în ${year}: da, de la ${from}.`,
+      );
+    }
+    draft.line(
+      `Codul de TVA art. 317 trebuie solicitat înainte de ${earliest.date} și e valabil de la data cererii (norme pct. 90 alin. (4)); cu codul, firma depune D390 pentru aceste servicii (art. 325), iar TVA pentru serviciile primite o declară în D301 (art. 324).`,
+    );
+    return draft.finish(
+      'proposed',
+      'special',
+      earliest.date,
+      `Cod de TVA art. 317 necesar de la ${earliest.date}, prima operațiune intracomunitară cu servicii.`,
+    );
+  });
+}
+
 /** Every determination of a year, in axis order. */
 export function determineYear(context: DeterminationContext, rules: RuleContext): Determination[] {
   return [
@@ -1242,6 +1615,8 @@ export function determineYear(context: DeterminationContext, rules: RuleContext)
     determineSizeCategory(context, rules),
     determineVatThreshold(context, rules),
     determineCashVat(context, rules),
+    determineVatStatus(context, rules),
+    determineVatEu(context, rules),
   ];
 }
 

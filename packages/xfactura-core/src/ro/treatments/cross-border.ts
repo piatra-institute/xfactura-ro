@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   accountCodePattern,
+  profileAt,
   vatPeriodOf,
   type Effect,
   type FxRate,
@@ -12,16 +13,25 @@ import {
 import {
   convertMinor,
   divRound,
+  formatMoney,
   isSupportedCurrency,
   LEDGER_CURRENCY,
   parseMoney,
   parseScaled,
 } from '../../money';
+import { questionIssue } from '../../questions/kinds';
 import { RuleGapError } from '../../rules';
-import { isLocalDate, parseLocalDate as date, type LocalDate } from '../../time';
+import {
+  isLocalDate,
+  monthEnd,
+  parseLocalDate as date,
+  type LocalDate,
+  type Month,
+} from '../../time';
 import { invoiceDocumentSchema } from '../../ubl/invoice-document';
 import { selectRate } from '../fx';
 import { euVatPrefixes } from '../geo';
+import { obligationDue } from '../obligations';
 import { invoiceKinds } from './invoices';
 
 const block = (code: string, message: string, path?: string): Issue => ({
@@ -30,6 +40,11 @@ const block = (code: string, message: string, path?: string): Issue => ({
   message,
   ...(path === undefined ? {} : { path }),
 });
+const warn = (code: string, message: string): Issue => ({ code, severity: 'ack', message });
+
+/** What a company not registered under art. 316 needs for services across the EU border: the
+ * special registration of art. 317 alin. (1) lit. b) (supplied) or c) (bought). */
+const ART317 = 'ANAF/Cod-fiscal-consolidat:art.317(1)';
 
 /**
  * The semantic codes of services across the border. Declarations derive their rows from them:
@@ -58,6 +73,9 @@ export const crossBorderInput = z
       .string()
       .refine((value): boolean => isLocalDate(value))
       .optional(),
+    /** For a purchase by a company not registered for VAT (art. 316): the tax authority, to which
+     * it owes the VAT through the special return (D301, art. 324). */
+    authorityId: z.uuid().optional(),
   })
   .strict();
 export type CrossBorderInput = z.infer<typeof crossBorderInput>;
@@ -80,7 +98,11 @@ export const crossBorderRecognition: Treatment<CrossBorderInput> = {
   toolset: 'inbox',
   dataClasses: ['books', 'tax'],
   subject: (input) => `document:${input.documentId}`,
-  plan: (input) => ({ documents: [input.documentId], profile: true }),
+  plan: (input) => ({
+    documents: [input.documentId],
+    profile: true,
+    ...(input.authorityId ? { parties: [input.authorityId] } : {}),
+  }),
   followUp(input, loaded) {
     const parsed = invoiceDocumentSchema.safeParse(loaded.documents.get(input.documentId)?.body);
     if (!parsed.success || parsed.data.currency === LEDGER_CURRENCY) return null;
@@ -134,7 +156,67 @@ export const crossBorderRecognition: Treatment<CrossBorderInput> = {
       issues.push(block('CURRENCY', `Moneda ${body.currency} nu este acceptată.`));
     const taxPoint = date(input.taxPoint ?? body.taxPointDate ?? body.issueDate) as LocalDate;
     const taxPeriod = vatPeriodOf(loaded, taxPoint);
-    if (issues.length) return { effect: null, issues };
+    // A company not registered under art. 316 owes the VAT on the services it buys (art. 307
+    // alin. (2)), without deducting it, through the special return (art. 324); with an EU partner
+    // it needs the special code of art. 317 (the `vat.eu` axis, `special`).
+    const status = profileAt(loaded, 'vat.status', taxPoint);
+    if (!status)
+      issues.push(
+        questionIssue(
+          'DETERMINATION_MISSING',
+          'Înregistrați regimul TVA al companiei pentru această dată.',
+          {
+            kind: 'profile.fact',
+            subject: { kind: 'profile', id: 'vat.status' },
+            params: { axis: 'vat.status', from: taxPoint },
+          },
+        ),
+      );
+    const nonPayer = status === 'non_vat';
+    if (nonPayer && eu) {
+      const code = profileAt(loaded, 'vat.eu', taxPoint);
+      if (!code)
+        issues.push(
+          questionIssue(
+            'DETERMINATION_MISSING',
+            'Înregistrați dacă firma are cod de TVA pentru operațiuni intracomunitare (art. 317).',
+            {
+              kind: 'profile.fact',
+              subject: { kind: 'profile', id: 'vat.eu' },
+              params: { axis: 'vat.eu', from: taxPoint },
+            },
+          ),
+        );
+      else if (code !== 'special')
+        issues.push({
+          ...warn(
+            'ART317_REQUIRED',
+            sale
+              ? `Firma neînregistrată în scopuri de TVA prestează servicii unui beneficiar din ${counterparty.country}: codul de TVA de la art. 317 alin. (1) lit. b) se solicită înainte de prestare, iar operațiunea se declară în D390.`
+              : `Firma neînregistrată în scopuri de TVA cumpără servicii de la un prestator din ${counterparty.country}: codul de TVA de la art. 317 alin. (1) lit. c) se solicită înaintea primirii lor. Taxa se datorează oricum (art. 307 alin. (2)) și se declară în D301.`,
+          ),
+          details: { clause: ART317 },
+        });
+    }
+    if (nonPayer && !sale) {
+      if (input.deduction !== 'none')
+        issues.push(
+          block(
+            'DEDUCTION',
+            'Un neplătitor de TVA nu deduce taxa datorată prin decontul special: deduction: none.',
+            'deduction',
+          ),
+        );
+      if (loaded.parties.get(input.authorityId ?? '')?.kind !== 'ro_public_institution')
+        issues.push(
+          block(
+            'AUTHORITY',
+            'Indicați autoritatea fiscală (instituție publică), căreia i se datorează TVA prin decontul special (D301).',
+            'authorityId',
+          ),
+        );
+    }
+    if (issues.some((issue) => issue.severity === 'block')) return { effect: null, issues };
 
     // Amounts in lei: at the accounting rate on the issue date; the VAT base at the VAT rate.
     const foreign = body.currency !== LEDGER_CURRENCY;
@@ -146,7 +228,7 @@ export const crossBorderRecognition: Treatment<CrossBorderInput> = {
       const v = selectRate(loaded, rules, body.currency, taxPoint, 'vat');
       if ('code' in a) issues.push(a);
       if ('code' in v) issues.push(v);
-      if (issues.length) return { effect: null, issues };
+      if (issues.some((issue) => issue.severity === 'block')) return { effect: null, issues };
       accounting = a as FxRate;
       vatRate = v as FxRate;
     }
@@ -230,6 +312,89 @@ export const crossBorderRecognition: Treatment<CrossBorderInput> = {
       }
       // base × rate ÷ 100, the rate at four decimals: rounded once, half away from zero.
       const tax = divRound(base * parseScaled(rate, 4), 1_000_000n, 'halfAwayFromZero');
+      if (nonPayer) {
+        // Owed through the special return by the 25th of the next month, on the account the
+        // register gives (4423): no 4427/4426, which a non-payer does not settle.
+        let payable: string;
+        let due: LocalDate;
+        try {
+          payable = rules.param<string>(
+            'ro.vat.special.payable_account',
+            'vat_chargeability_date',
+            taxPoint,
+          );
+          const month = taxPoint.slice(0, 7) as Month;
+          due = obligationDue('D301', { start: date(`${month}-01`), end: monthEnd(month) }, rules)
+            .due as LocalDate;
+        } catch (error) {
+          if (!(error instanceof RuleGapError)) throw error;
+          return { effect: null, issues: [...issues, block('RULE_GAP', error.message)] };
+        }
+        lines.push({ account: input.account, side: 'D', bani: net });
+        lines.push({
+          account: '401',
+          side: 'C',
+          bani: net,
+          openItem: item.ref,
+          partyId,
+          ...currency(accounting, netMinor),
+        });
+        lines.push({
+          account: input.account,
+          side: 'D',
+          bani: tax,
+          memo: 'TVA datorată prin decontul special (D301), nedeductibilă',
+        });
+        lines.push({
+          account: payable,
+          side: 'C',
+          bani: tax,
+          openItem: 'special',
+          partyId: input.authorityId!,
+        });
+        const special = { regime: 'special', return: 'D301' };
+        taxEntries.push(
+          entry('output', {
+            taxBani: tax,
+            attributes: { ...entry('output', {}).attributes, ...special },
+          }),
+        );
+        taxEntries.push(
+          entry('input', {
+            taxBani: tax,
+            attributes: { ...entry('input', {}).attributes, ...special },
+          }),
+        );
+        const effect: Effect = {
+          schema: 'effect@1',
+          date: date(body.issueDate),
+          journalClass: 'general',
+          journalCode: 'CUMPARARI',
+          description: `Factură primită ${body.number} (${counterparty.country}), TVA prin decontul special`,
+          lines,
+          openItems: [
+            item,
+            {
+              ref: 'special',
+              kind: 'tax.payable',
+              controlAccount: payable,
+              partyId: input.authorityId!,
+              currency: 'RON',
+              normalSide: 'C',
+              mayReverse: false,
+              dueDate: due,
+              documentId: record.id,
+            },
+          ],
+          taxEntries,
+          schedules: [],
+          explanation: {
+            summary: `Servicii din ${counterparty.country} cumpărate de o firmă neînregistrată în scopuri de TVA: TVA ${formatMoney(tax, LEDGER_CURRENCY)} lei datorată la cota standard (art. 307 alin. (2)), nedeductibilă, declarată în D301 până la ${due}.`,
+            details: { taxPoint, eu, code, regime: 'special', due },
+          },
+        };
+        return { effect, issues };
+      }
       const deducted = input.deduction === 'full' ? tax : 0n;
       lines.push({ account: input.account, side: 'D', bani: net });
       lines.push({

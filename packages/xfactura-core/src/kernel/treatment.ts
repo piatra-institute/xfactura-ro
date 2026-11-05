@@ -43,8 +43,13 @@ export interface ReadPlan {
   /** What the lines tagged with an analytics item booked on the accounts under some prefixes, per
    * item, account and open item (a loan's interest accrued on 1682, by loan). */
   itemLines?: { prefixes: string[] };
-  /** Every fixed asset in the register, with the depreciation booked for it. */
+  /** Every fixed asset in the register, with the depreciation booked for it and its latest
+   * fiscal basis. */
   assets?: boolean;
+  /** The postings that stand of the profit tax (`tax.profit`) and of prior-year corrections
+   * (`correction.priorYear`), with the position each effect recorded: earlier quarters' tax, the
+   * years' loss vintages. */
+  profitPostings?: boolean;
   /**
    * ANAF's status of a Romanian party on a date (`parties.checkStatus`): the latest snapshot
    * taken for exactly that date. A snapshot for an earlier date does not count: ANAF answers for
@@ -83,11 +88,31 @@ export interface PartyStatus {
 /** The key of a party's status on a date in `Loaded.partyStatus` and in the read-set. */
 export const partyStatusKey = (partyId: string, date: LocalDate) => `${partyId}|${date}`;
 
+/** A fixed asset's fiscal basis (Codul fiscal art. 28), its latest version on the register;
+ * amounts in bani. The methods are the tax module's (`ro/profit/depreciation.ts`). */
+export interface AssetFiscalBasis {
+  version: number;
+  method: string;
+  /** The fiscal value at entry. */
+  value: bigint;
+  /** The normal life, in months. */
+  lifeMonths: number;
+  /** The share of the value taken in the first year (the accelerated methods). */
+  firstYearPercent: string | null;
+  /** An M1 passenger car whose depreciation is capped monthly. */
+  m1: boolean;
+  /** A new asset (the superaccelerated method). */
+  newAsset: boolean;
+  evidenceId: string;
+}
+
 /** A fixed asset as registered, with what the ledger holds for it; amounts in bani. */
 export interface AssetState {
   id: string;
   number: string;
   name: string;
+  /** The fixed-asset catalogue's code (HG nr. 2.139/2004). */
+  catalogCode: string;
   account: string;
   depreciationAccount: string;
   expenseAccount: string;
@@ -98,6 +123,20 @@ export interface AssetState {
   disposedOn: LocalDate | null;
   /** Depreciation booked on its depreciation account (lines carrying the asset as their item). */
   depreciated: bigint;
+  /** Its latest fiscal basis, or null while none is recorded. */
+  fiscal: AssetFiscalBasis | null;
+}
+
+/** A posting that stands of the profit tax or of a prior-year correction, with the position its
+ * effect recorded (`explanation.details.position`). */
+export interface ProfitPosting {
+  entryId: string;
+  treatmentId: string;
+  subject: string;
+  date: LocalDate;
+  /** The entry's sequence: postings come in this order. */
+  seq: number;
+  position: JsonValue;
 }
 
 /** The lines tagged with one analytics item on one account and open item: their debit and credit
@@ -151,6 +190,9 @@ export interface OpenItemQuery {
   /** With the ids of the posted entries whose lines touch each item (`history`), to read them
    * with `entries` in a follow-up. */
   history?: boolean;
+  /** With what created each item (`origin`): the treatment and subject of the proposal whose
+   * entry opened it, and the analytics item of its opening line. */
+  origins?: boolean;
 }
 
 /** One recorded read. `version` identifies the state read: for an open item, its number of
@@ -173,6 +215,7 @@ export interface ReadSetEntry {
     | 'turnover'
     | 'itemLines'
     | 'assets'
+    | 'profitPostings'
     | 'partyStatus'
     /** Where a document read comes from: its authority, its group and whether it was
      * superseded (the engine adds it beside the document's own entry). */
@@ -211,6 +254,18 @@ export interface OpenItemState extends OpenItemInfo {
    * Rows are written with the entry that creates them and never change; a later version (a loan's
    * revised plan) is a read of its own. */
   schedule?: { id: string; version: number; method: string; rows: readonly ScheduleRow[] };
+  /** On request (`origins`): what created the item. It never changes, so the item's version
+   * covers it. */
+  origin?: OpenItemOrigin;
+}
+
+/** The posting that opened an open item: its proposal's treatment and subject, its date, and the
+ * analytics item (`LineSpec.analytics.item`) of the line that opened it, if it carried one. */
+export interface OpenItemOrigin {
+  treatmentId: string;
+  subject: string;
+  date: LocalDate;
+  tag: string | null;
 }
 
 export interface EvidenceRecord {
@@ -394,6 +449,8 @@ export interface Loaded {
   /** By `itemLinesKey(query)`: each item, account and open item with tagged lines. */
   itemLines: ReadonlyMap<string, readonly ItemLines[]>;
   assets: ReadonlyMap<string, AssetState>;
+  /** In posting order. */
+  profitPostings: readonly ProfitPosting[];
   /** By `partyStatusKey`: only the statuses a snapshot exists for. */
   partyStatus: ReadonlyMap<string, PartyStatus>;
   /** By question id: the answers the proposal's basis cites, and only those. */

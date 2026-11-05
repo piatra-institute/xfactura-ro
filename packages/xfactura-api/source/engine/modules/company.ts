@@ -12,6 +12,7 @@ import {
   individualForms,
   type EntityForm,
 } from 'xfactura-core/ro/entity';
+import { taxpayerCategories } from 'xfactura-core/ro/saft/applicability';
 import type { LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
 import {
@@ -88,6 +89,14 @@ export const profileAxes = {
   'vat.cash': ['no', 'yes'],
   'vat.eu': ['none', 'special'],
   income_tax: ['micro', 'profit'],
+  // The system of declaring and paying the profit tax (Codul fiscal art. 41): quarterly
+  // (alin. (1)), or annual with quarterly prepayments, an option for at least two years
+  // (alin. (2)–(3)).
+  'profit.system': ['quarterly', 'annual'],
+  // Payment facilities or insolvency (Codul de procedură fiscală art. 163 alin. (10)): a payment
+  // to the single account is then extinguished in another order, which the tax account does not
+  // cover (core ro/taxaccount); without the fact, a payment is not distributed.
+  'tax.facilities': ['none', 'rescheduling', 'deferral', 'insolvency', 'restructuring'],
   employer: ['no', 'yes'],
   // Yearly determinations (core ro/determinations): each year's fact, confirmed from the
   // computation or stated with its document; and what decides the product's scope.
@@ -95,7 +104,13 @@ export const profileAxes = {
   'size.category': ['micro', 'small', 'medium_large'],
   'vat.threshold': ['under', 'exceeded'],
   'activity.goods': ['no', 'yes'],
+  // No activity since the company was set up (Legea 82/1991 art. 36 alin. (2)): the inactivity
+  // declaration (S1046) instead of the annual statements; a person states it with its evidence.
+  'activity.none': ['no', 'yes'],
   'regime.excluded': ['none', 'excise', 'fiscal_group', 'ifrs'],
+  // ANAF's taxpayer category (large, medium, small), dated from the classification: it decides
+  // from when D406 is filed before 2025 (OPANAF nr. 1.783/2021 anexa nr. 5 pct. 1.1).
+  'taxpayer.category': taxpayerCategories,
   'books.assurance': ['preview', 'shadow', 'live'],
   // Segregation of duties (kernel/controls.ts): without a fact, off, as a company of one person
   // needs; on, nobody approves their own work; strict, nor what their agents did.
@@ -250,12 +265,13 @@ async function checkForm(tx: Transaction, companyId: string, input: z.infer<type
     return;
   }
   if (input.axis === 'books.system') {
+    // A PFA's, II's or IF's option for double entry is recorded as the person states it, with its
+    // document; the obligation closure reports it UNSUPPORTED (PFA_DOUBLE_ENTRY) and the
+    // single-entry registers refuse it: OUG nr. 44/2008 art. 15 against OMFP nr. 170/2015 art. 3.
     requireCondition(
-      input.value === 'double' ? !individual(form) : individual(form),
+      input.value === 'double' || individual(form),
       'BOOKS_SYSTEM_FORM',
-      input.value === 'double'
-        ? 'Opțiunea unei PFA, II sau IF pentru partida dublă nu este încă admisă: OUG nr. 44/2008 art. 15 prevede partida simplă, iar OMFP nr. 170/2015 art. 3 exceptează acest caz; se decide de expertul contabil.'
-        : 'Contabilitatea în partidă simplă se ține de PFA, II și IF (entity.form).',
+      'Contabilitatea în partidă simplă se ține de PFA, II și IF (entity.form).',
     );
     return;
   }

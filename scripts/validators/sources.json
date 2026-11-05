@@ -53,6 +53,15 @@
     },
     {
       "name": "anaf",
+      "description": "ANAF D301 validator J1.2.5 and PDF generator P1.1.0 (22.10.2020): the special VAT return (decont special) of OPANAF nr. 592/2016, structure D301_A2.0.0 of 01.01.2016 (schema d301_20200130.xsd, namespace mfp:anaf:dgti:d301:declaratie:v1), still the version ANAF's page publishes",
+      "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/D301_20201022.zip",
+      "sha256": "74e49372f802c2ac038a1bd66c2deda3ba45f0b970f5d07e45c66307956e0e13",
+      "extract": ["D301/D301Validator.jar", "D301/D301Pdf.jar"],
+      "into": "dist/lib",
+      "flatten": true
+    },
+    {
+      "name": "anaf",
       "description": "ANAF D394 validator and PDF generator (structure of 15.09.2025)",
       "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/D394_17092025.zip",
       "sha256": "8a762aed61ff568561a6b42c8e464289eb43911d55dab57d04ade715c9e4fb37",
@@ -61,9 +70,9 @@
     },
     {
       "name": "anaf",
-      "description": "ANAF D112 validator and PDF generator (reporting months from 07/2026, structure of 07.09.2026)",
-      "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/D112_09102026.zip",
-      "sha256": "247e5a784386a3a547cf7ce8a242fcb1759aab6b062b37f0ad3dacf3a5c5be67",
+      "description": "ANAF D112 validator J27.0.8 and PDF generator (reporting months from 07/2026, structure of 07.09.2026; J27.0.8 of 03.11.2026 changes rule S85.1)",
+      "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/D112_03112026.zip",
+      "sha256": "da375ffa481bae8a67f4c55cd078b2c3c6efebed6fba55d784191b09f0c1f3fb",
       "extract": ["D112/D112Validator.jar", "D112/D112Pdf.jar"],
       "into": "dist/lib",
       "flatten": true
@@ -76,6 +85,14 @@
       "extract": ["D100/D100Validator.jar", "D100/D100Pdf.jar"],
       "into": "dist/lib",
       "flatten": true
+    },
+    {
+      "name": "anaf",
+      "description": "ANAF D101 validator and PDF generator (J11.0.4 / P10.0.0, 22.09.2026): annual profit tax return, OPANAF nr. 206/2025, structure of 26.01.2026, years ending from 2024",
+      "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/D101_vJ1104.zip",
+      "sha256": "13932f36b1a2c60d6bdedf793e5df8ef00a7a0322a9de8c2fa2008e3c4627150",
+      "extract": ["D101Validator.jar", "D101Pdf.jar"],
+      "into": "dist/lib"
     },
     {
       "name": "anaf",
@@ -119,6 +136,24 @@
       "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/S1005_20260317.zip",
       "sha256": "3c9357f6206801bf16a8ef2f04d2c51aa923df7829c07f44f49d5789b7248857",
       "extract": ["S1005/S1005Validator.jar", "S1005/S1005Pdf.jar"],
+      "into": "dist/lib",
+      "flatten": true
+    },
+    {
+      "name": "anaf",
+      "description": "ANAF S1003 validator and PDF generator: small entities' annual financial statements for 2025 (J14.0.0 / P2.0.2, 10.02.2026), schema s1003_20260210.xsd, namespace s1003:declaratie:v15",
+      "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/S1003_20260210.zip",
+      "sha256": "2609b96ce111060504b8945ecf30263cc89a5c7ab4911354392da751570e7722",
+      "extract": ["S1003/S1003Validator.jar", "S1003/S1003Pdf.jar"],
+      "into": "dist/lib",
+      "flatten": true
+    },
+    {
+      "name": "anaf",
+      "description": "ANAF S1046 validator and PDF generator: the inactivity declaration (L82 art. 36 alin. (2)), J1.2.0 / P1.1.0 of 08.02.2016, structure A1.0.0 of 28.01.2016 for an >= 2015, as ANAF's page for 2025 still publishes it",
+      "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/S1046_20160209.zip",
+      "sha256": "4ab0688b52c3151bc8acb9dfb459d2f3f9f3e9985a2523c9a3e401fafe82144e",
+      "extract": ["S1046/S1046Validator.jar", "S1046/S1046Pdf.jar"],
       "into": "dist/lib",
       "flatten": true
     }
