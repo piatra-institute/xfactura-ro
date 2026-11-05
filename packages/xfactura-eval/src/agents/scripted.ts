@@ -379,6 +379,7 @@ class ScriptedAgent implements Agent {
       evidenceId: string;
       body: InvoiceBody;
     }>('documents.get', { id });
+    if (document.kind === 'receipt.received') return this.receipt(id, document.body);
     if (!['invoice.received', 'invoice.issued'].includes(document.kind)) return;
     const sale = document.kind === 'invoice.issued';
     const body = document.body;
@@ -439,6 +440,63 @@ class ScriptedAgent implements Agent {
           documentId: id,
           evidenceId: document.evidenceId,
         },
+      });
+  }
+
+  /**
+   * A fiscal receipt a person recorded (this agent reads no photos): its account by keyword, paid
+   * by card or from the only cash desk; its VAT deducted unless it lacks the company's code, a
+   * fuel receipt naming the only vehicle whose use was answered, so its answer decides.
+   */
+  private async receipt(id: string, body: unknown): Promise<'wait' | void> {
+    const receipt = body as {
+      buyerTaxId: string | null;
+      payment: string | null;
+      lines: { description: string }[];
+    };
+    const words = folded(receipt.lines.map((line) => line.description).join(' '));
+    const account = expenseRules.find(([pattern]) => pattern.test(words))?.[1] ?? '628';
+    let payment: Record<string, unknown> = { method: 'card' };
+    if (receipt.payment === 'cash') {
+      const desks = (
+        await this.all<{ kind: string; ledgerAccount: string }>('treasury.accounts')
+      ).filter((item) => item.kind === 'cash');
+      if (desks.length !== 1) return;
+      payment = { method: 'cash', account: desks[0]!.ledgerAccount };
+    } else if (receipt.payment !== 'card') return;
+    const input: Record<string, unknown> = {
+      documentId: id,
+      account,
+      deduction: receipt.buyerTaxId ? 'full' : 'none',
+      payment,
+    };
+    const answers: string[] = [];
+    if (account === '6022' && receipt.buyerTaxId) {
+      const vehicles = (
+        await this.all<{
+          id: string;
+          kind: string;
+          subject: { id: string };
+          answer: { value: { use: string } } | null;
+        }>('questions.list', { limit: 200 })
+      ).filter((question) => question.kind === 'vehicle.use' && question.answer);
+      if (vehicles.length === 1) {
+        input.vehicle = vehicles[0]!.subject.id;
+        input.deduction = vehicles[0]!.answer!.value.use === 'mixed' ? 'limited' : 'full';
+        answers.push(vehicles[0]!.id);
+      }
+    }
+    const proposal = await this.call<Proposal>('proposals.propose', {
+      treatment: 'receipts.recognize',
+      input,
+      ...(answers.length ? { basis: { answers } } : {}),
+    });
+    // Over the limit, or without the company's code: the VAT stays in the expense.
+    if (proposal.issues.some((issue) => issue.code === 'DEDUCTION'))
+      await this.call<Proposal>('proposals.revise', {
+        proposalId: proposal.id,
+        version: proposal.version,
+        input: { ...input, deduction: 'none' },
       });
   }
 

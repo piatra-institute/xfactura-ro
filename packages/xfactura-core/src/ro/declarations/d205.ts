@@ -38,6 +38,13 @@ import { isValidCnp, isValidCui } from '../identifiers';
  * divid_D and divid_P are for dividends only. An individual with dividends and interest has a
  * record of each type (the validator keys tip_venit1 + cifR).
  *
+ * Rent paid to resident individuals by the company (tip_venit 29, "1.k) venituri din cedarea
+ * folosinței bunurilor ... plătite de PJ", 10%, art. 84^1 Cod fiscal): one record per landlord,
+ * with the net income the tax was computed on (the gross less 20%) as baza1 and the tax withheld
+ * as imp1; VB and GAR (rent paid only in kind, a guarantee kept for the rent, art. 84^1 alin. (8))
+ * are 0, those cases not being covered. Intellectual property (tip 01) is among the codes the
+ * structure abolished: its payers declare it in D112 (art. 132 alin. (2)).
+ *
  * A rectifying declaration (d_rec 1) holds only the corrected records, each with its full corrected
  * amounts; a record with every amount zero removes the initial one.
  *
@@ -48,6 +55,7 @@ import { isValidCnp, isValidCui } from '../identifiers';
 export const d205IncomeTypes = [
   ['08', '1.a) venituri din dividende - 8%/2024, 10%/2025, 16%/2026'],
   ['09', '1.b) venituri din dobânzi - 10%'],
+  ['29', '1.k) venituri din cedarea folosinței bunurilor plătite de PJ - 10%'],
 ] as const;
 export type D205IncomeType = (typeof d205IncomeTypes)[number][0];
 
@@ -84,6 +92,18 @@ export type D205Interest = {
   tax: number;
 };
 
+/** The structure's rent rate in percent (tip_venit 29), on the net income. */
+export const d205RentRate = 10;
+
+/** Rent paid to the individual in the reporting year, with the tax withheld from it. */
+export type D205Rent = {
+  /** The payment date, YYYY-MM-DD, within the reporting year. */
+  date: string;
+  /** The net income the tax was computed on (the gross less 20%), whole lei. */
+  base: number;
+  tax: number;
+};
+
 export type D205Beneficiary =
   /** A resident individual: one benef record, all payments and unpaid dividends together. */
   | {
@@ -96,6 +116,8 @@ export type D205Beneficiary =
       unpaid: D205Unpaid[];
       /** Interest paid to them (tip_venit 09). */
       interest?: D205Interest[];
+      /** Rent paid to them (tip_venit 29). */
+      rent?: D205Rent[];
     }
   /** A Romanian company, left out of the declaration. */
   | { kind: 'company'; cui: string; name: string; payments: D205Payment[]; unpaid: D205Unpaid[] };
@@ -257,11 +279,16 @@ function inputProblems(model: D205): Problem[] {
       amount(`${path}.unpaid.${item}.gross`, unpaid.gross, 'Dividendele brute neplătite');
       amount(`${path}.unpaid.${item}.tax`, unpaid.tax, 'Impozitul');
     });
-    if (beneficiary.kind === 'individual')
+    if (beneficiary.kind === 'individual') {
       beneficiary.interest?.forEach((paid, item) => {
         amount(`${path}.interest.${item}.gross`, paid.gross, 'Dobânda brută');
         amount(`${path}.interest.${item}.tax`, paid.tax, 'Impozitul');
       });
+      beneficiary.rent?.forEach((paid, item) => {
+        amount(`${path}.rent.${item}.base`, paid.base, 'Venitul net din chirii');
+        amount(`${path}.rent.${item}.tax`, paid.tax, 'Impozitul');
+      });
+    }
   });
   return problems;
 }
@@ -279,6 +306,17 @@ const interestRecord = (id: number, beneficiary: number, interest: D205Interest[
   paid: 0n,
   base: sum(interest, (paid) => big(paid.gross)),
   tax: sum(interest, (paid) => big(paid.tax)),
+});
+
+/** A landlord's rent record: the net income of the year's payments and the tax on it. */
+const rentRecord = (id: number, beneficiary: number, rent: D205Rent[]): D205Record => ({
+  id,
+  beneficiary,
+  incomeType: '29',
+  distributed: 0n,
+  paid: 0n,
+  base: sum(rent, (paid) => big(paid.base)),
+  tax: sum(rent, (paid) => big(paid.tax)),
 });
 
 /**
@@ -299,10 +337,16 @@ export function calculateD205(model: D205): D205Calculation {
       return;
     }
     const interest = beneficiary.interest ?? [];
-    // An individual without dividends keeps a dividend record only when there is no interest
-    // either: in a rectifying declaration, a record of zeros removes the initial one.
-    if (interest.length && !beneficiary.payments.length && !beneficiary.unpaid.length) {
-      records.push(interestRecord(records.length + 1, index, interest));
+    const rent = beneficiary.rent ?? [];
+    // An individual without dividends keeps a dividend record only when there is no interest or
+    // rent either: in a rectifying declaration, a record of zeros removes the initial one.
+    if (
+      (interest.length || rent.length) &&
+      !beneficiary.payments.length &&
+      !beneficiary.unpaid.length
+    ) {
+      if (interest.length) records.push(interestRecord(records.length + 1, index, interest));
+      if (rent.length) records.push(rentRecord(records.length + 1, index, rent));
       return;
     }
     const current = beneficiary.payments.filter(
@@ -325,6 +369,7 @@ export function calculateD205(model: D205): D205Calculation {
         sum(beneficiary.unpaid, (unpaid) => big(unpaid.tax)),
     });
     if (interest.length) records.push(interestRecord(records.length + 1, index, interest));
+    if (rent.length) records.push(rentRecord(records.length + 1, index, rent));
   });
   const summaries: D205Summary[] = d205IncomeTypes.flatMap(([incomeType]) => {
     const own = records.filter((record) => record.incomeType === incomeType);
@@ -344,7 +389,7 @@ export function calculateD205(model: D205): D205Calculation {
     records,
     summaries,
     omitted,
-    // Tcastig, Tpierd, T_VB and T_GAR are zero for dividends and interest.
+    // Tcastig, Tpierd, T_VB and T_GAR are zero for dividends, interest and rent paid in money.
     controlSum: sum(
       summaries,
       (summary) => BigInt(summary.beneficiaries) + summary.base + summary.tax,
@@ -354,7 +399,7 @@ export function calculateD205(model: D205): D205Calculation {
 
 const text = (value: bigint | number) => value.toString();
 const noRecords =
-  'Declarația cuprinde cel puțin un beneficiar persoană fizică; fără dividende sau dobânzi plătite persoanelor fizice, D205 nu are ce declara.';
+  'Declarația cuprinde cel puțin un beneficiar persoană fizică; fără dividende, dobânzi sau chirii plătite persoanelor fizice, D205 nu are ce declara.';
 
 /**
  * Writes the declaration as one `declaratie205` element: the payer's attributes, sect_II per
@@ -418,6 +463,7 @@ export function writeD205(model: D205): string {
           ...(record.incomeType === '08'
             ? { divid_D: text(record.distributed), divid_P: text(record.paid) }
             : {}),
+          ...(record.incomeType === '29' ? { VB: '0', GAR: '0' } : {}),
         });
       }),
     ),
@@ -536,7 +582,8 @@ export function checkD205(model: D205): D205Check[] {
       !model.correction &&
       beneficiary.payments.length +
         beneficiary.unpaid.length +
-        (beneficiary.interest?.length ?? 0) ===
+        (beneficiary.interest?.length ?? 0) +
+        (beneficiary.rent?.length ?? 0) ===
         0
     )
       warning(
@@ -584,6 +631,23 @@ export function checkD205(model: D205): D205Check[] {
       rated(`${path}.unpaid.${item}`, model.year, unpaid.gross, unpaid.tax),
     );
     if (beneficiary.kind !== 'individual') return;
+    beneficiary.rent?.forEach((paid, item) => {
+      const at = `${path}.rent.${item}`;
+      if (!isDate(paid.date) || yearOf(paid.date) !== model.year)
+        error(
+          'D205_DATE',
+          `${at}.date`,
+          `Chiria plătită la ${paid.date} nu este din anul ${model.year}.`,
+        );
+      if (!isAmount(paid.base) || !isAmount(paid.tax)) return;
+      const expected = percent(paid.base, d205RentRate);
+      if (BigInt(paid.tax) < expected - 1n || BigInt(paid.tax) > expected + 1n)
+        warning(
+          'D205_TAX',
+          `${at}.tax`,
+          `Impozitul (${paid.tax}) diferă de ${d205RentRate}% din venitul net de ${paid.base} lei (${expected}).`,
+        );
+    });
     beneficiary.interest?.forEach((paid, item) => {
       const at = `${path}.interest.${item}`;
       if (!isDate(paid.date) || yearOf(paid.date) !== model.year)

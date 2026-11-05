@@ -60,5 +60,15 @@ export const singleEntryExcluded: Readonly<Record<string, string>> = {
   'year.transferResult': 'nu există rezultat contabil de repartizat',
   'dividends.distribute': 'nu există dividende',
   'dividends.withhold': 'nu există dividende',
+  'dividends.interim': 'nu există dividende',
+  'dividends.regularize': 'nu există dividende',
+  // Not built for single entry yet: whether a PFA, II or IF withholds at source on rent,
+  // intellectual property and non-residents' income, and how its register records it.
+  'payees.recognize': 'reținerea la sursă nu este încă acoperită în registrul-jurnal',
+  'payees.withhold': 'reținerea la sursă nu este încă acoperită în registrul-jurnal',
+  'nonresidents.withhold': 'reținerea la sursă nu este încă acoperită în registrul-jurnal',
   'tax.micro': 'impozitul pe veniturile microîntreprinderilor se aplică doar persoanelor juridice',
+  // Not built for single entry yet: what a receipt is for the income tax of a PFA, II or IF.
+  'receipts.recognize':
+    'bonurile fiscale nu sunt încă acoperite în registrul-jurnal de încasări și plăți',
 };

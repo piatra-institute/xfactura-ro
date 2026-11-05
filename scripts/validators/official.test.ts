@@ -268,6 +268,30 @@ const vatReturns: Record<string, D300> = {
     { R9_1: 30000, R9_2: 6300, R22_1: 10000, R22_2: 2100, R28_2: 2100 },
     { type: 'T' },
   ),
+  // The domestic reverse charge (art. 331): waste bought on rd. 12 (repeated as deductible on rd.
+  // 26), cereals sold on rd. 13 with their flag, and a receipt's VAT on rd. 24.
+  'reverse-charge': vatReturn(
+    {
+      R9_1: 1000,
+      R9_2: 210,
+      R12_1: 10000,
+      R12_2: 2100,
+      R12_1_1: 10000,
+      R12_1_2: 2100,
+      R13_1: 5000,
+      R22_1: 248,
+      R22_2: 52,
+      R28_2: 2152,
+    },
+    {
+      reverseCharge: {
+        cereals: true,
+        mobilePhones: false,
+        integratedCircuits: false,
+        consoles: false,
+      },
+    },
+  ),
   // 08–12/2025: namespace v11 and a transitional 19% row.
   'transitional-2025': vatReturn(
     { R9_1: 1000, R9_2: 210, R69_1: 500, R69_2: 95, R74_1: 200, R74_2: 38, R28_2: 38 },
@@ -424,6 +448,40 @@ const statements: Record<string, D394> = {
         11,
       ),
     ],
+  }),
+  // The domestic reverse charge: laptops and phones bought (C, at 21%, the invoice counted for
+  // the larger product), waste and wheat sold (V, rate 0, the wheat by its NC code under 21), and
+  // receipts deducted as simplified invoices.
+  'reverse-charge': statement({
+    ...invoiced,
+    operations: [
+      sale(registered('14399840', 'Client Unu SRL'), '21', 2, 10000, 2100),
+      {
+        type: 'C',
+        rate: '21',
+        partner: registered('13548146', 'Furnizor IT SRL'),
+        invoices: 1,
+        base: 30000,
+        vat: 6300,
+        products: [
+          { code: '31', invoices: 1, base: 25000, vat: 5250 },
+          { code: '29', invoices: 0, base: 5000, vat: 1050 },
+        ],
+      },
+      {
+        type: 'V',
+        rate: '0',
+        partner: registered('10376500', 'Reciclare Exemplu SRL'),
+        invoices: 2,
+        base: 8000,
+        vat: 0,
+        products: [
+          { code: '22', invoices: 1, base: 5000, vat: 0 },
+          { code: '1001', invoices: 1, base: 3000, vat: 0 },
+        ],
+      },
+    ],
+    simplified: { '21': { receipts: { base: 248, vat: 52 } } },
   }),
   // The first v5 period, with every other covered section.
   'all-sections': statement({

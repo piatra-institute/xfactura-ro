@@ -62,6 +62,16 @@ The parallel pilot preserves input manifests, frozen versions, reference outputs
 
 Produce reproducible signed conformance reports with real executed counts, failures/skips, software/profile/package/corpus/oracle/validator hashes. Claims stay draft until their gates pass. Clean-room Compose and restoration tests prove self-hosting independence and recovery.
 
+## Official validators
+
+`bun run validators:fetch` installs the artifacts pinned in `scripts/validators/sources.json` into `.validators/`, checking each SHA-256. `bun run test:official` runs them on the writers: the UBL 2.1 schema and the CEN EN 16931 rules on e-Factura, ANAF's DUKIntegrator on every declaration, and broken documents that must be rejected. Without an artifact, Java or `xmllint`, a test is skipped, never passed.
+
+DUKIntegrator is a Java CLI, and its shutdown hook halts the JVM only after `maxWaitBeforeExitMillis` (1 s by default): a JVM per document cost about 1.5 s each, and far more when several runs shared the machine. `scripts/validators/anaf.ts` therefore keeps one JVM per kit (the general kit and the SAF-T kit) for the whole `bun test` process. That JVM runs `scripts/validators/DukServer.java`, started as a single source file (JDK 11 or later) with the kit's `DUKIntegrator.jar` on the class path and the kit as its working directory. It reads one DUKIntegrator command line per line on stdin and runs it through DUKIntegrator's own `general.Main.main`, with `Main`'s static fields restored to their initial values first; the verdict is read from the result file, as with the CLI. The JVM is unreferenced and halts when its stdin closes, so it ends with the tests and leaves no process behind.
+
+DUKIntegrator keeps each declaration's validator loaded between files. Only declarations shown to give the CLI's verdicts there use the shared JVM (`reusable` in `anaf.ts`: D100, D101, D112, D204, D205, D212, D300, D301, D394, D406, S1003, S1005 and S1046). For each of them, every official test's documents gave the same verdicts as a fresh JVM per document, sent in order, reversed, shuffled and three times each. Any other declaration runs in a fresh JVM per document. So does any command the shared JVM fails: a crash, an out-of-memory error, or no answer within 120 s. `ANAF_DUK=fresh` runs every document in its own JVM. `ANAF_DUK=compare` runs each document both ways and fails on any difference; run it before adding a declaration to `reusable`.
+
+The engine's `DukIntegrator` adapter (`declarations.validate` and the integration tests that reach `validated_official`) still starts a JVM per call.
+
 ## Agent evaluation
 
 `bun run eval` measures how well an AI agent keeps a company's books through the engine's MCP surface. It is separate from the engine's gates (`bun run check`, `bun run test:integration`): it scores agents, not the engine. The harness is `packages/xfactura-eval`.

@@ -6,10 +6,12 @@ import { interestDefinitions, interestVersions } from './financing';
 import { fxDefinitions, fxVersions } from './fx';
 import { microDefinitions, microVersions } from './micro';
 import { nonpayerDefinitions, nonpayerVersions } from './nonpayers/parameters';
+import { exemptDefinitions, exemptVersions } from './exempt/parameters';
 import { obligationDefinitions, obligationVersions } from './obligations';
 import { payrollDefinitions, payrollVersions } from './payroll/parameters';
 import { sickLeaveDefinitions, sickLeaveVersions } from './payroll/sick-leave';
 import { pitDefinitions, pitVersions } from './pit/parameters';
+import { receiptDefinitions, receiptVersions } from './receipts/parameters';
 import { procedureDefinitions, procedureVersions } from './procedure';
 import { cashDefinitions, cashVersions } from './treatments/cash';
 import { determinationDefinitions, determinationVersions } from './determinations/parameters';
@@ -17,6 +19,7 @@ import { profitDefinitions, profitDeadlineVersions, profitVersions } from './pro
 import { saftDefinitions, saftVersions } from './saft/parameters';
 import { taxAccountDefinitions, taxAccountVersions } from './taxaccount/parameters';
 import { vatDefinitions, vatVersions } from './vat';
+import { withholdingDefinitions, withholdingVersions } from './withholding/parameters';
 
 /**
  * Every Romanian parameter family, in the order the engine's `defaultRegister()` assembles them
@@ -34,6 +37,7 @@ export const roDefinitions: readonly ParameterDefinition[] = [
   ...microDefinitions,
   ...dividendDefinitions,
   ...interestDefinitions,
+  ...withholdingDefinitions,
   ...etvaDefinitions,
   ...pitDefinitions,
   ...determinationDefinitions,
@@ -42,6 +46,8 @@ export const roDefinitions: readonly ParameterDefinition[] = [
   ...saftDefinitions,
   ...taxAccountDefinitions,
   ...nonpayerDefinitions,
+  ...exemptDefinitions,
+  ...receiptDefinitions,
 ];
 
 export const roVersions: readonly ParameterVersion[] = [
@@ -55,6 +61,7 @@ export const roVersions: readonly ParameterVersion[] = [
   ...microVersions,
   ...dividendVersions,
   ...interestVersions,
+  ...withholdingVersions,
   ...etvaVersions,
   ...pitVersions,
   ...determinationVersions,
@@ -64,6 +71,8 @@ export const roVersions: readonly ParameterVersion[] = [
   ...saftVersions,
   ...taxAccountVersions,
   ...nonpayerVersions,
+  ...exemptVersions,
+  ...receiptVersions,
 ];
 
 export const roRegister = () => new ParameterRegister(roDefinitions, roVersions);

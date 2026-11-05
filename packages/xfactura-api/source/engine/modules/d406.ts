@@ -36,11 +36,13 @@ import {
 import { supplierAppliesCashVat } from 'xfactura-core/ro/cash-vat';
 import {
   d406CashVatReleaseCode,
+  d406RatedAdjustments,
   d406ReverseCharges,
   d406VatTaxCode,
 } from 'xfactura-core/ro/saft/tax-codes';
 import { invoiceKinds } from 'xfactura-core/ro/treatments/invoices';
 import { vatPeriodEnd } from 'xfactura-core/ro/treatments/vat-settlement';
+import { withheldOf, type Withheld } from 'xfactura-core/ro/withholding';
 import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
 import { bucharestDate, type LocalDate } from 'xfactura-core/time';
 import type { ObjectStore } from '../adapters/object-store';
@@ -394,6 +396,7 @@ async function booksOf(tx: Transaction, companyId: string, period: string) {
       treatmentId: proposals.treatmentId,
       documentId: proposals.documentId,
       input: proposalVersions.input,
+      effect: proposalVersions.effect,
     })
     .from(entries)
     .innerJoin(
@@ -451,14 +454,22 @@ async function booksOf(tx: Transaction, companyId: string, period: string) {
         : [];
     }),
   );
-  // Tax withheld at source (dividends, interest): ANAF wants it under its WHT codes.
-  const withholdings = new Set(
-    treatments.flatMap((row) =>
-      row.treatmentId === 'dividends.withhold' || row.treatmentId === 'loans.withhold'
-        ? [row.entryId]
-        : [],
-    ),
-  );
+  // Tax withheld at source: ANAF wants it under its WHT codes, on the line it is withheld from.
+  const withholdings = new Map(
+    treatments.flatMap((row) => {
+      const details = (
+        JSON.parse(row.effect ?? '{}') as { explanation?: { details?: Record<string, unknown> } }
+      ).explanation?.details;
+      const given = input.get(row.entryId)!;
+      const taxLine = periodLines.find(
+        (line) => line.entryId === row.entryId && line.account === '446' && line.side === 'C',
+      );
+      const gross =
+        typeof given.gross === 'string' ? BigInt(Math.round(Number(given.gross) * 100)) : 0n;
+      const found = withheldOf(row.treatmentId, details, gross, taxLine?.bani ?? 0n);
+      return found ? [[row.entryId, found] as const] : [];
+    }),
+  ) as Map<string, Withheld>;
   const movementOf = new Map(
     treatments.flatMap((row) =>
       row.treatmentId === 'bank.settle'
@@ -898,9 +909,13 @@ export function d406Declaration(
                       tax.taxBani - 2n * tax.deductibleBani <= 1n
                     ? 'half'
                     : 'partial';
+          // A reverse charge at the standard rate of its tax point; an adjustment of rd. 34 at
+          // the rate of the VAT it adjusts, as its entry records it.
           const rate = d406ReverseCharges.includes(tax.code)
             ? await standardRate(tax.taxPoint)
-            : undefined;
+            : d406RatedAdjustments.includes(tax.code)
+              ? attributes.rate
+              : undefined;
           const code = d406VatTaxCode({
             direction: tax.direction,
             code: tax.code,
@@ -970,11 +985,19 @@ export function d406Declaration(
         const document = documentNumber(header.id, header.number);
         const vat = await vatOf(header.id, header.number);
         entryVat.set(header.id, vat);
-        if (books.withholdings.has(header.id))
+        // A tax withheld at source: its D100 TaxType and WHT TaxCode on the line it is withheld
+        // from (the debit of the beneficiary's item), as ANAF's guide and answers say; one
+        // declared in D112 (intellectual property) keeps the generic 000.
+        const withheld = books.withholdings.get(header.id);
+        if (withheld && withheld.taxCode === null && withheld.annual !== 'D112')
           problem(
             'D406_WHT',
-            `Nota ${header.number} reține impozit la sursă: ANAF îl cere cu codurile WHT (TaxType 604, 150, 605 și TaxCode-ul cotei) pe linia plății, ceea ce fișierul nu raportează încă.`,
+            `Nota ${header.number} reține impozit la sursă (${withheld.type}, ${withheld.rate}%) fără un cod în nomenclatorul WHT al ANAF.`,
           );
+        const whtLine =
+          withheld?.taxCode && BigInt(withheld.tax) > 0n
+            ? own.findIndex((line) => line.side === 'D' && line.account !== '446')
+            : -1;
         // An invoice split over accounts or rates has a base line per part, in the parts' order:
         // each VAT goes to the lines of its category, shared by their amounts. Otherwise the base
         // of an entry's VAT is its first line that is neither a partner's nor VAT.
@@ -1062,19 +1085,28 @@ export function d406Declaration(
           // taxes other than VAT and those withheld at source (WHT) ANAF recommends the generic
           // code (Întrebări și răspunsuri SAF-T v1.2, MF.TT.2, opțiunea 2).
           const tax: D406Tax[] =
-            bases.length > 1
-              ? (taxFor.get(index) ?? [])
-              : index === base
-                ? vat.map(({ tax, code }) => ({
-                    type: '300',
-                    code,
-                    base: lei(tax.baseBani),
-                    amount: lei(tax.taxBani),
-                    ...(currency && tax.currency
-                      ? { currencyAmount: formatMoney(tax.taxMinor ?? 0n, tax.currency) }
-                      : {}),
-                  }))
-                : [];
+            index === whtLine
+              ? [
+                  {
+                    type: withheld!.type,
+                    code: withheld!.taxCode!,
+                    base: lei(BigInt(withheld!.base)),
+                    amount: lei(BigInt(withheld!.tax)),
+                  },
+                ]
+              : bases.length > 1
+                ? (taxFor.get(index) ?? [])
+                : index === base
+                  ? vat.map(({ tax, code }) => ({
+                      type: '300',
+                      code,
+                      base: lei(tax.baseBani),
+                      amount: lei(tax.taxBani),
+                      ...(currency && tax.currency
+                        ? { currencyAmount: formatMoney(tax.taxMinor ?? 0n, tax.currency) }
+                        : {}),
+                    }))
+                  : [];
           return {
             id: `${header.number}.${line.lineNo}`,
             account: line.account,

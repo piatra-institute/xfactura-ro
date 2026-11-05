@@ -13,7 +13,9 @@ export const obligationKinds = [
   'D112.quarterly',
   'D100.micro',
   'D100.dividends',
+  'D100.withholding',
   'D205',
+  'D207',
   'D406',
   'D406.assets',
   'S1005',
@@ -168,11 +170,31 @@ export const obligationVersions: ParameterVersion[] = [
     ['ANAF/Cod-fiscal-consolidat:art.43(2)', 'ANAF/Cod-fiscal-consolidat:art.97(7)'],
     '2016-01-01',
   ),
+  // The other taxes withheld at source (O1): rent paid to individuals (art. 84^1 alin. (6)),
+  // interest (art. 97 alin. (2)), non-residents' income (art. 224 alin. (5)), each by the 25th of
+  // the month after it was withheld. Read in the text in force in 2026.
+  version(
+    'ro.deadline.D100.withholding',
+    day25,
+    [
+      'ANAF/Cod-fiscal-consolidat:art.84^1(3)-(6)',
+      'ANAF/Cod-fiscal-consolidat:art.97(2)',
+      'ANAF/Cod-fiscal-consolidat:art.224(5)',
+    ],
+    '2026-01-01',
+  ),
   version(
     'ro.deadline.D205',
     { kind: 'february_last_day' },
     ['ANAF/Cod-fiscal-consolidat:art.132(2)'],
     '2016-01-01',
+  ),
+  // The non-residents' beneficiaries: by the last day of February (art. 231 alin. (1)).
+  version(
+    'ro.deadline.D207',
+    { kind: 'february_last_day' },
+    ['ANAF/Cod-fiscal-consolidat:art.231(1)'],
+    '2026-01-01',
   ),
   version(
     'ro.deadline.D406',

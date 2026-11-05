@@ -13,6 +13,7 @@ import {
 } from 'xfactura-core/ro/declarations/d300';
 import { counties } from 'xfactura-core/ro/geo';
 import { regimeCodes } from 'xfactura-core/ro/treatments/vat-registration';
+import { adjustmentCodes, exemptCodes, provisionalProrata } from 'xfactura-core/ro/exempt';
 import { vatPeriodEnd } from 'xfactura-core/ro/treatments/vat-settlement';
 import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
 import type { LocalDate } from 'xfactura-core/time';
@@ -30,6 +31,7 @@ import {
 import { loadState } from '../kernel/state';
 import type { DeclarationKind, DeclarationProblem } from './declarations';
 import { standing } from './questions';
+import { reverseChargeFlags } from './receipts';
 
 const vatPeriod = z.string().regex(/^\d{4}-(0[1-9]|1[0-2]|Q[1-4])$/);
 export const d300Options = z
@@ -102,6 +104,29 @@ const rowsByCode: Record<'output' | 'input', Record<string, [string, string | nu
       ['R3_1_1', null],
     ],
     'EXP-NONEU-SERV': [['R3_1', null]],
+    // The domestic reverse charge (art. 331): acquisitions on rd. 12 by rate (repeated as
+    // deductible on rd. 26), supplies on rd. 13, base only.
+    'TI-A-21': [
+      ['R12_1', 'R12_2'],
+      ['R12_1_1', 'R12_1_2'],
+    ],
+    'TI-A-11': [
+      ['R12_1', 'R12_2'],
+      ['R12_2_1', 'R12_2_2'],
+    ],
+    'TI-A-19': [
+      ['R12_1', 'R12_2'],
+      ['R12_3_1', 'R12_3_2'],
+    ],
+    'TI-A-9': [
+      ['R12_1', 'R12_2'],
+      ['R72_1', 'R72_2'],
+    ],
+    'TI-A-5': [
+      ['R12_1', 'R12_2'],
+      ['R73_1', 'R73_2'],
+    ],
+    'TI-L': [['R13_1', null]],
   },
   input: {
     'S-21': [['R22_1', 'R22_2']],
@@ -109,12 +134,40 @@ const rowsByCode: Record<'output' | 'input', Record<string, [string, string | nu
     'S-19': [['R74_1', 'R74_2']],
     'RC-EU-SERV': null,
     'RC-NONEU-SERV': null,
+    'TI-A-21': null,
+    'TI-A-11': null,
+    'TI-A-19': null,
+    'TI-A-9': null,
+    'TI-A-5': null,
     [regimeCodes.late]: [['R30_1', 'R30_2']],
     [regimeCodes.capitalGoods]: [],
   },
 };
+// Exempt operations (V2), base only: an intra-community supply of goods on rd. 1, exempt with
+// the right of deduction (exports, art. 294 alin. (1), 295, 296, 297 alin. (4) lit. d)) on rd.
+// 14, without it (art. 292) on rd. 15, and purchases exempt or not taxable on rd. 29
+// (OPANAF nr. 174/2026, instructions of rd. 1, 14, 15 and 29); the year-end pro-rata adjustment
+// and the adjustment of stock and services on rd. 34, signed, as the capital goods'.
+Object.assign(rowsByCode.output, {
+  [exemptCodes.intraCommunity]: [['R1_1', null]],
+  [exemptCodes.withDeduction]: [['R14_1', null]],
+  [exemptCodes.export]: [['R14_1', null]],
+  [exemptCodes.noDeduction]: [['R15_1', null]],
+});
+Object.assign(rowsByCode.input, {
+  [exemptCodes.purchase]: [['R26_1', null]],
+  [adjustmentCodes.prorata]: [],
+  [adjustmentCodes.stock]: [],
+});
+/** Input entries declared on rd. 34 (`R31_2`), signed. */
+const adjustments: readonly string[] = [
+  regimeCodes.capitalGoods,
+  adjustmentCodes.prorata,
+  adjustmentCodes.stock,
+];
+
 /** Input entries declared on their own rows, not in the deducted subtotal (row 31). */
-const regularizations: readonly string[] = [regimeCodes.late, regimeCodes.capitalGoods];
+const regularizations: readonly string[] = [regimeCodes.late, ...adjustments];
 
 function returnPeriod(period: string): D300['period'] {
   const quarter = /^(\d{4})-Q([1-4])$/.exec(period);
@@ -428,7 +481,8 @@ async function salesWithoutVat(
           and p.subject_key = 'document:' || ${documents.id})`,
         sql`not exists (select 1 from ${taxEntries} t where t.company_id = ${documents.companyId}
           and t.document_id = ${documents.id} and t.direction = 'output'
-          and (t.code like 'S-%' or t.code like 'EXP-%'))`,
+          and (t.code like 'S-%' or t.code like 'EXP-%' or t.code like 'EX-%'
+            or t.code like 'TI-%'))`,
       ),
     );
 }
@@ -455,6 +509,42 @@ async function inputsOf(tx: Transaction, companyId: string, period: string) {
       : []),
   ];
   return { loaded, seller, inputs, deferred: deferred.entries, late: late.ranges };
+}
+
+/** The return's pro-rata header (art. 300; OPANAF nr. 174/2026, "Pro rata de deducere"). */
+function proRataOf(
+  loaded: Awaited<ReturnType<typeof inputsOf>>['loaded'],
+  period: string,
+  given: string,
+): { value: string; problem?: DeclarationProblem } {
+  const adjustment = (loaded.taxLedger.get(`VAT|${period}`)?.entries ?? []).find(
+    (entry) => entry.code === adjustmentCodes.prorata && entry.attributes.definitive,
+  );
+  const provisional = provisionalProrata(loaded.profile, vatPeriodEnd(period));
+  const derived = adjustment
+    ? adjustment.attributes.definitive!
+    : provisional.found && provisional.fact.kind === 'percent'
+      ? String(provisional.fact.percent)
+      : null;
+  if (provisional.found && provisional.fact.kind === 'special')
+    return {
+      value: given,
+      problem: {
+        code: 'PRORATA_SPECIAL',
+        message:
+          'Pro rata specială (art. 300 alin. (16)–(18) din Codul fiscal) nu este încă acoperită.',
+      },
+    };
+  if (derived === null) return { value: given };
+  if (given !== '100' && given !== derived)
+    return {
+      value: derived,
+      problem: {
+        code: 'PRORATA_OPTION',
+        message: `Pro rata perioadei este ${derived}% (${adjustment ? 'definitivă, din ajustarea de la sfârșitul anului' : 'provizorie, vat.prorata'}), nu ${given}%.`,
+      },
+    };
+  return { value: derived };
 }
 
 /** Whether the company is registered under art. 316 on some day of a period. */
@@ -547,7 +637,7 @@ export function d300Declaration(
         const regularization = regularizations.includes(entry.code);
         // Outside the normal regime's days, or in a range a late registration declares.
         if (!regularization && (!registered(entry.taxPoint) || covered(entry.taxPoint))) continue;
-        if (entry.code === regimeCodes.capitalGoods) {
+        if (adjustments.includes(entry.code)) {
           add('R31_2', entry.deductibleBani);
           continue;
         }
@@ -568,6 +658,11 @@ export function d300Declaration(
       if (deducted !== 0n) add('R28_2', deducted);
       for (const [element, bani] of Object.entries(deferredRows(deferred, period, problems)))
         add(element, bani);
+      // The pro-rata of art. 300: the provisional one of the period's year, and the definitive in
+      // the return holding the year-end adjustment (alin. (8)); 100 as the printed form pre-fills
+      // it for a company without one.
+      const proRata = proRataOf(loaded, period, options.proRata);
+      if (proRata.problem) problems.push(proRata.problem);
       if (problems.length || !seller || !roundToLeu)
         return { xml: '', inputs, problems, summary: null };
 
@@ -599,13 +694,13 @@ export function d300Declaration(
         groupRepresentative: false,
         simplifiedDomestic: false,
         afterReserveCancellation: false,
-        proRata: options.proRata,
-        reverseCharge: {
-          cereals: false,
-          mobilePhones: false,
-          integratedCircuits: false,
-          consoles: false,
-        },
+        proRata: proRata.value,
+        // The reverse-charged supplies of the period's entries that it declares.
+        reverseCharge: reverseChargeFlags(
+          (loaded.taxLedger.get(`VAT|${period}`)?.entries ?? []).filter(
+            (entry) => registered(entry.taxPoint) && !covered(entry.taxPoint),
+          ),
+        ),
         refundRequested: options.refundRequested ?? false,
         rows: {
           ...(Object.fromEntries(

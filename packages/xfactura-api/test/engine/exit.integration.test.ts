@@ -1299,7 +1299,8 @@ describe('Phase 1 exit: an MCP agent keeps four months of books, people approve'
     expect(car.effect?.taxEntries).toMatchObject([{ amount: '315.00', deductible: '157.50' }]);
 
     // The photo went to the agent's vision model as an image; what it read is recorded, its
-    // citations unverifiable, and booking receipts is not built: it waits, for information.
+    // citations unverifiable. The worklist offers its booking (receipts.recognize), which this
+    // agent, booking invoices only, leaves to a person: it waits.
     expect(agent.images).toEqual([{ mediaType: 'image/png', bytes: photo.length }]);
     const [read] = await s.list<{ id: string; authority: string }>(s.owner, 'documents.list', {
       kinds: ['receipt.received'],
@@ -1310,8 +1311,10 @@ describe('Phase 1 exit: an MCP agent keeps four months of books, people approve'
     const [waiting] = (await ownerWork(['document.unproposed'])).filter(
       (item) => item.subject.id === read!.id,
     );
-    expect(waiting).toMatchObject({ severity: 'info' });
-    expect(waiting!.next.filter((step) => step.by === 'agent')).toEqual([]);
+    expect(waiting).toMatchObject({ severity: 'warn' });
+    expect(waiting!.next.filter((step) => step.by === 'agent')).toMatchObject([
+      { operation: 'proposals.propose', inputHint: { treatment: 'receipts.recognize' } },
+    ]);
     expect(
       (await proposals()).some((proposal) => proposal.subject === `document:${read!.id}`),
     ).toBe(false);

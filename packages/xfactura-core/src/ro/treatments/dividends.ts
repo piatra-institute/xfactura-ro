@@ -11,6 +11,7 @@ import {
 import { divRound, formatMoney, parseMoney, parseScaled } from '../../money';
 import { RuleGapError } from '../../rules';
 import { isLocalDate, type LocalDate } from '../../time';
+import { whtCode, type Withheld } from '../withholding/codes';
 
 const block = (code: string, message: string, path?: string): Issue => ({
   code,
@@ -179,11 +180,13 @@ export const dividendWithholding: Treatment<WithholdingInput> = {
     const issues: Issue[] = [];
     const entry = loaded.entries.get(input.distributionEntryId);
     const item = loaded.openItems.get(input.openItem);
+    // A dividend distributed from the year's retained profit (457), or during the year from the
+    // interim statements (456, `dividends.interim`).
     if (
       !entry ||
       !item ||
-      item.controlAccount !== '457' ||
-      !entry.lines.some((line) => line.account === '457' && line.openItem === item.id)
+      (item.controlAccount !== '457' && item.controlAccount !== '456') ||
+      !entry.lines.some((line) => line.account === item.controlAccount && line.openItem === item.id)
     )
       return {
         effect: null,
@@ -229,7 +232,12 @@ export const dividendWithholding: Treatment<WithholdingInput> = {
           : null;
     if (!beneficiary)
       issues.push(
-        block('NON_RESIDENT', 'Dividendele plătite nerezidenților nu sunt încă suportate.'),
+        block(
+          'NON_RESIDENT',
+          shareholder?.kind === 'eu_taxable' || shareholder?.kind === 'non_eu'
+            ? 'Impozitul pe dividendele plătite nerezidenților se reține cu nonresidents.withhold (art. 223–224 din Codul fiscal).'
+            : 'Asociatul nu este o persoană fizică sau o persoană juridică română.',
+        ),
       );
     if (issues.length) return { effect: null, issues };
 
@@ -262,7 +270,13 @@ export const dividendWithholding: Treatment<WithholdingInput> = {
       journalCode: 'DIVIDENDE',
       description: `Impozit pe dividende reținut ${shareholder!.name}`,
       lines: [
-        { account: '457', side: 'D', bani: tax, openItem: item.id, partyId: item.partyId },
+        {
+          account: item.controlAccount,
+          side: 'D',
+          bani: tax,
+          openItem: item.id,
+          partyId: item.partyId,
+        },
         {
           account: '446',
           side: 'C',
@@ -286,9 +300,424 @@ export const dividendWithholding: Treatment<WithholdingInput> = {
       schedules: [],
       explanation: {
         summary: `Dividend brut ${formatMoney(gross, 'RON')} lei, impozit ${rate}% ${formatMoney(tax, 'RON')} lei, net de plată ${formatMoney(gross - tax, 'RON')} lei.`,
-        details: { beneficiary: beneficiary!, rate, distribution: entry.date },
+        details: {
+          beneficiary: beneficiary!,
+          rate,
+          distribution: entry.date,
+          ...(item.controlAccount === '456' ? { interim: true } : {}),
+          withholding: withheldDividend(beneficiary!, rate, gross, tax) as unknown as Record<
+            string,
+            string
+          >,
+        },
       },
     };
     return { effect, issues: issuesAfter };
+  },
+};
+
+/** What a dividend withholding declares: 604 for an individual, 150 for a Romanian company. */
+function withheldDividend(
+  beneficiary: 'individual' | 'company',
+  rate: string,
+  gross: bigint,
+  tax: bigint,
+): Withheld {
+  const type = beneficiary === 'individual' ? '604' : '150';
+  return {
+    type,
+    taxCode: whtCode(type, 'domestic', rate),
+    regime: 'domestic',
+    rate,
+    base: String(gross),
+    gross: String(gross),
+    tax: String(tax),
+    annual: 'D205',
+  };
+}
+
+// ─── Interim dividends (Legea nr. 82/1991 art. 19 alin. (3)–(3^2), OMFP nr. 3.067/2018) ──────
+
+const quarterEnds = ['-03-31', '-06-30', '-09-30'];
+const INTERIM = [
+  'L82/1991:art.19(3)-(3^2)',
+  'L163/2018:art.II.pct.1-2',
+  'OMFP3067/2018:pct.423^1-423^2',
+  'OMFP3067/2018:art.III-V',
+];
+
+export const interimInput = z
+  .object({
+    /** The date of the shareholders' decision approving the interim statements and the
+     * distribution. */
+    date: localDate,
+    /** The shareholders' decision. */
+    evidenceId: z.uuid(),
+    /** The interim financial statements it approves (balance sheet and profit and loss account
+     * from the year's start, OMFP nr. 1.802/2014 pct. 602). */
+    statementsEvidenceId: z.uuid(),
+    /** The last day of the quarter the interim statements end with (Q1–Q3). */
+    quarterEnd: localDate,
+    /** Reserves the law or the articles require, set aside from the profit (deducted). */
+    reserves: amount,
+    /** Available reserves (1068) withdrawn for the distribution (added). */
+    fromReserves: amount,
+    shareholders: z
+      .array(z.object({ partyId: z.uuid(), amount }).strict())
+      .min(1)
+      .max(50),
+  })
+  .strict();
+export type InterimInput = z.infer<typeof interimInput>;
+
+const yearStart = (date: string) => `${date.slice(0, 4)}-01-01` as LocalDate;
+const interimQueries = (input: InterimInput) => ({
+  // The year's result to the quarter's end: revenues less expenses, the profit tax included.
+  result: {
+    prefixes: ['6', '7'],
+    from: yearStart(input.quarterEnd),
+    to: input.quarterEnd as LocalDate,
+  } satisfies TurnoverQuery,
+  retained: undistributed(input.date as LocalDate),
+  reserves: {
+    prefixes: ['1068'],
+    from: '1900-01-01' as LocalDate,
+    to: input.date as LocalDate,
+  } satisfies TurnoverQuery,
+  // What the year's earlier interim decisions distributed (463's debits).
+  earlier: {
+    prefixes: ['463'],
+    from: yearStart(input.date),
+    to: input.date as LocalDate,
+  } satisfies TurnoverQuery,
+});
+
+/**
+ * Dividends the shareholders distribute during the year from the interim statements they approve
+ * (Legea nr. 82/1991 art. 19 alin. (3^1), Legea nr. 31/1990 art. 67 alin. (2)): Dr 463 / Cr 456
+ * per shareholder (OMFP nr. 3.067/2018, pct. 423^1), within the year's net profit to the quarter's
+ * end, plus the retained profit (1171) and the available reserves withdrawn, less the reserves
+ * the law or the articles require and what the year's earlier interim decisions distributed. The
+ * tax is withheld when paid (`dividends.withhold` on the 456 item); they are regularized against
+ * the annual dividends once the year's statements are approved (`dividends.regularize`).
+ */
+export const interimDistribution: Treatment<InterimInput> = {
+  id: 'dividends.interim',
+  version: 1,
+  description:
+    'Repartizarea de dividende în cursul exercițiului, pe baza situațiilor financiare interimare.',
+  input: interimInput,
+  agent: true,
+  summary:
+    'Interim dividends distributed during the year from the approved interim financial statements (463 = 456 per shareholder).',
+  subject: (input) => `dividends-interim:${input.evidenceId}`,
+  plan: (input) => {
+    const queries = interimQueries(input);
+    return {
+      evidence: [input.evidenceId, input.statementsEvidenceId],
+      parties: input.shareholders.map((item) => item.partyId),
+      turnover: [queries.result, queries.retained, queries.reserves, queries.earlier],
+    };
+  },
+  evaluate(input, loaded) {
+    const issues: Issue[] = [];
+    if (!loaded.evidence.has(input.evidenceId))
+      issues.push(block('EVIDENCE', 'Hotărârea asociaților nu este disponibilă.', 'evidenceId'));
+    if (!loaded.evidence.has(input.statementsEvidenceId))
+      issues.push(
+        block(
+          'EVIDENCE',
+          'Situațiile financiare interimare nu sunt disponibile.',
+          'statementsEvidenceId',
+        ),
+      );
+    const year = input.quarterEnd.slice(0, 4);
+    if (!quarterEnds.some((end) => input.quarterEnd === `${year}${end}`))
+      issues.push(
+        block(
+          'QUARTER',
+          'Situațiile interimare se încheie la sfârșitul trimestrului I, II sau III; al IV-lea este al situațiilor anuale.',
+          'quarterEnd',
+        ),
+      );
+    if (input.date <= input.quarterEnd || input.date.slice(0, 4) !== year)
+      issues.push(
+        block(
+          'DATE',
+          'Hotărârea se ia după sfârșitul trimestrului, în cursul aceluiași exercițiu financiar.',
+          'date',
+        ),
+      );
+    if (
+      loaded.years.some(
+        (item) =>
+          item.kind === 'financial' &&
+          item.from <= input.quarterEnd &&
+          input.quarterEnd <= item.to &&
+          item.from !== `${year}-01-01`,
+      )
+    )
+      issues.push(
+        block(
+          'FINANCIAL_YEAR',
+          'Un exercițiu financiar care nu începe la 1 ianuarie nu este încă suportat pentru dividendele interimare.',
+        ),
+      );
+    const seen = new Set<string>();
+    input.shareholders.forEach((item, index) => {
+      if (!loaded.parties.has(item.partyId))
+        issues.push(block('PARTY', 'Asociatul nu există.', `shareholders.${index}.partyId`));
+      if (seen.has(item.partyId))
+        issues.push(
+          block('PARTY', 'Asociatul apare de două ori.', `shareholders.${index}.partyId`),
+        );
+      if (parseMoney(item.amount, 'RON') === 0n)
+        issues.push(block('AMOUNT', 'Dividendul este zero.', `shareholders.${index}.amount`));
+      seen.add(item.partyId);
+    });
+    const queries = interimQueries(input);
+    const rows = (query: TurnoverQuery) => loaded.turnover.get(turnoverKey(query)) ?? [];
+    // Revenues (credit) less expenses (debit) to the quarter's end.
+    const profit = rows(queries.result).reduce((sum, row) => sum + row.credit - row.debit, 0n);
+    const retained = rows(queries.retained).reduce((sum, row) => sum + row.credit - row.debit, 0n);
+    const available = rows(queries.reserves).reduce((sum, row) => sum + row.credit - row.debit, 0n);
+    const earlier = rows(queries.earlier).reduce((sum, row) => sum + row.debit, 0n);
+    const withdrawn = parseMoney(input.fromReserves, 'RON');
+    const reserves = parseMoney(input.reserves, 'RON');
+    if (withdrawn > available)
+      issues.push(
+        block(
+          'RESERVES',
+          `Rezervele retrase (${formatMoney(withdrawn, 'RON')} lei) depășesc rezervele disponibile în 1068 (${formatMoney(available, 'RON')} lei).`,
+          'fromReserves',
+        ),
+      );
+    const limit = profit + retained + withdrawn - reserves - earlier;
+    const total = input.shareholders.reduce(
+      (sum, item) => sum + parseMoney(item.amount, 'RON'),
+      0n,
+    );
+    if (total > limit)
+      issues.push(
+        block(
+          'DISTRIBUTABLE',
+          `Dividendele interimare (${formatMoney(total, 'RON')} lei) depășesc suma distribuibilă (${formatMoney(limit, 'RON')} lei): profitul net la ${input.quarterEnd} ${formatMoney(profit, 'RON')}, profitul reportat ${formatMoney(retained, 'RON')}, rezervele retrase ${formatMoney(withdrawn, 'RON')}, minus rezervele constituite ${formatMoney(reserves, 'RON')} și dividendele interimare anterioare ale anului ${formatMoney(earlier, 'RON')} (Legea nr. 82/1991 art. 19 alin. (3^1)).`,
+        ),
+      );
+    if (issues.length) return { effect: null, issues };
+
+    const openItems: OpenItemSpec[] = [];
+    const lines: LineSpec[] = [];
+    input.shareholders.forEach((item, index) => {
+      const bani = parseMoney(item.amount, 'RON');
+      openItems.push(
+        {
+          ref: `claim:${index}`,
+          kind: 'receivable',
+          controlAccount: '463',
+          partyId: item.partyId,
+          currency: 'RON',
+          normalSide: 'D',
+          mayReverse: false,
+        },
+        {
+          ref: `owed:${index}`,
+          kind: 'payable',
+          controlAccount: '456',
+          partyId: item.partyId,
+          currency: 'RON',
+          normalSide: 'C',
+          mayReverse: false,
+        },
+      );
+      lines.push(
+        { account: '463', side: 'D', bani, openItem: `claim:${index}`, partyId: item.partyId },
+        { account: '456', side: 'C', bani, openItem: `owed:${index}`, partyId: item.partyId },
+      );
+    });
+    const effect: Effect = {
+      schema: 'effect@1',
+      date: input.date as LocalDate,
+      journalClass: 'general',
+      journalCode: 'DIVIDENDE',
+      description: `Dividende interimare repartizate prin hotărârea din ${input.date}`,
+      lines,
+      openItems,
+      taxEntries: [],
+      schedules: [],
+      explanation: {
+        summary: `${input.shareholders.length} asociați, dividende interimare ${formatMoney(total, 'RON')} lei din suma distribuibilă de ${formatMoney(limit, 'RON')} lei la ${input.quarterEnd}.`,
+        details: {
+          decision: input.date,
+          quarterEnd: input.quarterEnd,
+          profit: formatMoney(profit, 'RON'),
+          retained: formatMoney(retained, 'RON'),
+          limit: formatMoney(limit, 'RON'),
+          clauses: INTERIM,
+        },
+      },
+    };
+    return {
+      effect,
+      issues: [
+        {
+          code: 'INTERIM_STATEMENTS',
+          severity: 'ack',
+          message:
+            'Situațiile financiare interimare se depun la Ministerul Finanțelor în 30 de zile de la aprobare (OMFP nr. 3.067/2018 art. V) și se auditează când cele anuale se auditează (Legea nr. 82/1991 art. 34^1): aplicația nu le întocmește și nu le urmărește în calendar. Confirmați că sunt întocmite și aprobate.',
+        },
+      ],
+    };
+  },
+};
+
+export const regularizationInput = z
+  .object({
+    /** The posted annual distribution (`dividends.distribute`) of the year's profit. */
+    distributionEntryId: z.uuid(),
+    /** The interim distributions (`dividends.interim`) of the financial year it closes. */
+    interimEntryIds: z.array(z.uuid()).min(1).max(3),
+    /** The day of the regularization: on or after the annual distribution. */
+    date: localDate,
+  })
+  .strict();
+export type RegularizationInput = z.infer<typeof regularizationInput>;
+
+/**
+ * The interim dividends regularized against the annual dividends once the year's statements are
+ * approved (Legea nr. 82/1991 art. 19 alin. (3^2), OMFP nr. 3.067/2018 pct. 423^2): per
+ * shareholder, Dr 457 / Cr 463 for the interim dividends of the year, within the annual dividend
+ * (its 457 item). The annual dividend left over is paid with its tax as usual. Interim dividends
+ * above the annual dividend, which the shareholder returns within 60 days, are not covered: their
+ * restitution and the tax withheld on them are refused.
+ */
+export const interimRegularization: Treatment<RegularizationInput> = {
+  id: 'dividends.regularize',
+  version: 1,
+  description:
+    'Regularizarea dividendelor interimare pe seama dividendelor anuale, după aprobarea situațiilor financiare anuale.',
+  input: regularizationInput,
+  agent: true,
+  summary:
+    'Interim dividends regularized against the annual dividends after the annual statements are approved (457 = 463 per shareholder).',
+  subject: (input) => `dividends-regularize:${input.distributionEntryId}`,
+  plan: (input) => ({ entries: [input.distributionEntryId, ...input.interimEntryIds] }),
+  followUp(input, loaded) {
+    const ids = [input.distributionEntryId, ...input.interimEntryIds].flatMap(
+      (id) =>
+        loaded.entries
+          .get(id)
+          ?.lines.flatMap((line) =>
+            (line.account === '457' || line.account === '463') && line.openItem
+              ? [line.openItem]
+              : [],
+          ) ?? [],
+    );
+    return ids.length ? { openItems: [{ ids: [...new Set(ids)] }] } : null;
+  },
+  evaluate(input, loaded) {
+    const annual = loaded.entries.get(input.distributionEntryId);
+    const interims = input.interimEntryIds.map((id) => loaded.entries.get(id));
+    if (!annual || !annual.lines.some((line) => line.account === '1171' && line.side === 'D'))
+      return {
+        effect: null,
+        issues: [
+          block(
+            'DISTRIBUTION',
+            'Repartizarea anuală indicată nu este o repartizare de dividende din profitul reportat.',
+            'distributionEntryId',
+          ),
+        ],
+      };
+    const issues: Issue[] = [];
+    if (new Set(input.interimEntryIds).size !== input.interimEntryIds.length)
+      issues.push(
+        block('INTERIM', 'O repartizare interimară apare de două ori.', 'interimEntryIds'),
+      );
+    interims.forEach((entry, index) => {
+      if (!entry || !entry.lines.some((line) => line.account === '463'))
+        issues.push(
+          block(
+            'INTERIM',
+            'Repartizarea indicată nu este una de dividende interimare.',
+            `interimEntryIds.${index}`,
+          ),
+        );
+      else if (Number(entry.date.slice(0, 4)) !== Number(annual.date.slice(0, 4)) - 1)
+        issues.push(
+          block(
+            'INTERIM',
+            'Dividendele interimare se regularizează pe seama dividendelor anuale ale aceluiași exercițiu, aprobate în anul următor.',
+            `interimEntryIds.${index}`,
+          ),
+        );
+    });
+    if (input.date < annual.date)
+      issues.push(
+        block('DATE', 'Regularizarea urmează repartizării anuale a dividendelor.', 'date'),
+      );
+    if (issues.length) return { effect: null, issues };
+
+    // Per shareholder: the interim dividends still on 463, and the annual dividend owed on 457.
+    const claims = new Map<string, { id: string; balance: bigint }[]>();
+    for (const entry of interims)
+      for (const line of entry!.lines)
+        if (line.account === '463' && line.openItem) {
+          const item = loaded.openItems.get(line.openItem);
+          if (item && item.balanceBani !== 0n)
+            claims.set(item.partyId, [
+              ...(claims.get(item.partyId) ?? []),
+              { id: item.id, balance: item.balanceBani },
+            ]);
+        }
+    const owed = new Map<string, { id: string; owed: bigint }>();
+    for (const line of annual.lines)
+      if (line.account === '457' && line.openItem) {
+        const item = loaded.openItems.get(line.openItem);
+        if (item) owed.set(item.partyId, { id: item.id, owed: -item.balanceBani });
+      }
+    if (!claims.size)
+      return {
+        effect: null,
+        issues: [block('NOTHING', 'Dividendele interimare sunt deja regularizate.')],
+      };
+    const lines: LineSpec[] = [];
+    for (const [partyId, items] of claims) {
+      const interim = items.reduce((sum, item) => sum + item.balance, 0n);
+      const annualItem = owed.get(partyId);
+      const name = loaded.parties.get(partyId)?.name ?? partyId;
+      if (!annualItem || annualItem.owed < interim) {
+        issues.push(
+          block(
+            'INTERIM_EXCESS',
+            `Dividendele interimare ale lui ${name} (${formatMoney(interim, 'RON')} lei) depășesc dividendul anual rămas de plată (${formatMoney(annualItem?.owed ?? 0n, 'RON')} lei): restituirea în 60 de zile (Legea nr. 82/1991 art. 19 alin. (3^2)) și impozitul reținut pe ea nu sunt încă suportate.`,
+          ),
+        );
+        continue;
+      }
+      lines.push({ account: '457', side: 'D', bani: interim, openItem: annualItem.id, partyId });
+      for (const item of items)
+        lines.push({ account: '463', side: 'C', bani: item.balance, openItem: item.id, partyId });
+    }
+    if (issues.length) return { effect: null, issues };
+    const total = lines
+      .filter((line) => line.side === 'D')
+      .reduce((sum, line) => sum + line.bani, 0n);
+    const effect: Effect = {
+      schema: 'effect@1',
+      date: input.date as LocalDate,
+      journalClass: 'general',
+      journalCode: 'DIVIDENDE',
+      description: `Regularizarea dividendelor interimare pe seama dividendelor din ${annual.date}`,
+      lines,
+      openItems: [],
+      taxEntries: [],
+      schedules: [],
+      explanation: {
+        summary: `${claims.size} asociați, dividende interimare regularizate ${formatMoney(total, 'RON')} lei pe seama dividendelor anuale.`,
+        details: { annual: annual.date, clauses: INTERIM },
+      },
+    };
+    return { effect, issues: [] };
   },
 };

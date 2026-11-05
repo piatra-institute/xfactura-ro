@@ -79,7 +79,7 @@ export const nonpayerDefinitions: ParameterDefinition[] = [
     scope: [],
     value: capitalGoods,
     description:
-      'Perioadele de ajustare a taxei deductibile pentru bunurile de capital (art. 305), rândul decontului și conturile ajustării la trecerea între regimul normal și regimul special de scutire.',
+      'Perioadele de ajustare a taxei deductibile pentru bunurile de capital (art. 305), rândul decontului și conturile ajustării: la trecerea între regimul normal și regimul special de scutire, la schimbarea folosirii bunului, la livrarea și la încetarea existenței lui.',
   },
 ];
 
@@ -136,6 +136,8 @@ export const nonpayerVersions: ParameterVersion[] = [
     { movable: 5, immovable: 20, row: 'R31_2', expense: '635', income: '7588' },
     [
       code('art.305(2)-(5)'),
+      code('art.305(4)-(5),(7)'),
+      code('norme.art.305.pct.79(1)-(2)'),
       code('norme.art.310.pct.83(7)-(8),(11)-(12)'),
       'OPANAF174/2026:rd.33-34',
     ],

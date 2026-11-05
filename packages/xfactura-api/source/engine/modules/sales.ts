@@ -16,6 +16,13 @@ import { documentIdentity, normalizedTaxId } from 'xfactura-core/documents/schem
 import { accountCodePattern, profileAt } from 'xfactura-core/kernel';
 import { cashVatMention, mentionsCashVat } from 'xfactura-core/ro/cash-vat';
 import { invoiceKinds, taxPointOf } from 'xfactura-core/ro/treatments/invoices';
+import { exemptionBases, exemptionBasisIds, isExemptCategory } from 'xfactura-core/ro/exempt';
+import {
+  cerealCodes,
+  reverseChargeApplies,
+  reverseChargeCategoryIds,
+  type ReverseChargeRule,
+} from 'xfactura-core/ro/receipts';
 import { RuleGapError } from 'xfactura-core/rules';
 import type { LocalDate } from 'xfactura-core/time';
 import { parseInvoiceXml } from 'xfactura-core/ubl/invoice-document';
@@ -90,6 +97,20 @@ export const issueInput = invoiceFieldsSchema
     /** The buyer is affiliated with the company (Codul fiscal art. 7 pct. 26): a company applying
      * VAT on collection invoices it under the general rules (art. 282 alin. (6) lit. d)). */
     affiliated: z.boolean().optional(),
+    /** The legal basis of the lines invoiced as exempt (E, K, G): art. 292 without the right of
+     * deduction, art. 294–296 or 297 alin. (4) lit. d) with it. Each exempt category states its
+     * reason on the invoice (BT-120, or the VATEX code BT-121); the recognition books by it. */
+    exemption: z.enum(exemptionBasisIds).optional(),
+    /** A supply under the domestic reverse charge (art. 331), its lines in category AE without
+     * VAT: the category of art. 331 alin. (2) it is (the NC code for cereals). It is recognized
+     * with `invoices.reverseCharge`. */
+    reverseCharge: z
+      .object({
+        category: z.enum(reverseChargeCategoryIds),
+        nc: z.enum(cerealCodes).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type IssueInput = z.infer<typeof issueInput>;
@@ -392,7 +413,7 @@ export class Sales {
     actor: Actor,
     key: string,
     input: IssueInput,
-    issued: { documentId: string; account: string },
+    issued: { documentId: string; account: string; totals: { taxExclusive: string } },
   ) {
     const credit = input.typeCode === '381';
     try {
@@ -400,18 +421,34 @@ export class Sales {
       const proposal = await this.proposals.propose(
         actor,
         `recognize:${hashOf(key).slice(0, 40)}`,
-        credit ? 'invoices.credit' : 'invoices.recognize',
         credit
+          ? 'invoices.credit'
+          : input.reverseCharge
+            ? 'invoices.reverseCharge'
+            : 'invoices.recognize',
+        input.reverseCharge && !credit
           ? {
               documentId: issued.documentId,
-              originalDocumentId: input.precedingDocumentIds[0],
-              account: issued.account,
+              parts: [
+                {
+                  ...input.reverseCharge,
+                  account: issued.account,
+                  amount: issued.totals.taxExclusive,
+                },
+              ],
             }
-          : {
-              documentId: issued.documentId,
-              account: issued.account,
-              ...(input.affiliated ? { affiliated: true } : {}),
-            },
+          : credit
+            ? {
+                documentId: issued.documentId,
+                originalDocumentId: input.precedingDocumentIds[0],
+                account: issued.account,
+              }
+            : {
+                documentId: issued.documentId,
+                account: issued.account,
+                ...(input.affiliated ? { affiliated: true } : {}),
+                ...(input.exemption ? { exemption: input.exemption } : {}),
+              },
       );
       return { proposalId: proposal.id, error: null };
     } catch (error) {
@@ -573,6 +610,8 @@ export class Sales {
           revenueAccount: _r,
           reducedRateBasis: _basis,
           affiliated: _affiliated,
+          exemption: _exemption,
+          reverseCharge: _reverse,
           ...fields
         } = input;
         invoice = calculateInvoice({
@@ -589,6 +628,9 @@ export class Sales {
           ),
         });
         problems.push(...checkInvoice(invoice).map(({ code, message }) => ({ code, message })));
+        problems.push(
+          ...(await this.reverseCharge(tx, companyId, input, invoice, taxPoint, status, buyer)),
+        );
       } catch (error) {
         const { code = 'EINVOICE', message } = error as { code?: string; message: string };
         problem(code, message);
@@ -602,6 +644,98 @@ export class Sales {
       sellerVersion: seller?.version ?? 0,
       buyerVersion: buyer?.version ?? 0,
     };
+  }
+
+  /**
+   * A supply under the domestic reverse charge (art. 331): every line in category AE, without
+   * VAT, between persons registered for VAT, of a category in force on the tax point, and for
+   * phones, circuits and laptops at least the threshold on the invoice (alin. (7)). Lines in AE
+   * name the category, which the recognition needs.
+   */
+  private async reverseCharge(
+    tx: Transaction,
+    companyId: string,
+    input: IssueInput,
+    invoice: Invoice,
+    taxPoint: LocalDate,
+    status: string | null,
+    buyer: { details: Party } | null | undefined,
+  ): Promise<Problem[]> {
+    const vats = [
+      ...input.lines.map((line) => line.vat),
+      ...input.adjustments.map((item) => item.vat),
+    ];
+    const reverse = vats.some((vat) => vat.category === 'AE');
+    if (!reverse && !input.reverseCharge) return [];
+    if (!input.reverseCharge)
+      return [
+        {
+          code: 'REVERSE_CHARGE_CATEGORY',
+          message:
+            'Liniile cu taxare inversă (AE) se emit cu categoria art. 331 alin. (2) a operațiunii (reverseCharge.category).',
+        },
+      ];
+    const problems: Problem[] = [];
+    if (vats.some((vat) => vat.category !== 'AE') || input.typeCode !== '380')
+      problems.push({
+        code: 'REVERSE_CHARGE_LINES',
+        message:
+          'O factură cu taxare inversă are toate liniile în categoria AE, fără TVA; facturile mixte și notele de credit nu sunt încă acoperite.',
+      });
+    // The supplier writes «taxare inversă» on the invoice (norme pct. 109 alin. (1)).
+    const mention = (text: string | undefined) =>
+      !!text &&
+      text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().includes('taxare inversa');
+    if (
+      !vats.some((vat) => mention(vat.exemptionReason)) &&
+      !input.notes.some((note) => mention(note))
+    )
+      problems.push({
+        code: 'REVERSE_CHARGE_MENTION',
+        message:
+          'Înscrieți pe factură mențiunea „taxare inversă” (motivul scutirii al categoriei AE, BT-120, sau o notă).',
+      });
+    if (input.currency !== 'RON')
+      problems.push({
+        code: 'REVERSE_CHARGE_CURRENCY',
+        message: 'Facturile cu taxare inversă în valută nu sunt încă acoperite.',
+      });
+    if (status !== 'normal_vat' || !/^RO\d+$/i.test(buyer?.details.vatId ?? ''))
+      problems.push({
+        code: 'REVERSE_CHARGE_PARTIES',
+        message:
+          'Taxarea inversă se aplică doar între persoane înregistrate în scopuri de TVA (art. 331 alin. (1)): compania și cumpărătorul, cu codul lui de TVA (RO…).',
+      });
+    const rules = await this.proposals.ruleContext(tx, companyId);
+    try {
+      const rule = rules.param<ReverseChargeRule>(
+        'ro.vat.reverse_charge.domestic',
+        'vat_chargeability_date',
+        taxPoint,
+      );
+      const applies = reverseChargeApplies(
+        [
+          {
+            category: input.reverseCharge.category,
+            bani: BigInt(invoice.totals.taxExclusive.replace('.', '')),
+          },
+        ],
+        rule,
+      );
+      if (!applies.applies)
+        problems.push({
+          code:
+            applies.reason === 'category' ? 'REVERSE_CHARGE_CATEGORY' : 'REVERSE_CHARGE_THRESHOLD',
+          message:
+            applies.reason === 'category'
+              ? `Categoria ${applies.detail} nu este cu taxare inversă la ${taxPoint}: se facturează cu TVA.`
+              : `Bunurile însumează ${applies.detail} lei, sub ${rule.threshold.lei} lei: se facturează cu TVA (art. 331 alin. (7)).`,
+        });
+    } catch (error) {
+      if (!(error instanceof RuleGapError)) throw error;
+      problems.push({ code: 'RULE_GAP', message: error.message });
+    }
+    return problems;
   }
 
   /** Standard-rated lines carry the standard rate in force at the tax point, or the reduced
@@ -618,6 +752,28 @@ export class Sales {
       ...input.lines.map((line) => line.vat),
       ...input.adjustments.map((item) => item.vat),
     ];
+    // An exempt line names its legal basis (art. 292, 294–296, 297 alin. (4) lit. d)).
+    if (status === 'normal_vat' && vats.some((vat) => isExemptCategory(vat.category))) {
+      if (!input.exemption)
+        return [
+          {
+            code: 'EXEMPTION_BASIS',
+            message:
+              'Liniile scutite (E, K, G) cer temeiul scutirii (exemption): de el depind dreptul de deducere și rândul decontului (art. 292, 294–296, 297 alin. (4) din Codul fiscal).',
+          },
+        ];
+      const allowed = exemptionBases[input.exemption].categories as readonly string[];
+      const wrong = vats.filter(
+        (vat) => isExemptCategory(vat.category) && !allowed.includes(vat.category),
+      );
+      if (wrong.length)
+        return [
+          {
+            code: 'EXEMPTION_CATEGORY',
+            message: `Temeiul ${input.exemption} se facturează cu categoria ${allowed.join(' sau ')}.`,
+          },
+        ];
+    }
     if (status === 'non_vat')
       return vats.some((vat) => vat.category !== 'O')
         ? [

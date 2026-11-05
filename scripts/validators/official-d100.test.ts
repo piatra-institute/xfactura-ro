@@ -55,6 +55,23 @@ const declarations: Record<string, D100> = {
     ],
     { period: { year: 2026, month: 10 } },
   ),
+  // March 2026: rent paid to an individual (628) and a non-resident's royalties, interest,
+  // commissions and services (633, 632, 634, 636), withheld at source (O1, model 1#); December:
+  // a non-resident's dividends (631) with those unpaid at year end.
+  withheld: declaration(
+    [
+      { kind: 'withheld', code: '628', withheld: 200 },
+      { kind: 'withheld', code: '633', withheld: 740 },
+      { kind: 'withheld', code: '632', withheld: 160 },
+      { kind: 'withheld', code: '634', withheld: 50 },
+      { kind: 'withheld', code: '636', withheld: 320 },
+    ],
+    { period: { year: 2026, month: 3 } },
+  ),
+  'nonresident-dividends-year-end': declaration(
+    [{ kind: 'withheld', code: '631', withheld: 800, unpaidAtYearEnd: 1600 }],
+    { period: { year: 2026, month: 12 } },
+  ),
   // Q3 2026 of a profit taxpayer in the quarterly system (103, model 8#), and a quarter that owed
   // nothing (cumulated tax already declared).
   'profit-q3': declaration([{ kind: 'profit', tax: 4704 }]),

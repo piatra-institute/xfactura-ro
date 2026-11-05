@@ -1,6 +1,9 @@
+import { exemptAnchors } from './anchors-exempt';
 import { nonpayerAnchors } from './anchors-nonpayers';
 import { saftAnchors } from './anchors-saft';
+import { receiptAnchors } from './anchors-receipts';
 import { taxAccountAnchors } from './anchors-taxaccount';
+import { withholdingAnchors } from './anchors-withholding';
 import type { Anchor } from './types';
 
 /**
@@ -381,6 +384,9 @@ export const clauseAnchors: Readonly<Record<string, readonly Anchor[]>> = {
     },
   ],
   ...nonpayerAnchors,
+  ...exemptAnchors,
   ...taxAccountAnchors,
   ...saftAnchors,
+  ...receiptAnchors,
+  ...withholdingAnchors,
 };

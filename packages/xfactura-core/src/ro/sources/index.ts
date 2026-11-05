@@ -1,9 +1,12 @@
 import type { ParameterVersion } from '../../rules';
 import { annualClauses, annualSources } from './annual';
 import { nonpayerClauses, nonpayerSources } from './nonpayers';
+import { exemptClauses, exemptSources } from './exempt';
 import { taxAccountClauses, taxAccountSources } from './taxaccount';
 import { profitClauses, profitSources } from './profit';
 import { saftClauses, saftSources } from './saft';
+import { withholdingClauses, withholdingSources } from './withholding';
+import { receiptClauses, receiptSources } from './receipts';
 
 /**
  * Where the engine's Romanian rules come from. A source is a legal act or an official
@@ -894,8 +897,11 @@ export const legalSources: readonly LegalSource[] = [
   ...annualSources,
   ...profitSources,
   ...nonpayerSources,
+  ...exemptSources,
   ...taxAccountSources,
   ...saftSources,
+  ...withholdingSources,
+  ...receiptSources,
 ];
 
 export const clauses: readonly Clause[] = [
@@ -2471,8 +2477,11 @@ export const clauses: readonly Clause[] = [
   ...annualClauses,
   ...profitClauses,
   ...nonpayerClauses,
+  ...exemptClauses,
   ...taxAccountClauses,
   ...saftClauses,
+  ...withholdingClauses,
+  ...receiptClauses,
 ];
 
 const sourceById = new Map(legalSources.map((source) => [source.id, source]));

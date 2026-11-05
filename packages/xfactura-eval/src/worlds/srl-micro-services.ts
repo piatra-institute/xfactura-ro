@@ -10,12 +10,16 @@ import { camtStatement, iban, ubl, type Trader } from './helpers';
  *   car lease  1,500.00 + 315.00 = 1,815.00 (a car also used privately: half the VAT deducted)
  *   SaaS          49.00 EUR, reverse charge (services from an Irish business)
  *   yearly     1,200.00 + 252.00 = 1,452.00, deferred: November 2026 to October 2027
- *   insurance    950.00, exempt (E): not supported by the engine's invoice treatments
+ *   insurance    950.00, exempt (E, art. 292 alin. (2) lit. b)): no VAT, on 613, deferred:
+ *                November 2026 to October 2027
  *   advertising 3,000.00 + 630.00 = 3,630.00 (unpaid in October)
  *   sale      10,000.00 + 2,100.00 = 12,100.00
  *   EU sale    2,000.00 EUR, reverse charge (a German business)
- *   receipt      300.00 fuel with 52.07 VAT: booking receipts is not built yet
- *   bank: 20,000.00 − 2,420.00 − 121.00 − 1,815.00 − 1,452.00 + 12,100.00 − 12.50 = 26,279.50
+ *   receipt      300.00 fuel with 52.07 VAT, the company's code on it: a simplified invoice
+ *                (300.00 ≤ 100 euro = 508.10 lei at 5.0810), the car's use mixed: 26.04 deducted
+ *                (52.07 × 50%, half up), 273.96 expensed; paid by card
+ *   bank: 20,000.00 − 2,420.00 − 121.00 − 1,815.00 − 1,452.00 − 300.00 + 12,100.00 − 12.50
+ *         = 25,979.50
  */
 
 const company: Trader = { name: 'Exemplu Servicii SRL', id: '18547290', vat: true };
@@ -65,6 +69,8 @@ export const srlMicroServices = defineWorld({
     bnr: [
       { date: '2026-10-02', currency: 'EUR', rate: '5.0795' },
       { date: '2026-10-03', currency: 'EUR', rate: '5.0801' },
+      // The rate the receipt of Sunday 18 October is read at (art. 290 alin. (2)).
+      { date: '2026-10-16', currency: 'EUR', rate: '5.0810' },
       { date: '2026-10-19', currency: 'EUR', rate: '5.0822' },
       { date: '2026-10-20', currency: 'EUR', rate: '5.0830' },
     ],
@@ -326,14 +332,33 @@ export const srlMicroServices = defineWorld({
           ],
         }),
       },
+      hidden: { 'deferral.schedule': { from: '2026-11', months: 12 } },
       gold: {
         status: draft,
-        note: 'An exempt (E) category is not supported by the invoice treatments: the proposal blocks with TAX_CATEGORY. The agent stops and leaves it to a person instead of booking it through a general journal.',
+        note: 'An exempt purchase (E): no VAT to deduct, the premium on 613 and on D300 rd. 29, the reason kept; then deferred to 471 over the twelve months the policy covers, November 2026 to October 2027 as the owner says. The car named on the policy does not matter: there is no VAT whose deduction art. 298 limits.',
         intake: { op: 'invoices.import' },
-        stop: {
-          reason: 'unsupported',
-          note: 'invoices.recognize refuses VAT category E (TAX_CATEGORY).',
-        },
+        questions: ['deferral.schedule:insurance'],
+        decisions: [
+          {
+            key: 'insurance.recognize',
+            treatment: 'invoices.recognize',
+            input: { documentId: '@doc:insurance', account: '613', deduction: 'full' },
+          },
+          {
+            key: 'insurance.defer',
+            treatment: 'deferrals.defer',
+            input: {
+              date: '2026-10-07',
+              account: '613',
+              amount: '950.00',
+              from: '2026-11',
+              months: 12,
+              partyId: '@party:insurance',
+              documentId: '@doc:insurance',
+              evidenceId: '@evidence:insurance',
+            },
+          },
+        ],
       },
     },
     {
@@ -431,7 +456,7 @@ export const srlMicroServices = defineWorld({
       },
       gold: {
         status: draft,
-        note: 'A receipt is recorded as a document (read from the photo; its citations stay unverified). Booking receipts, with the VAT they may deduct, is not built: the agent stops there.',
+        note: "A receipt is recorded as a document (read from the photo; its citations stay unverified). With the company's VAT code and at most 100 euro it is a simplified invoice (art. 319 alin. (12), norme pct. 69 alin. (6)): fuel for the car also used privately deducts half its VAT (art. 298), as the lease's answer says; paid by card, a payable the bank's card movement settles.",
         intake: {
           op: 'documents.record',
           kind: 'receipt.received',
@@ -449,10 +474,18 @@ export const srlMicroServices = defineWorld({
             payment: 'card',
           },
         },
-        stop: {
-          reason: 'unsupported',
-          note: 'No treatment books a receipt yet (document.unproposed lists it with no step).',
-        },
+        decisions: [
+          {
+            key: 'receipt.recognize',
+            treatment: 'receipts.recognize',
+            input: {
+              documentId: '@doc:receipt',
+              account: '6022',
+              deduction: 'limited',
+              payment: { method: 'card' },
+            },
+          },
+        ],
       },
     },
     {
@@ -533,7 +566,7 @@ export const srlMicroServices = defineWorld({
           from: '2026-10-01',
           to: '2026-10-31',
           opening: '20000.00',
-          closing: '26279.50',
+          closing: '25979.50',
           entries: [
             {
               date: '2026-10-08',
@@ -560,6 +593,12 @@ export const srlMicroServices = defineWorld({
               ref: 'TRF-1013-01',
             },
             {
+              date: '2026-10-19',
+              amount: '300.00',
+              text: 'Plata card POS Benzinaria Exemplu BF 0042',
+              ref: 'POS-1019-01',
+            },
+            {
               date: '2026-10-28',
               amount: '12100.00',
               credit: true,
@@ -577,7 +616,7 @@ export const srlMicroServices = defineWorld({
       },
       gold: {
         status: draft,
-        note: 'Each movement explained in full: payments against the payables they settle, the receipt against the receivable, the fee on 627.',
+        note: "Each movement explained in full: payments against the payables they settle (the fuel receipt's card payment among them), the customer's payment against the receivable, the fee on 627.",
         intake: { op: 'bank.import' },
         decisions: [
           {
@@ -610,6 +649,14 @@ export const srlMicroServices = defineWorld({
             input: {
               movementId: '@movement:2026-10-13:-1452.00',
               allocations: [{ openItem: '@openItem:subscription', amount: '1452.00' }],
+            },
+          },
+          {
+            key: 'statement.fuel',
+            treatment: 'bank.settle',
+            input: {
+              movementId: '@movement:2026-10-19:-300.00',
+              allocations: [{ openItem: '@openItem:receipt', amount: '300.00' }],
             },
           },
           {

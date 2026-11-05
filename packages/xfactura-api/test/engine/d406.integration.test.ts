@@ -1334,8 +1334,11 @@ describe('D406 taxes other than VAT', () => {
     120_000,
   );
 
-  test('refuses a month with tax withheld at source: its WHT codes are not reported yet', async () => {
-    const { s, prepare } = await september();
+  /** September with a dividend paid to an individual and to a company, and rent paid to an
+   * individual, each with its tax withheld at source. */
+  async function withheld(validator?: DeclarationValidator) {
+    const books = await september(validator);
+    const { s } = books;
     await s.book(
       'ledger.general',
       journal(
@@ -1347,31 +1350,106 @@ describe('D406 taxes other than VAT', () => {
         { date: '2026-01-02' },
       ),
     );
-    const anaf = await s.invoke<{ id: string }>(s.owner, 'parties.create', {
-      kind: 'ro_public_institution',
-      country: 'RO',
-      name: 'ANAF',
-    });
-    const person = await s.invoke<{ id: string }>(s.owner, 'parties.create', {
-      kind: 'ro_individual',
-      country: 'RO',
-      name: 'Popescu Ana',
-    });
+    const create = (kind: string, name: string, taxId?: string) =>
+      s.invoke<{ id: string }>(s.owner, 'parties.create', {
+        kind,
+        country: 'RO',
+        name,
+        ...(taxId ? { taxId } : {}),
+      });
+    const anaf = await create('ro_public_institution', 'ANAF');
+    const person = await create('ro_individual', 'Popescu Ana');
+    const holding = await create('ro_legal_entity', 'Holding Exemplu SRL', '31552803');
     const distributed = await s.book('dividends.distribute', {
       date: '2026-09-20',
       evidenceId: (await s.evidence('hotarare-aga.pdf')).id,
-      shareholders: [{ partyId: person.id, amount: '10000.00' }],
+      shareholders: [
+        { partyId: person.id, amount: '10000.00' },
+        { partyId: holding.id, amount: '5000.00' },
+      ],
     });
-    await s.book('dividends.withhold', {
-      distributionEntryId: distributed.entry!.id,
-      openItem: distributed.effect!.openItems[0]!.id,
-      date: '2026-09-25',
-      gross: '10000.00',
+    const [personal, corporate] = distributed.effect!.openItems;
+    for (const [item, gross, acks] of [
+      [personal!.id, '10000.00', []],
+      [corporate!.id, '5000.00', ['DIVIDEND_EXEMPTION']],
+    ] as const)
+      await s.post(
+        await s.approve(
+          await s.propose('dividends.withhold', {
+            distributionEntryId: distributed.entry!.id,
+            openItem: item,
+            date: '2026-09-25',
+            gross,
+            authorityId: anaf.id,
+          }),
+          s.reviewer,
+          [...acks],
+        ),
+      );
+    const rent = await s.book('payees.recognize', {
+      kind: 'rent',
+      partyId: person.id,
+      evidenceId: (await s.evidence('contract-inchiriere.pdf')).id,
+      date: '2026-09-01',
+      period: '2026-09',
+      amount: '2500.00',
+      account: '612',
+    });
+    await s.book('payees.withhold', {
+      openItem: rent.effect!.openItems[0]!.id,
+      date: '2026-09-05',
+      gross: '2500.00',
       authorityId: anaf.id,
     });
-    const refused = await s.refused(prepare('2026-09', { contact, accounts: { '623': '6231' } }));
-    expect(
-      (refused?.details as { problems: { code: string }[] }).problems.map((item) => item.code),
-    ).toEqual(['D406_WHT']);
+    return books;
+  }
+  const options = { contact, accounts: { '623': '6231', '612': '6123' } };
+
+  test("reports tax withheld at source with ANAF's WHT codes on the line it is withheld from, and lists them in the TaxTable", async () => {
+    const { s, prepare } = await withheld();
+    const prepared = await prepare('2026-09', options);
+    const file = await fileOf(s, prepared);
+    const taxes = children(file, 'TransactionLine').flatMap((line) =>
+      children(line, 'TaxInformation')
+        .filter((tax) => !['000', '300'].includes(value(tax, 'TaxType')!))
+        .map((tax) => [
+          value(line, 'AccountID'),
+          value(tax, 'TaxType'),
+          value(tax, 'TaxCode'),
+          value(tax, 'TaxPercentage'),
+          value(tax, 'TaxBase'),
+          value(children(tax, 'TaxAmount')[0]!, 'Amount'),
+        ]),
+    );
+    // Rent: 10% of the gross less 20%; dividends: 16% of the gross, 604040 for the individual.
+    expect(taxes).toEqual([
+      ['462', '628', '628010', '10', '2000.00', '200.00'],
+      ['457', '604', '604040', '16', '10000.00', '1600.00'],
+      ['457', '150', '150080', '16', '5000.00', '800.00'],
+    ]);
+    const table = children(file, 'TaxTableEntry').map((entry) => [
+      value(entry, 'TaxType'),
+      ...children(entry, 'TaxCodeDetails').map(
+        (detail) => `${value(detail, 'TaxCode')} ${value(detail, 'BaseRate')}`,
+      ),
+    ]);
+    expect(table.slice(1)).toEqual([
+      ['150', '150080 1'],
+      ['604', '604040 1'],
+      ['628', '628010 1'],
+    ]);
   });
+
+  official(
+    "a month with dividends and rent withheld at source passes ANAF's SAF-T validator",
+    async () => {
+      const { prepare } = await withheld(kits());
+      const prepared = await prepare('2026-09', options);
+      expect([prepared.state, prepared.steps.at(-1)?.detail ?? null]).toEqual([
+        'validated_official',
+        null,
+      ]);
+    },
+    120_000,
+  );
 });

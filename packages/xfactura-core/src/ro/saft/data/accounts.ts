@@ -1,6 +1,7 @@
 // ANAF standard chart of accounts for general commercial companies (TaxAccountingBasis A).
 // Extracted from ANAF RO_SAFT_SchemaDefCod_05.02.2026.xlsx (sha256 d0981202182438e4597ff3bc27d2c41dec06c60bc32b86620c1de29a9cb8436d),
 // sheet PlanConturiBalSocCom, classes 1-8 (groups, synthetic accounts and the subdivisions ANAF lists).
+// The pinned RO_SAFT_SchemaDefCod_16.02.2026.xlsx (sha256 050508bf6eadbd6bb4684a0016296253c629d4e9b54a1118dd9b9bfd0c1d0f2d) has the same sheets; it adds only the WHT code 604040.
 
 /** StandardAccountID: account code to its Romanian description. */
 export const standardAccounts: Readonly<Record<string, string>> = {

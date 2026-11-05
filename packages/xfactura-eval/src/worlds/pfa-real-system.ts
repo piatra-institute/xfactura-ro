@@ -10,7 +10,7 @@ import { iban, ubl, type Trader } from './helpers';
  *   internet      50.00 +  10.50 VAT =  60.50, the same
  *   sale-1     8,000.00 (no VAT: the PFA is not registered)
  *   accounting   300.00 (a PDF from a PFA not registered for VAT)
- *   receipt      200.00 fuel with 34.71 VAT: booking receipts is not built yet
+ *   receipt      200.00 fuel with 34.71 VAT: receipts are not booked in single-entry books yet
  *   sale-2     1,500.00
  *   bank: 0.00 + 2,000.00 − 726.00 − 60.50 + 8,000.00 − 7.00 = 9,206.50
  */
@@ -264,7 +264,7 @@ export const pfaRealSystem = defineWorld({
       },
       gold: {
         status: draft,
-        note: 'Recorded from the photo; booking receipts is not built, so the agent stops there.',
+        note: 'Recorded from the photo; receipts.recognize is refused on single-entry books (SINGLE_ENTRY_EXCLUDED: what a receipt is for the income tax is not built), so the agent stops there.',
         intake: {
           op: 'documents.record',
           kind: 'receipt.received',
@@ -282,7 +282,10 @@ export const pfaRealSystem = defineWorld({
             payment: 'card',
           },
         },
-        stop: { reason: 'unsupported', note: 'No treatment books a receipt yet.' },
+        stop: {
+          reason: 'unsupported',
+          note: 'Receipts are not booked in single-entry books yet.',
+        },
       },
     },
     {

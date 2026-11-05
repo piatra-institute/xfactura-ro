@@ -162,24 +162,75 @@ async function interestWithholdings(tx: Transaction, companyId: string, year: st
   );
 }
 
+/** The year's posted rent withholdings (`payees.withhold`, rent): the landlord, the net income
+ * the tax was computed on and the tax. Intellectual property is D112's, not D205's. */
+async function rentWithholdings(tx: Transaction, companyId: string, year: string) {
+  const rows = await tx
+    .select({ entry: entries, input: proposalVersions.input, effect: proposalVersions.effect })
+    .from(entries)
+    .innerJoin(
+      proposals,
+      and(eq(proposals.companyId, entries.companyId), eq(proposals.id, entries.proposalId)),
+    )
+    .innerJoin(
+      proposalVersions,
+      and(
+        eq(proposalVersions.companyId, entries.companyId),
+        eq(proposalVersions.proposalId, entries.proposalId),
+        eq(proposalVersions.version, entries.version),
+      ),
+    )
+    .where(
+      and(
+        eq(entries.companyId, companyId),
+        eq(proposals.treatmentId, 'payees.withhold'),
+        gte(entries.date, `${year}-01-01`),
+        lte(entries.date, `${year}-12-31`),
+      ),
+    );
+  const found = [];
+  for (const { entry, input, effect } of rows) {
+    const record = (
+      JSON.parse(effect ?? '{}') as {
+        explanation?: { details?: { withholding?: { type: string; base: string; tax: string } } };
+      }
+    ).explanation?.details?.withholding;
+    if (record?.type !== '628') continue;
+    const given = JSON.parse(input) as { openItem: string };
+    const [item] = await tx
+      .select({ partyId: openItems.partyId })
+      .from(openItems)
+      .where(and(eq(openItems.companyId, companyId), eq(openItems.id, given.openItem)));
+    found.push({
+      entryId: entry.id,
+      date: entry.date,
+      partyId: item!.partyId,
+      base: BigInt(record.base),
+      tax: BigInt(record.tax),
+    });
+  }
+  return found;
+}
+
 async function inputsOf(tx: Transaction, companyId: string, year: string) {
   const found = await withholdings(tx, companyId, year);
   const interest = await interestWithholdings(tx, companyId, year);
+  const rent = await rentWithholdings(tx, companyId, year);
   const { readSet } = await loadState(tx, companyId, {
-    entries: [...found, ...interest].map((row) => row.entryId),
+    entries: [...found, ...interest, ...rent].map((row) => row.entryId),
   });
   const seller = await sellerDetails(tx, companyId);
   const inputs: ReadSetEntry[] = [
     ...readSet,
     ...(seller ? [{ kind: 'party' as const, id: seller.partyId, version: seller.hash }] : []),
   ];
-  return { found, interest, seller, inputs };
+  return { found, interest, rent, seller, inputs };
 }
 
 /**
- * The annual informative declaration of tax withheld (D205), for the dividends and the interest
- * paid in a year: per individual, a record of each, their CNP opened from its seal for the
- * declaration only. Companies are not declared in it.
+ * The annual informative declaration of tax withheld (D205), for the dividends, the interest and
+ * the rent paid in a year: per individual, a record of each, their CNP opened from its seal for
+ * the declaration only. Companies are not declared in it.
  */
 export function d205Declaration(secret: string): DeclarationKind {
   const sealer = new Sealer(secret);
@@ -201,7 +252,7 @@ export function d205Declaration(secret: string): DeclarationKind {
     async prepare(tx, companyId, year, raw) {
       const options = d205Options.parse(raw);
       const problems: DeclarationProblem[] = [];
-      const { found, interest, seller, inputs } = await inputsOf(tx, companyId, year);
+      const { found, interest, rent, seller, inputs } = await inputsOf(tx, companyId, year);
       if (!seller)
         problems.push({
           code: 'SELLER_DETAILS',
@@ -212,7 +263,7 @@ export function d205Declaration(secret: string): DeclarationKind {
           problems.push({ code: 'D205_BANI', message: `${what} are subdiviziuni de leu.` });
         return Number(bani / 100n);
       };
-      const ids = [...new Set([...found, ...interest].map((row) => row.partyId))];
+      const ids = [...new Set([...found, ...interest, ...rent].map((row) => row.partyId))];
       const people = ids.length
         ? await tx
             .select()
@@ -252,6 +303,14 @@ export function d205Declaration(secret: string): DeclarationKind {
             gross: lei(row.gross, `Dobânda plătită lui ${party.name}`),
             tax: lei(row.tax, `Impozitul pe dobânda reținut lui ${party.name}`),
           }));
+        // The net income of each rent payment, rounded half up to the leu as D205 declares it.
+        const paidRent = rent
+          .filter((row) => row.partyId === party.id)
+          .map((row) => ({
+            date: row.date,
+            base: Number((row.base + 50n) / 100n),
+            tax: lei(row.tax, `Impozitul pe chirie reținut lui ${party.name}`),
+          }));
         if (party.kind === 'ro_individual') {
           const sealed = cnps.get(party.id);
           if (!sealed)
@@ -266,6 +325,7 @@ export function d205Declaration(secret: string): DeclarationKind {
             payments,
             unpaid,
             ...(paidInterest.length ? { interest: paidInterest } : {}),
+            ...(paidRent.length ? { rent: paidRent } : {}),
           };
         }
         return { kind: 'company', cui: party.taxId ?? '', name: party.name, payments, unpaid };

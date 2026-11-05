@@ -13,12 +13,13 @@ import {
 } from './accounts';
 import { invoiceTypes, paymentMechanisms, units, vatRegimes } from './data/codes';
 import { taxTypes, vatTaxCodes } from './data/tax';
+import { whtTaxCodes } from '../withholding/codes';
 
 /**
  * The standard audit file for tax (D406, "fișierul standard de control fiscal", SAF-T) that a
  * company keeping double-entry books on the general chart of accounts (TaxAccountingBasis A)
  * files for each VAT period: monthly (HeaderComment L) or quarterly (T), after ANAF's schema
- * Ro_SAFT_Schema_v249_2025.xsd (2.4.9) and the definitions RO_SAFT_SchemaDefCod_05.02.2026.xlsx,
+ * Ro_SAFT_Schema_v249_2025.xsd (2.4.9) and the definitions RO_SAFT_SchemaDefCod_16.02.2026.xlsx,
  * in the namespace `mfp:anaf:dgti:d406:declaratie:v1` that ANAF's D406 validator (J2.2.18 of
  * 16.02.2026) requires.
  *
@@ -29,8 +30,8 @@ import { taxTypes, vatTaxCodes } from './data/tax';
  * MovementOfGoods. Left out, as the structure allows for L and T: Taxonomies (never reported),
  * PhysicalStock, Owners' entries, MovementTypeTable entries and stock movements (the on-demand
  * file C), Assets and AssetTransactions (the annual file A, written by `assets.ts`), analysis
- * codes, segmented (modal) files, withholding tax on payments and the files of non-residents
- * (NL, NT).
+ * codes, segmented (modal) files, withholding tax on the Payments' lines and the files of
+ * non-residents (NL, NT).
  *
  * Where ANAF's documents differ, this module follows the validator: AccountID is an integer
  * (analytical accounts are written as digits, 4111.01 as 411101); BaseRate is a fraction of 1;
@@ -43,8 +44,11 @@ import { taxTypes, vatTaxCodes } from './data/tax';
  *
  * Partners: lines on a customer's or supplier's account name it and 0 for the other side; the
  * other lines name the company (00 and its CUI) on both. A line's TaxInformation is the caller's
- * (VAT on the base's line, TaxType 000 and TaxCode 000000 otherwise); ANAF's consistency tests
- * expect no tax amount on 4426, 4427 and 4428.
+ * (VAT on the base's line; a tax withheld at source on the line of what it is withheld from, with
+ * its D100 TaxType and its WHT TaxCode; TaxType 000 and TaxCode 000000 otherwise); ANAF's
+ * consistency tests expect no tax amount on 4426, 4427 and 4428. The TaxTable lists the VAT codes
+ * and the WHT codes used, each WHT TaxType an entry (BaseRate 1 for both, as the validator reads
+ * the guide's 100).
  *
  * Amounts are lei with two decimals, as decimal strings; balances are signed, debit positive.
  */
@@ -116,7 +120,8 @@ export type D406Currency = { code: string; amount: string; rate: string };
 export type D406Tax = {
   /** TaxType: 300 for VAT, 000 for lines without tax relevance, or another TAX-IMP code. */
   type: string;
-  /** TaxCode: a VAT code for type 300, 000000 otherwise. */
+  /** TaxCode: a VAT code for type 300, a WHT code for a tax withheld at source (its TaxType the
+   * D100 obligation: 604, 150, 605, 628, 631–636), 000000 otherwise. */
   code: string;
   /** TaxBase */
   base?: string;
@@ -555,6 +560,8 @@ export type D406Calculation = {
   payments: { count: number; debit: bigint; credit: bigint; gross: bigint[] };
   /** TaxTable: VAT codes used, ascending. */
   vatCodes: string[];
+  /** TaxTable: WHT codes used, ascending. */
+  whtCodes: string[];
   /** UOMTable: units used, in order of first use. */
   units: string[];
 };
@@ -614,8 +621,11 @@ export function calculateD406(model: D406): D406Calculation {
   );
   const ledger = { lines: 0, transactions: 0, debit: 0n, credit: 0n };
   const vatCodes = new Set<string>();
+  const whtCodes = new Set<string>();
   const used = (taxes: readonly D406Tax[] | undefined) => {
-    for (const tax of taxes ?? []) if (tax.type === '300') vatCodes.add(tax.code);
+    for (const tax of taxes ?? [])
+      if (tax.type === '300') vatCodes.add(tax.code);
+      else if (whtTaxCodes[tax.code]) whtCodes.add(tax.code);
   };
   for (const journal of model.journals)
     for (const transaction of journal.transactions) {
@@ -702,6 +712,7 @@ export function calculateD406(model: D406): D406Calculation {
     purchases,
     payments,
     vatCodes: [...vatCodes].sort(),
+    whtCodes: [...whtCodes].sort(),
     units: [...unitsUsed],
   };
 }
@@ -743,7 +754,8 @@ export function address(value: D406Address, name = 'Address') {
 }
 
 function taxInformation(name: string, tax: D406Tax, currency?: D406Currency) {
-  const percentage = tax.type === '300' ? vatTaxCodes[tax.code]?.percentage : undefined;
+  const percentage =
+    tax.type === '300' ? vatTaxCodes[tax.code]?.percentage : whtTaxCodes[tax.code]?.percentage;
   return element(
     name,
     null,
@@ -1114,6 +1126,29 @@ export function writeD406(model: D406): string {
             leaf('BaseRate', '1'),
             leaf('Country', 'RO'),
           ),
+        ),
+      ),
+      // A tax withheld at source: an entry per TaxType (the D100 obligation), with its codes.
+      [...new Set(calculation.whtCodes.map((code) => whtTaxCodes[code]!.type))].map((type) =>
+        element(
+          'TaxTableEntry',
+          null,
+          leaf('TaxType', type),
+          leaf('Description', taxTypes[type]?.slice(0, 256)),
+          calculation.whtCodes
+            .filter((code) => whtTaxCodes[code]!.type === type)
+            .map((code) =>
+              element(
+                'TaxCodeDetails',
+                null,
+                leaf('TaxCode', code),
+                leaf('Description', whtTaxCodes[code]!.description.slice(0, 256)),
+                leaf('TaxPercentage', whtTaxCodes[code]!.percentage),
+                // The guide's 100 for every WHT code, as a fraction of 1.
+                leaf('BaseRate', '1'),
+                leaf('Country', 'RO'),
+              ),
+            ),
         ),
       ),
     ),
@@ -1662,11 +1697,39 @@ export function checkD406(model: D406): D406Check[] {
               `TVA (${tax.amount}) nu este ${entry.percentage}% din bază (${text(base)}).`,
             );
         }
+      } else if (whtTaxCodes[tax.code]) {
+        // A tax withheld at source: its code's TaxType, and the rate applied to the base.
+        const entry = whtTaxCodes[tax.code]!;
+        if (entry.type !== tax.type)
+          error(
+            'D406_TAX_CODE',
+            `${at}.code`,
+            `Codul de taxă ${tax.code} aparține tipului ${entry.type}, nu ${tax.type}.`,
+          );
+        else if (
+          tax.base !== undefined &&
+          amountPattern.test(tax.amount) &&
+          amountPattern.test(tax.base)
+        ) {
+          const expected = divRound(
+            lei(tax.base) * BigInt(Math.round(Number(entry.percentage) * 10000)),
+            1_000_000n,
+            'halfAwayFromZero',
+          );
+          const withheld = lei(tax.amount);
+          // The tax is in whole lei, so within a leu of the rate.
+          if (withheld - expected > 100n || expected - withheld > 100n)
+            warning(
+              'D406_WHT',
+              `${at}.amount`,
+              `Impozitul reținut (${tax.amount}) nu este ${entry.percentage}% din bază (${tax.base}).`,
+            );
+        }
       } else if (tax.code !== '000000')
         error(
           'D406_TAX_CODE',
           `${at}.code`,
-          'Pentru alte taxe decât TVA codul de taxă este 000000.',
+          'Pentru alte taxe decât TVA și impozitele reținute la sursă codul de taxă este 000000.',
         );
       if (tax.type === '000' && amountPattern.test(tax.amount) && lei(tax.amount) !== 0n)
         error(

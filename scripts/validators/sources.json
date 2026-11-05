@@ -104,6 +104,15 @@
     },
     {
       "name": "anaf",
+      "description": "ANAF D207 validator J2.0.2 and PDF generator P2.0.0 (20.02.2025): the annual informative return of tax withheld at source from non-residents (OPANAF nr. 179/2022, reporting years from 2021), structure of 20.02.2026, namespace mfp:anaf:dgti:d207:declaratie:v2",
+      "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/D207_20250220.zip",
+      "sha256": "15df23630b988e9dac5751ef5bbb6623bc5bb5e51c9d1c2b2e5a95a1cdb79338",
+      "extract": ["D207/D207Validator.jar", "D207/D207Pdf.jar"],
+      "into": "dist/lib",
+      "flatten": true
+    },
+    {
+      "name": "anaf",
       "description": "ANAF D204 validator and PDF generator (J3.0.14 / P2.0.2, 16.01.2026): annual return of associations without legal personality, structure declaratie:v3 for an >= 2018 (CAEN Rev. 2 to 2024, Rev. 2 and Rev. 3 from 2025). It loads in both kits; installed in the general one",
       "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/D204_16012026.zip",
       "sha256": "5679dd855e0142f066a3715101ed803e079f3dba2416d3f43ccf529bdd541aee",

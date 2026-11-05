@@ -1,8 +1,11 @@
 import { z } from 'zod';
+import { hashOf } from '../../hash';
 import {
   profileAt,
   turnoverKey,
   vatPeriodOf,
+  type AnswerRecord,
+  type AssetState,
   type Effect,
   type Issue,
   type LineSpec,
@@ -13,9 +16,25 @@ import {
   type TurnoverQuery,
 } from '../../kernel';
 import { formatMoney, parseMoney } from '../../money';
+import { questionIssue, questionKinds, type CapitalGoodUseAnswer } from '../../questions/kinds';
 import { RuleGapError, type RuleContext } from '../../rules';
 import { addDays, isLocalDate, parseLocalDate, type LocalDate } from '../../time';
 import { invoiceDocumentSchema } from '../../ubl/invoice-document';
+import {
+  adjustmentCodes,
+  advanceVat,
+  FULL_SHARE,
+  initialShare,
+  percentOf,
+  remainingAdjustment,
+  shareOf,
+  stockVat,
+  transitionalOf,
+  unusedServiceVat,
+  useAdjustment,
+  type Share,
+  type StockAdjustmentRule,
+} from '../exempt';
 import type { CapitalGoodsRule, LateRegistration } from '../nonpayers/parameters';
 import {
   capitalGoodAdjustment,
@@ -24,7 +43,7 @@ import {
   tangibleAsset,
   type CapitalGood,
 } from '../nonpayers/regime';
-import { invoiceKinds } from './invoices';
+import { invoiceKinds, taxPointOf } from './invoices';
 
 /*
  * A change of VAT regime, booked (Codul fiscal art. 305, 310, 316): the VAT owed for registering
@@ -41,6 +60,7 @@ const block = (code: string, message: string, path?: string): Issue => ({
   ...(path === undefined ? {} : { path }),
 });
 const info = (code: string, message: string): Issue => ({ code, severity: 'info', message });
+const warn = (code: string, message: string): Issue => ({ code, severity: 'ack', message });
 const lei = (bani: bigint) => formatMoney(bani, 'RON');
 const day = z
   .string()
@@ -468,91 +488,216 @@ export const lateRegistration: Treatment<LateRegistrationInput> = {
 };
 
 // ---------------------------------------------------------------------------------------------
-// The capital goods' adjustment on entering or leaving the normal regime
+// The capital goods' adjustment: on entering or leaving the normal regime, and in the general case
+
+const good = z
+  .object({
+    assetId: z.uuid(),
+    /** Its acquisition invoice and the VAT period its entries are in. */
+    documentId: z.uuid(),
+    taxPeriod: z.string().regex(/^\d{4}-(0[1-9]|1[0-2]|Q[1-4])$/),
+  })
+  .strict();
+
+/** The events of a capital good's adjustment: the change of regime (art. 305 alin. (5) lit. a)
+ * and c), last sentences), a change of its use (alin. (4) lit. a), c)), the year's adjustment
+ * while a changed use holds (norme pct. 79 alin. (1)), its supply (alin. (5) lit. a), c)) and its
+ * end (alin. (4) lit. d)). */
+const regimeEvents = ['registration', 'deregistration'] as const;
+const capitalEvents = [...regimeEvents, 'use', 'year', 'supply', 'cessation'] as const;
 
 export const capitalGoodsInput = z
   .object({
     /** `registration`: from the small-enterprise exemption to the normal regime (art. 305 alin.
-     * (5) lit. c)); `deregistration`: the other way (lit. a)). */
-    event: z.enum(['registration', 'deregistration']),
-    /** The day of the change: the registration's validity, or the cancellation's. */
+     * (5) lit. c)); `deregistration`: the other way (lit. a)); `use`: the share of a good's use
+     * for operations with the right of deduction changes (alin. (4) lit. a), c), the share from
+     * the `capitalGood.use` answer); `year`: the year's adjustment of goods whose changed use
+     * holds, in its last return; `supply`: the good is supplied (exempt, or taxable after a
+     * limited deduction); `cessation`: it ceases to exist (alin. (4) lit. d)). */
+    event: z.enum(capitalEvents),
+    /** The day of the event: the registration's validity, the cancellation's, the change of use,
+     * the year's last day, the supply, the cessation. */
     date: day,
     /** The posting date. */
     postingDate: day,
-    /** Every tangible fixed asset held at the change, with its acquisition invoice and the VAT
-     * period its entries are in. */
-    goods: z
+    /** Every capital good the event concerns: at a change of regime every tangible fixed asset
+     * held. */
+    goods: z.array(good).max(500),
+    /** The inventory at a change of regime (norme pct. 83 alin. (7) lit. a), (11) lit. a)). */
+    inventoryEvidenceId: z.uuid().optional(),
+    /** The registration certificate or the cancellation decision; the lease or decision of a
+     * change of use; the year's statement of the goods; the sale invoice; the record of the
+     * cessation. */
+    evidenceId: z.uuid(),
+    /** At a change of regime, the inventory's stock and assets in progress (3x, 231) at their
+     * value and their acquisition's VAT rate (art. 304; norme pct. 78 alin. (13)). */
+    stock: z
       .array(
         z
           .object({
-            assetId: z.uuid(),
+            account: z.string().regex(/^(3[0-7]\d{0,4}|231\d{0,3})(\.[\dA-Z_-]{1,20})?$/),
+            value: z.string().regex(/^(0|[1-9]\d{0,15})(\.\d{1,2})?$/),
+            rate: z.string().regex(/^(0|[1-9]\d?)(\.\d{1,2})?$/),
+          })
+          .strict(),
+      )
+      .max(1000)
+      .default([]),
+    /** At a change of regime, the intangible assets not wholly depreciated (20x): the services
+     * not used (norme pct. 78 alin. (2)). */
+    services: z.array(good).max(500).default([]),
+    /** At a cancellation, the advances paid still open (4091, 4092) whose supply comes after it
+     * (norme pct. 83 alin. (7) lit. d)), with the advance invoice. */
+    advances: z
+      .array(
+        z
+          .object({
+            openItemId: z.uuid(),
             documentId: z.uuid(),
             taxPeriod: z.string().regex(/^\d{4}-(0[1-9]|1[0-2]|Q[1-4])$/),
           })
           .strict(),
       )
-      .max(500),
-    /** The inventory at the change (norme pct. 83 alin. (7) lit. a), (11) lit. a)). */
-    inventoryEvidenceId: z.uuid(),
-    /** The registration certificate or the cancellation decision. */
-    evidenceId: z.uuid(),
+      .max(500)
+      .default([]),
+    /** The sale invoice of a supplied good. */
+    saleDocumentId: z.uuid().optional(),
+    /** How a good ceased to exist: a shortage not proven a loss (adjusted, norme pct. 79 alin.
+     * (10)); scrapped, destroyed or stolen with its proof (not adjusted, alin. (11), (17)). */
+    cause: z.enum(['shortage', 'scrapped', 'destroyed', 'stolen']).optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (input) =>
+      (regimeEvents as readonly string[]).includes(input.event) ===
+      (input.inventoryEvidenceId !== undefined),
+    {
+      message: 'Inventarierea se indică la schimbarea regimului de TVA (înregistrare sau anulare).',
+      path: ['inventoryEvidenceId'],
+    },
+  )
+  .refine(
+    (input) =>
+      (regimeEvents as readonly string[]).includes(input.event) ||
+      (!input.stock.length && !input.services.length && !input.advances.length),
+    {
+      message:
+        'Stocurile, serviciile neutilizate și avansurile se ajustează la schimbarea regimului de TVA.',
+      path: ['stock'],
+    },
+  )
+  .refine((input) => input.event !== 'registration' || !input.advances.length, {
+    message: 'Avansurile se ajustează la anularea înregistrării.',
+    path: ['advances'],
+  })
+  .refine((input) => (input.event === 'supply') === (input.saleDocumentId !== undefined), {
+    message: 'Factura de vânzare se indică la livrarea bunului de capital.',
+    path: ['saleDocumentId'],
+  })
+  .refine((input) => (input.event === 'cessation') === (input.cause !== undefined), {
+    message: 'Cauza încetării existenței se indică pentru o încetare.',
+    path: ['cause'],
+  })
+  .refine((input) => input.event !== 'year' || input.date.slice(5) === '12-31', {
+    message: 'Ajustarea anului se înregistrează cu data ultimei zile a anului.',
+    path: ['date'],
+  });
 export type CapitalGoodsInput = z.infer<typeof capitalGoodsInput>;
 
-/** What the deregistration's adjustment of art. 304 would need: stock, assets in progress,
- * advances and deferred services, which the engine does not adjust yet. */
+/** What a change of regime adjusts beside the capital goods (art. 304, norme pct. 83 alin. (7),
+ * (11)): stock, assets in progress, advances, and deferred expenses, which are services used
+ * when bought (norme pct. 78 alin. (2)). */
 const otherAdjustable = (date: LocalDate) =>
   balanceQuery(['3', '231', '4091', '4092', '471'], addDays(date, -1));
+/** Stock accounts that hold differences, not goods at their cost: their adjustment is not
+ * covered (price differences, the trade margin, impairment). */
+const stockDifferences = /^(308|348|368|378|388|39)/;
+
+const eventYear = (input: Pick<CapitalGoodsInput, 'event' | 'date'>) =>
+  Number(input.date.slice(0, 4));
+/** The periods of a year, where a good's earlier adjustments of that year are. */
+const yearPeriods = (year: number) =>
+  periodsOf(`${year}-01-01` as LocalDate, `${year}-12-31` as LocalDate);
+
+/** The capital good's use the basis cites, latest first by the engine's time. */
+function capitalUse(loaded: Loaded, assetId: string, date: LocalDate) {
+  const kind = questionKinds['capitalGood.use'];
+  let found: { record: AnswerRecord; value: CapitalGoodUseAnswer } | null = null;
+  for (const record of loaded.answers.values()) {
+    if (record.kind !== kind.id || record.subject.kind !== 'asset' || record.subject.id !== assetId)
+      continue;
+    const parsed = kind.answer({}).safeParse(record.value);
+    if (!parsed.success || parsed.data.from > date) continue;
+    if (
+      !found ||
+      found.record.answeredAt < record.answeredAt ||
+      (found.record.answeredAt === record.answeredAt && found.record.answerId < record.answerId)
+    )
+      found = { record, value: parsed.data };
+  }
+  return found;
+}
 
 /**
- * The once-for-all adjustment of the capital goods' VAT when the company enters or leaves the
- * normal regime (art. 305 alin. (5) lit. a) and c)): a fifth (a twentieth for buildings) of the
- * VAT deducted, or not deducted, for each year left of the period, the change's year included.
- * Leaving, Dr 635 / Cr 4426 in the last return; entering, Dr 4426 / Cr 7588 in the first (rd. 34).
+ * The adjustment of capital goods' deductible VAT (art. 305; norme pct. 79, pct. 83):
+ * - on entering the normal regime from the exemption, or leaving it, once for the whole period
+ *   left, the change's year included (alin. (5) lit. a) and c)), with the stock, the assets in
+ *   progress, the services not used and the advances (art. 304; norme pct. 78, pct. 83 alin.
+ *   (7), (11));
+ * - on a change of a good's use for operations with the right of deduction, the year's fifth (a
+ *   twentieth for buildings) of its VAT at the new share, less a fifth of what was deducted, in
+ *   the event's period, and in each later year's last period while the use holds (alin. (4) lit.
+ *   a), c), (5) lit. a), c), (7); norme pct. 79 alin. (1));
+ * - on its exempt supply, on a taxable supply after a limited deduction (at most the VAT
+ *   collected) and on its cessation, once for the period left (alin. (4) lit. c)–d), (5)).
+ * Rd. 34 (`R31_2`), tax entries ADJ-305 (capital goods) and ADJ-304 (stock and services).
  */
 export const capitalGoodsAdjustment: Treatment<CapitalGoodsInput> = {
   id: 'vat.capitalGoods',
   version: 1,
   description:
-    'Ajustarea taxei deductibile pentru bunurile de capital la trecerea între regimul special de scutire și regimul normal de taxare (art. 305 alin. (5) lit. a) și c)).',
+    'Ajustarea taxei deductibile pentru bunurile de capital (art. 305 din Codul fiscal): la trecerea între regimul special de scutire și regimul normal, cu stocurile, serviciile neutilizate și avansurile (art. 304), la schimbarea folosirii unui bun, în fiecare an în care noua folosire se menține, la livrarea și la încetarea existenței lui.',
   input: capitalGoodsInput,
   agent: true,
   summary:
-    "Adjusts the capital goods' deductible VAT once, for the remaining adjustment period, when the company enters or leaves the normal VAT regime.",
+    "Adjusts capital goods' deductible VAT on a change of VAT regime (with stock and advances), on a change of a good's use and each year it holds, and when a good is supplied or ceases to exist.",
   toolset: 'tax',
   dataClasses: ['books', 'tax'],
-  subject: (input) => `vat.capitalGoods:${input.event}:${input.date}`,
-  plan: (input) => ({
-    evidence: [input.evidenceId, input.inventoryEvidenceId],
-    profile: true,
-    assets: true,
-    taxPeriods: [...new Set(input.goods.map((good) => good.taxPeriod))].map((period) => ({
-      tax: 'VAT',
-      period,
-    })),
-    ...(input.event === 'deregistration' ? { turnover: [otherAdjustable(input.date)] } : {}),
-  }),
+  subject: (input) =>
+    (regimeEvents as readonly string[]).includes(input.event)
+      ? `vat.capitalGoods:${input.event}:${input.date}`
+      : `vat.capitalGoods:${input.event}:${input.date}:${hashOf(
+          input.goods.map((item) => item.assetId).sort(),
+        ).slice(0, 16)}`,
+  plan: (input) => {
+    const regime = (regimeEvents as readonly string[]).includes(input.event);
+    return {
+      evidence: [
+        input.evidenceId,
+        ...(input.inventoryEvidenceId ? [input.inventoryEvidenceId] : []),
+      ],
+      profile: true,
+      assets: true,
+      documents: input.saleDocumentId ? [input.saleDocumentId] : [],
+      taxPeriods: [
+        ...new Set([
+          ...[...input.goods, ...input.services, ...input.advances].map((item) => item.taxPeriod),
+          // A good's earlier adjustments of the event's year.
+          ...(regime ? [] : yearPeriods(eventYear(input))),
+        ]),
+      ].map((period) => ({ tax: 'VAT', period })),
+      ...(regime ? { turnover: [otherAdjustable(input.date)] } : {}),
+      ...(input.advances.length
+        ? { openItems: [{ ids: input.advances.map((item) => item.openItemId) }] }
+        : {}),
+    };
+  },
   evaluate(input, loaded, rules) {
     const issues: Issue[] = [];
     for (const id of [input.evidenceId, input.inventoryEvidenceId])
-      if (!loaded.evidence.has(id))
+      if (id && !loaded.evidence.has(id))
         issues.push(block('EVIDENCE', 'Documentul justificativ nu este disponibil.', 'evidenceId'));
-    const change = changeOn(loaded, input.date);
-    const [before, after] =
-      input.event === 'registration' ? ['non_vat', 'normal_vat'] : ['normal_vat', 'non_vat'];
-    if (change.before !== before || change.after !== after)
-      issues.push(
-        block(
-          'REGIME_CHANGE',
-          `Faptele companiei nu consemnează ${input.event === 'registration' ? 'înregistrarea' : 'anularea înregistrării'} în scopuri de TVA la ${input.date} (vat.status ${after}).`,
-          'date',
-        ),
-      );
-    // The last day of the normal regime (leaving) or its first (entering): its return holds it.
-    const taxPoint = input.event === 'deregistration' ? addDays(input.date, -1) : input.postingDate;
-    if (input.event === 'registration' && input.postingDate < input.date)
-      issues.push(block('DATE', 'Ajustarea se înregistrează după înregistrare.', 'postingDate'));
+    const regime = (regimeEvents as readonly string[]).includes(input.event);
     const rule = param<CapitalGoodsRule>(
       rules,
       'ro.vat.capital_goods',
@@ -560,133 +705,651 @@ export const capitalGoodsAdjustment: Treatment<CapitalGoodsInput> = {
       input.date,
       issues,
     );
-    if (input.event === 'deregistration') {
-      const others = balancesOf(loaded, otherAdjustable(input.date));
-      if (others.length)
+    const minimum = param<string>(
+      rules,
+      'ro.vat.capital_goods.minimum',
+      'vat_chargeability_date',
+      input.date,
+      issues,
+    );
+    const stockRule =
+      regime && (input.stock.length || input.services.length || input.advances.length)
+        ? param<StockAdjustmentRule>(
+            rules,
+            'ro.vat.stock_adjustment',
+            'vat_chargeability_date',
+            input.date,
+            issues,
+          )
+        : undefined;
+    // The event's tax point: the day before a cancellation (its last return holds it), the
+    // registration's posting, or the event's day.
+    let taxPoint: LocalDate =
+      input.event === 'deregistration'
+        ? addDays(input.date, -1)
+        : input.event === 'registration'
+          ? input.postingDate
+          : input.date;
+    if (input.postingDate < input.date && input.event !== 'deregistration')
+      issues.push(block('DATE', 'Ajustarea se înregistrează după eveniment.', 'postingDate'));
+
+    if (regime) {
+      const change = changeOn(loaded, input.date);
+      const [before, after] =
+        input.event === 'registration' ? ['non_vat', 'normal_vat'] : ['normal_vat', 'non_vat'];
+      if (change.before !== before || change.after !== after)
         issues.push(
           block(
-            'OTHER_ADJUSTMENTS',
-            `La ${input.date} registrele au solduri pe ${others.map((row) => row.account).join(', ')}: ajustarea taxei pentru stocuri, active în curs, servicii neutilizate și avansuri (art. 304, norme pct. 83 alin. (7) lit. a) și d)) nu este încă acoperită.`,
+            'REGIME_CHANGE',
+            `Faptele companiei nu consemnează ${input.event === 'registration' ? 'înregistrarea' : 'anularea înregistrării'} în scopuri de TVA la ${input.date} (vat.status ${after}).`,
+            'date',
           ),
         );
-    }
-    const listed = new Map(input.goods.map((good) => [good.assetId, good]));
-    for (const asset of loaded.assets.values()) {
-      if (!tangibleAsset(asset.account)) continue;
-      const held =
-        asset.commissionedOn < input.date &&
-        (asset.disposedOn === null || asset.disposedOn >= input.date);
-      if (held && !listed.has(asset.id))
-        issues.push(
-          block(
-            'CAPITAL_GOOD_UNLISTED',
-            `Mijlocul fix ${asset.number} ${asset.name} este bun de capital la ${input.date}: indicați-l cu factura de achiziție.`,
-            'goods',
-          ),
-        );
-    }
-    const goods: CapitalGood[] = [];
-    for (const good of input.goods) {
-      const asset = loaded.assets.get(good.assetId);
+      const listed = new Map(input.goods.map((item) => [item.assetId, item]));
+      for (const asset of loaded.assets.values()) {
+        if (!tangibleAsset(asset.account)) continue;
+        const held =
+          asset.commissionedOn < input.date &&
+          (asset.disposedOn === null || asset.disposedOn >= input.date);
+        if (held && !listed.has(asset.id))
+          issues.push(
+            block(
+              'CAPITAL_GOOD_UNLISTED',
+              `Mijlocul fix ${asset.number} ${asset.name} este bun de capital la ${input.date}: indicați-l cu factura de achiziție.`,
+              'goods',
+            ),
+          );
+      }
+    } else if (profileAt(loaded, 'vat.status', input.date) !== 'normal_vat')
+      issues.push(
+        block(
+          'NOT_VAT_PAYER',
+          `La ${input.date} compania nu este înregistrată în scopuri de TVA: ajustarea o face persoana înregistrată (art. 305 din Codul fiscal).`,
+          'date',
+        ),
+      );
+
+    // Each good's acquisition: its VAT and what was deducted of it.
+    const goods: { basis: CapitalGood; asset: AssetState; prorata: boolean; rate: string }[] = [];
+    for (const item of input.goods) {
+      const asset = loaded.assets.get(item.assetId);
       if (!asset || !tangibleAsset(asset.account)) {
         issues.push(
           block('ASSET', 'Mijlocul fix nu este un activ corporal din registru.', 'goods'),
         );
         continue;
       }
-      const entries = (loaded.taxLedger.get(`VAT|${good.taxPeriod}`)?.entries ?? []).filter(
+      const entries = (loaded.taxLedger.get(`VAT|${item.taxPeriod}`)?.entries ?? []).filter(
         (entry) =>
           entry.direction === 'input' &&
-          entry.documentId === good.documentId &&
+          entry.documentId === item.documentId &&
           entry.code.startsWith('S-'),
       );
       if (!entries.length) {
         issues.push(
           block(
             'ASSET_VAT',
-            `Factura de achiziție a mijlocului fix ${asset.number} nu are TVA în perioada ${good.taxPeriod}.`,
+            `Factura de achiziție a mijlocului fix ${asset.number} nu are TVA în perioada ${item.taxPeriod}.`,
             'goods',
           ),
         );
         continue;
       }
-      const acquiredOn = entries.map((entry) => entry.taxPoint).sort()[0]!;
-      if (acquiredOn < '2016-01-01')
+      goods.push({
+        asset,
+        prorata: entries.some((entry) => entry.attributes.prorata !== undefined),
+        // The rate of the VAT adjusted (norme pct. 78 alin. (13)), for the SAF-T code.
+        rate: entries[0]!.code.replace(/^S-/, ''),
+        basis: {
+          assetId: asset.id,
+          number: asset.number,
+          name: asset.name,
+          immovable: immovableAsset(asset),
+          acquiredOn: entries.map((entry) => entry.taxPoint).sort()[0]!,
+          vatBani: entries.reduce((sum, entry) => sum + entry.taxBani, 0n),
+          deductedBani: entries.reduce((sum, entry) => sum + entry.deductibleBani, 0n),
+        },
+      });
+    }
+    if (new Set(input.goods.map((item) => item.assetId)).size !== input.goods.length)
+      issues.push(block('GOODS', 'Un bun de capital se indică o singură dată.', 'goods'));
+    if (!regime && !input.goods.length)
+      issues.push(block('GOODS', 'Indicați bunurile de capital ajustate.', 'goods'));
+
+    // The goods' adjustments, by the event.
+    const year = input.event === 'deregistration' ? Number(taxPoint.slice(0, 4)) : eventYear(input);
+    const already = (assetId: string) =>
+      ledgerOf(loaded, yearPeriods(year))
+        .filter(
+          (entry) =>
+            entry.code === regimeCodes.capitalGoods &&
+            entry.attributes.assetId === assetId &&
+            entry.attributes.year === String(year),
+        )
+        .reduce((sum, entry) => sum + entry.deductibleBani, 0n);
+    const adjustments: {
+      assetId: string;
+      number: string;
+      bani: bigint;
+      share: Share | null;
+      line: string;
+    }[] = [];
+    const rateOf = new Map(goods.map((item) => [item.basis.assetId, item.rate]));
+    const rates = [...new Set(goods.map((item) => item.rate))];
+    let sale: { exempt: boolean; collected: bigint } | null = null;
+    if (input.event === 'supply') {
+      const record = loaded.documents.get(input.saleDocumentId!);
+      const parsed = invoiceDocumentSchema.safeParse(record?.body);
+      if (!record || record.kind !== invoiceKinds.sale || !parsed.success)
         issues.push(
           block(
-            'ART306',
-            `Mijlocul fix ${asset.number} a fost achiziționat înainte de 2016: ajustarea art. 306 nu este acoperită.`,
-            'goods',
+            'SALE',
+            'Factura de vânzare nu este o factură emisă de companie.',
+            'saleDocumentId',
           ),
         );
-      goods.push({
-        assetId: asset.id,
-        number: asset.number,
-        name: asset.name,
-        immovable: immovableAsset(asset),
-        acquiredOn,
-        vatBani: entries.reduce((sum, entry) => sum + entry.taxBani, 0n),
-        deductedBani: entries.reduce((sum, entry) => sum + entry.deductibleBani, 0n),
-      });
+      else {
+        const exempt = parsed.data.taxes.some((tax) => tax.category === 'E');
+        const taxed = parsed.data.taxes.some((tax) => tax.category === 'S');
+        if (exempt === taxed)
+          issues.push(
+            block(
+              'SALE',
+              'Factura de vânzare a bunului de capital este fie scutită (E, art. 292), fie taxabilă (S).',
+              'saleDocumentId',
+            ),
+          );
+        if (input.goods.length > 1)
+          issues.push(
+            block(
+              'GOODS',
+              'La livrare, fiecare bun de capital se ajustează cu factura lui: taxa suplimentară de dedus se limitează la TVA colectată pentru livrarea bunului respectiv (art. 305 alin. (4) lit. c)).',
+              'goods',
+            ),
+          );
+        sale = { exempt, collected: parseMoney(parsed.data.totals.tax, 'RON') };
+        taxPoint = taxPointOf(parsed.data);
+        if (taxPoint.slice(0, 4) !== String(year))
+          issues.push(
+            block('DATE', `Livrarea are data exigibilității ${taxPoint}, nu în ${year}.`, 'date'),
+          );
+      }
+    }
+    if (rule)
+      for (const { basis, asset, prorata } of goods) {
+        const transitional = transitionalOf(
+          basis,
+          {
+            value: asset.value,
+            depreciated: asset.depreciated,
+            fiscalLifeMonths: asset.fiscal?.lifeMonths ?? null,
+          },
+          year,
+          rule,
+        );
+        if (transitional.kind === 'ART306' || transitional.kind === 'ART332') {
+          issues.push(
+            block(
+              transitional.kind,
+              transitional.kind === 'ART306'
+                ? `Mijlocul fix ${asset.number} a fost achiziționat înainte de 2016 și nu este amortizat complet: ajustarea proporțională cu valoarea rămasă neamortizată (art. 306 din Codul fiscal, norme pct. 80) nu este acoperită.`
+                : `Bunul imobil ${asset.number} a fost achiziționat înainte de aderare: ajustarea urmează dispozițiile tranzitorii ale art. 332 din Codul fiscal, neacoperite.`,
+              'goods',
+            ),
+          );
+          continue;
+        }
+        if (transitional.kind === 'expired') {
+          adjustments.push({
+            assetId: asset.id,
+            number: asset.number,
+            bani: 0n,
+            share: null,
+            line: `${asset.number} ${asset.name}: achiziționat la ${basis.acquiredOn}; perioada de ajustare s-a încheiat sau activul este amortizat complet (art. 305 alin. (2)–(3), art. 306): nu se ajustează.`,
+          });
+          continue;
+        }
+        if (regime) {
+          const result = capitalGoodAdjustment(
+            basis,
+            input.event as 'registration' | 'deregistration',
+            input.date,
+            rule,
+          );
+          adjustments.push({
+            assetId: asset.id,
+            number: asset.number,
+            bani: result.bani,
+            share: null,
+            line: result.line,
+          });
+          continue;
+        }
+        if (prorata) {
+          issues.push(
+            block(
+              'CAPITAL_GOOD_PRORATA',
+              `Mijlocul fix ${asset.number} s-a dedus pe bază de pro rata: se ajustează anual cu pro rata definitivă (art. 305 alin. (4) lit. b), art. 300 alin. (15)), prin vat.proRata.`,
+              'goods',
+            ),
+          );
+          continue;
+        }
+        const done = already(asset.id);
+        if (input.event === 'use' || input.event === 'year') {
+          const found = capitalUse(loaded, asset.id, input.date);
+          if (!found) {
+            issues.push(
+              questionIssue(
+                'CAPITAL_GOOD_USE',
+                `Folosirea bunului de capital ${asset.number} ${asset.name} pentru operațiuni cu drept de deducere la ${input.date} nu este cunoscută: întrebați proprietarul (capitalGood.use) și revizuiți propunerea citând răspunsul.`,
+                {
+                  kind: 'capitalGood.use',
+                  subject: { kind: 'asset', id: asset.id },
+                  params: { date: input.date },
+                },
+                'block',
+                'goods',
+              ),
+            );
+            continue;
+          }
+          if (input.event === 'use' && found.value.from !== input.date)
+            issues.push(
+              block(
+                'USE_DATE',
+                `Răspunsul despre ${asset.number} arată folosirea de la ${found.value.from}: ajustarea pentru schimbarea folosirii are data evenimentului (date: ${found.value.from}).`,
+                'date',
+              ),
+            );
+          const share = shareOf(found.value.share)!;
+          if (input.event === 'year' && share === initialShare(basis)) {
+            adjustments.push({
+              assetId: asset.id,
+              number: asset.number,
+              bani: 0n,
+              share,
+              line: `${asset.number} ${asset.name}: folosit în ${year} ca la deducerea inițială (${percentOf(share)}): nu se ajustează.`,
+            });
+            continue;
+          }
+          const result = useAdjustment(basis, year, share, done, rule);
+          adjustments.push({
+            assetId: asset.id,
+            number: asset.number,
+            bani: result.bani,
+            share,
+            line: result.line,
+          });
+          continue;
+        }
+        if (input.event === 'supply' && sale) {
+          // Taxable after a full deduction: nothing changes (alin. (4) lit. d) pct. 1).
+          const share = sale.exempt ? 0 : FULL_SHARE;
+          const result = remainingAdjustment(
+            basis,
+            year,
+            share,
+            done,
+            rule,
+            sale.exempt ? undefined : sale.collected,
+          );
+          adjustments.push({
+            assetId: asset.id,
+            number: asset.number,
+            bani: !sale.exempt && basis.deductedBani >= basis.vatBani ? 0n : result.bani,
+            share,
+            line: result.line,
+          });
+          continue;
+        }
+        if (input.event === 'cessation') {
+          if (input.cause !== 'shortage') {
+            adjustments.push({
+              assetId: asset.id,
+              number: asset.number,
+              bani: 0n,
+              share: null,
+              line: `${asset.number} ${asset.name}: ${input.cause === 'scrapped' ? 'casat' : input.cause === 'destroyed' ? 'distrus, dovedit' : 'furat, dovedit prin actele organelor judiciare'}: taxa dedusă nu se ajustează (art. 305 alin. (4) lit. d) pct. 2 și 4, norme pct. 79 alin. (11), (17)).`,
+            });
+            continue;
+          }
+          const result = remainingAdjustment(basis, year, 0, done, rule);
+          adjustments.push({
+            assetId: asset.id,
+            number: asset.number,
+            bani: result.bani,
+            share: 0,
+            line: result.line,
+          });
+        }
+      }
+    if (input.event === 'cessation' && input.cause !== 'shortage')
+      issues.push(
+        warn(
+          'CESSATION_PROOF',
+          'Bunurile casate, distruse sau furate nu se ajustează doar cu dovada lor: procesul-verbal de casare, documentele care confirmă distrugerea, actele organelor judiciare (norme pct. 79 alin. (11)–(12)). Confirmați.',
+        ),
+      );
+    // The smallest adjustment made, if any is set (art. 305 alin. (9), repealed).
+    const floor = minimum ? BigInt(minimum) * 100n : 0n;
+    for (const item of adjustments)
+      if (item.bani !== 0n && (item.bani < 0n ? -item.bani : item.bani) < floor) {
+        item.line = `${item.line} Sub pragul de ${minimum} lei: nu se ajustează.`;
+        item.bani = 0n;
+      }
+
+    // Stock, services not used and advances on a change of regime (art. 304).
+    const other: { key: string; rate: string; bani: bigint; line: string }[] = [];
+    if (regime) {
+      const sign = input.event === 'deregistration' ? -1n : 1n;
+      const balances = balancesOf(loaded, otherAdjustable(input.date));
+      const stocked = new Map<string, bigint>();
+      for (const line of input.stock) {
+        const synthetic = line.account.split('.')[0]!;
+        if (stockDifferences.test(synthetic))
+          issues.push(
+            block('STOCK_ACCOUNT', `Contul ${line.account} nu ține bunuri la cost.`, 'stock'),
+          );
+        stocked.set(
+          line.account,
+          (stocked.get(line.account) ?? 0n) + parseMoney(line.value, 'RON'),
+        );
+      }
+      for (const row of balances) {
+        if (row.account.startsWith('471')) continue; // services used when bought (pct. 78 (2))
+        if (row.account.startsWith('409')) continue; // the advances, below
+        if (stockDifferences.test(row.account))
+          issues.push(
+            block(
+              'STOCK_DIFFERENCES',
+              `La ${input.date} contul ${row.account} are sold (${lei(row.bani)} lei): ajustarea stocurilor ținute la preț de vânzare, cu diferențe de preț sau ajustări pentru depreciere nu este încă acoperită.`,
+            ),
+          );
+        else if ((stocked.get(row.account) ?? 0n) !== row.bani)
+          issues.push(
+            block(
+              'STOCK_UNLISTED',
+              `La ${input.date} contul ${row.account} are soldul ${lei(row.bani)} lei, iar inventarul indicat ${lei(stocked.get(row.account) ?? 0n)} lei: indicați stocul inventariat pe conturi (stock), cu cota TVA de la achiziție.`,
+              'stock',
+            ),
+          );
+      }
+      for (const account of stocked.keys())
+        if (!balances.some((row) => row.account === account))
+          issues.push(
+            block('STOCK_UNLISTED', `Contul ${account} nu are sold la ${input.date}.`, 'stock'),
+          );
+      if (input.stock.some((line) => line.rate !== '0'))
+        issues.push(
+          warn(
+            'STOCK_RATE',
+            'Taxa stocurilor se ajustează la cota în vigoare la data achiziției lor (norme pct. 78 alin. (13)): confirmați cotele inventarului.',
+          ),
+        );
+      const byRate = new Map<string, bigint>();
+      for (const line of input.stock) {
+        const vat = stockVat({
+          account: line.account,
+          valueBani: parseMoney(line.value, 'RON'),
+          rate: line.rate,
+        });
+        if (vat !== 0n) byRate.set(line.rate, (byRate.get(line.rate) ?? 0n) + vat);
+      }
+      for (const [rate, vat] of byRate)
+        other.push({
+          key: `stock:${rate}`,
+          rate,
+          bani: sign * vat,
+          line: `Stocuri și active în curs la cota de ${rate}%: TVA ${lei(vat)} lei ${sign < 0n ? 'dedusă, anulată' : 'nededusă, dedusă acum'} (art. 304, norme pct. 83 alin. (7) lit. a), (11) lit. a)).`,
+        });
+      // Intangible assets not wholly depreciated (norme pct. 78 alin. (2)).
+      const services = new Map(input.services.map((item) => [item.assetId, item]));
+      for (const asset of loaded.assets.values()) {
+        if (!asset.account.startsWith('20')) continue;
+        const held =
+          asset.commissionedOn < input.date &&
+          (asset.disposedOn === null || asset.disposedOn >= input.date);
+        if (held && asset.depreciated < asset.value && !services.has(asset.id))
+          issues.push(
+            block(
+              'SERVICE_UNLISTED',
+              `Imobilizarea necorporală ${asset.number} ${asset.name} nu este amortizată complet: este un serviciu neutilizat (norme pct. 78 alin. (2)), indicați-o cu factura de achiziție (services).`,
+              'services',
+            ),
+          );
+      }
+      for (const item of input.services) {
+        const asset = loaded.assets.get(item.assetId);
+        if (!asset || !asset.account.startsWith('20')) {
+          issues.push(
+            block('ASSET', 'Imobilizarea nu este una necorporală din registru.', 'services'),
+          );
+          continue;
+        }
+        const entries = (loaded.taxLedger.get(`VAT|${item.taxPeriod}`)?.entries ?? []).filter(
+          (entry) =>
+            entry.direction === 'input' &&
+            entry.documentId === item.documentId &&
+            entry.code.startsWith('S-'),
+        );
+        if (!entries.length) {
+          issues.push(
+            block(
+              'ASSET_VAT',
+              `Factura imobilizării ${asset.number} nu are TVA în ${item.taxPeriod}.`,
+              'services',
+            ),
+          );
+          continue;
+        }
+        const vat = entries.reduce(
+          (sum, entry) =>
+            sum + (sign < 0n ? entry.deductibleBani : entry.taxBani - entry.deductibleBani),
+          0n,
+        );
+        const left = unusedServiceVat(vat, asset);
+        if (left === 0n) continue;
+        const rate = entries[0]!.code.replace(/^S-/, '');
+        other.push({
+          key: `service:${asset.number}`,
+          rate,
+          bani: sign * left,
+          line: `${asset.number} ${asset.name}: TVA ${lei(vat)} lei, pentru valoarea rămasă neamortizată ${lei(asset.value - asset.depreciated)} din ${lei(asset.value)} lei: ${lei(left)} lei (norme pct. 78 alin. (2)).`,
+        });
+      }
+      // Advances still open at a cancellation (norme pct. 83 alin. (7) lit. d)).
+      const advanceBalance = balances
+        .filter((row) => row.account.startsWith('4091') || row.account.startsWith('4092'))
+        .reduce((sum, row) => sum + row.bani, 0n);
+      let listedAdvances = 0n;
+      for (const item of input.advances) {
+        const open = loaded.openItems.get(item.openItemId);
+        if (!open || open.kind !== 'advance.paid') {
+          issues.push(block('ADVANCE', 'Poziția indicată nu este un avans plătit.', 'advances'));
+          continue;
+        }
+        const entries = (loaded.taxLedger.get(`VAT|${item.taxPeriod}`)?.entries ?? []).filter(
+          (entry) =>
+            entry.direction === 'input' &&
+            entry.documentId === item.documentId &&
+            entry.code.startsWith('S-'),
+        );
+        if (!entries.length || open.documentId !== item.documentId) {
+          issues.push(
+            block('ADVANCE', 'Factura de avans nu are TVA în perioada indicată.', 'advances'),
+          );
+          continue;
+        }
+        const openBani = open.balanceBani < 0n ? -open.balanceBani : open.balanceBani;
+        listedAdvances += openBani;
+        const gross = entries.reduce((sum, entry) => sum + entry.baseBani + entry.taxBani, 0n);
+        const deducted = entries.reduce((sum, entry) => sum + entry.deductibleBani, 0n);
+        const vat = advanceVat(deducted, gross, openBani);
+        if (vat === 0n) continue;
+        other.push({
+          key: `advance:${item.openItemId}`,
+          rate: entries[0]!.code.replace(/^S-/, ''),
+          bani: -vat,
+          line: `Avansul ${entries[0]!.attributes.number ?? item.documentId}: ${lei(openBani)} lei nedecontat din ${lei(gross)} lei, TVA dedusă ${lei(vat)} lei, anulată (norme pct. 83 alin. (7) lit. d)).`,
+        });
+      }
+      if (input.event === 'deregistration' && listedAdvances !== advanceBalance)
+        issues.push(
+          block(
+            'ADVANCE_UNLISTED',
+            `La ${input.date} avansurile plătite (4091, 4092) însumează ${lei(advanceBalance)} lei, iar cele indicate ${lei(listedAdvances)} lei: indicați fiecare avans nedecontat (advances).`,
+            'advances',
+          ),
+        );
+      if (input.event === 'registration' && advanceBalance !== 0n)
+        issues.push(
+          block(
+            'ADVANCE_UNLISTED',
+            `La ${input.date} există avansuri plătite (${lei(advanceBalance)} lei): ajustarea lor la înregistrare nu este încă acoperită.`,
+            'advances',
+          ),
+        );
+      const deferred = balances.find((row) => row.account.startsWith('471'));
+      if (deferred)
+        issues.push(
+          info(
+            'DEFERRED_SERVICES',
+            `Cheltuielile în avans (471, ${lei(deferred.bani)} lei) sunt servicii utilizate la achiziție (norme pct. 78 alin. (2)): nu se ajustează.`,
+          ),
+        );
     }
     if (issues.some((issue) => issue.severity === 'block') || !rule)
       return { effect: null, issues };
-    const adjustments = goods.map((good) =>
-      capitalGoodAdjustment(good, input.event, input.date, rule),
-    );
     const total = adjustments.reduce((sum, item) => sum + item.bani, 0n);
-    if (total === 0n)
+    const totalOther = other.reduce((sum, item) => sum + item.bani, 0n);
+    if (adjustments.every((item) => item.bani === 0n) && other.every((item) => item.bani === 0n))
       return {
         effect: null,
         issues: [
           ...issues,
           block(
             'NOTHING',
-            'Niciun bun de capital nu are taxă de ajustat pentru perioada rămasă: nu se înregistrează nimic.',
+            `Nu este nimic de ajustat: ${[...adjustments.map((item) => item.line)].join(' ') || 'niciun bun de capital nu are taxă de ajustat pentru perioada rămasă.'}`,
           ),
         ],
       };
     const taxPeriod = vatPeriodOf(loaded, taxPoint);
-    const lines: LineSpec[] =
-      total < 0n
-        ? [
-            { account: rule.expense, side: 'D', bani: -total },
-            { account: '4426', side: 'C', bani: -total },
-          ]
-        : [
-            { account: '4426', side: 'D', bani: total },
-            { account: rule.income, side: 'C', bani: total },
-          ];
-    const taxEntries: TaxEntrySpec[] = [
-      {
-        key: 'vat',
-        tax: 'VAT',
-        code: regimeCodes.capitalGoods,
-        direction: 'input',
-        baseBani: 0n,
-        taxBani: total,
-        deductibleBani: total,
-        ledgerBani: total,
-        line: total < 0n ? 1 : 0,
-        taxPoint,
-        exigibility: taxPoint,
-        taxPeriod,
-        attributes: { event: input.event, change: input.date, goods: String(goods.length) },
-      },
-    ];
+    const lines: LineSpec[] = [];
+    const taxEntries: TaxEntrySpec[] = [];
+    // One 4426 line per sign and code, its entries pointing to it.
+    const post = (
+      code: string,
+      items: { key: string; bani: bigint; attributes: Record<string, string> }[],
+      accounts: { expense: string; income: string },
+    ) => {
+      for (const sign of [1n, -1n]) {
+        const members = items.filter((item) => (sign > 0n ? item.bani > 0n : item.bani < 0n));
+        if (!members.length) continue;
+        const sum = members.reduce((acc, item) => acc + item.bani, 0n);
+        if (sum > 0n) {
+          lines.push({ account: '4426', side: 'D', bani: sum });
+          lines.push({ account: accounts.income, side: 'C', bani: sum });
+        } else {
+          lines.push({ account: accounts.expense, side: 'D', bani: -sum });
+          lines.push({ account: '4426', side: 'C', bani: -sum });
+        }
+        const line = sum > 0n ? lines.length - 2 : lines.length - 1;
+        for (const item of members)
+          taxEntries.push({
+            key: item.key,
+            tax: 'VAT',
+            code,
+            direction: 'input',
+            baseBani: 0n,
+            taxBani: item.bani,
+            deductibleBani: item.bani,
+            ledgerBani: item.bani,
+            line,
+            taxPoint,
+            exigibility: taxPoint,
+            taxPeriod,
+            attributes: item.attributes,
+          });
+      }
+    };
+    if (regime)
+      // On a change of regime, one entry for the capital goods (V1).
+      post(
+        regimeCodes.capitalGoods,
+        total === 0n
+          ? []
+          : [
+              {
+                key: 'vat',
+                bani: total,
+                attributes: {
+                  event: input.event,
+                  change: input.date,
+                  goods: String(goods.length),
+                  ...(rates.length === 1 ? { rate: rates[0]! } : {}),
+                },
+              },
+            ],
+        rule,
+      );
+    else
+      post(
+        regimeCodes.capitalGoods,
+        adjustments
+          .filter((item) => item.bani !== 0n)
+          .map((item) => ({
+            key: `vat:${item.number}`,
+            bani: item.bani,
+            attributes: {
+              event: input.event,
+              change: input.date,
+              assetId: item.assetId,
+              year: String(year),
+              ...(item.share !== null ? { share: String(item.share) } : {}),
+              ...(rateOf.get(item.assetId) ? { rate: rateOf.get(item.assetId)! } : {}),
+            },
+          })),
+        rule,
+      );
+    if (stockRule)
+      post(
+        adjustmentCodes.stock,
+        other
+          .filter((item) => item.bani !== 0n)
+          .map((item) => ({
+            key: `vat:${item.key}`,
+            bani: item.bani,
+            attributes: { event: input.event, change: input.date, rate: item.rate },
+          })),
+        stockRule,
+      );
+    const grand = total + totalOther;
+    const labels: Record<CapitalGoodsInput['event'], string> = {
+      registration: 'la înregistrarea în scopuri de TVA',
+      deregistration: 'la anularea înregistrării în scopuri de TVA',
+      use: 'la schimbarea folosirii',
+      year: `pentru anul ${year}`,
+      supply: 'la livrarea bunului de capital',
+      cessation: 'la încetarea existenței bunului de capital',
+    };
     const effect: Effect = {
       schema: 'effect@1',
       date: input.postingDate,
       journalClass: 'general',
       journalCode: 'TVA',
-      description: `Ajustarea TVA pentru bunurile de capital la ${input.event === 'registration' ? 'înregistrarea' : 'anularea înregistrării'} în scopuri de TVA (${input.date})`,
+      description: `Ajustarea TVA pentru bunurile de capital ${labels[input.event]} (${input.date})`,
       lines,
       openItems: [],
       taxEntries,
       schedules: [],
       explanation: {
-        summary: `Ajustare ${lei(total < 0n ? -total : total)} lei ${total < 0n ? 'în favoarea bugetului, în ultimul decont' : 'în favoarea firmei, în primul decont după înregistrare'} (${taxPeriod}, rd. 34; art. 305 alin. (5) lit. ${input.event === 'deregistration' ? 'a' : 'c'})).`,
-        details: { event: input.event, date: input.date, lines: adjustments.map((a) => a.line) },
+        summary: `Ajustare ${lei(grand < 0n ? -grand : grand)} lei ${grand < 0n ? 'în favoarea bugetului' : 'în favoarea firmei'} în decontul ${taxPeriod}, rd. 34 (art. 305${other.length ? ' și art. 304' : ''} din Codul fiscal).`,
+        details: {
+          event: input.event,
+          date: input.date,
+          lines: [...adjustments.map((item) => item.line), ...other.map((item) => item.line)],
+        },
       },
     };
     return { effect, issues };

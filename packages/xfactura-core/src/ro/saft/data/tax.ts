@@ -1,6 +1,7 @@
 // ANAF tax types and VAT tax codes for TaxInformationStructure and TaxTable.
 // Extracted from ANAF RO_SAFT_SchemaDefCod_05.02.2026.xlsx (sha256 d0981202182438e4597ff3bc27d2c41dec06c60bc32b86620c1de29a9cb8436d),
 // sheets TAX-IMP - Impozite, Livrari, Achizitii ded 100%, Achizitii ded 50%, Achizitii neded and TVA_NoteContabile (active codes only).
+// The pinned RO_SAFT_SchemaDefCod_16.02.2026.xlsx (sha256 050508bf6eadbd6bb4684a0016296253c629d4e9b54a1118dd9b9bfd0c1d0f2d) has the same sheets; it adds only the WHT code 604040.
 
 /** TaxType: the tax and duty codes of the state budget nomenclature (TAX-IMP). */
 export const taxTypes: Readonly<Record<string, string>> = {

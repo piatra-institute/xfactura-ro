@@ -508,7 +508,7 @@ export class Autonomy {
         from acc_proposals q
         join acc_entries e on e.company_id = q.company_id and e.proposal_id = q.id
         join acc_documents d on d.company_id = q.company_id and d.id = q.document_id
-        where q.company_id = ${companyId} and q.treatment_id = 'invoices.recognize'
+        where q.company_id = ${companyId} and q.treatment_id in ('invoices.recognize', 'receipts.recognize')
           and d.party_id is not null and ${entryStands('e')}
         union all
         select q.treatment_id, l.party_id,
@@ -537,6 +537,15 @@ export class Autonomy {
       order by b.treatment_id, b.party_id, b.kind`);
     return rows.map((row) => {
       const input = JSON.parse(row.input_json) as Record<string, JsonValue>;
+      // A receipt's template fixes its payment too, by card or from a cash desk: an employee's
+      // receipts are not templated.
+      const payment = input.payment as { method?: string } | undefined;
+      const paid: Record<string, JsonValue> | null =
+        row.treatment_id !== 'receipts.recognize'
+          ? {}
+          : payment?.method === 'card' || payment?.method === 'cash'
+            ? { payment: input.payment! }
+            : null;
       // The latest posting's account to start from, with its vehicle when it named one (the
       // deduction then follows the answer about it); a settlement matches by invoice number.
       const mapping: JsonValue =
@@ -544,11 +553,11 @@ export class Autonomy {
           ? { to: typeof input.to === 'string' ? input.to : 'single' }
           : row.treatment_id === 'bank.settle'
             ? { settle: 'openItem', match: 'number' }
-            : typeof input.account !== 'string'
+            : typeof input.account !== 'string' || !paid
               ? null
               : typeof input.vehicle === 'string'
-                ? { account: input.account, vehicle: input.vehicle }
-                : { account: input.account, deduction: input.deduction ?? 'full' };
+                ? { account: input.account, vehicle: input.vehicle, ...paid }
+                : { account: input.account, deduction: input.deduction ?? 'full', ...paid };
       return {
         treatment: row.treatment_id,
         partyId: row.party_id,

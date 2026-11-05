@@ -338,7 +338,8 @@ export const expenseReportInput = z
     date: z.string().refine((value): boolean => isLocalDate(value)),
     /** The expense report (decont de cheltuieli) with the receipts. */
     evidenceId: z.uuid(),
-    /** What was spent, at the amounts paid (VAT on receipts is not deducted). */
+    /** What was spent, at the amounts paid, without a fiscal receipt document of its own: a
+     * receipt is booked with `receipts.recognize` against the same advance. */
     expenses: z
       .array(
         z
@@ -359,8 +360,9 @@ export type ExpenseReportInput = z.infer<typeof expenseReportInput>;
  * The expense report of an advance for expenses (decont de avans, OMFP nr. 2.634/2015): the
  * receipts justify part of the advance, booked to expenses against 542; what is left is returned
  * in cash (a `cash.record` receipt settling the same advance). Spending more than the advance is
- * refused: the difference is paid to the person first, as a further advance. VAT on the receipts
- * is not deducted: simplified invoices are not reported yet.
+ * refused: the difference is paid to the person first, as a further advance. A fiscal receipt of
+ * the report is booked on its own with `receipts.recognize` (`payment: advance`), which deducts
+ * its VAT when it is a simplified invoice; this books what has no receipt document.
  */
 export const expenseReport: Treatment<ExpenseReportInput> = {
   id: 'cash.expenseReport',

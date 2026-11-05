@@ -753,7 +753,7 @@ export class Templates {
         and not exists (select 1 from acc_document_links l where l.company_id = d.company_id
           and l.to_id = d.id and l.kind = 'supersedes')
         and ${noPrediction(`'document:' || d.id`)}
-        ${scope.treatment === 'invoices.recognize' ? sql`and ${notPosted(`'document:' || d.id`)}` : sql``}
+        ${scope.treatment === 'invoices.recognize' || scope.treatment === 'receipts.recognize' ? sql`and ${notPosted(`'document:' || d.id`)}` : sql``}
       order by d.created_at, d.id limit ${limit}`);
     return rows.map((item) => `document:${item.id}`);
   }

@@ -12,6 +12,7 @@ import {
   individualForms,
   type EntityForm,
 } from 'xfactura-core/ro/entity';
+import { prorataValues } from 'xfactura-core/ro/exempt';
 import { taxpayerCategories } from 'xfactura-core/ro/saft/applicability';
 import type { LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
@@ -88,6 +89,11 @@ export const profileAxes = {
   'vat.period': ['monthly', 'quarterly'],
   'vat.cash': ['no', 'yes'],
   'vat.eu': ['none', 'special'],
+  // The provisional pro-rata of a taxable person with mixed operations (Codul fiscal art. 300
+  // alin. (9)–(10)), in whole percent, from 1 January or from the day it starts being mixed, with
+  // its notification to ANAF; `special` approved or imposed by the Ministry (alin. (16)–(17)),
+  // `opted_out` not to deduct the VAT of purchases for both kinds of operations (alin. (20)).
+  'vat.prorata': prorataValues,
   income_tax: ['micro', 'profit'],
   // The system of declaring and paying the profit tax (Codul fiscal art. 41): quarterly
   // (alin. (1)), or annual with quarterly prepayments, an option for at least two years

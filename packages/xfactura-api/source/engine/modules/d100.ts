@@ -6,9 +6,12 @@ import {
   checkD100,
   d100Namespace,
   writeD100,
+  d100WithheldCodes,
   type D100,
   type D100Obligation,
+  type D100WithheldCode,
 } from 'xfactura-core/ro/declarations/d100';
+import type { Withheld } from 'xfactura-core/ro/withholding';
 import { counties } from 'xfactura-core/ro/geo';
 import type { Transaction } from '../db/database';
 import { companies, entries, lines, proposals, proposalVersions } from '../db/schema';
@@ -106,6 +109,19 @@ async function obligationsOf(tx: Transaction, companyId: string, month: string) 
     from: `${month}-01`,
     to: end,
   });
+  // Rent paid to individuals and non-residents' income (O1); intellectual property is D112's.
+  const others = [
+    ...(await posted(tx, companyId, {
+      treatmentId: 'payees.withhold',
+      from: `${month}-01`,
+      to: end,
+    })),
+    ...(await posted(tx, companyId, {
+      treatmentId: 'nonresidents.withhold',
+      from: `${month}-01`,
+      to: end,
+    })),
+  ];
   // The profit tax of quarters I–III, posted from the quarter's end within the year (memoranda
   // when nothing was due).
   const profit =
@@ -154,14 +170,15 @@ async function obligationsOf(tx: Transaction, companyId: string, month: string) 
       booked.reduce((sum, line) => sum + (line.side === 'C' ? line.bani : -line.bani), 0n),
     );
   }
-  return { micro, dividends, interest, profit, taxes };
+  return { micro, dividends, interest, others, profit, taxes };
 }
 
 /**
  * The declaration of obligations to the state budget (D100) for a month, from the books: the
  * micro-enterprise tax posted for the quarter, in its last month, the dividend tax withheld in
  * the month, for individuals (604) and companies (150), with, in December, the tax on dividends
- * left unpaid at year end, and the tax withheld on interest paid to individuals (605).
+ * left unpaid at year end, the tax withheld on interest paid to individuals (605), on rent paid to
+ * individuals (628) and on non-residents' income (631–634, 636).
  */
 export function d100Declaration(): DeclarationKind {
   return {
@@ -178,9 +195,15 @@ export function d100Declaration(): DeclarationKind {
     },
     options: d100Options,
     async inputs(tx, companyId, month) {
-      const { micro, dividends, interest, profit } = await obligationsOf(tx, companyId, month);
+      const { micro, dividends, interest, others, profit } = await obligationsOf(
+        tx,
+        companyId,
+        month,
+      );
       const { readSet } = await loadState(tx, companyId, {
-        entries: [...micro, ...dividends, ...interest, ...profit].map((row) => row.entryId),
+        entries: [...micro, ...dividends, ...interest, ...others, ...profit].map(
+          (row) => row.entryId,
+        ),
       });
       const seller = await sellerDetails(tx, companyId);
       const inputs: ReadSetEntry[] = [
@@ -193,7 +216,7 @@ export function d100Declaration(): DeclarationKind {
       const options = d100Options.parse(raw);
       const problems: DeclarationProblem[] = [];
       const inputs = await this.inputs(tx, companyId, month);
-      const { micro, dividends, interest, profit, taxes } = await obligationsOf(
+      const { micro, dividends, interest, others, profit, taxes } = await obligationsOf(
         tx,
         companyId,
         month,
@@ -274,6 +297,25 @@ export function d100Declaration(): DeclarationKind {
           });
         obligations.push({ kind: 'interest', withheld: Number(withheld / 100n) });
       }
+      // The other taxes withheld at source, by their code: what each posting withheld.
+      const byCode = new Map<D100WithheldCode, bigint>();
+      for (const row of others) {
+        const record = row.effect.explanation?.details?.withholding as Withheld | undefined;
+        if (!record || BigInt(record.tax) === 0n) continue;
+        if (!(d100WithheldCodes as readonly string[]).includes(record.type)) continue;
+        const code = record.type as D100WithheldCode;
+        byCode.set(code, (byCode.get(code) ?? 0n) + BigInt(record.tax));
+      }
+      for (const code of d100WithheldCodes) {
+        const tax = byCode.get(code);
+        if (tax === undefined) continue;
+        if (tax % 100n)
+          problems.push({
+            code: 'D100_BANI',
+            message: `Impozitul reținut la sursă (${code}) are subdiviziuni de leu.`,
+          });
+        obligations.push({ kind: 'withheld', code, withheld: Number(tax / 100n) });
+      }
       if (!obligations.length)
         problems.push({
           code: 'D100_NOTHING',
@@ -315,7 +357,9 @@ export function d100Declaration(): DeclarationKind {
         problems,
         summary: {
           month,
-          obligations: obligations.map((item) => (item.kind === 'other' ? item.code : item.kind)),
+          obligations: obligations.map((item) =>
+            item.kind === 'other' || item.kind === 'withheld' ? item.code : item.kind,
+          ),
         },
       };
     },

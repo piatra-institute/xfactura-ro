@@ -2,10 +2,11 @@ import { z } from 'zod';
 import { canonical } from '../hash';
 import { accountCodePattern } from '../kernel';
 import { allocate, formatMoney, LEDGER_CURRENCY, parseMoney } from '../money';
-import { normalizedNumber } from '../documents/schemas';
+import { normalizedNumber, receiptDocumentSchema } from '../documents/schemas';
 import { normalizePlate } from '../questions/kinds';
 import { recognitionInput, registration } from '../ro/treatments/invoices';
 import { deferralInput } from '../ro/treatments/deferrals';
+import { receiptRecognitionInput } from '../ro/receipts/receipts';
 import { settlementInput } from '../ro/treatments/settlement';
 import { taxTypes } from '../ro/taxaccount/obligations';
 import { taxPaymentInput } from '../ro/taxaccount/treatments';
@@ -26,6 +27,7 @@ export const templateTreatments = [
   'deferrals.defer',
   'bank.settle',
   'tax.pay',
+  'receipts.recognize',
 ] as const;
 export type TemplateTreatment = (typeof templateTreatments)[number];
 
@@ -35,6 +37,7 @@ export const templateDocumentKinds: Record<TemplateTreatment, readonly string[]>
   'deferrals.defer': ['invoice.received', 'invoice.issued'],
   'bank.settle': ['movement.paid', 'movement.received'],
   'tax.pay': ['movement.paid'],
+  'receipts.recognize': ['receipt.received'],
 };
 
 /** Whether a treatment's templates read documents or bank movements. */
@@ -67,7 +70,9 @@ export const templateScope = z
 export type TemplateScope = z.infer<typeof templateScope>;
 
 const account = z.string().regex(accountCodePattern);
-const deduction = z.enum(['full', 'none', 'limited']);
+// `prorata`: a purchase for both kinds of operations of a company with mixed operations (Codul
+// fiscal art. 300 alin. (5)), deducting the provisional pro-rata of its year.
+const deduction = z.enum(['full', 'none', 'limited', 'prorata']);
 
 /**
  * A part's deduction, or the road vehicle it concerns (art. 298): a part naming a vehicle takes
@@ -85,11 +90,9 @@ const vehicleOrDeduction = {
   message:
     'Cu vehiculul numit, deducerea urmează răspunsul despre folosirea lui (vehicle.use): nu o fixați în șablon.',
 };
-function settled<T extends { deduction?: 'full' | 'none' | 'limited'; vehicle?: string }>({
-  deduction: fixed,
-  vehicle,
-  ...rest
-}: T) {
+function settled<
+  T extends { deduction?: 'full' | 'none' | 'limited' | 'prorata'; vehicle?: string },
+>({ deduction: fixed, vehicle, ...rest }: T) {
   return vehicle === undefined
     ? { ...rest, deduction: fixed ?? ('full' as const) }
     : { ...rest, vehicle };
@@ -128,10 +131,32 @@ export const recognitionMapping = z.union([
 ]);
 export type RecognitionMapping = z.infer<typeof recognitionMapping>;
 /** A part of a recognition mapping: its deduction, or the vehicle whose answer decides it. */
-type MappedPart = { deduction: 'full' | 'none' | 'limited' } | { vehicle: string };
+type MappedPart = { deduction: 'full' | 'none' | 'limited' | 'prorata' } | { vehicle: string };
+
+/** `receipts.recognize`: the expense account, its deduction or the vehicle whose answer decides
+ * it, and how the receipts are paid: by card, or from a cash desk (e.g. the fuel of one station).
+ * An employee's receipts are not templated: the person and the advance differ each time. */
+export const receiptMapping = z
+  .object({
+    account,
+    ...deducting,
+    payment: z.union([
+      z.object({ method: z.literal('card') }).strict(),
+      z.object({ method: z.literal('cash'), account: z.string().regex(/^531\d?$/) }).strict(),
+    ]),
+  })
+  .strict()
+  .refine(vehicleOrDeduction.check, { message: vehicleOrDeduction.message, path: ['deduction'] })
+  .transform(settled);
 
 /** The vehicles a mapping names, in their one spelling (`B123XFA`). */
 export function mappedVehicles(treatment: TemplateTreatment, mapping: unknown): string[] {
+  if (treatment === 'receipts.recognize') {
+    const parsed = receiptMapping.safeParse(mapping);
+    return parsed.success && 'vehicle' in parsed.data
+      ? [normalizePlate(parsed.data.vehicle as string)]
+      : [];
+  }
   if (treatment !== 'invoices.recognize') return [];
   const parsed = recognitionMapping.safeParse(mapping);
   if (!parsed.success) return [];
@@ -171,6 +196,7 @@ export const templateMappings = {
   'deferrals.defer': deferralMapping,
   'bank.settle': settlementMapping,
   'tax.pay': taxPaymentMapping,
+  'receipts.recognize': receiptMapping,
 } as const;
 
 /** A template as it is applied: its scope and its mapping, checked against its treatment. */
@@ -242,6 +268,13 @@ export function inScope(template: TemplateDefinition, subject: TemplateSubject):
     if (document.kind !== scope.documentKind) return false;
     if (scope.partyId && document.partyId !== scope.partyId) return false;
     if (!scope.linePattern) return true;
+    if (scope.treatment === 'receipts.recognize') {
+      const receipt = receiptDocumentSchema.safeParse(document.body);
+      return (
+        receipt.success &&
+        receipt.data.lines.some((line) => holds(line.description, scope.linePattern!))
+      );
+    }
     const body = invoiceDocumentSchema.safeParse(document.body);
     return (
       body.success && body.data.lines.some((line) => holds(line.description, scope.linePattern!))
@@ -306,6 +339,24 @@ export function applyTemplate(template: TemplateDefinition, subject: TemplateSub
         }));
       });
       const parsed = recognitionInput.safeParse({ documentId: document.id, allocations });
+      return parsed.success ? { ok: true, input: parsed.data } : { ok: false, reason: 'document' };
+    }
+    case 'receipts.recognize': {
+      const { document, vehicles } = subject as DocumentSubject;
+      const mapping = receiptMapping.parse(template.mapping);
+      // A vehicle's receipts deduct what the answer that holds about it allows.
+      let part: { deduction: 'full' | 'none' | 'limited' | 'prorata'; vehicle?: string };
+      if ('vehicle' in mapping) {
+        const allowed = vehicles?.[normalizePlate(mapping.vehicle as string)];
+        if (!allowed) return { ok: false, reason: 'vehicle' };
+        part = { vehicle: mapping.vehicle as string, deduction: allowed };
+      } else part = { deduction: mapping.deduction as 'full' | 'none' | 'limited' | 'prorata' };
+      const parsed = receiptRecognitionInput.safeParse({
+        documentId: document.id,
+        account: mapping.account,
+        ...part,
+        payment: mapping.payment,
+      });
       return parsed.success ? { ok: true, input: parsed.data } : { ok: false, reason: 'document' };
     }
     case 'deferrals.defer': {
@@ -391,6 +442,7 @@ const parsers: Record<TemplateTreatment, z.ZodType> = {
   'deferrals.defer': deferralInput,
   'bank.settle': settlementInput,
   'tax.pay': taxPaymentInput,
+  'receipts.recognize': receiptRecognitionInput,
 };
 
 /** What a mapping fixes of an input, compared without reading the document or movement. */
@@ -423,6 +475,25 @@ function fixedFields(treatment: TemplateTreatment, mapping: unknown, input: unkn
       }[];
       return (
         parts.length > 0 && parts.every((part) => fixed.shares.some((share) => same(part, share)))
+      );
+    }
+    case 'receipts.recognize': {
+      const fixed = receiptMapping.parse(mapping) as {
+        account: string;
+        deduction?: string;
+        vehicle?: string;
+        payment: { method: string; account?: string };
+      };
+      const payment = value.payment as { method: string; account?: string };
+      return (
+        value.allocations === undefined &&
+        value.account === fixed.account &&
+        payment.method === fixed.payment.method &&
+        payment.account === fixed.payment.account &&
+        (fixed.vehicle !== undefined
+          ? typeof value.vehicle === 'string' &&
+            normalizePlate(value.vehicle) === normalizePlate(fixed.vehicle)
+          : value.vehicle === undefined && value.deduction === fixed.deduction)
       );
     }
     case 'deferrals.defer': {

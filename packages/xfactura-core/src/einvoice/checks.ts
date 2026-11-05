@@ -47,6 +47,23 @@ export function checkInvoice(invoice: Invoice): Check[] {
       'buyer.vatId',
       'Taxarea inversă cere codurile de TVA ale ambelor părți.',
     );
+  // BR-E-10, BR-IC-10, BR-G-10: an exempt, intra-community or export breakdown states the
+  // exemption reason (BT-120) or its code (BT-121); art. 319 alin. (20) lit. l) of the Fiscal Code
+  // asks the invoice for the provision that exempts it.
+  for (const item of invoice.vatBreakdown)
+    if (['E', 'K', 'G'].includes(item.category) && !item.exemptionReason && !item.exemptionCode)
+      add(
+        'EXEMPTION_REASON',
+        'vatBreakdown',
+        `Categoria ${item.category} cere motivul scutirii (textul sau codul VATEX).`,
+      );
+  // BR-IC-02: an intra-community supply names the seller's and the buyer's VAT identifiers.
+  if (categories.has('K') && (!invoice.seller.vatId || !invoice.buyer.vatId))
+    add(
+      'INTRA_EU_IDS',
+      'buyer.vatId',
+      'Livrarea intracomunitară cere codurile de TVA ale vânzătorului și cumpărătorului.',
+    );
   if (invoice.typeCode === '381' && invoice.precedingInvoices.length === 0)
     add(
       'CREDIT_REFERENCE',

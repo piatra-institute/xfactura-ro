@@ -59,6 +59,12 @@ describe('D100 obligations, namespace and payment number', () => {
       ['604', '5503XXXXXX', 'Impozit pe veniturile din dividende distribuite PF'],
       ['150', '5503XXXXXX', 'Impozit pe dividende distribuite PJ'],
       ['605', '5503XXXXXX', 'Impozit pe veniturile din dobânzi'],
+      ['628', '5503XXXXXX', 'Impozit pe veniturile din cedarea folosinței bunurilor plătite de PJ'],
+      ['631', '5503XXXXXX', 'Impozit pe dividendele obținute din România de nerezidenți'],
+      ['632', '5503XXXXXX', 'Impozit pe dobânzile obținute din România de nerezidenți'],
+      ['633', '5503XXXXXX', 'Impozit pe redevențele obținute din România de nerezidenți'],
+      ['634', '5503XXXXXX', 'Impozit pe comisioanele obținute din România de nerezidenți'],
+      ['636', '5503XXXXXX', 'Impozit pe serviciile prestate de nerezidenți'],
     ]);
   });
 

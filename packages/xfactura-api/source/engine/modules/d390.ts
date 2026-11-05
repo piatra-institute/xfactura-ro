@@ -11,6 +11,7 @@ import {
 } from 'xfactura-core/ro/declarations/d390';
 import { counties, euVatPrefixes } from 'xfactura-core/ro/geo';
 import { crossBorderCodes } from 'xfactura-core/ro/treatments/cross-border';
+import { exemptCodes } from 'xfactura-core/ro/exempt';
 import type { RuleContext } from 'xfactura-core/rules';
 import { monthEnd, type LocalDate, type Month } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
@@ -33,10 +34,12 @@ export const d390Options = z
   })
   .strict();
 
-/** The books' intra-Community services and their D390 types: P supplied, S acquired. */
+/** The books' intra-Community operations and their D390 types: P services supplied, S
+ * acquired, L goods supplied exempt (art. 294 alin. (2) lit. a), art. 325 alin. (1) lit. a)). */
 const typeByCode: Record<string, D390Operation['type']> = {
   [crossBorderCodes.sale.eu]: 'P',
   [crossBorderCodes.purchase.eu]: 'S',
+  [exemptCodes.intraCommunity]: 'L',
 };
 
 /** The month's entries: D390 is monthly even when the VAT period is a quarter. */

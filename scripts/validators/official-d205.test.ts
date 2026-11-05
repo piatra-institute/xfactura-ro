@@ -94,6 +94,17 @@ const declarations: Record<string, D205> = {
       interest: [{ date: '2026-09-30', gross: 1200, tax: 120 }],
     },
   ]),
+  // Rent paid by the company to a landlord (tip 29): the net income (the gross less 20%) and
+  // 10% of it, beside the same person's dividends.
+  rent: declaration([
+    {
+      ...shareholder,
+      rent: [
+        { date: '2026-04-05', base: 2000, tax: 200 },
+        { date: '2026-05-05', base: 988, tax: 99 },
+      ],
+    },
+  ]),
 };
 
 describe('official D205 validation', () => {
@@ -109,6 +120,17 @@ describe('official D205 validation', () => {
       expect(checkD205(declarations.rectifying!)).toEqual([]);
       expect(checkD205(declarations['year-end']!)).toEqual([]);
       expect(checkD205(declarations.interest!)).toEqual([]);
+      expect(checkD205(declarations.rent!)).toEqual([]);
+      expect(
+        calculateD205(declarations.rent!).records.map((record) => [
+          record.incomeType,
+          record.base,
+          record.tax,
+        ]),
+      ).toEqual([
+        ['08', 30_000n, 4800n],
+        ['29', 2988n, 299n],
+      ]);
       expect(
         calculateD205(declarations.interest!).summaries.map((summary) => [
           summary.incomeType,

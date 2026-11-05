@@ -64,6 +64,22 @@ export const chartAmendments: readonly {
       },
     ],
   },
+  {
+    // Interim dividends (OMFP nr. 3.067/2018, MO nr. 792 of 17.09.2018): distributed during the
+    // year as 463 = 456, regularized against the annual dividends as 457 = 463.
+    clause: 'OMFP3067/2018:pct.423^1-423^2',
+    validFrom: '2018-09-17',
+    accounts: [
+      {
+        code: '463',
+        name: 'Creanțe reprezentând dividende repartizate în cursul exercițiului financiar',
+        balance: 'debit',
+        parentCode: '46',
+        postable: true,
+        book: 'general',
+      },
+    ],
+  },
 ];
 
 /**
@@ -130,9 +146,13 @@ const controls: Record<string, ControlKind> = {
   // Associates' current accounts and interest on them: per associate, normally owed to them.
   '4551': 'payable',
   '4558': 'payable',
+  // The associates' capital settlements (456), interim dividends owed to them included, and the
+  // interim dividends distributed during the year (463, OMFP nr. 3.067/2018): per associate.
+  '456': 'payable',
   '457': 'payable',
   '461': 'receivable',
   '462': 'payable',
+  '463': 'receivable',
   '471': 'deferral.expense',
   '472': 'deferral.revenue',
   // Treasury advances: per person, owed back until their expense report settles them.

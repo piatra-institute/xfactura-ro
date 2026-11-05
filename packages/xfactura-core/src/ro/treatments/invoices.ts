@@ -37,6 +37,17 @@ import {
   type CashVatParty,
 } from '../cash-vat';
 import { normalizePlate, questionIssue } from '../../questions/kinds';
+import {
+  exemptCodes,
+  exemptionBases,
+  exemptionBasisIds,
+  isExemptCategory,
+  prorataShare,
+  provisionalProrata,
+  reasonAgrees,
+  type ExemptionBasisId,
+} from '../exempt';
+import { euVatPrefixes } from '../geo';
 import { RuleGapError, type RuleContext } from '../../rules';
 import { isLocalDate, type LocalDate } from '../../time';
 import { invoiceDocumentSchema, type InvoiceDocument } from '../../ubl/invoice-document';
@@ -318,14 +329,19 @@ export const recognitionInput = z
      * 21x) for a purchase. */
     account: z.string().regex(accountCodePattern).optional(),
     /** Input VAT deduction for a purchase booked on one account; ignored for a sale. `limited`
-     * deducts the register's share for vehicles not used only for the business (art. 298). */
-    deduction: z.enum(['full', 'none', 'limited']).default('full'),
+     * deducts the register's share for vehicles not used only for the business (art. 298);
+     * `prorata`, of a company with mixed operations, the provisional pro-rata of a purchase for
+     * both kinds of operations (art. 300 alin. (5), (11)); `full` and `none` are then the
+     * purchases destined only to operations with, or without, the right of deduction (alin. (3),
+     * (4)). */
+    deduction: z.enum(['full', 'none', 'limited', 'prorata']).default('full'),
     /** The road vehicle a purchase booked on one account concerns (its registration): what it
      * deducts follows the person's answer about the vehicle's use (`vehicle.use`, art. 298). */
     vehicle: registration.optional(),
     /**
      * Instead of `account`: each VAT category's taxable amount (BT-116) split over accounts, in
-     * the document's currency. A category is `S-<rate>` or `O`, and its parts add up to its
+     * the document's currency. A category is `S-<rate>`, `O`, or an exempt one (`E`, `K`, `G`),
+     * and its parts add up to its
      * amount; allowances and charges are inside it. An advance invoice puts its part on 419
      * (4091, 4092 for a purchase); the final invoice's negative line deducting it goes there too,
      * naming the advance it settles.
@@ -335,10 +351,10 @@ export const recognitionInput = z
         z
           .object({
             account: z.string().regex(accountCodePattern),
-            vat: z.string().regex(/^(S-\d{1,2}(\.\d{1,2})?|O)$/),
+            vat: z.string().regex(/^(S-\d{1,2}(\.\d{1,2})?|O|E|K|G)$/),
             amount: z.string().regex(amountPattern),
             /** Input VAT deduction of this part, for a purchase. */
-            deduction: z.enum(['full', 'none', 'limited']).default('full'),
+            deduction: z.enum(['full', 'none', 'limited', 'prorata']).default('full'),
             /** The road vehicle this part of a purchase concerns (its registration). */
             vehicle: registration.optional(),
             /** The advance (its open item) a negative part on 419, 4091 or 4092 settles. */
@@ -374,6 +390,14 @@ export const recognitionInput = z
     /** A sale to a customer affiliated with the company (Codul fiscal art. 7 pct. 26) when the
      * invoice is issued: VAT on collection does not apply to it (art. 282 alin. (6) lit. d)). */
     affiliated: z.boolean().optional(),
+    /** The legal basis of a sale's exempt category (E, K, G): it decides the right of deduction
+     * and the D300 row (art. 292 rd. 15; art. 294–296 and 297 alin. (4) lit. d) rd. 14; an
+     * intra-community supply rd. 1). The invoice's exemption reason (BT-120, BT-121) must agree. */
+    exemption: z.enum(exemptionBasisIds).optional(),
+    /** A rent or a supply of immovable property taxed by option (art. 292 alin. (3); norme pct. 57
+     * alin. (3), pct. 58 alin. (3)): the notification filed with the tax authority, for a sale
+     * invoiced with VAT. */
+    optionEvidenceId: z.uuid().optional(),
   })
   .strict()
   .refine((input) => (input.account === undefined) !== (input.allocations === undefined), {
@@ -416,6 +440,8 @@ function vatCategories(invoice: Invoice, loaded: Loaded, rules: RuleContext, tax
     rate: tax.rate,
     base: tax.base,
     tax: tax.tax,
+    /** The exemption reason the supplier gave (BT-121, else BT-120). */
+    reason: tax.exemptionReason,
   }));
   const keys = new Set(categories.map((item) => item.key));
   if (
@@ -459,14 +485,32 @@ function vatCategories(invoice: Invoice, loaded: Loaded, rules: RuleContext, tax
               ),
         );
       }
+    } else if (isExemptCategory(tax.category)) {
+      // Exempt (E), intra-community (K) and export (G) categories carry no VAT (BR-E-08,
+      // BR-IC-08, BR-G-08). A purchase in K is an intra-community acquisition of goods, which
+      // the buyer self-assesses (art. 307 alin. (1); D300 rd. 5 and 20): not covered yet.
+      if (ron(tax.tax) !== 0n)
+        issues.push(
+          block('TAX_CATEGORY', `Categoria TVA ${tax.category} nu are TVA: factura înscrie TVA.`),
+        );
+      if (invoice.direction === 'purchase' && tax.category === 'K')
+        issues.push(
+          block(
+            'INTRA_EU_GOODS',
+            'Factura cu categoria K este o achiziție intracomunitară de bunuri: TVA se autolichidează de cumpărător (art. 307 alin. (1) din Codul fiscal; D300 rd. 5 și 20, D390 tip A), ceea ce nu este încă acoperit.',
+          ),
+        );
     } else if (tax.category !== 'O' || ron(tax.tax) !== 0n)
       issues.push(
         block('TAX_CATEGORY', `Categoria TVA ${tax.category} cere un tratament separat.`),
       );
     if (invoice.direction === 'sale') {
-      if (status === 'normal_vat' && tax.category !== 'S')
+      if (status === 'normal_vat' && tax.category !== 'S' && !isExemptCategory(tax.category))
         issues.push(
-          block('TAX_CATEGORY', 'Un plătitor de TVA facturează această operațiune cu TVA.'),
+          block(
+            'TAX_CATEGORY',
+            'Un plătitor de TVA facturează această operațiune cu TVA, sau ca scutită (E, K, G) cu temeiul scutirii.',
+          ),
         );
       if (status === 'non_vat' && tax.category !== 'O')
         issues.push(block('TAX_CATEGORY', 'Un neplătitor de TVA nu colectează TVA.'));
@@ -508,6 +552,7 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
     return {
       documents: [input.documentId],
       profile: true,
+      ...(input.optionEvidenceId ? { evidence: [input.optionEvidenceId] } : {}),
       ...(advances.length || leases.length
         ? {
             openItems: [
@@ -573,7 +618,7 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
       account: string;
       vat: string;
       amount: string;
-      deduction: 'full' | 'none' | 'limited';
+      deduction: 'full' | 'none' | 'limited' | 'prorata';
       vehicle?: string;
       advance?: string;
       lease?: string;
@@ -830,6 +875,10 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
     issues.push(...vehicles.issues);
     const cash = cashVatOf(input, invoice, loaded, vat.status, supplier, isAdvance);
     issues.push(...cash.issues);
+    const exemption = exemptionIssues(input, invoice, vat.categories, loaded);
+    issues.push(...exemption.issues);
+    const prorata = prorataOf(input, invoice, parts, vat.categories, loaded, taxPoint, cash.party);
+    issues.push(...prorata.issues);
     if (input.serviceDate && input.serviceDate.slice(0, 7) !== taxPoint.slice(0, 7))
       issues.push(
         warn(
@@ -923,7 +972,9 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
         ? 0n
         : part.deduction === 'full'
           ? amount
-          : divRound(amount * limited, 1_000_000n, 'halfAwayFromZero');
+          : part.deduction === 'prorata'
+            ? prorataShare(amount, prorata.percent!)
+            : divRound(amount * limited, 1_000_000n, 'halfAwayFromZero');
     const deducted = parts.map((part, p) => portion(partTax[p]!, part));
     const deductedMinor = parts.map((part, p) => portion(partTaxMinor[p]!, part));
     if (direction === 'sale')
@@ -1014,7 +1065,9 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
       );
     });
     categories.forEach((category, c) => {
-      if (categoryTax[c] === 0n) return;
+      // An exempt category is declared by its base (D300 rd. 1, 14, 15, 29), without VAT.
+      const exempt = isExemptCategory(category.category);
+      if (categoryTax[c] === 0n && !exempt) return;
       const members = parts.flatMap((part, p) => (part.vat === category.key ? [p] : []));
       const deductedTax = members.reduce((sum, p) => sum + deducted[p]!, 0n);
       const deductedTaxMinor = members.reduce((sum, p) => sum + deductedMinor[p]!, 0n);
@@ -1057,20 +1110,41 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
               }
             : {}),
         },
-        category.category === 'S' ? `S-${category.rate}` : 'O',
+        exempt
+          ? direction === 'sale'
+            ? exemption.code!
+            : exemptCodes.purchase
+          : category.category === 'S'
+            ? `S-${category.rate}`
+            : 'O',
       );
+      // A purchase part for both kinds of operations: the VAT the year-end adjustment takes to
+      // the definitive pro-rata (art. 300 alin. (14)), and what the provisional deducted of it.
+      const mixed = members.filter((p) => parts[p]!.deduction === 'prorata');
       taxEntries.push({
         ...entry,
         key: categories.length === 1 ? 'vat' : `vat:${category.key}`,
-        ...(cash.party
-          ? {
-              attributes: {
-                ...entry.attributes,
-                cashVat: cash.party,
-                invoice: invoice.record.id,
-              },
-            }
-          : {}),
+        attributes: {
+          ...entry.attributes,
+          ...(exempt
+            ? {
+                category: category.category,
+                ...(direction === 'sale' ? { exemption: input.exemption! } : {}),
+                ...(category.reason ? { reason: category.reason } : {}),
+              }
+            : {}),
+          ...(mixed.length && direction === 'purchase'
+            ? {
+                prorata: String(prorata.percent),
+                prorataTax: String(mixed.reduce((sum, p) => sum + partTax[p]!, 0n)),
+                prorataDeducted: String(mixed.reduce((sum, p) => sum + deducted[p]!, 0n)),
+              }
+            : {}),
+          ...(input.optionEvidenceId && direction === 'sale' && category.category === 'S'
+            ? { option: 'art.292(3)' }
+            : {}),
+          ...(cash.party && !exempt ? { cashVat: cash.party, invoice: invoice.record.id } : {}),
+        },
       });
     });
     if (direction === 'purchase')
@@ -1103,6 +1177,24 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
             ? { category: categories[0]!.category, rate: categories[0]!.rate }
             : { categories: categories.map((category) => category.key) }),
           deduction: direction === 'purchase' && !input.allocations ? input.deduction : null,
+          ...(input.exemption
+            ? {
+                exemption: {
+                  basis: input.exemption,
+                  label: exemptionBases[input.exemption].label,
+                  code: exemption.code ?? null,
+                  clause: exemptionBases[input.exemption].clause,
+                },
+              }
+            : {}),
+          ...(prorata.percent !== undefined
+            ? { prorata: { percent: prorata.percent, clauses: [EXEMPT_CLAUSES.provisional] } }
+            : {}),
+          ...(input.optionEvidenceId
+            ? {
+                option: { evidenceId: input.optionEvidenceId, clause: EXEMPT_CLAUSES.option },
+              }
+            : {}),
           ...(vehicles.decided.length
             ? { vehicles: vehicles.decided, vehicleClauses: VEHICLE_CLAUSES }
             : {}),
@@ -1280,6 +1372,252 @@ function vehicleIssues(
   return { issues, decided };
 }
 
+/** The registered clauses of exempt operations and the pro-rata. */
+const EXEMPT_CLAUSES = {
+  reason: 'ANAF/Cod-fiscal-consolidat:art.319(20)(l)',
+  option: 'ANAF/Cod-fiscal-consolidat:norme.art.292.pct.57-59',
+  prorata: 'ANAF/Cod-fiscal-consolidat:art.300(1)-(7)',
+  provisional: 'ANAF/Cod-fiscal-consolidat:art.300(8)-(14)',
+};
+
+/**
+ * A sale's exempt category and its legal basis (Codul fiscal art. 292, 294–296, 297 alin. (4)):
+ * the basis is stated, allows the category, and the invoice's exemption reason agrees with it
+ * (its VATEX code, BT-121); a reason given only as text is confirmed by the reviewer, as is an
+ * exemption the books cannot prove by themselves (an export, an intra-community supply). An
+ * intra-community supply needs the customer's VAT code of another member state (art. 294 alin.
+ * (2) lit. a)). A purchase carries its supplier's reason through and names no basis.
+ */
+function exemptionIssues(
+  input: RecognitionInput,
+  invoice: Invoice,
+  categories: readonly { key: string; category: string; reason: string | null }[],
+  loaded: Loaded,
+): { issues: Issue[]; code?: string } {
+  const issues: Issue[] = [];
+  const exempt = categories.filter((item) => isExemptCategory(item.category));
+  if (invoice.direction === 'purchase') {
+    if (input.exemption)
+      issues.push(
+        block(
+          'EXEMPTION',
+          'Temeiul scutirii se indică pentru o vânzare; o achiziție scutită păstrează motivul scutirii înscris de furnizor.',
+          'exemption',
+        ),
+      );
+    if (input.optionEvidenceId)
+      issues.push(
+        block(
+          'OPTION',
+          'Notificarea opțiunii de taxare se indică pentru o vânzare.',
+          'optionEvidenceId',
+        ),
+      );
+    return { issues };
+  }
+  if (input.optionEvidenceId) {
+    if (!loaded.evidence.has(input.optionEvidenceId))
+      issues.push(
+        block(
+          'EVIDENCE',
+          'Notificarea opțiunii de taxare nu este disponibilă.',
+          'optionEvidenceId',
+        ),
+      );
+    if (!categories.some((item) => item.category === 'S'))
+      issues.push(
+        block(
+          'OPTION',
+          'Opțiunea de taxare (art. 292 alin. (3) din Codul fiscal) se aplică unei facturi cu TVA (categoria S); fără ea, închirierea sau livrarea bunului imobil este scutită (E).',
+          'optionEvidenceId',
+        ),
+      );
+  }
+  if (!exempt.length) {
+    if (input.exemption)
+      issues.push(block('EXEMPTION', 'Factura nu are o categorie scutită (E, K, G).', 'exemption'));
+    return { issues };
+  }
+  if (exempt.length > 1)
+    issues.push(
+      block(
+        'EXEMPTION',
+        `Factura are mai multe categorii scutite (${exempt.map((item) => item.key).join(', ')}): fiecare temei de scutire se facturează separat.`,
+        'exemption',
+      ),
+    );
+  if (!input.exemption) {
+    issues.push(
+      block(
+        'EXEMPTION_BASIS',
+        `Indicați temeiul scutirii (exemption): ${exemptionBasisIds.map((id) => `${id}, ${exemptionBases[id].label}`).join('; ')}. Temeiul decide dreptul de deducere (art. 297 alin. (4) din Codul fiscal) și rândul decontului.`,
+        'exemption',
+      ),
+    );
+    return { issues };
+  }
+  const id: ExemptionBasisId = input.exemption;
+  const basis = exemptionBases[id];
+  for (const item of exempt) {
+    if (!(basis.categories as readonly string[]).includes(item.category))
+      issues.push(
+        block(
+          'EXEMPTION_CATEGORY',
+          `Temeiul ${id} se facturează cu categoria ${basis.categories.join(' sau ')}, nu ${item.category}.`,
+          'exemption',
+        ),
+      );
+    const agrees = reasonAgrees(id, item.reason);
+    if (agrees === 'missing')
+      issues.push(
+        block(
+          'EXEMPTION_REASON',
+          'Factura nu înscrie motivul scutirii (BT-120 sau codul VATEX, BT-121): factura pentru o operațiune scutită cuprinde temeiul legal al scutirii (art. 319 alin. (20) lit. l) din Codul fiscal). Corectați factura.',
+        ),
+      );
+    else if (agrees === 'contradicts' || agrees === 'other')
+      issues.push({
+        ...block(
+          'EXEMPTION_REASON',
+          `Codul motivului scutirii din factură (${item.reason}) nu corespunde temeiului ${id} (${basis.label}).`,
+          'exemption',
+        ),
+        details: { reason: item.reason, basis: id, clause: basis.clause },
+      });
+    else if (agrees === 'text')
+      issues.push({
+        ...warn(
+          'EXEMPTION_TEXT',
+          `Factura înscrie motivul scutirii ca text („${item.reason}”), nu ca cod VATEX: confirmați că el arată temeiul ${id} (${basis.label}).`,
+        ),
+        details: { reason: item.reason, basis: id, clause: basis.clause },
+      });
+  }
+  const proof: string | undefined = 'proof' in basis ? basis.proof : undefined;
+  if (proof)
+    issues.push({
+      ...warn('EXEMPTION_PROOF', `${proof} Confirmați că documentele există.`),
+      details: { basis: id, clause: basis.clause },
+    });
+  const customer = invoice.body.customer;
+  if (id === 'art.294(2)(a)') {
+    const prefix = euVatPrefixes[customer.country];
+    const code = customer.taxId.toUpperCase().replace(/\s+/g, '');
+    if (!prefix || customer.country === 'RO' || !code.startsWith(prefix))
+      issues.push(
+        block(
+          'EXEMPTION_CUSTOMER',
+          `Livrarea intracomunitară este scutită doar către o persoană care îi comunică furnizorului un cod de TVA atribuit de alt stat membru (art. 294 alin. (2) lit. a) din Codul fiscal); clientul ${customer.name} are ${code || 'niciun cod'} (${customer.country}).`,
+        ),
+      );
+  }
+  if (id === 'art.297(4)(d)' && (customer.country === 'RO' || euVatPrefixes[customer.country]))
+    issues.push({
+      ...warn(
+        'EXEMPTION_PROOF',
+        `Clientul ${customer.name} este stabilit în Uniunea Europeană (${customer.country}): dreptul de deducere al art. 297 alin. (4) lit. d) din Codul fiscal se păstrează doar dacă operațiunea este în legătură directă cu bunuri exportate. Confirmați.`,
+      ),
+      details: { basis: id, clause: basis.clause },
+    });
+  return { issues, code: basis.code };
+}
+
+/**
+ * The provisional pro-rata a purchase part for both kinds of operations deducts (`prorata`,
+ * Codul fiscal art. 300 alin. (5), (11)): the company's `vat.prorata` fact of the tax point's
+ * year, asked when none is recorded. A special pro-rata and the option of alin. (20) are not
+ * computed; nor is a pro-rata under VAT on collection (norme pct. 79 alin. (18)–(20)). A
+ * company with a recorded pro-rata confirms each purchase allocated directly (alin. (3)–(4)).
+ */
+function prorataOf(
+  input: RecognitionInput,
+  invoice: Invoice,
+  parts: readonly { vat: string; deduction: string }[],
+  categories: readonly { key: string; category: string }[],
+  loaded: Loaded,
+  taxPoint: LocalDate,
+  cashParty: CashVatParty | undefined,
+): { issues: Issue[]; percent?: number } {
+  const issues: Issue[] = [];
+  const path = input.allocations ? 'allocations' : 'deduction';
+  const taxed = (part: { vat: string }) =>
+    categories.find((item) => item.key === part.vat)?.category === 'S';
+  const wanted = parts.some((part) => part.deduction === 'prorata');
+  if (invoice.direction === 'sale') return { issues };
+  const provisional = provisionalProrata(loaded.profile, taxPoint);
+  if (!wanted) {
+    // A mixed company: a purchase allocated directly is confirmed by the reviewer.
+    if (
+      provisional.found &&
+      provisional.fact.kind === 'percent' &&
+      parts.some((part) => taxed(part) && part.deduction !== 'prorata')
+    )
+      issues.push({
+        ...warn(
+          'PRORATA_DIRECT',
+          `Compania aplică pro rata (${provisional.fact.percent}% pentru ${taxPoint.slice(0, 4)}): o achiziție dedusă integral este destinată exclusiv operațiunilor cu drept de deducere (art. 300 alin. (3) din Codul fiscal), una nededusă exclusiv celor fără drept de deducere (alin. (4)). Confirmați destinația sau înregistrați-o cu deduction: prorata.`,
+        ),
+        details: { percent: provisional.fact.percent, clauses: [EXEMPT_CLAUSES.prorata] },
+      });
+    return { issues };
+  }
+  if (!provisional.found) {
+    issues.push(
+      questionIssue(
+        'PRORATA_MISSING',
+        provisional.reason === 'earlier_year'
+          ? `Pro rata provizorie se comunică pentru fiecare an (art. 300 alin. (9) din Codul fiscal): cea înregistrată este din ${provisional.from}. Înregistrați pro rata provizorie a anului ${taxPoint.slice(0, 4)} (vat.prorata).`
+          : `Achiziția este destinată ambelor feluri de operațiuni: TVA se deduce pe bază de pro rata (art. 300 alin. (5) din Codul fiscal). Înregistrați pro rata provizorie a anului (vat.prorata), cu comunicarea ei către organul fiscal.`,
+        {
+          kind: 'profile.fact',
+          subject: { kind: 'profile', id: `vat.prorata/${taxPoint.slice(0, 4)}` },
+          params: { axis: 'vat.prorata', from: `${taxPoint.slice(0, 4)}-01-01` },
+        },
+        'block',
+        path,
+      ),
+    );
+    return { issues };
+  }
+  if (provisional.fact.kind === 'special')
+    issues.push(
+      block(
+        'PRORATA_SPECIAL',
+        'Pro rata specială aprobată sau impusă de Ministerul Finanțelor (art. 300 alin. (16)–(18) din Codul fiscal), pe sectoare de activitate sau pe operațiunile din decizie, nu este încă acoperită.',
+        path,
+      ),
+    );
+  if (provisional.fact.kind === 'opted_out')
+    issues.push(
+      block(
+        'PRORATA_OPTED_OUT',
+        'Compania a optat să nu deducă TVA aferentă achizițiilor destinate ambelor feluri de operațiuni (art. 300 alin. (20) din Codul fiscal): înregistrați achiziția cu deduction: none.',
+        path,
+      ),
+    );
+  if (cashParty !== undefined)
+    issues.push(
+      block(
+        'PRORATA_CASH_VAT',
+        'Deducerea pe bază de pro rata a unei achiziții în sistemul TVA la încasare (norme pct. 79 alin. (18)–(20)) nu este încă acoperită.',
+        path,
+      ),
+    );
+  parts.forEach((part, index) => {
+    if (part.deduction === 'prorata' && !taxed(part))
+      issues.push(
+        block(
+          'PRORATA',
+          `Partea ${part.vat} nu are TVA de dedus pe bază de pro rata.`,
+          input.allocations ? `allocations.${index}.deduction` : 'deduction',
+        ),
+      );
+  });
+  return provisional.fact.kind === 'percent'
+    ? { issues, percent: provisional.fact.percent }
+    : { issues };
+}
+
 /**
  * Whether an invoice falls under VAT on collection, and what to tell the reviewer about it. The
  * company's own system is read on the earlier of the issue date and the tax point: an invoice
@@ -1321,7 +1659,10 @@ function cashVatOf(
           'affiliated',
         ),
       );
-    party = own && !input.affiliated ? 'own' : undefined;
+    // Exempt supplies stay under the general rules (art. 282 alin. (6) lit. b)): an invoice
+    // without taxed lines is not under the system.
+    const taxed = body.taxes.some((tax) => tax.category === 'S');
+    party = own && !input.affiliated && taxed ? 'own' : undefined;
     if (party && !mention)
       issues.push(
         warn(
@@ -1386,7 +1727,9 @@ export const creditInput = z
     originalDocumentId: z.uuid(),
     /** The revenue or expense account the original invoice used, for every line. */
     account: z.string().regex(accountCodePattern).optional(),
-    deduction: z.enum(['full', 'none', 'limited']).default('full'),
+    /** The original's deduction; `prorata` at the provisional pro-rata of the credit note's tax
+     * point, in the original's year. */
+    deduction: z.enum(['full', 'none', 'limited', 'prorata']).default('full'),
     /** Instead of `account`: each VAT category of the credit note split over the accounts the
      * original used, as positive amounts in lei, each part with the original's deduction. */
     allocations: z
@@ -1394,9 +1737,9 @@ export const creditInput = z
         z
           .object({
             account: z.string().regex(accountCodePattern),
-            vat: z.string().regex(/^(S-\d{1,2}(\.\d{1,2})?|O)$/),
+            vat: z.string().regex(/^(S-\d{1,2}(\.\d{1,2})?|O|E|K|G)$/),
             amount: z.string().regex(/^(0|[1-9]\d{0,15})(\.\d{1,2})?$/),
-            deduction: z.enum(['full', 'none', 'limited']).default('full'),
+            deduction: z.enum(['full', 'none', 'limited', 'prorata']).default('full'),
           })
           .strict(),
       )
@@ -1566,12 +1909,50 @@ export const creditRecognition: Treatment<CreditInput> = {
             4,
           )
         : 0n;
+    // A credit note on a purchase for both kinds of operations reverses its deduction at the
+    // provisional pro-rata of its own tax point, in the original's year; across years the
+    // definitive pro-rata of the original's year would apply, which is not covered.
+    let percent = 0;
+    if (purchase && parts.some((part) => part.deduction === 'prorata')) {
+      const provisional = provisionalProrata(loaded.profile, taxPoint);
+      if (taxPoint.slice(0, 4) !== originalTaxPoint.slice(0, 4))
+        return {
+          effect: null,
+          issues: [
+            block(
+              'PRORATA_CREDIT_YEAR',
+              `Nota de credit (${taxPoint}) ajustează o achiziție din ${originalTaxPoint.slice(0, 4)} dedusă pe bază de pro rata: regularizarea cu pro rata definitivă a acelui an nu este încă acoperită.`,
+            ),
+          ],
+        };
+      if (!provisional.found || provisional.fact.kind !== 'percent')
+        return {
+          effect: null,
+          issues: [
+            block(
+              'PRORATA_MISSING',
+              'Pro rata provizorie a anului nu este înregistrată (vat.prorata) sau nu este un procent.',
+            ),
+          ],
+        };
+      percent = provisional.fact.percent;
+    }
     const deducted = parts.map((part, p) =>
       !purchase || part.deduction === 'none'
         ? 0n
         : part.deduction === 'full'
           ? partTax[p]!
-          : divRound(partTax[p]! * limited, 1_000_000n, 'halfAwayFromZero'),
+          : part.deduction === 'prorata'
+            ? prorataShare(partTax[p]!, percent)
+            : divRound(partTax[p]! * limited, 1_000_000n, 'halfAwayFromZero'),
+    );
+    // The original's own tax entries, by key: an exempt category's code (its basis) is the
+    // original's.
+    const originalEntries = new Map(
+      [...loaded.entries.values()]
+        .flatMap((entry) => entry.taxEntries)
+        .filter((entry) => entry.documentId === original.record.id)
+        .map((entry) => [entry.key, entry]),
     );
     // Red storno: the original sides with negative amounts, so turnover stays correct.
     const lines: LineSpec[] = [];
@@ -1593,12 +1974,35 @@ export const creditRecognition: Treatment<CreditInput> = {
     );
     const cashVat: { code: string; deferred: string; chargeable: string }[] = [];
     for (const category of categories) {
-      if (category.tax === 0n) continue;
+      const exempt = isExemptCategory(category.category);
+      if (category.tax === 0n && !exempt) continue;
       const members = parts.flatMap((part, p) => (part.vat === category.key ? [p] : []));
       const deductedTax = members.reduce((sum, p) => sum + deducted[p]!, 0n);
       const ledger = purchase ? deductedTax : category.tax;
       const originKey = originalKeys.length === 1 ? 'vat' : `vat:${category.key}`;
-      const code = category.category === 'S' ? `S-${category.rate}` : 'O';
+      const originCode = originalEntries.get(originKey)?.code;
+      if (exempt && !originCode)
+        return {
+          effect: null,
+          issues: [
+            ...issues,
+            block(
+              'ORIGINAL_TAX_ENTRY',
+              `Factura inițială nu are înregistrarea categoriei scutite ${category.key}.`,
+              'originalDocumentId',
+            ),
+          ],
+        };
+      const code = exempt ? originCode! : category.category === 'S' ? `S-${category.rate}` : 'O';
+      const mixed = members.filter((p) => parts[p]!.deduction === 'prorata');
+      const mixedAttributes: Record<string, string> =
+        purchase && mixed.length
+          ? {
+              prorata: String(percent),
+              prorataTax: String(-mixed.reduce((sum, p) => sum + partTax[p]!, 0n)),
+              prorataDeducted: String(-mixed.reduce((sum, p) => sum + deducted[p]!, 0n)),
+            }
+          : {};
       const key = categories.length === 1 ? 'vat' : `vat:${category.key}`;
       // Booked on `account` with the reduction `amounts` (positive), as a red storno.
       const book = (
@@ -1608,23 +2012,29 @@ export const creditRecognition: Treatment<CreditInput> = {
       ): TaxEntrySpec => {
         if (amounts.ledger !== 0n)
           lines.push({ account, side: purchase ? 'D' : 'C', bani: -amounts.ledger });
+        const entry = vatEntry(
+          credit,
+          {
+            baseBani: -amounts.base,
+            taxBani: -amounts.tax,
+            deductibleBani: -amounts.deductible,
+            ledgerBani: -amounts.ledger,
+            taxPoint,
+            taxPeriod,
+            ...(amounts.ledger !== 0n ? { line: lines.length - 1 } : {}),
+            originTaxEntry: `${original.record.id}:${originKey}`,
+            ...extra,
+          },
+          code,
+        );
         return {
-          ...vatEntry(
-            credit,
-            {
-              baseBani: -amounts.base,
-              taxBani: -amounts.tax,
-              deductibleBani: -amounts.deductible,
-              ledgerBani: -amounts.ledger,
-              taxPoint,
-              taxPeriod,
-              ...(amounts.ledger !== 0n ? { line: lines.length - 1 } : {}),
-              originTaxEntry: `${original.record.id}:${originKey}`,
-              ...extra,
-            },
-            code,
-          ),
+          ...entry,
           key,
+          attributes: {
+            ...entry.attributes,
+            ...mixedAttributes,
+            ...(exempt ? { category: category.category } : {}),
+          },
         };
       };
       const reduction = {

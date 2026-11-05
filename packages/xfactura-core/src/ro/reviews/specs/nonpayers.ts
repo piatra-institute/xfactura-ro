@@ -488,6 +488,6 @@ export const capitalGoodsSpec: ReviewSpec = {
     ),
   ],
   gaps: [
-    'Activele de dinainte de 2016 (art. 306) și ajustarea stocurilor, a serviciilor neutilizate și a avansurilor (art. 304) nu sunt calculate: vat.capitalGoods le refuză.',
+    'Activele mobile de dinainte de 2016 nu se mai ajustează când perioada lor s-a încheiat sau sunt amortizate complet; ajustarea proporțională cu valoarea rămasă (art. 306) și clădirile de dinainte de aderare (art. 332) nu sunt calculate: vat.capitalGoods le refuză. Stocurile, serviciile neutilizate și avansurile (art. 304) au propriul parametru (ro.vat.stock_adjustment).',
   ],
 };

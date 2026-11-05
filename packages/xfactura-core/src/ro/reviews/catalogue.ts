@@ -324,11 +324,54 @@ export const keyAnnotations: Readonly<Record<string, KeyAnnotation>> = {
     reach: {
       estimate: 1,
       profiles: ['RO-SRV-02', 'RO-SRV-05'],
-      basis: 'A company with fixed assets entering or leaving the normal VAT regime.',
+      basis:
+        'A company with fixed assets entering or leaving the normal VAT regime, or whose asset changes use (part of a building leased exempt), is sold or ceases to exist.',
     },
     risk: {
       kind: 'tax_amount',
-      basis: 'The VAT adjusted on the capital goods in the first or the last return.',
+      basis: 'The VAT adjusted on the capital goods, once or each year of the adjustment period.',
+    },
+    obligations: ['D300', 'D406'],
+  },
+  // Exempt supplies and the pro-rata (V2): a company with exempt rent, financial or medical
+  // supplies beside its taxable ones.
+  'ro.vat.prorata': {
+    reach: {
+      estimate: 2,
+      profiles: ['RO-SRV-02'],
+      basis:
+        'A VAT payer with supplies exempt without the right of deduction (rent of property, financial, medical, education) beside taxable ones: its overheads deduct by the pro-rata, adjusted each December.',
+    },
+    risk: {
+      kind: 'tax_amount',
+      basis:
+        'The year-end adjustment of the VAT deducted on every purchase for both kinds of operations.',
+    },
+    obligations: ['D300', 'D406'],
+  },
+  'ro.vat.stock_adjustment': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-SRV-02'],
+      basis:
+        'A company entering or leaving the normal VAT regime with stock, assets in progress, unused intangibles or open advances.',
+    },
+    risk: {
+      kind: 'tax_amount',
+      basis: 'The VAT adjusted on them in the first or the last return.',
+    },
+    obligations: ['D300', 'D406'],
+  },
+  'ro.vat.capital_goods.minimum': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-SRV-02', 'RO-SRV-05'],
+      basis:
+        'Small adjustments of capital goods: each year a good is used otherwise than deducted.',
+    },
+    risk: {
+      kind: 'tax_amount',
+      basis: 'Whether an adjustment under 1.000 lei is made at all.',
     },
     obligations: ['D300'],
   },
@@ -410,6 +453,102 @@ export const keyAnnotations: Readonly<Record<string, KeyAnnotation>> = {
     },
     obligations: ['D406.assets'],
   },
+  'ro.vat.simplified_invoice.limit_eur': {
+    reach: {
+      estimate: 3,
+      profiles: ['RO-SRV-02', 'RO-SRV-03', 'RO-SRV-04', 'RO-SRV-05'],
+      basis:
+        'Fuel, parking and small purchases on fiscal receipts: every VAT payer deducts their VAT only within the limit and with its code printed (receipts.recognize).',
+    },
+    risk: { kind: 'tax_amount', basis: "The limit decides whether a receipt's VAT is deducted." },
+    obligations: ['D300', 'D394', 'D406'],
+  },
+  'ro.vat.reverse_charge.domestic': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-SRV-02'],
+      basis:
+        'VAT payers buying or selling the goods of art. 331 (waste, timber, cereals, energy to traders, real estate taxed, gold, phones and electronics from 22,500 lei).',
+    },
+    risk: {
+      kind: 'tax_amount',
+      basis: 'Reverse charge or not decides who collects the VAT and whether it is deductible.',
+    },
+    obligations: ['D300', 'D394'],
+  },
+  // Withholding (O1): rent and intellectual property paid to individuals, non-residents.
+  'ro.dividend.tax_rate': {
+    reach: {
+      estimate: 2,
+      profiles: ['RO-OWN-01', 'RO-SRV-01', 'RO-SRV-02', 'RO-TAX-MICRO'],
+      basis:
+        'Every dividend paid, interim ones included (dividends.withhold), and those paid to non-residents (nonresidents.withhold).',
+    },
+    risk: {
+      kind: 'tax_amount',
+      basis: 'The tax withheld on dividends, declared in D100 and D205.',
+    },
+    obligations: ['D100.dividends', 'D205'],
+  },
+  'ro.rent.tax_rate': {
+    reach: {
+      estimate: 2,
+      profiles: ['RO-SRV-01', 'RO-SRV-02', 'RO-TAX-MICRO'],
+      basis:
+        'A company renting its office or a car from an individual (often its associate) withholds at every payment (payees.withhold).',
+    },
+    risk: { kind: 'tax_amount', basis: 'The tax withheld and declared in D100 (628) and D205.' },
+    obligations: ['D100.withholding', 'D205'],
+  },
+  'ro.rent.expense_rate': {
+    reach: {
+      estimate: 2,
+      profiles: ['RO-SRV-01', 'RO-SRV-02', 'RO-TAX-MICRO'],
+      basis: 'The net income every rent withholding is computed on.',
+    },
+    risk: { kind: 'tax_amount', basis: 'The base of the tax withheld on rent.' },
+    obligations: ['D100.withholding', 'D205'],
+  },
+  'ro.ip.tax_rate': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-SRV-01', 'RO-SRV-02'],
+      basis: 'Intellectual property paid to individual authors.',
+    },
+    risk: { kind: 'tax_amount', basis: 'The tax withheld, declared in D112.' },
+    obligations: ['D112'],
+  },
+  'ro.ip.expense_rate': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-SRV-01', 'RO-SRV-02'],
+      basis: 'Intellectual property paid to individual authors.',
+    },
+    risk: { kind: 'tax_amount', basis: 'The base of the tax withheld on intellectual property.' },
+    obligations: ['D112'],
+  },
+  'ro.nonresident.tax_rate': {
+    reach: {
+      estimate: 2,
+      profiles: ['RO-SRV-02', 'RO-SRV-03', 'RO-SRV-04'],
+      basis:
+        'Software licences, interest and services paid abroad: a services company buying from foreign suppliers meets it once a payment is a royalty.',
+    },
+    risk: {
+      kind: 'tax_amount',
+      basis: 'The tax withheld from non-residents, declared in D100 (632–636) and D207.',
+    },
+    obligations: ['D100.withholding', 'D207'],
+  },
+  'ro.nonresident.certificate_days': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-SRV-04'],
+      basis: 'Payments to non-residents in the first days of a year.',
+    },
+    risk: { kind: 'tax_amount', basis: 'Whether the treaty rate or the domestic one applies.' },
+    obligations: ['D100.withholding', 'D207'],
+  },
 };
 
 /** The periods each return is filed for; urgency takes the earliest next deadline. */
@@ -424,7 +563,9 @@ export const obligationCadence: Readonly<
   'D112.quarterly': ['quarter'],
   'D100.micro': ['quarter'],
   'D100.dividends': ['month'],
+  'D100.withholding': ['month'],
   D205: ['year'],
+  D207: ['year'],
   D406: ['month', 'quarter'],
   'D406.assets': ['year'],
   S1005: ['year'],

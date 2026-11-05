@@ -279,6 +279,78 @@ export const d406VatCodes: readonly D406VatCodeRow[] = [
   })),
 ];
 
+/**
+ * Exempt operations and the adjustments of deductible VAT (V2, src/ro/exempt): an exempt
+ * purchase (EX-IN, D300 rd. 29) on the deductible sheet, its VAT being nil; the adjustments of
+ * rd. 34 by the rate of the VAT they adjust (`rate` attribute): the pro-rata's "Ajustări conform
+ * pro-rata", the capital goods' and the stock's "Ajustări de taxă".
+ */
+export const d406ExemptCodes: readonly D406VatCodeRow[] = [
+  {
+    direction: 'output',
+    code: 'EX-292',
+    taxCode: '310326',
+    description: 'Livrări de bunuri și prestări de servicii scutite fără drept de deducere',
+    d300: '15',
+  },
+  {
+    direction: 'output',
+    code: 'EX-294',
+    taxCode: '310314',
+    description:
+      'Livrari de bunuri si /sau prestari de servicii scutite cu drept de deducere, altele decat Exporturile si operatiunile prevazute la art 294 alin (5) din Codul Fiscal',
+    d300: '14',
+  },
+  {
+    direction: 'output',
+    code: 'EX-EXPORT',
+    taxCode: '310313',
+    description:
+      'Livrari de bunuri scutite cu drept de deducere cf Art. 294 alin (1) lit a) si b) din Codul Fiscal (Exporturi)',
+    d300: '14',
+  },
+  {
+    direction: 'output',
+    code: 'EX-IC',
+    taxCode: '310301',
+    description: 'Livrări intracomunitare de bunuri, scutite',
+    d300: '1',
+  },
+  {
+    direction: 'input',
+    code: 'EX-IN',
+    deduction: 'full',
+    taxCode: '308302',
+    description:
+      'Achiziţii de bunuri şi servicii scutite de taxă sau neimpozabile altele decat AIC servicii scutite de taxa',
+    d300: '29',
+  },
+  ...(
+    [
+      ['ADJ-300', '21', '307327', 'Ajustări conform pro-rata'],
+      ['ADJ-300', '11', '307328', 'Ajustări conform pro-rata'],
+      ['ADJ-300', '19', '307311', 'Ajustări conform pro-rata'],
+      ['ADJ-305', '21', '307329', 'Ajustări de taxă'],
+      ['ADJ-305', '11', '307330', 'Ajustări de taxă'],
+      ['ADJ-305', '19', '307321', 'Ajustări de taxă'],
+      ['ADJ-304', '21', '307329', 'Ajustări de taxă'],
+      ['ADJ-304', '11', '307330', 'Ajustări de taxă'],
+      ['ADJ-304', '19', '307321', 'Ajustări de taxă'],
+    ] as const
+  ).map(([code, rate, taxCode, description]): D406VatCodeRow => ({
+    direction: 'input',
+    code,
+    rate,
+    deduction: 'full',
+    taxCode,
+    description,
+    d300: '34',
+  })),
+];
+
+/** Adjustments reported at the rate of the VAT they adjust, which their tax entry records. */
+export const d406RatedAdjustments = ['ADJ-300', 'ADJ-304', 'ADJ-305'];
+
 /** The engine's codes whose collected side is reported with the acquisition. */
 export const d406ReverseCharges = ['RC-EU-SERV', 'RC-NONEU-SERV'];
 
@@ -295,7 +367,7 @@ export function d406VatTaxCode(entry: {
   cashVat?: boolean;
 }): string | null | undefined {
   if (entry.direction === 'output' && d406ReverseCharges.includes(entry.code)) return null;
-  const row = d406VatCodes.find(
+  const row = [...d406VatCodes, ...d406ExemptCodes].find(
     (item) =>
       item.direction === entry.direction &&
       item.code === entry.code &&

@@ -15,12 +15,14 @@ export const saftSources: readonly LegalSource[] = [
     id: 'ANAF/D406',
     kind: 'official_document',
     title:
-      'Schema SAF-T pentru România 2.4.9 (Ro_SAFT_Schema_v249_2025.xsd) și definițiile ei (RO_SAFT_SchemaDefCod_05.02.2026.xlsx): structura, modul de raportare pe tipuri de fișier și nomenclatoarele',
+      'Schema SAF-T pentru România 2.4.9 (Ro_SAFT_Schema_v249_2025.xsd) și definițiile ei (RO_SAFT_SchemaDefCod_16.02.2026.xlsx): structura, modul de raportare pe tipuri de fișier și nomenclatoarele',
     issuer: 'ANAF',
     publication: null,
+    // The workbook of 16.02.2026 differs from the one of 05.02.2026 only in its history and the
+    // WHT nomenclature (604040 added): every other sheet reads the same.
     urls: [
       `${declarations}/Ro_SAFT_Schema_v249_2025.xsd`,
-      `${declarations}/RO_SAFT_SchemaDefCod_05.02.2026.xlsx`,
+      `${saft}/RO_SAFT_SchemaDefCod_16.02.2026.xlsx`,
     ],
     fetch: true,
     snapshots: [
@@ -31,9 +33,9 @@ export const saftSources: readonly LegalSource[] = [
         mediaType: 'application/xml',
       },
       {
-        url: `${declarations}/RO_SAFT_SchemaDefCod_05.02.2026.xlsx`,
-        sha256: 'd0981202182438e4597ff3bc27d2c41dec06c60bc32b86620c1de29a9cb8436d',
-        retrievedOn: '2026-10-29',
+        url: `${saft}/RO_SAFT_SchemaDefCod_16.02.2026.xlsx`,
+        sha256: '050508bf6eadbd6bb4684a0016296253c629d4e9b54a1118dd9b9bfd0c1d0f2d',
+        retrievedOn: '2026-11-05',
         mediaType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       },
     ],

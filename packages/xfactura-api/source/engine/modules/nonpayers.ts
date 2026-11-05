@@ -493,10 +493,9 @@ export async function registrationOf(
         ),
       );
     if (others?.accounts)
-      unsupported.push({
-        code: 'OTHER_ADJUSTMENTS',
-        message: `Registrele au avut mișcări pe ${others.accounts}: ajustarea taxei pentru stocuri, active în curs, servicii neutilizate și avansuri la anularea înregistrării (art. 304, norme pct. 83 alin. (7) lit. a) și d)) nu este acoperită; vat.capitalGoods o refuză cât timp soldurile nu sunt zero.`,
-      });
+      out.push(
+        `Registrele au avut mișcări pe ${others.accounts}: stocurile și activele în curs inventariate (cu cota TVA de la achiziție), imobilizările necorporale neamortizate complet și avansurile nedecontate se ajustează în același decont (art. 304, norme pct. 83 alin. (7) lit. a) și d)), cu vat.capitalGoods (stock, services, advances); cheltuielile în avans (471) sunt servicii utilizate și nu se ajustează (norme pct. 78 alin. (2)).`,
+      );
     out.push(
       `Anularea înregistrării de la ${date}: ultimul decont (${label}) se depune până la ${due ?? '—'} și cuprinde ajustările (art. 310 alin. (7), art. 316 alin. (13)); bunurile de capital: ${money(total)} lei (art. 305 alin. (5) lit. a)), cu vat.capitalGoods.`,
     );

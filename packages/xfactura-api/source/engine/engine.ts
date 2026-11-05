@@ -18,6 +18,14 @@ import {
   lateRegistration,
 } from 'xfactura-core/ro/treatments/vat-registration';
 import { nonpayerDefinitions, nonpayerVersions } from 'xfactura-core/ro/nonpayers';
+import { exemptDefinitions, exemptVersions } from 'xfactura-core/ro/exempt';
+import { prorataAdjustment } from 'xfactura-core/ro/treatments/prorata';
+import {
+  receiptDefinitions,
+  receiptRecognition,
+  receiptVersions,
+  reverseChargeRecognition,
+} from 'xfactura-core/ro/receipts';
 import { payrollRecognition } from 'xfactura-core/ro/treatments/payroll';
 import { microTax } from 'xfactura-core/ro/treatments/micro-tax';
 import { assetDepreciation, assetDerecognition } from 'xfactura-core/ro/treatments/assets';
@@ -55,7 +63,18 @@ import {
   taxDistribution,
   taxPayment,
 } from 'xfactura-core/ro/taxaccount';
-import { dividendDistribution, dividendWithholding } from 'xfactura-core/ro/treatments/dividends';
+import {
+  dividendDistribution,
+  dividendWithholding,
+  interimDistribution,
+  interimRegularization,
+} from 'xfactura-core/ro/treatments/dividends';
+import {
+  nonresidentWithholding,
+  payeeRecognition,
+  payeeWithholding,
+} from 'xfactura-core/ro/treatments/withholding';
+import { withholdingDefinitions, withholdingVersions } from 'xfactura-core/ro/withholding';
 import { ParameterRegister } from 'xfactura-core/rules';
 import { clause, sourceOf } from 'xfactura-core/ro/sources';
 import { addDays, bucharestDate } from 'xfactura-core/time';
@@ -193,10 +212,19 @@ import { d300Declaration } from './modules/d300';
 import { d390Declaration } from './modules/d390';
 import { d301Declaration } from './modules/d301';
 import { registrationInput, Registrations, registrationView } from './modules/nonpayers';
+import {
+  capitalRegisterInput,
+  capitalRegisterView,
+  prorataComputeInput,
+  prorataComputeView,
+  VatAdjustments,
+  vatAdjustmentWork,
+} from './modules/exempt';
 import { d394Declaration } from './modules/d394';
 import { d406Declaration } from './modules/d406';
 import { d112Declaration } from './modules/d112';
 import { d205Declaration } from './modules/d205';
+import { d207Declaration } from './modules/d207';
 import { d212Declaration } from './modules/d212';
 import { d204Declaration } from './modules/d204';
 import { d100Declaration } from './modules/d100';
@@ -414,6 +442,7 @@ export const defaultRegister = () =>
       ...microDefinitions,
       ...dividendDefinitions,
       ...interestDefinitions,
+      ...withholdingDefinitions,
       ...etvaDefinitions,
       ...pitDefinitions,
       ...determinationDefinitions,
@@ -422,6 +451,8 @@ export const defaultRegister = () =>
       ...saftDefinitions,
       ...taxAccountDefinitions,
       ...nonpayerDefinitions,
+      ...exemptDefinitions,
+      ...receiptDefinitions,
     ],
     [
       ...vatVersions,
@@ -434,6 +465,7 @@ export const defaultRegister = () =>
       ...microVersions,
       ...dividendVersions,
       ...interestVersions,
+      ...withholdingVersions,
       ...etvaVersions,
       ...pitVersions,
       ...determinationVersions,
@@ -443,6 +475,8 @@ export const defaultRegister = () =>
       ...saftVersions,
       ...taxAccountVersions,
       ...nonpayerVersions,
+      ...exemptVersions,
+      ...receiptVersions,
     ],
   );
 
@@ -499,6 +533,8 @@ export class Engine {
   /** A non-payer's registration, the VAT owed for registering late and the cancellation (core
    * ro/nonpayers). */
   readonly registrations: Registrations;
+  /** The pro-rata and the capital goods' register (core ro/exempt). */
+  readonly vatAdjustments: VatAdjustments;
   /** The profit tax's fiscal register and loss vintages (core ro/profit). */
   readonly profit: Profit;
   /** The tax account: the state's obligations and claims, and ANAF's statement against them. */
@@ -564,6 +600,11 @@ export class Engine {
       microTax,
       dividendDistribution,
       dividendWithholding,
+      interimDistribution,
+      interimRegularization,
+      payeeRecognition,
+      payeeWithholding,
+      nonresidentWithholding,
       assetDepreciation,
       assetDerecognition,
       resultClosing,
@@ -576,6 +617,8 @@ export class Engine {
       offset,
       cashMovement,
       expenseReport,
+      receiptRecognition,
+      reverseChargeRecognition,
       loanReceipt,
       loanPlan,
       loanAccrual,
@@ -588,6 +631,7 @@ export class Engine {
       taxDecision,
       lateRegistration,
       capitalGoodsAdjustment,
+      prorataAdjustment,
       ...(options.treatments ?? []),
     );
     this.templates = new Templates(this.commands, this.proposals);
@@ -691,6 +735,7 @@ export class Engine {
       ),
       d112Declaration(secret),
       d205Declaration(secret),
+      d207Declaration(),
       d100Declaration(),
       d101Declaration(),
       s1005Declaration(),
@@ -726,6 +771,11 @@ export class Engine {
       this.clock,
     );
     this.registrations = new Registrations(
+      this.commands,
+      (tx, companyId) => this.proposals.ruleContext(tx, companyId),
+      this.clock,
+    );
+    this.vatAdjustments = new VatAdjustments(
       this.commands,
       (tx, companyId) => this.proposals.ruleContext(tx, companyId),
       this.clock,
@@ -767,6 +817,8 @@ export class Engine {
         annual: async (tx, companyId, today) =>
           annualWork(tx, companyId, today, await this.proposals.ruleContext(tx, companyId)),
         profit: (tx, companyId, today) => profitWork(tx, companyId, today),
+        vatAdjustments: async (tx, companyId, today) =>
+          vatAdjustmentWork(tx, companyId, today, await this.proposals.ruleContext(tx, companyId)),
         taxaccount: async (tx, companyId, today) =>
           taxAccountWork(
             tx,
@@ -2552,6 +2604,42 @@ export class Engine {
         input: registrationInput,
         output: registrationView,
         run: (actor, _, input) => this.registrations.view(actor, input),
+      }),
+      define({
+        id: 'vat.proRata.compute',
+        description:
+          'Pro rata unui an (art. 300 din Codul fiscal): pro rata provizorie înregistrată, pro rata definitivă din livrările anului (cu drept de deducere, fără, excluse), TVA achizițiilor destinate ambelor feluri de operațiuni și ajustarea de la sfârșitul anului pe care o înregistrează vat.proRata.',
+        summary:
+          "A year's pro-rata: the provisional recorded, the definitive the year's supplies give, the VAT of purchases for both kinds of operations and the year-end adjustment vat.proRata books.",
+        toolset: 'tax',
+        dataClasses: ['books', 'tax'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: prorataComputeInput,
+        output: prorataComputeView,
+        run: (actor, _, input) => this.vatAdjustments.prorata(actor, input),
+      }),
+      define({
+        id: 'vat.capitalGoods.register',
+        description:
+          'Registrul bunurilor de capital (norme pct. 79 alin. (2)): pentru fiecare mijloc fix corporal, data achiziției, baza, TVA deductibilă și dedusă, perioada de ajustare, folosirea declarată (capitalGood.use) și ajustările înregistrate.',
+        summary:
+          "The capital goods' register: each tangible fixed asset's acquisition, VAT deductible and deducted, adjustment period, stated use and the adjustments posted.",
+        toolset: 'tax',
+        dataClasses: ['books', 'tax'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: capitalRegisterInput,
+        output: capitalRegisterView,
+        run: (actor, _, input) => this.vatAdjustments.register(actor, input),
       }),
       define({
         id: 'closure.evaluate',

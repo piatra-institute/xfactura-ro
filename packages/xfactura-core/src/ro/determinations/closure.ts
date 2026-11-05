@@ -5,6 +5,8 @@ import { individualForms, type EntityForm } from '../entity';
 import { euVatPrefixes } from '../geo';
 import type { ObligationKind } from '../obligations';
 import { d112Filing } from '../payroll/quarterly';
+import type { LocalDate } from '../../time';
+import { provisionalProrata } from '../exempt/facts';
 import { d406Begun, type D406StartAt } from '../saft/applicability';
 import {
   confirmQuestion,
@@ -25,7 +27,7 @@ import {
  * gap, never a pass. Each item records the rule and the slots, with their basis, it came from.
  */
 
-export const CLOSURE_VERSION = 'ro-closure@4';
+export const CLOSURE_VERSION = 'ro-closure@5';
 
 export type ClosureStatus = 'ELIGIBLE' | 'NEEDS_EVIDENCE' | 'UNSUPPORTED';
 
@@ -42,10 +44,18 @@ export interface ClosureBooks {
   /** Months with sick leave or a contract ended: a quarterly D112 is due monthly then (art. 147
    * alin. (11)). */
   payrollEventMonths: readonly string[];
-  /** Months with services across the EU border, supplied or bought. */
+  /** Months with services across the EU border, supplied or bought, and intra-community
+   * supplies of goods (D390). */
   euServiceMonths: readonly string[];
+  /** Months with supplies exempt without the right of deduction (EX-292): the company is mixed
+   * and applies a pro-rata (art. 300). */
+  exemptNoDeductionMonths?: readonly string[];
   /** Months with dividend tax withheld. */
   dividendMonths: readonly string[];
+  /** The other taxes withheld at source (O1), by month and the return that declares their
+   * beneficiaries: D205 (interest, rent paid to residents), D207 (non-residents), D112
+   * (intellectual property, not written yet). */
+  withholdings?: readonly { month: string; annual: 'D205' | 'D207' | 'D112' }[];
   /** Invoices received from suppliers outside Romania; `reverseCharge` when booked as services
    * under the general rule (an RC-… tax entry). */
   foreignPurchases: readonly {
@@ -1059,6 +1069,28 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
           }
         },
       });
+    const withheldHere = (books.withholdings ?? []).filter(
+      (item) => item.month === month && item.annual !== 'D112',
+    );
+    // A month with tax withheld at source and no dividend tax: its own D100 (art. 84^1 alin. (6),
+    // art. 97 alin. (2), art. 224 alin. (5)).
+    if (withheldHere.length && !books.dividendMonths.includes(month))
+      rules.push({
+        id: `obligation.withholding@${month}`,
+        clauses: [`${CODE}:art.97(2)`, `${CODE}:art.84^1(3)-(6)`, `${CODE}:art.224(5)`],
+        reads: [],
+        derives: [],
+        run(_read, emit) {
+          emit.obligation({
+            kind: 'D100',
+            deadline: 'D100.withholding',
+            period: month,
+            deadlinePeriod: null,
+            state: 'applies',
+            blockers: [],
+          });
+        },
+      });
     if (books.dividendMonths.includes(month))
       rules.push({
         id: `obligation.dividends@${month}`,
@@ -1077,7 +1109,13 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
         },
       });
     if (month.endsWith('-12')) {
-      if (books.dividendMonths.some((item) => item.startsWith(String(year))))
+      const withheldInYear = (books.withholdings ?? []).filter((item) =>
+        item.month.startsWith(String(year)),
+      );
+      if (
+        books.dividendMonths.some((item) => item.startsWith(String(year))) ||
+        withheldInYear.some((item) => item.annual === 'D205')
+      )
         rules.push({
           id: `obligation.d205@${year}`,
           clauses: [`${CODE}:art.132(2)`],
@@ -1087,6 +1125,23 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
             emit.obligation({
               kind: 'D205',
               deadline: 'D205',
+              period: String(year),
+              deadlinePeriod: null,
+              state: 'applies',
+              blockers: [],
+            });
+          },
+        });
+      if (withheldInYear.some((item) => item.annual === 'D207'))
+        rules.push({
+          id: `obligation.d207@${year}`,
+          clauses: [`${CODE}:art.231(1)`],
+          reads: [],
+          derives: [],
+          run(_read, emit) {
+            emit.obligation({
+              kind: 'D207',
+              deadline: 'D207',
               period: String(year),
               deadlinePeriod: null,
               state: 'applies',
@@ -1476,6 +1531,43 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
         },
       });
   }
+  // A year with supplies exempt without the right of deduction: the company is mixed and applies
+  // its provisional pro-rata (art. 300 alin. (9)–(10)), the year's fact, or a special one the
+  // engine does not compute (alin. (16)–(18)).
+  for (const year of years) {
+    const exempt = (books.exemptNoDeductionMonths ?? []).filter(
+      (month) => month.startsWith(`${year}-`) && months.includes(month),
+    );
+    if (!exempt.length) continue;
+    const last = exempt.at(-1)!;
+    rules.push({
+      id: `scope.prorata@${year}`,
+      clauses: [`${CODE}:art.300(8)-(14)`],
+      reads: [`vat@${last}`],
+      derives: [],
+      run(read, emit) {
+        const vat = read(`vat@${last}`);
+        if (vat.state !== 'known' || vat.value !== 'normal_vat') return;
+        const provisional = provisionalProrata(input.facts, lastDay(last) as LocalDate);
+        if (!provisional.found)
+          emit.need({
+            code: 'FACT_UNKNOWN',
+            fact: `vat.prorata/${year}`,
+            message: `Operațiuni scutite fără drept de deducere în ${exempt.join(', ')}: pro rata provizorie a anului ${year} se comunică organului fiscal (art. 300 alin. (9)–(10)) și se înregistrează (vat.prorata).`,
+            question: factQuestion('vat.prorata', year),
+          });
+        else if (provisional.fact.kind === 'special')
+          emit.unsupported({
+            trigger: 'PRORATA_SPECIAL',
+            message: `Pro rata specială a anului ${year} (art. 300 alin. (16)–(18)), aprobată sau impusă de Ministerul Finanțelor pe sectoare sau pe operațiunile deciziei, nu este calculată.`,
+            missingCapabilities: ['VAT_PRORATA_SPECIAL'],
+            evidenceIds: [],
+            resolution:
+              'Calculați pro rata specială și ajustările în afara aplicației, atribuit explicit.',
+          });
+      },
+    });
+  }
   // A range wholly before the books: nothing to read, nothing to ask.
   if (!months.length) return rules;
   rules.push({
@@ -1499,6 +1591,22 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
           missingCapabilities: ['D107'],
           evidenceIds: [],
           resolution: 'Declarația 107, întocmită în afara aplicației, atribuită explicit.',
+        });
+      const intellectual = [
+        ...new Set(
+          (books.withholdings ?? [])
+            .filter((item) => item.annual === 'D112')
+            .map((item) => item.month),
+        ),
+      ];
+      if (intellectual.length)
+        emit.unsupported({
+          trigger: 'D112_INTELLECTUAL_PROPERTY',
+          message: `Impozit reținut pe drepturi de proprietate intelectuală în ${intellectual.join(', ')}: se declară în D112 (art. 132 alin. (2) din Codul fiscal), pe care aplicația nu îl scrie încă pentru aceste venituri.`,
+          missingCapabilities: ['D112_INTELLECTUAL_PROPERTY'],
+          evidenceIds: [],
+          resolution:
+            'D112 pentru drepturile de proprietate intelectuală, depus în afara aplicației.',
         });
       if (books.payrollWithoutContractMonths.length)
         emit.unsupported({

@@ -20,6 +20,7 @@ import { counties } from 'xfactura-core/ro/geo';
 import { isValidCnp, isValidCui } from 'xfactura-core/ro/identifiers';
 import { invoiceKinds } from 'xfactura-core/ro/treatments/invoices';
 import { regimeCodes } from 'xfactura-core/ro/treatments/vat-registration';
+import { adjustmentCodes, allExemptCodes, exemptCodes } from 'xfactura-core/ro/exempt';
 import { vatPeriodEnd } from 'xfactura-core/ro/treatments/vat-settlement';
 import type { RuleContext } from 'xfactura-core/rules';
 import { invoiceDocumentSchema } from 'xfactura-core/ubl/invoice-document';
@@ -34,6 +35,7 @@ import {
 } from '../db/schema';
 import { loadState } from '../kernel/state';
 import { periodStart, rounding, sellerDetails } from './d300';
+import { receiptEntries, receiptSections, reverseChargeOperations } from './receipts';
 import type { DeclarationKind, DeclarationProblem } from './declarations';
 
 const text = (max: number) => z.string().trim().min(1).max(max);
@@ -106,6 +108,14 @@ const rateOf = (code: string) => {
 };
 /** Codes reported elsewhere (D390, D300 rows 3 and 7): services across the border. */
 const crossBorder = /^(RC|EXP)-/;
+/** Exempt operations and adjustments: D394 lists the taxable operations on the national
+ * territory and the acquisitions from persons not registered for VAT (OPANAF nr. 3.769/2015,
+ * anexa nr. 2, secțiunea a 2-a), not exempt supplies nor the regularizations of rd. 34. */
+const notListed: readonly string[] = [
+  ...allExemptCodes,
+  adjustmentCodes.prorata,
+  adjustmentCodes.stock,
+];
 
 function statementPeriod(period: string): D394['period'] {
   const quarter = /^(\d{4})-Q([1-4])$/.exec(period);
@@ -162,6 +172,7 @@ async function inputsOf(tx: Transaction, companyId: string, period: string) {
     (entry) =>
       !crossBorder.test(entry.code) &&
       !(Object.values(regimeCodes) as string[]).includes(entry.code) &&
+      !notListed.includes(entry.code) &&
       profileAt(ledger.loaded, 'vat.status', entry.taxPoint) === 'normal_vat',
   );
   // Under VAT on collection, a collection or payment releases an invoice's VAT: the period's
@@ -246,6 +257,24 @@ export function d394Declaration(
       const problems: DeclarationProblem[] = [];
       const { loaded, entries, releases, documents, details, issued, seller, inputs } =
         await inputsOf(tx, companyId, period);
+      // An exempt purchase from a supplier not registered for VAT is an acquisition of type N
+      // (OPANAF nr. 3.769/2015, anexa nr. 2, secțiunea a 2-a pct. 2), which is not produced yet;
+      // from a registered supplier it is not listed.
+      const unlisted = (loaded.taxLedger.get(`VAT|${period}`)?.entries ?? []).filter(
+        (entry) =>
+          entry.code === exemptCodes.purchase &&
+          profileAt(loaded, 'vat.status', entry.taxPoint) === 'normal_vat' &&
+          !(
+            entry.attributes.counterpartyCountry === 'RO' &&
+            /^RO\d+$/i.test((entry.attributes.counterpartyTaxId ?? '').replace(/\s+/g, '')) &&
+            isValidCui((entry.attributes.counterpartyTaxId ?? '').replace(/\s+/g, '').toUpperCase())
+          ),
+      );
+      if (unlisted.length)
+        problems.push({
+          code: 'D394_ACQUISITION_N',
+          message: `Achizițiile ${[...new Set(unlisted.map((entry) => entry.attributes.number ?? entry.documentId))].join(', ')} sunt de la furnizori neînregistrați în scopuri de TVA: se declară cu tipul N (achiziții de la persoane neînregistrate), care nu este încă produs.`,
+        });
       const end = vatPeriodEnd(period);
       if (vatPeriodOf(loaded, end) !== period)
         problems.push({
@@ -301,7 +330,9 @@ export function d394Declaration(
           vat: bigint;
         }
       >();
-      for (const entry of entries) {
+      // Receipts (rezumat2) and the domestic reverse charge (V, C) have sections of their own.
+      const special = receiptEntries(entries);
+      for (const entry of special.ordinary) {
         const rate = rateOf(entry.code);
         const document = entry.documentId ? documents.get(entry.documentId) : undefined;
         const body = invoiceDocumentSchema.safeParse(document?.body);
@@ -372,7 +403,15 @@ export function d394Declaration(
       }
 
       // Series and storno invoices: those the engine issued, plus those declared outside it.
-      const recorded = new Set(entries.map((entry) => entry.documentId));
+      // An exempt invoice is in the VAT ledger too, though not listed (OPANAF nr. 3.769/2015).
+      const recorded = new Set(
+        [
+          ...entries,
+          ...(loaded.taxLedger.get(`VAT|${period}`)?.entries ?? []).filter((entry) =>
+            allExemptCodes.includes(entry.code),
+          ),
+        ].map((entry) => entry.documentId),
+      );
       const seriesRows = new Map<
         string,
         { prefix: string; width: number; first: number; numbers: number[] }
@@ -500,13 +539,16 @@ export function d394Declaration(
           ? { consultationChanged: options.consultationChanged }
           : {}),
         affiliates: options.affiliates,
-        operations: [...groups.values()].map(({ documents: ids, base, vat, ...group }) => ({
-          ...group,
-          invoices: ids.size,
-          base: Number(roundToLeu(base)),
-          vat: Number(roundToLeu(vat)),
-        })),
-        simplified: {},
+        operations: [
+          ...[...groups.values()].map(({ documents: ids, base, vat, ...group }) => ({
+            ...group,
+            invoices: ids.size,
+            base: Number(roundToLeu(base)),
+            vat: Number(roundToLeu(vat)),
+          })),
+          ...reverseChargeOperations(special.reverse, documents, roundToLeu, problems),
+        ],
+        simplified: receiptSections(special.receipts, roundToLeu, problems),
         series: seriesList,
         issuedInvoices: {
           own: issued.length + (options.outsideSeries?.invoices ?? 0),

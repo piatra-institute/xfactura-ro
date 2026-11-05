@@ -12,7 +12,7 @@ export const dividendDefinitions: ParameterDefinition[] = [
     scope: ['beneficiary'],
     value: z.string().regex(/^(0|[1-9]\d{0,2})(\.\d{1,4})?$/),
     description:
-      'Cota impozitului pe dividende reținut la plată, după beneficiar: persoană fizică sau persoană juridică română.',
+      'Cota impozitului pe dividende reținut la plată, după beneficiar: persoană fizică sau persoană juridică română, ori nerezident (cota din Codul fiscal, înaintea celei dintr-o convenție).',
   },
 ];
 
@@ -22,6 +22,9 @@ export const dividendVersions: ParameterVersion[] = (
   [
     ['individual', [code('art.97(7)')]],
     ['company', [code('art.43(2)')]],
+    // A non-resident's dividends (art. 224 alin. (4) lit. b)): the domestic rate, before a
+    // treaty's lower one (art. 230 alin. (1)).
+    ['nonresident', [code('art.223(1)'), code('art.224(4)(b)'), code('art.224(5)')]],
   ] as const
 ).map(([beneficiary, clauses]) => ({
   id: `ro.dividend.tax_rate/${beneficiary}/2026-01-01`,

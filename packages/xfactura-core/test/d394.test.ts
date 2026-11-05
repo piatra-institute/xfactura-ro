@@ -258,7 +258,7 @@ describe('D394 calculation', () => {
     expect(() => calculateD394(one({ type: 'A', partner: individual('1900101400012') }))).toThrow(
       'doar livrări',
     );
-    expect(() => calculateD394(one({ type: 'C' as 'L' }))).toThrow('nu este acoperit');
+    expect(() => calculateD394(one({ type: 'N' as 'L' }))).toThrow('nu este acoperit');
     expect(() => calculateD394(model({ cashVatDeductible: { '21': 0.5 } }))).toThrow(
       'fără zecimale',
     );

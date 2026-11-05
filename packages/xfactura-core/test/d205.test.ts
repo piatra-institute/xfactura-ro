@@ -78,8 +78,8 @@ describe('D205 namespace and catalogues', () => {
       expect(() => d205Namespace(year)).toThrow('2025 și 2026');
   });
 
-  test('lists the dividend and interest codes and the structure’s rates', () => {
-    expect(d205IncomeTypes.map(([code]) => code)).toEqual(['08', '09']);
+  test('lists the dividend, interest and rent codes and the structure’s rates', () => {
+    expect(d205IncomeTypes.map(([code]) => code)).toEqual(['08', '09', '29']);
     expect(d205IncomeTypes[0][1]).toContain('venituri din dividende');
     expect(d205DividendRates).toEqual({ 2024: 8, 2025: 10, 2026: 16 });
   });

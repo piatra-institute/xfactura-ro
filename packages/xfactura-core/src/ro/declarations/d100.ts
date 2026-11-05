@@ -20,7 +20,10 @@ import { isValidCnp, isValidCui } from '../identifiers';
  * quarters of the quarterly system (103, model 8#), the dividend tax withheld from
  * individuals (604) and Romanian companies (150), and the tax withheld on interest paid to
  * individuals (605, nomenclature position 7: art. 97 and 132, monthly, due the 25th of the next
- * month, model 1#); any other obligation of the nomenclature as
+ * month, model 1#); the other taxes withheld at source (O1, positions 13–18 and 109, each monthly,
+ * due the 25th of the next month, model 1#, budget 5503): rent paid to individuals (628, art. 84^1
+ * and 132) and a non-resident's dividends, interest, royalties, commissions and services (631,
+ * 632, 633, 634, 636, art. 223–224 or a treaty); any other obligation of the nomenclature as
  * typed amounts, with its budget code and due date given. A declaration filed after the reserve of
  * subsequent verification was cancelled is a D100 (d_anulare 1, temei 2); any other correction is
  * the rectifying declaration D710 (`declaratie710`, with the amounts as declared and as
@@ -39,6 +42,12 @@ export const d100Obligations = [
   ['604', '5503XXXXXX', 'Impozit pe veniturile din dividende distribuite PF'],
   ['150', '5503XXXXXX', 'Impozit pe dividende distribuite PJ'],
   ['605', '5503XXXXXX', 'Impozit pe veniturile din dobânzi'],
+  ['628', '5503XXXXXX', 'Impozit pe veniturile din cedarea folosinței bunurilor plătite de PJ'],
+  ['631', '5503XXXXXX', 'Impozit pe dividendele obținute din România de nerezidenți'],
+  ['632', '5503XXXXXX', 'Impozit pe dobânzile obținute din România de nerezidenți'],
+  ['633', '5503XXXXXX', 'Impozit pe redevențele obținute din România de nerezidenți'],
+  ['634', '5503XXXXXX', 'Impozit pe comisioanele obținute din România de nerezidenți'],
+  ['636', '5503XXXXXX', 'Impozit pe serviciile prestate de nerezidenți'],
 ] as const;
 export type D100ObligationCode = (typeof d100Obligations)[number][0];
 
@@ -107,8 +116,29 @@ export type D100InterestTax = {
   withheld: number;
 };
 
+/** The codes of the other taxes withheld at source written here. */
+export const d100WithheldCodes = ['628', '631', '632', '633', '634', '636'] as const;
+export type D100WithheldCode = (typeof d100WithheldCodes)[number];
+
+export type D100WithheldTax = {
+  /** 628 (rent paid to individuals, art. 84^1) or 631–634, 636 (non-residents, art. 224). */
+  kind: 'withheld';
+  code: D100WithheldCode;
+  /** The tax withheld on the income paid in the month, whole lei: the sum of each payment's tax
+   * as booked (446). */
+  withheld: number;
+  /** 631, December only: the tax on dividends distributed and unpaid at the end of the year, due
+   * by 25 January (art. 224 alin. (5)). */
+  unpaidAtYearEnd?: number;
+};
+
 export type D100Obligation =
-  D100MicroTax | D100ProfitTax | D100DividendTax | D100InterestTax | D100OtherObligation;
+  | D100MicroTax
+  | D100ProfitTax
+  | D100DividendTax
+  | D100InterestTax
+  | D100WithheldTax
+  | D100OtherObligation;
 
 export type D100Contact = {
   /** adresa, adrR */
@@ -187,6 +217,12 @@ const reservedCodes: Readonly<Record<string, string>> = {
   '150': 'se declară ca impozit pe dividende (kind dividends)',
   '604': 'se declară ca impozit pe dividende (kind dividends)',
   '605': 'se declară ca impozit pe dobânzi (kind interest)',
+  ...Object.fromEntries(
+    d100WithheldCodes.map((code) => [
+      code,
+      'se declară ca impozit reținut la sursă (kind withheld)',
+    ]),
+  ),
   '131': 'cere data încheierii exercițiului financiar (Data_I), pe care modulul nu o scrie',
   '132': 'cere data încheierii exercițiului financiar (Data_I), pe care modulul nu o scrie',
   '701': 'cere Data_IC și bifele d_nInf, d_bonif, pe care modulul nu le scrie',
@@ -320,6 +356,28 @@ function inputProblems(model: D100): Problem[] {
       case 'interest':
         amount(`${path}.withheld`, obligation.withheld, 'Impozitul reținut');
         return;
+      case 'withheld':
+        if (!(d100WithheldCodes as readonly string[]).includes(obligation.code))
+          problem(
+            'D100_CODE',
+            `${path}.code`,
+            `Impozitul reținut la sursă se declară cu unul dintre codurile ${d100WithheldCodes.join(', ')}.`,
+          );
+        amount(`${path}.withheld`, obligation.withheld, 'Impozitul reținut');
+        if (obligation.unpaidAtYearEnd !== undefined) {
+          amount(
+            `${path}.unpaidAtYearEnd`,
+            obligation.unpaidAtYearEnd,
+            'Impozitul pe dividendele neplătite',
+          );
+          if (!december || obligation.code !== '631')
+            problem(
+              'D100_YEAR_END',
+              `${path}.unpaidAtYearEnd`,
+              'Impozitul pe dividendele nerezidenților distribuite și neplătite până la sfârșitul anului se declară cu 631, în declarația lunii decembrie.',
+            );
+        }
+        return;
       case 'profit':
         amount(`${path}.tax`, obligation.tax, 'Impozitul pe profit');
         if (!model.dissolution && ![3, 6, 9].includes(model.period.month))
@@ -358,7 +416,7 @@ function inputProblems(model: D100): Problem[] {
         problem(
           'D100_KIND',
           path,
-          'Obligația este impozitul microîntreprinderii, impozitul pe profit, impozitul pe dividende, impozitul pe dobânzi sau altă obligație din nomenclator.',
+          'Obligația este impozitul microîntreprinderii, impozitul pe profit, impozitul pe dividende, impozitul pe dobânzi, alt impozit reținut la sursă sau altă obligație din nomenclator.',
         );
     }
   });
@@ -427,6 +485,19 @@ function line(model: D100, obligation: D100Obligation): D100Line {
       const due = big(obligation.withheld);
       return {
         ...dated('605', nextMonth25(period)),
+        budgetCode: '5503XXXXXX',
+        due,
+        deductible: 0n,
+        payable: due,
+        refund: 0n,
+        minimumTax: false,
+      };
+    }
+    case 'withheld': {
+      // Model 1#: suma_plata = suma_dat.
+      const due = big(obligation.withheld) + big(obligation.unpaidAtYearEnd);
+      return {
+        ...dated(obligation.code, nextMonth25(period)),
         budgetCode: '5503XXXXXX',
         due,
         deductible: 0n,

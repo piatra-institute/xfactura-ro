@@ -693,6 +693,135 @@ const vatRefund = define({
 });
 export type VatRefundAnswer = z.infer<ReturnType<typeof vatRefund.answer>>;
 
+/**
+ * What a non-resident is paid for, and who receives it: a per-supplier determination, kept until a
+ * later answer replaces it. A software licence is a royalty when the rights go beyond those needed
+ * to use the program (Codul fiscal art. 7 pct. 36, norme art. 223 pct. 2); a service is taxed in
+ * Romania only as management or consulting, performed in Romania or as a profession there (art.
+ * 223 alin. (1) lit. i), k), l)). The contract is the evidence; the engine never infers it.
+ */
+const nonresidentPayee = define({
+  id: 'nonresident.payee',
+  summary:
+    'What a non-resident supplier, lender or shareholder is paid for (dividends, interest, royalties as Codul fiscal art. 7 pct. 36 defines them, a software licence included when it grants more than the right to use the program, commissions, services taxable in Romania under art. 223 alin. (1) lit. i), k), l), or income not taxable in Romania) and whether the beneficiary is a company or an individual, with the contract as evidence: a per-supplier determination the withholding at payment reads.',
+  holds: 'untilChanged',
+  subjects: ['party'],
+  params: z
+    .object({
+      /** The invoice or item that raised the question. */
+      documentId: z.uuid().optional(),
+    })
+    .strict(),
+  answer: () =>
+    z
+      .object({
+        income: z.enum([
+          'dividends',
+          'interest',
+          'royalties',
+          'commissions',
+          'services',
+          'not_taxable',
+        ]),
+        beneficiary: z.enum(['company', 'individual']),
+        /** The contract (licence, loan, service agreement) the determination reads. */
+        contractEvidenceId: z.uuid(),
+        /** Why: the contract's clause (the rights granted, where the service is performed). */
+        reason: text(1000),
+      })
+      .strict(),
+  prompt: (subject) =>
+    `Ce plătește compania nerezidentului ${subject.id} și cine este beneficiarul (persoană juridică sau fizică)? Încadrați plata: dividende, dobânzi, redevențe (Codul fiscal art. 7 pct. 36: o licență de software este redevență când dă mai mult decât dreptul de a folosi programul, de exemplu dreptul de a-l reproduce, distribui sau modifica), comisioane, servicii impozabile în România (management sau consultanță, servicii prestate în România, profesii independente în România, art. 223 alin. (1) lit. i), k), l)) sau venit neimpozabil în România. Atașați contractul și indicați clauza.`,
+  evidence: (value) => [value.contractEvidenceId],
+});
+export type NonresidentPayeeAnswer = z.infer<ReturnType<typeof nonresidentPayee.answer>>;
+
+/**
+ * A non-resident's certificate of tax residence, and the treaty rate it allows: presented at
+ * payment, valid in the year presented and the first days of the next (Codul fiscal art. 230 alin.
+ * (2)); the rate comes from the treaty's article, kept as evidence, never assumed.
+ */
+const nonresidentCertificate = define({
+  id: 'nonresident.certificate',
+  summary:
+    "A non-resident's certificate of tax residence (original or legalized copy with an authorized translation, or the electronic original) presented at payment, the state and year it attests, and the rate the double tax treaty's article allows for the income, with the treaty's text as evidence (Codul fiscal art. 230 alin. (1)–(2)): without it the domestic rate applies.",
+  holds: 'untilChanged',
+  subjects: ['party'],
+  params: z
+    .object({
+      income: z.enum(['dividends', 'interest', 'royalties', 'commissions', 'services']),
+      /** The payment it is asked for. */
+      date: day.optional(),
+    })
+    .strict(),
+  answer: () =>
+    z
+      .object({
+        certificateEvidenceId: z.uuid(),
+        /** The state of residence it attests: ISO 3166-1 alpha-2. */
+        state: z.string().regex(/^[A-Z]{2}$/),
+        /** The year whose residence it attests. */
+        year: z.number().int().min(2000).max(2100),
+        /** When it was presented to the company. */
+        presentedOn: day,
+        /** The income the treaty's article and rate are for. */
+        income: z.enum(['dividends', 'interest', 'royalties', 'commissions', 'services']),
+        /** The treaty as published (Monitorul Oficial or the ratifying law). */
+        treatyEvidenceId: z.uuid(),
+        /** The treaty's article for the income, as it reads (`art. 12 alin. (2)`). */
+        article: text(100),
+        /** The rate the article allows, in percent. */
+        rate: z.string().regex(/^(0|[1-9]\d?)(\.\d{1,2})?$/),
+      })
+      .strict(),
+  prompt: (subject, params) =>
+    `Nerezidentul ${subject.id} a prezentat certificatul de rezidență fiscală${params.date ? ` pentru plata din ${params.date}` : ''}? Atașați certificatul (original sau copie legalizată, cu traducere autorizată; cel electronic este original), indicați statul și anul atestat, data prezentării, apoi articolul convenției de evitare a dublei impuneri pentru ${params.income} și cota lui, cu textul convenției (Codul fiscal art. 230). Fără certificat se aplică cota din Codul fiscal.`,
+  evidence: (value) => [value.certificateEvidenceId, value.treatyEvidenceId],
+});
+export type NonresidentCertificateAnswer = z.infer<
+  ReturnType<typeof nonresidentCertificate.answer>
+>;
+
+/**
+ * How a capital good is used for operations with the right of deduction, from a date (Codul
+ * fiscal art. 305 alin. (4) lit. a) and c)): part of a building leased out exempt, a good moved to
+ * an exempt or a non-business use, or back. The share decides each year's fifth (twentieth) of its
+ * VAT the adjustment keeps (norme pct. 79 alin. (1), (15)), until a later answer replaces it.
+ */
+const capitalGoodUse = define({
+  id: 'capitalGood.use',
+  summary:
+    'From when, and in what share (percent of its use), a capital good of the asset register is used for operations with the right of deduction (taxable, or exempt with deduction); the rest is exempt without deduction or outside the business. It decides the adjustment of its VAT for each year of its adjustment period (Codul fiscal art. 305).',
+  holds: 'untilChanged',
+  subjects: ['asset'],
+  params: z
+    .object({
+      /** The date the use matters on (an event, a year's end). */
+      date: day.optional(),
+    })
+    .strict(),
+  answer: () =>
+    z
+      .object({
+        /** The share of its use with the right of deduction, in percent with up to two
+         * decimals: 100 all taxable, 0 all exempt or outside the business. */
+        share: z.string().regex(/^(0|[1-9]\d?|100)(\.\d{1,2})?$/),
+        from: day,
+        /** What shows the use: a lease of the part used exempt, the option to tax notified, a
+         * decision allocating the good. */
+        evidenceId: z.uuid(),
+      })
+      .strict()
+      .refine((value) => Number(value.share) <= 100, {
+        message: 'Proporția este cel mult 100%.',
+        path: ['share'],
+      }),
+  prompt: (subject, params) =>
+    `În ce proporție este folosit bunul de capital ${subject.id}${params.date ? ` la ${params.date}` : ''} pentru operațiuni cu drept de deducere (taxabile, sau scutite cu drept de deducere), și de la ce dată? Restul este folosit pentru operațiuni scutite fără drept de deducere (de exemplu o închiriere scutită, art. 292 alin. (2) lit. e)) sau în afara activității economice. Atașați documentul care o arată (contractul de închiriere, notificarea opțiunii de taxare, decizia de alocare): ajustarea taxei deduse se calculează pe an, pentru o cincime sau o douăzecime din ea (Codul fiscal art. 305).`,
+  evidence: (value) => [value.evidenceId],
+});
+export type CapitalGoodUseAnswer = z.infer<ReturnType<typeof capitalGoodUse.answer>>;
+
 /** Every kind of question, by id. */
 export const questionKinds = {
   'vehicle.use': vehicleUse,
@@ -708,6 +837,9 @@ export const questionKinds = {
   'profit.losses': profitLosses,
   'obligation.filed': obligationFiled,
   'vat.refund': vatRefund,
+  'capitalGood.use': capitalGoodUse,
+  'nonresident.payee': nonresidentPayee,
+  'nonresident.certificate': nonresidentCertificate,
   'annual.informative': annualInformative,
   'annual.disclosures': annualDisclosures,
   'annual.document': annualDocument,

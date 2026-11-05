@@ -25,6 +25,7 @@ import {
   type YearActivity,
   type YearFigures,
 } from 'xfactura-core/ro/determinations';
+import { exemptCodes, exemptWithDeduction } from 'xfactura-core/ro/exempt';
 import { euVatPrefixes } from 'xfactura-core/ro/geo';
 import { quarterMonths } from 'xfactura-core/ro/payroll';
 import { d406StartOf } from 'xfactura-core/ro/saft/applicability';
@@ -53,6 +54,7 @@ import {
   payrollRuns,
   profileFacts,
   proposals,
+  proposalVersions,
   questionAnswers,
   questions,
   questionWithdrawals,
@@ -406,7 +408,12 @@ async function outputBases(tx: Transaction, companyId: string, from: string, to:
   for (const row of revenue) day(row.date).exemption += row.credit - row.debit;
   for (const row of taxed) {
     if (row.code.startsWith('EXP-')) day(row.date).exemption -= row.base;
-    if (row.code.startsWith('S-') || row.code.startsWith('EXP-')) day(row.date).vat += row.base;
+    if (
+      row.code.startsWith('S-') ||
+      row.code.startsWith('EXP-') ||
+      exemptWithDeduction.includes(row.code)
+    )
+      day(row.date).vat += row.base;
   }
   return [...days.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
@@ -892,7 +899,7 @@ async function booksOf(
       and(
         eq(taxEntries.companyId, companyId),
         eq(taxEntries.tax, 'VAT'),
-        inArray(taxEntries.code, ['RC-EU-SERV', 'EXP-EU-SERV']),
+        inArray(taxEntries.code, ['RC-EU-SERV', 'EXP-EU-SERV', exemptCodes.intraCommunity]),
         gte(taxEntries.taxPoint, from),
         lte(taxEntries.taxPoint, to),
       ),
@@ -914,6 +921,40 @@ async function booksOf(
       ),
     )
     .groupBy(sql`substr(${entries.date}, 1, 7)`);
+  // The other taxes withheld at source (O1), with the return that declares their beneficiaries.
+  const withheld = await tx
+    .select({
+      month: sql<string>`substr(${entries.date}, 1, 7)`,
+      treatment: proposals.treatmentId,
+      annual: sql<
+        string | null
+      >`${proposalVersions.effect} ->> '$.explanation.details.withholding.annual'`,
+    })
+    .from(entries)
+    .innerJoin(
+      proposals,
+      and(eq(proposals.companyId, entries.companyId), eq(proposals.id, entries.proposalId)),
+    )
+    .innerJoin(
+      proposalVersions,
+      and(
+        eq(proposalVersions.companyId, entries.companyId),
+        eq(proposalVersions.proposalId, entries.proposalId),
+        eq(proposalVersions.version, entries.version),
+      ),
+    )
+    .where(
+      and(
+        eq(entries.companyId, companyId),
+        inArray(proposals.treatmentId, [
+          'loans.withhold',
+          'payees.withhold',
+          'nonresidents.withhold',
+        ]),
+        gte(entries.date, `${range.from.slice(0, 4)}-01-01`),
+        lte(entries.date, to),
+      ),
+    );
   const foreign = await tx
     .select({
       id: documents.id,
@@ -1003,7 +1044,32 @@ async function booksOf(
     employmentMonths,
     payrollEventMonths: [...new Set([...sick.map((row) => row.month), ...ends])].sort(),
     euServiceMonths: european.map((row) => row.month).sort(),
+    exemptNoDeductionMonths: (
+      await tx
+        .selectDistinct({ month: sql<string>`substr(${taxEntries.taxPoint}, 1, 7)` })
+        .from(taxEntries)
+        .where(
+          and(
+            eq(taxEntries.companyId, companyId),
+            eq(taxEntries.tax, 'VAT'),
+            eq(taxEntries.code, exemptCodes.noDeduction),
+            gte(taxEntries.taxPoint, from),
+            lte(taxEntries.taxPoint, to),
+          ),
+        )
+    )
+      .map((row) => row.month)
+      .sort(),
     dividendMonths: dividends.map((row) => row.month).sort(),
+    withholdings: [
+      ...new Map(
+        withheld.map((row) => {
+          const annual = (row.treatment === 'loans.withhold' ? 'D205' : (row.annual ?? 'D205')) as
+            'D205' | 'D207' | 'D112';
+          return [`${row.month}|${annual}`, { month: row.month, annual }] as const;
+        }),
+      ).values(),
+    ].sort((a, b) => (a.month < b.month ? -1 : a.month > b.month ? 1 : 0)),
     foreignPurchases: foreign.map((row) => ({
       month: row.date.slice(0, 7),
       documentId: row.id,

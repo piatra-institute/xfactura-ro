@@ -88,6 +88,8 @@ export const workKinds = [
   'taxaccount.differs',
   'taxaccount.undistributed',
   'taxaccount.correction',
+  'vat.prorata',
+  'vat.capitalGoods',
   'close.finding',
   'period.unclosed',
   'rule.gap',
@@ -1062,6 +1064,56 @@ function taxAccountDetector(source: TaxAccountWorkOf): Detector {
   };
 }
 
+// The pro-rata and the capital goods' adjustments: a mixed year without its provisional
+// pro-rata or its year-end adjustment, a capital good whose changed use waits for the year's
+// adjustment (core ro/exempt/agent.ts).
+
+/** An item of the exempt supplies' module, as the worklist reads it. */
+export type VatAdjustmentWorkItem = {
+  kind: 'vat.prorata' | 'vat.capitalGoods';
+  subject: { kind: string; id: string };
+  severity: 'block' | 'warn';
+  period: string;
+  message: string;
+  details: { [key: string]: JsonValue };
+  next: WorkStep[];
+};
+export type VatAdjustmentWorkOf = (
+  tx: Transaction,
+  companyId: string,
+  today: LocalDate,
+) => Promise<VatAdjustmentWorkItem[]>;
+
+function vatAdjustmentDetector(source: VatAdjustmentWorkOf): Detector {
+  const cursorOf = (item: VatAdjustmentWorkItem) =>
+    `${item.kind}|${item.subject.kind}:${item.subject.id}`;
+  return {
+    id: 'vatAdjustments',
+    kinds: ['vat.prorata', 'vat.capitalGoods'],
+    async list({ tx, companyId, today }, page) {
+      const found = (await source(tx, companyId, today))
+        .sort((a, b) => cursorOf(a).localeCompare(cursorOf(b)))
+        .filter((item) =>
+          page.only !== undefined
+            ? item.subject.id === page.only
+            : page.after === null || cursorOf(item) > page.after,
+        );
+      const items = found.slice(0, page.limit).map((item): Draft => ({
+        kind: item.kind,
+        subject: item.subject,
+        severity: item.severity,
+        due: null,
+        period: item.period,
+        message: item.message,
+        details: item.details,
+        next: item.next,
+        cursor: cursorOf(item),
+      }));
+      return { items, next: found.length > page.limit ? items.at(-1)!.cursor : null };
+    },
+  };
+}
+
 // Month-close checks of the months not closed, up to the current one.
 
 /** What to do about a close finding, by its code. */
@@ -1377,26 +1429,35 @@ const documentsDetector: Detector = {
         const receipt = row.kind === 'receipt.received';
         const credit = row.kind.startsWith('creditNote.');
         const foreign = row.country !== null && row.country !== 'RO';
+        // An invoice in category AE: the domestic reverse charge (art. 331).
+        const reverse =
+          !receipt &&
+          !foreign &&
+          (JSON.parse(row.body) as { taxes?: { category?: string }[] }).taxes?.some(
+            (tax) => tax.category === 'AE',
+          ) === true;
         const steps: WorkStep[] = receipt
-          ? []
-          : row.kind === 'tax.decision'
-            ? [propose('tax.decision', { documentId: row.id })]
-            : credit
-              ? [propose('invoices.credit', { documentId: row.id })]
-              : foreign
-                ? [
-                    propose('invoices.crossBorder', { documentId: row.id }),
-                    propose('invoices.recognize', { documentId: row.id }),
-                  ]
-                : [propose('invoices.recognize', { documentId: row.id })];
+          ? [propose('receipts.recognize', { documentId: row.id })]
+          : reverse && !credit
+            ? [propose('invoices.reverseCharge', { documentId: row.id })]
+            : row.kind === 'tax.decision'
+              ? [propose('tax.decision', { documentId: row.id })]
+              : credit
+                ? [propose('invoices.credit', { documentId: row.id })]
+                : foreign
+                  ? [
+                      propose('invoices.crossBorder', { documentId: row.id }),
+                      propose('invoices.recognize', { documentId: row.id }),
+                    ]
+                  : [propose('invoices.recognize', { documentId: row.id })];
         return {
           kind: 'document.unproposed',
           subject: { kind: 'document', id: row.id },
-          severity: receipt ? 'info' : 'warn',
+          severity: 'warn',
           due: null,
           period: monthOf(row.date),
           message: receipt
-            ? `Bonul ${row.number ?? row.id} nu este înregistrat; înregistrarea bonurilor nu este încă disponibilă.`
+            ? `Bonul fiscal ${row.number ?? row.id} din ${row.date} nu este înregistrat.`
             : `Documentul ${row.kind} ${row.number ?? row.id} din ${row.date} nu are o propunere de înregistrare.`,
           details: {
             kind: row.kind,
@@ -1963,6 +2024,7 @@ export interface WorkSources {
   profit: ProfitWorkOf;
   annual: AnnualWorkOf;
   taxaccount: TaxAccountWorkOf;
+  vatAdjustments: VatAdjustmentWorkOf;
 }
 
 /** The detectors in worklist order: decisions and blocked work first, then intake. */
@@ -1976,6 +2038,7 @@ export function workDetectors(sources: WorkSources): Detector[] {
     profitDetector(sources.profit),
     annualDetector(sources.annual),
     taxAccountDetector(sources.taxaccount),
+    vatAdjustmentDetector(sources.vatAdjustments),
     closeDetector(sources.closeChecks),
     rulesDetector(sources.register),
     betterSourceDetector,
