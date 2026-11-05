@@ -717,14 +717,47 @@ describe('obligation closure', () => {
     // The form unknown: a company's statements wait on it; an individual's D212 is not listed.
     expect(lines(result)).toContain('S1005 2026 needs_evidence');
     expect(lines(result).filter((line) => /^D2(12|04) /.test(line))).toEqual([]);
-    const goods = closure({
-      facts: [
-        ...known.filter((item) => item.axis !== 'regime.excluded'),
-        fact('activity.goods', 'yes', '2026-01-01'),
-      ],
+    // Goods (G1): the stock register's written policies are asked for; once recorded they are
+    // covered, but for the retail price method.
+    const withGoods = [
+      ...known.filter((item) => item.axis !== 'regime.excluded'),
+      fact('activity.goods', 'yes', '2026-01-01'),
+    ];
+    const goods = closure({ facts: withGoods });
+    expect(goods.status).toBe('NEEDS_EVIDENCE');
+    expect(goods.needs.map((need) => need.fact).sort()).toEqual([
+      'policy.stock.inventory',
+      'policy.stock.negative',
+      'policy.stock.valuation',
+      'regime.excluded',
+      // A company with goods is asked about the import scheme (V4).
+      'vat.ioss/2026',
+    ]);
+    const policies = [
+      fact('policy.stock.valuation', 'fifo', '2026-01-01'),
+      fact('policy.stock.inventory', 'permanent', '2026-01-01'),
+      fact('policy.stock.negative', 'refuse', '2026-01-01'),
+      fact('regime.excluded', 'none', '2026-01-01'),
+      fact('vat.ioss', 'none', '2026-01-01'),
+    ];
+    expect(closure({ facts: [...withGoods, ...policies] }).unsupported).toEqual([]);
+    // Goods at their retail price (G2): covered on the perpetual inventory, without the cost
+    // method's policies; with the intermittent one the method does not apply (pct. 291 alin. (5)).
+    const retailFacts = [
+      ...withGoods,
+      fact('policy.stock.inventory', 'permanent', '2026-01-01'),
+      fact('regime.excluded', 'none', '2026-01-01'),
+      fact('vat.ioss', 'none', '2026-01-01'),
+      fact('policy.stock.retail', 'retail', '2026-01-01'),
+    ];
+    const retail = closure({ facts: retailFacts });
+    expect(retail.unsupported).toEqual([]);
+    expect(retail.needs.map((need) => need.fact)).not.toContain('policy.stock.valuation');
+    const intermittent = closure({
+      facts: [...retailFacts, fact('policy.stock.inventory', 'intermittent', '2026-02-01')],
     });
-    expect(goods.status).toBe('UNSUPPORTED');
-    expect(goods.unsupported.map((item) => item.trigger)).toEqual(['GOODS_STOCK']);
+    expect(intermittent.status).toBe('UNSUPPORTED');
+    expect(intermittent.unsupported.map((item) => item.trigger)).toEqual(['RETAIL_INTERMITTENT']);
   });
 
   test('a yearly determination missing, or contradicted by the books, blocks what depends on it', () => {

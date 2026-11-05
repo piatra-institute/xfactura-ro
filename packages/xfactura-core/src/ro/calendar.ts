@@ -66,3 +66,14 @@ export function workingDays(month: Month): number {
     addDays(`${month}-28` as LocalDate, 3),
   ).filter((day) => day.startsWith(month)).length;
 }
+
+/** The `count`-th working day after `from` (a term "în termen de n zile lucrătoare de la" a date:
+ * the date itself is not counted). */
+export function addWorkingDays(from: LocalDate, count: number): LocalDate {
+  let day = from;
+  for (let left = count; left > 0;) {
+    day = addDays(day, 1);
+    if (workingDaysBetween(day, day).length) left -= 1;
+  }
+  return day;
+}

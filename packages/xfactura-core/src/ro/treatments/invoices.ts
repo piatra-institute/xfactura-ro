@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   accountCodePattern,
+  isStockAccount,
   partyStatusKey,
   profileAt,
   vatPeriodOf,
@@ -51,6 +52,22 @@ import { euVatPrefixes } from '../geo';
 import { RuleGapError, type RuleContext } from '../../rules';
 import { isLocalDate, type LocalDate } from '../../time';
 import { invoiceDocumentSchema, type InvoiceDocument } from '../../ubl/invoice-document';
+import {
+  invoiceStockInput,
+  invoiceStockQuery,
+  issueInvoiceStock,
+  receiveInvoiceStock,
+  returnFromPriorYear,
+  returnInvoiceStock,
+  type StockInvoiceLine,
+  type StockResult,
+} from '../stock/invoices';
+import {
+  isRetailGoodsAccount,
+  receiveRetail,
+  retailReceiptInput,
+  retailReceiptQuery,
+} from '../retail/retail';
 import {
   answerCovers,
   suggestsVehicle,
@@ -398,10 +415,22 @@ export const recognitionInput = z
      * alin. (3), pct. 58 alin. (3)): the notification filed with the tax authority, for a sale
      * invoiced with VAT. */
     optionEvidenceId: z.uuid().optional(),
+    /** Goods the invoice moves in the stock register (G1): for a purchase, received into a
+     * warehouse, its parts then on stock accounts (371, 30x, 381), each line an item, with the
+     * reception's differences; for a sale, out of a warehouse at the policy's value (607). */
+    stock: invoiceStockInput.optional(),
+    /** Goods a purchase brings into a warehouse kept at retail price (G2, ro/retail): its parts
+     * on the warehouse's goods accounts (`371.<code>-<rate>`) at cost, then the markup and the VAT
+     * the sale price includes (the NIR at sale price). */
+    retail: retailReceiptInput.optional(),
   })
   .strict()
   .refine((input) => (input.account === undefined) !== (input.allocations === undefined), {
     message: 'Indicați fie contul, fie repartizarea pe conturi (allocations).',
+  })
+  .refine((input) => !(input.stock && input.retail), {
+    message:
+      'Mărfurile intră fie în gestiunea pe articole (stock), fie în cea la preț cu amănuntul (retail).',
   })
   .refine((input) => input.vehicle === undefined || input.allocations === undefined, {
     message:
@@ -552,7 +581,16 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
     return {
       documents: [input.documentId],
       profile: true,
-      ...(input.optionEvidenceId ? { evidence: [input.optionEvidenceId] } : {}),
+      ...(input.optionEvidenceId || input.retail
+        ? {
+            evidence: [
+              ...(input.optionEvidenceId ? [input.optionEvidenceId] : []),
+              ...(input.retail ? [input.retail.evidenceId] : []),
+            ],
+          }
+        : {}),
+      ...(input.stock ? { stock: invoiceStockQuery(input.stock) } : {}),
+      ...(input.retail ? { stock: retailReceiptQuery(input.retail).stock! } : {}),
       ...(advances.length || leases.length
         ? {
             openItems: [
@@ -725,7 +763,9 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
         !isLease[index] &&
         (direction === 'sale'
           ? !part.account.startsWith('70')
-          : !purchaseAccount.test(part.account))
+          : !purchaseAccount.test(part.account) &&
+            !(input.stock !== undefined && isStockAccount(part.account)) &&
+            !(input.retail !== undefined && isRetailGoodsAccount(part.account)))
       )
         issues.push(
           block(
@@ -1031,6 +1071,8 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
       return result;
     };
     const advanceItems: OpenItemSpec[] = [];
+    // The line each part is booked on, for the stock register's moves.
+    const partLines: (number | undefined)[] = parts.map(() => undefined);
     parts.forEach((part, p) => {
       const kept = direction === 'purchase';
       // An advance invoiced opens the partner's advance; a negative part settles one.
@@ -1052,6 +1094,7 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
         lines.push(...leaseLines(p));
         return;
       }
+      partLines[p] = lines.length;
       lines.push(
         line(
           {
@@ -1158,6 +1201,78 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
           fx?.gross,
         ),
       );
+    // The goods it moves in the stock register (G1).
+    let stock: StockResult | null = null;
+    if (input.stock) {
+      const invoiceLines: StockInvoiceLine[] = body.lines.map((row) => ({
+        id: row.id,
+        key: categoryKey(row.vatCategory, row.vatRate),
+        net:
+          parseMoney(row.net.replace(/^-/, ''), LEDGER_CURRENCY) *
+          (row.net.startsWith('-') ? -1n : 1n),
+      }));
+      const context = {
+        stock: input.stock,
+        loaded,
+        rules,
+        date: date(body.issueDate),
+        invoiceLines,
+        lines,
+      };
+      stock =
+        direction === 'purchase'
+          ? fx &&
+            input.stock.lines.some(
+              (row) => row.received !== undefined && row.received !== row.quantity,
+            )
+            ? {
+                issues: [
+                  block(
+                    'STOCK_DIFFERENCE_CURRENCY',
+                    'Diferențele la recepția unei facturi în valută nu sunt acoperite: înregistrați factura cu cantitățile ei și diferența separat.',
+                    'stock',
+                  ),
+                ],
+                openItems: [],
+                book: null,
+                details: null,
+              }
+            : receiveInvoiceStock({
+                ...context,
+                partyId,
+                documentId: invoice.record.id,
+                parts: parts.map((part, p) => ({
+                  account: part.account,
+                  vat: part.vat,
+                  line: partLines[p],
+                })),
+              })
+          : issueInvoiceStock(context);
+      issues.push(...stock.issues);
+    }
+    // Goods received into a warehouse at retail price (G2): the VAT their sale price includes
+    // and the markup, on top of their cost.
+    if (input.retail && direction !== 'purchase')
+      issues.push(
+        block(
+          'RETAIL_SALE',
+          'Mărfurile la preț cu amănuntul se vând prin rapoartele Z (retail.zReport).',
+          'retail',
+        ),
+      );
+    const retail =
+      input.retail && direction === 'purchase' && !fx
+        ? receiveRetail({ retail: input.retail, loaded, rules, date: date(body.issueDate), lines })
+        : null;
+    if (input.retail && fx)
+      issues.push(
+        block(
+          'RETAIL_CURRENCY',
+          'Recepția la preț cu amănuntul a unei facturi în valută nu este acoperită.',
+          'retail',
+        ),
+      );
+    if (retail) issues.push(...retail.issues);
     const effect: Effect = {
       schema: 'effect@1',
       date: date(body.issueDate),
@@ -1165,9 +1280,10 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
       journalCode: direction === 'sale' ? 'VANZARI' : 'CUMPARARI',
       description: `${direction === 'sale' ? 'Factură emisă' : 'Factură primită'} ${body.number}`,
       lines,
-      openItems: [item, ...advanceItems],
+      openItems: [item, ...advanceItems, ...(stock?.openItems ?? [])],
       taxEntries,
       schedules: [],
+      ...(stock?.book ? stock.book.effectPart() : {}),
       explanation: {
         summary: fx
           ? `${body.number} din ${body.issueDate}: ${body.totals.gross} ${fx.code} la cursul ${fx.accounting.rate} (${fx.accounting.date}); TVA ${formatMoney(tax, LEDGER_CURRENCY)} lei.`
@@ -1210,6 +1326,8 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
                 ),
               }
             : {}),
+          ...(stock ? { stock: stock.details } : {}),
+          ...(retail ? { retail: retail.details } : {}),
           ...(supplier
             ? {
                 supplierStatus: {
@@ -1750,6 +1868,10 @@ export const creditInput = z
       .min(1)
       .max(50)
       .optional(),
+    /** Goods the credit note moves in the stock register (G1): returned to the supplier, out of
+     * the lots its invoice created (or a price corrected on goods still held, quantity 0); or
+     * returned by the customer, back at the cost they left at. */
+    stock: invoiceStockInput.optional(),
   })
   .strict()
   .refine((input) => (input.account === undefined) !== (input.allocations === undefined), {
@@ -1781,6 +1903,7 @@ export const creditRecognition: Treatment<CreditInput> = {
     documents: [input.documentId, input.originalDocumentId],
     openItems: [{ documentId: input.originalDocumentId, history: true }],
     profile: true,
+    ...(input.stock ? { stock: invoiceStockQuery(input.stock) } : {}),
   }),
   // The original's entries, for the VAT it still defers under VAT on collection.
   followUp(input, loaded) {
@@ -1969,13 +2092,15 @@ export const creditRecognition: Treatment<CreditInput> = {
       partyId,
     };
     if (!purchase) lines.push(partner);
-    parts.forEach((part, p) =>
+    const partLines: number[] = [];
+    parts.forEach((part, p) => {
+      partLines[p] = lines.length;
       lines.push({
         account: part.account,
         side: purchase ? 'D' : 'C',
         bani: -(partNet[p]! + (purchase ? partTax[p]! - deducted[p]! : 0n)),
-      }),
-    );
+      });
+    });
     const cashVat: { code: string; deferred: string; chargeable: string }[] = [];
     for (const category of categories) {
       const exempt = isExemptCategory(category.category);
@@ -2108,6 +2233,58 @@ export const creditRecognition: Treatment<CreditInput> = {
         );
     }
     if (purchase) lines.push(partner);
+    // The goods it moves in the stock register (G1): back to the supplier, or from the customer.
+    let stock: StockResult | null = null;
+    if (input.stock) {
+      const invoiceLines: StockInvoiceLine[] = credit.body.lines.map((row) => ({
+        id: row.id,
+        key: categoryKey(row.vatCategory, row.vatRate),
+        net: parseMoney(row.net.replace(/^-/, ''), LEDGER_CURRENCY),
+      }));
+      const originEntry = loaded.entries.get(item!.originEntryId);
+      const creditDate = date(credit.body.issueDate);
+      if (!purchase && (!originEntry || returnFromPriorYear(loaded, originEntry, creditDate)))
+        stock = {
+          issues: [
+            block(
+              originEntry ? 'STOCK_RETURN_PRIOR_YEAR' : 'STOCK_RETURN_ORIGINAL',
+              originEntry
+                ? 'Returul unei vânzări din exercițiul precedent se corectează la data bilanțului prin 418 și 408 (OMFP 1802/2014 pct. 330), ceea ce gestiunea nu acoperă.'
+                : 'Înregistrarea vânzării inițiale nu este disponibilă.',
+              'stock',
+            ),
+          ],
+          openItems: [],
+          book: null,
+          details: null,
+        };
+      else
+        stock = purchase
+          ? returnInvoiceStock({
+              stock: input.stock,
+              loaded,
+              rules,
+              date: creditDate,
+              invoiceLines,
+              parts: parts.map((part, p) => ({
+                account: part.account,
+                vat: part.vat,
+                line: partLines[p],
+              })),
+              lines,
+              originEntryId: item!.originEntryId,
+            })
+          : issueInvoiceStock({
+              stock: input.stock,
+              loaded,
+              rules,
+              date: creditDate,
+              invoiceLines,
+              lines,
+              original: originEntry!,
+            });
+      issues.push(...stock.issues);
+    }
     const effect: Effect = {
       schema: 'effect@1',
       date: date(credit.body.issueDate),
@@ -2118,11 +2295,13 @@ export const creditRecognition: Treatment<CreditInput> = {
       openItems: [],
       taxEntries,
       schedules: [],
+      ...(stock?.book ? stock.book.effectPart() : {}),
       explanation: {
         summary: `${credit.body.number} reduce ${original.body.number} cu ${credit.body.totals.gross} lei, la cota inițială.`,
         details: {
           originalDocumentId: original.record.id,
           taxPoint,
+          ...(stock ? { stock: stock.details } : {}),
           ...(cashVat.length
             ? { vatOnCollection: { categories: cashVat, clause: cashVatClauses.corrections } }
             : {}),

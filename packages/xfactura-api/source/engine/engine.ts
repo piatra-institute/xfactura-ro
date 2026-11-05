@@ -19,6 +19,10 @@ import {
 } from 'xfactura-core/ro/treatments/vat-registration';
 import { nonpayerDefinitions, nonpayerVersions } from 'xfactura-core/ro/nonpayers';
 import { exemptDefinitions, exemptVersions } from 'xfactura-core/ro/exempt';
+import { euConsumerRecognition, ossDefinitions, ossVersions } from 'xfactura-core/ro/oss';
+import { stockDefinitions, stockTreatments, stockVersions } from 'xfactura-core/ro/stock';
+import { tradeDefinitions, tradeTreatments, tradeVersions } from 'xfactura-core/ro/trade';
+import { retailDefinitions, retailTreatments, retailVersions } from 'xfactura-core/ro/retail';
 import { prorataAdjustment } from 'xfactura-core/ro/treatments/prorata';
 import {
   receiptDefinitions,
@@ -26,6 +30,14 @@ import {
   receiptVersions,
   reverseChargeRecognition,
 } from 'xfactura-core/ro/receipts';
+import {
+  flatRateRecognition,
+  marginPurchase,
+  marginSale,
+  schemeDefinitions,
+  schemeVersions,
+  travelMargin,
+} from 'xfactura-core/ro/schemes';
 import { payrollRecognition } from 'xfactura-core/ro/treatments/payroll';
 import { microTax } from 'xfactura-core/ro/treatments/micro-tax';
 import { assetDepreciation, assetDerecognition } from 'xfactura-core/ro/treatments/assets';
@@ -219,6 +231,17 @@ import { cashVatChecks } from './modules/cash-vat';
 import { d300Declaration } from './modules/d300';
 import { d390Declaration } from './modules/d390';
 import { d301Declaration } from './modules/d301';
+import { d398Declaration } from './modules/d398';
+import {
+  checkViesInput,
+  checkViesView,
+  etransportListInput,
+  etransportListView,
+  intrastatDataInput,
+  intrastatDataView,
+  Trade,
+} from './modules/trade';
+import type { ViesPort } from './adapters/vies';
 import { registrationInput, Registrations, registrationView } from './modules/nonpayers';
 import {
   capitalRegisterInput,
@@ -228,6 +251,25 @@ import {
   VatAdjustments,
   vatAdjustmentWork,
 } from './modules/exempt';
+import {
+  goodsRegisterInput,
+  goodsRegisterView,
+  schemeChecks,
+  schemeWork,
+  SpecialSchemes,
+} from './modules/schemes';
+import {
+  cardInput,
+  cardView,
+  itemInput,
+  itemView,
+  registerInput,
+  registerView,
+  Stock,
+  stockChecks,
+  warehouseInput,
+  warehouseView,
+} from './modules/stock';
 import { d394Declaration } from './modules/d394';
 import { d406Declaration } from './modules/d406';
 import { d112Declaration } from './modules/d112';
@@ -284,12 +326,30 @@ import {
 } from './modules/declarations';
 import {
   employeeInput,
+  garnishmentInput,
+  garnishmentReleaseInput,
   partyCnpInput,
   Payroll,
+  regesInput,
   runIdInput,
   runInput,
+  Sealer,
   termsInput,
 } from './modules/payroll';
+import {
+  cashRegisterView,
+  importZInput,
+  importZView,
+  positionInput as retailPositionInput,
+  positionView as retailPositionView,
+  registerEventInput,
+  registerInput as amefRegisterInput,
+  Retail,
+  retailChecks,
+  retailWork,
+  setupInput,
+  setupView,
+} from './modules/retail';
 import { assetInput, Assets, disposalInput, fiscalInput } from './modules/assets';
 import { EnterpriseMembers, membersInput } from './modules/enterprise';
 import {
@@ -473,7 +533,12 @@ export const defaultRegister = () =>
       ...nonpayerDefinitions,
       ...exemptDefinitions,
       ...receiptDefinitions,
+      ...schemeDefinitions,
       ...yearEndDefinitions,
+      ...ossDefinitions,
+      ...stockDefinitions,
+      ...tradeDefinitions,
+      ...retailDefinitions,
     ],
     [
       ...vatVersions,
@@ -498,7 +563,12 @@ export const defaultRegister = () =>
       ...nonpayerVersions,
       ...exemptVersions,
       ...receiptVersions,
+      ...schemeVersions,
       ...yearEndVersions,
+      ...ossVersions,
+      ...stockVersions,
+      ...tradeVersions,
+      ...retailVersions,
     ],
   );
 
@@ -570,6 +640,14 @@ export class Engine {
   /** The year-end in full: the inventory against the books, the review, the year's opening
    * against its close (core ro/yearend). */
   readonly yearEnd: YearEnd;
+  /** The special VAT schemes: a dealer's items under the margin scheme (core ro/schemes). */
+  readonly schemes: SpecialSchemes;
+  /** The stock register (G1): the catalogue, the warehouses and what the entries moved. */
+  readonly stock: Stock;
+  /** Goods across the border (G3): VIES checks, Intrastat's data, RO e-Transport's transports. */
+  readonly trade: Trade;
+  /** Retail and B2C (G2): the fiscal cash registers, their Z reports, the retail price method. */
+  readonly retail: Retail;
 
   constructor(
     readonly db: Database,
@@ -597,6 +675,8 @@ export class Engine {
       anaf?: { client: AnafClient; environment: AnafEnvironment; fetch?: typeof fetch };
       /** ANAF's registers of taxpayers; without it, partners' statuses cannot be checked. */
       taxpayers?: TaxpayerRegistryPort;
+      /** VIES on-the-Web; without it, partners' VAT codes in other Member States are not checked. */
+      vies?: ViesPort;
     } = {},
   ) {
     this.clock = options.clock ?? Date.now;
@@ -644,6 +724,10 @@ export class Engine {
       expenseReport,
       receiptRecognition,
       reverseChargeRecognition,
+      marginSale,
+      marginPurchase,
+      travelMargin,
+      flatRateRecognition,
       loanReceipt,
       loanPlan,
       loanAccrual,
@@ -661,6 +745,10 @@ export class Engine {
       receivableImpairment,
       assetImpairment,
       provisionRecord,
+      euConsumerRecognition,
+      ...stockTreatments,
+      ...tradeTreatments,
+      ...retailTreatments,
       ...(options.treatments ?? []),
     );
     this.templates = new Templates(this.commands, this.proposals);
@@ -683,6 +771,9 @@ export class Engine {
       ...pitChecks((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
       ...taxAccountChecks((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
       ...yearEndChecks((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
+      ...schemeChecks,
+      ...stockChecks,
+      ...retailChecks,
       ...(options.closeChecks ?? []),
     ];
     this.actions.add(closeHandler(this.closeChecks));
@@ -726,7 +817,7 @@ export class Engine {
       ]),
     );
     this.positions = new Positions(this.commands);
-    this.sales = new Sales(this.commands, objects, this.proposals);
+    this.sales = new Sales(this.commands, objects, this.proposals, new Sealer(secret));
     this.invoicerImport = new InvoicerImport(this.commands, objects);
     this.anaf = options.anaf
       ? new AnafConnections(
@@ -780,6 +871,7 @@ export class Engine {
       s1046Declaration(),
       d212Declaration(secret, (tx, companyId) => this.proposals.ruleContext(tx, companyId)),
       d204Declaration(secret, (tx, companyId) => this.proposals.ruleContext(tx, companyId)),
+      d398Declaration(objects, (tx, companyId) => this.proposals.ruleContext(tx, companyId)),
       ...(options.declarations ?? []),
     );
     this.actions.add(this.declarations.authorizeHandler());
@@ -810,6 +902,17 @@ export class Engine {
     this.registrations = new Registrations(
       this.commands,
       (tx, companyId) => this.proposals.ruleContext(tx, companyId),
+      this.clock,
+    );
+    this.schemes = new SpecialSchemes(this.commands);
+    this.stock = new Stock(this.commands);
+    this.retail = new Retail(this.commands, objects);
+    this.trade = new Trade(
+      this.commands,
+      objects,
+      this.documents,
+      (tx, companyId) => this.proposals.ruleContext(tx, companyId),
+      options.vies,
       this.clock,
     );
     this.vatAdjustments = new VatAdjustments(
@@ -856,8 +959,13 @@ export class Engine {
         profit: (tx, companyId, today) => profitWork(tx, companyId, today),
         vatAdjustments: async (tx, companyId, today) =>
           vatAdjustmentWork(tx, companyId, today, await this.proposals.ruleContext(tx, companyId)),
+        schemes: (tx, companyId, today) => schemeWork(tx, companyId, today),
         yearEnd: async (tx, companyId, today) =>
           yearEndWork(tx, companyId, today, await this.proposals.ruleContext(tx, companyId)),
+        payroll: (tx, companyId, today) => this.payroll.work(tx, companyId, today),
+        trade: (tx, companyId, today) => this.trade.work(tx, companyId, today),
+        retail: async (tx, companyId, today) =>
+          retailWork(tx, companyId, today, await this.proposals.ruleContext(tx, companyId)),
         taxaccount: async (tx, companyId, today) =>
           taxAccountWork(
             tx,
@@ -2630,6 +2738,92 @@ export class Engine {
         run: (actor) => whole(this.payroll.listRuns(actor)),
       }),
       define({
+        id: 'payroll.garnishments.record',
+        description:
+          'Înregistrează o poprire pe salariul unui salariat (adresa de înființare): creditorul, felul creanței, suma de recuperat și ce se reține lunar.',
+        summary:
+          "Records a garnishment order on an employee's salary: the creditor, the kind of debt, the amount to recover and what is withheld each month.",
+        toolset: 'payroll',
+        dataClasses: ['payroll', 'personal'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'write',
+        agent: false,
+        effect: 'prepare',
+        approval: 'none',
+        input: garnishmentInput,
+        output: z.object({ id: z.string() }),
+        run: (actor, key, input) => this.payroll.recordGarnishment(actor, key, input),
+      }),
+      define({
+        id: 'payroll.garnishments.release',
+        description: 'Înregistrează ridicarea unei popriri, de la o dată, cu documentul ei.',
+        summary: 'Records the release of a garnishment order from a date, with its document.',
+        toolset: 'payroll',
+        dataClasses: ['payroll', 'personal'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'write',
+        agent: false,
+        effect: 'prepare',
+        approval: 'none',
+        input: garnishmentReleaseInput,
+        output: z.object({ garnishmentId: z.string() }),
+        run: (actor, key, input) => this.payroll.releaseGarnishment(actor, key, input),
+      }),
+      define({
+        id: 'payroll.garnishments.list',
+        description: 'Popririle pe salarii, cu ce s-a reținut și ce mai este de recuperat.',
+        summary: 'Lists the garnishment orders on salaries, what was withheld and what remains.',
+        toolset: 'payroll',
+        dataClasses: ['payroll', 'personal'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: false,
+        effect: 'read',
+        approval: 'none',
+        input: z.object({}).strict(),
+        output: page(z.unknown()),
+        run: (actor) => whole(this.payroll.listGarnishments(actor)),
+      }),
+      define({
+        id: 'payroll.reges.record',
+        description:
+          'Înregistrează transmiterea în REGES-ONLINE a unui contract, a unei modificări sau a încetării lui, cu recipisa; aplicația nu transmite în REGES.',
+        summary:
+          'Records a transmission to REGES-ONLINE (a contract, a change or its end) with its receipt; the engine does not submit to REGES.',
+        toolset: 'payroll',
+        dataClasses: ['payroll', 'personal'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'write',
+        agent: false,
+        effect: 'prepare',
+        approval: 'none',
+        input: regesInput,
+        output: z.object({ contractId: z.string(), termsSeq: z.number(), event: z.string() }),
+        run: (actor, key, input) => this.payroll.recordReges(actor, key, input),
+      }),
+      define({
+        id: 'payroll.reges.list',
+        description:
+          'Ce trebuie transmis în REGES-ONLINE pentru fiecare contract, termenul și dacă a fost transmis.',
+        summary:
+          'Lists what REGES-ONLINE needs for each contract, its deadline and whether it was transmitted.',
+        toolset: 'payroll',
+        dataClasses: ['payroll', 'personal'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: false,
+        effect: 'read',
+        approval: 'none',
+        input: z.object({}).strict(),
+        output: page(z.unknown()),
+        run: (actor) => whole(this.payroll.listReges(actor)),
+      }),
+      define({
         id: 'cash.register',
         description:
           'Registrul de casă: pe zile, soldul reportat, încasările și plățile în numerar cu documentele lor și soldul zilei.',
@@ -2769,6 +2963,237 @@ export class Engine {
         input: prorataComputeInput,
         output: prorataComputeView,
         run: (actor, _, input) => this.vatAdjustments.prorata(actor, input),
+      }),
+      define({
+        id: 'stock.items.create',
+        description:
+          'Adaugă un articol în nomenclatorul de stocuri: cod, denumire, unitate de măsură (UN/ECE 20), cod NC8, contul de stoc și regimul TVA la vânzare.',
+        summary:
+          'Adds an item to the stock catalogue: code, name, unit of measure (UN/ECE 20), NC8 code, stock account and VAT category.',
+        toolset: 'books',
+        dataClasses: ['books'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'write',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: itemInput,
+        output: itemView,
+        run: (actor, key, input) => this.stock.createItem(actor, key, input),
+      }),
+      define({
+        id: 'stock.items.list',
+        description: 'Nomenclatorul de stocuri: articolele cu unitatea, codul NC8 și contul lor.',
+        summary: 'The stock catalogue: each item with its unit, NC8 code and stock account.',
+        toolset: 'reference',
+        dataClasses: ['books'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: z.object({}).strict(),
+        output: z.object({ items: z.array(itemView), next: z.string().nullable() }),
+        run: (actor) => this.stock.listItems(actor),
+      }),
+      define({
+        id: 'stock.warehouses.create',
+        description:
+          'Adaugă o gestiune (magazie, magazin) cu gestionarul ei și, opțional, decizia de numire.',
+        summary:
+          'Adds a warehouse (gestiune) with the person responsible for it and, optionally, the appointment.',
+        toolset: 'books',
+        dataClasses: ['books', 'personal'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'write',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: warehouseInput,
+        output: warehouseView,
+        run: (actor, key, input) => this.stock.createWarehouse(actor, key, input),
+      }),
+      define({
+        id: 'stock.warehouses.list',
+        description: 'Gestiunile companiei, cu gestionarii lor.',
+        summary: "The company's warehouses with their keepers.",
+        toolset: 'reference',
+        dataClasses: ['books', 'personal'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: z.object({}).strict(),
+        output: z.object({ items: z.array(warehouseView), next: z.string().nullable() }),
+        run: (actor) => this.stock.listWarehouses(actor),
+      }),
+      define({
+        id: 'stock.register',
+        description:
+          'Registrul stocurilor la o dată: cantitatea și valoarea fiecărui articol pe gestiuni (și loturi), și registrul față de soldurile conturilor de stocuri.',
+        summary:
+          "The stock register at a date: each item's quantity and value per warehouse (and layer), and the register against the stock accounts' balances.",
+        toolset: 'books',
+        dataClasses: ['books'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: registerInput,
+        output: registerView,
+        run: (actor, _, input) => this.stock.register(actor, input),
+      }),
+      define({
+        id: 'stock.card',
+        description:
+          'Fișa de magazie a unui articol într-o gestiune: fiecare intrare și ieșire cu soldul în cantitate și valoare.',
+        summary:
+          "An item's stock card in a warehouse (fișa de magazie): every entry and exit with the running quantity and value.",
+        toolset: 'books',
+        dataClasses: ['books'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: cardInput,
+        output: cardView,
+        run: (actor, _, input) => this.stock.card(actor, input),
+      }),
+      define({
+        id: 'retail.registers.record',
+        description:
+          'Înregistrează o casă de marcat (aparat de marcat electronic fiscal): numărul unic, seria fiscală, locul de instalare, gestiunea și data fiscalizării; aplicația nu comunică cu aparatul.',
+        summary:
+          'Records a fiscal cash register: its unique number, fiscal series, location, warehouse and fiscalization; the engine never talks to the device.',
+        toolset: 'admin',
+        dataClasses: ['books'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'manage',
+        agent: false,
+        effect: 'manage',
+        approval: 'human',
+        input: amefRegisterInput,
+        output: z.object({ id: z.string(), code: z.string() }),
+        run: (actor, key, input) => this.retail.recordRegister(actor, key, input),
+      }),
+      define({
+        id: 'retail.registers.event',
+        description:
+          'Înregistrează un eveniment al unei case de marcat cu documentul lui: înregistrarea la ANAF, contractul de service, înlocuirea memoriei fiscale sau a jurnalului, defectarea și repararea, scoaterea din folosință.',
+        summary:
+          "Records a cash register's event with its document: ANAF registration, service contract, memory or journal replaced, failure and repair, taken out of use.",
+        toolset: 'books',
+        dataClasses: ['books'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'write',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: registerEventInput,
+        output: z.object({ registerId: z.string(), seq: z.number(), kind: z.string() }),
+        run: (actor, key, input) => this.retail.recordEvent(actor, key, input),
+      }),
+      define({
+        id: 'retail.registers.list',
+        description:
+          'Casele de marcat ale companiei, cu evenimentele, rapoartele Z înregistrate și obligațiile externe ale fiecăreia (fiscalizare, înregistrare ANAF, service, registru special, arhivare).',
+        summary:
+          "The company's cash registers with their events, the Z reports recorded and each register's external obligations (fiscalization, ANAF, service, archives).",
+        toolset: 'reference',
+        dataClasses: ['books'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: z.object({}).strict(),
+        output: z.object({ items: z.array(cashRegisterView), next: z.string().nullable() }),
+        run: (actor) => this.retail.listRegisters(actor),
+      }),
+      define({
+        id: 'retail.setup',
+        description:
+          'Deschide conturile unei gestiuni ținute la preț cu amănuntul: mărfurile și TVA neexigibilă pe cote, adaosul comercial (371, 4428, 378), separate de TVA la încasare.',
+        summary:
+          "Opens a retail-price warehouse's accounts: goods and the VAT their price includes by rate, the markup (371, 4428, 378), apart from VAT on collection.",
+        toolset: 'admin',
+        dataClasses: ['books'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'manage',
+        agent: false,
+        effect: 'manage',
+        approval: 'human',
+        input: setupInput,
+        output: setupView,
+        run: (actor, key, input) => this.retail.setup(actor, key, input),
+      }),
+      define({
+        id: 'retail.importZ',
+        description:
+          'Importă fișierul zilnic exportat de o casă de marcat (XML A4203, OPANAF nr. 146/2018, semnat sau nu) ca raport Z al casei înregistrate.',
+        summary:
+          "Imports a cash register's daily export (A4203 XML, OPANAF 146/2018, signed or not) as the Z report of a recorded register.",
+        // With the retail operations: the inbox's direct tools are at the MCP limit.
+        toolset: 'books',
+        dataClasses: ['books'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'write',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: importZInput,
+        output: importZView,
+        run: (actor, key, input) => this.retail.importZ(actor, key, input),
+      }),
+      define({
+        id: 'retail.position',
+        description:
+          'O gestiune la preț cu amănuntul la o dată: mărfurile la preț de vânzare și TVA neexigibilă pe cote, adaosul și costul lor.',
+        summary:
+          'A retail-price warehouse on a date: its goods at sale price and the VAT they include by rate, the markup and their cost.',
+        toolset: 'books',
+        dataClasses: ['books'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: retailPositionInput,
+        output: retailPositionView,
+        run: (actor, _, input) => this.retail.position(actor, input),
+      }),
+      define({
+        id: 'margin.goods.register',
+        description:
+          'Registrul bunurilor în regimul marjei (art. 312 din Codul fiscal, norme pct. 86 alin. (6)): fiecare bun cu documentul lui de achiziție, prețul de cumpărare, vânzarea cu prețul, marja și TVA ei, și, pe perioade fiscale, baza și taxa livrărilor în regim special.',
+        summary:
+          "A dealer's register of items under the margin scheme: each purchase document with its price, its sale with the price, margin and VAT, and per VAT period the base and VAT of the supplies.",
+        toolset: 'tax',
+        dataClasses: ['books', 'tax'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: goodsRegisterInput,
+        output: goodsRegisterView,
+        run: (actor, _, input) => this.schemes.register(actor, input),
       }),
       define({
         id: 'vat.capitalGoods.register',
@@ -3032,6 +3457,60 @@ export class Engine {
         input: checkStatusInput,
         output: checkStatusView,
         run: (actor, key, input) => this.partyStatuses.checkStatus(actor, key, input),
+      }),
+      define({
+        id: 'parties.checkVies',
+        description:
+          'Verifică în VIES (serviciul Comisiei Europene) codul de TVA dintr-un alt stat membru al unui partener, pentru ziua de azi; păstrează răspunsul VIES și îl înregistrează ca document vies.check, pe care îl citește livrarea intracomunitară.',
+        summary:
+          "Asks VIES whether a partner's VAT code in another Member State is valid today, keeps VIES's answer and records it as a vies.check document, which an intra-community supply reads.",
+        toolset: 'tax',
+        dataClasses: ['books', 'tax'],
+        reversible: true,
+        externalEffect: true,
+        permission: 'write',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: checkViesInput,
+        output: checkViesView,
+        run: (actor, key, input) => this.trade.checkVies(actor, key, input),
+      }),
+      define({
+        id: 'intrastat.data',
+        description:
+          'Datele declarației statistice Intrastat a unei luni, pe flux (introduceri, expedieri), din registre: liniile facturilor cu codul NC8 al articolului și valoarea facturată în lei, cu câmpurile pe care registrele nu le țin; declarația se depune la INS.',
+        summary:
+          "A month's Intrastat lines per flow from the books: each invoice line with its item's CN8 code and invoiced value in lei, and the fields the books do not hold; the declaration is filed with INS.",
+        toolset: 'tax',
+        dataClasses: ['books', 'tax'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: intrastatDataInput,
+        output: intrastatDataView,
+        run: (actor, _, input) => this.trade.intrastatData(actor, input),
+      }),
+      define({
+        id: 'etransport.list',
+        description:
+          'Transporturile de bunuri din registre (achiziții și livrări intracomunitare, importuri, exporturi) cu cine le declară în RO e-Transport, intervalul declarării, valabilitatea codului UIT și codul înregistrat.',
+        summary:
+          'The transports of goods in the books (intra-community acquisitions and supplies, imports, exports) with who declares them in RO e-Transport, the declaration window, the UIT validity and the code recorded.',
+        toolset: 'tax',
+        dataClasses: ['books', 'tax'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: etransportListInput,
+        output: etransportListView,
+        run: (actor, _, input) => this.trade.etransportList(actor, input),
       }),
       define({
         id: 'parties.get',

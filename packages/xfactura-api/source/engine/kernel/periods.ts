@@ -220,13 +220,17 @@ async function closingBalances(tx: Transaction, companyId: string, month: string
         BigInt,
       ),
     })
-    .from(lines)
-    .innerJoin(entries, and(eq(entries.companyId, lines.companyId), eq(entries.id, lines.entryId)))
+    // The months' entries first (`entry_period`), then each one's lines (CROSS JOIN keeps the
+    // entries outermost): a first close reads its months, not every line along an index.
+    .from(entries)
+    .crossJoin(lines)
     .where(
       and(
         eq(entries.companyId, companyId),
         lte(entries.period, month),
         previous ? gt(entries.period, previous.month) : undefined,
+        eq(lines.companyId, entries.companyId),
+        eq(lines.entryId, entries.id),
       ),
     )
     .groupBy(lines.account, sql`coalesce(${lines.currency}, 'RON')`);

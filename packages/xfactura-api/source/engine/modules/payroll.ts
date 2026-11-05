@@ -1,19 +1,32 @@
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from 'node:crypto';
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, like, lte } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireCondition } from 'xfactura-core/errors';
 import { canonical, hashOf } from 'xfactura-core/hash';
 import { formatMoney, parseMoney } from 'xfactura-core/money';
 import { workingDays } from 'xfactura-core/ro/calendar';
 import { isValidCnp } from 'xfactura-core/ro/identifiers';
+import { profileAt } from 'xfactura-core/kernel';
 import {
+  benefitTotals,
   calculatePay,
+  evaluateBenefits,
+  garnish,
+  garnishmentKinds,
+  giftOccasions,
   minimumExemptions,
   payItemKinds,
+  regesDeadline,
+  voucherExcess,
+  type BenefitInput,
+  type BenefitResult,
+  type GarnishmentOrder,
   type MinimumWageRelief,
   type PayInput,
   type PayIssue,
+  type PayItemKind,
   type PayResult,
+  type RegesField,
 } from 'xfactura-core/ro/payroll';
 import { d112PrescriptionPlaces } from 'xfactura-core/ro/declarations/d112';
 import {
@@ -21,17 +34,30 @@ import {
   sickIndemnity,
   type SickBase,
   type SickCertificate,
+  type SickCodeRule,
   type SickEpisode,
 } from 'xfactura-core/ro/payroll/sick-leave';
 import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
-import { addDays, monthEnd, monthStart, type LocalDate, type Month } from 'xfactura-core/time';
+import {
+  addDays,
+  bucharestDate,
+  monthEnd,
+  monthStart,
+  type LocalDate,
+  type Month,
+} from 'xfactura-core/time';
 import { sha256 } from '../adapters/object-store';
 import type { Transaction } from '../db/database';
 import {
+  artifactEvents,
+  artifacts,
   employees,
   employmentTerms,
   entries,
   evidence,
+  fxRates,
+  garnishmentReleases,
+  garnishments,
   parties,
   partyCnps,
   payrollLines,
@@ -39,9 +65,12 @@ import {
   payrollRuns,
   proposals,
   proposalVersions,
+  regesRecords,
 } from '../db/schema';
 import { appendAudit, type Actor, type Commands } from '../kernel/commands';
 import { entryStands } from '../kernel/ledger';
+import { loadState } from '../kernel/state';
+import type { YearEndWorkItem } from '../kernel/work';
 
 const money = z.string().regex(/^(0|[1-9]\d*)(\.\d{1,2})?$/);
 const localDate = z.iso.date();
@@ -84,12 +113,118 @@ export const termsInput = z
     unionDues: money.default('0'),
     minimumExemption: z.enum(minimumExemptions).optional(),
     evidenceId: z.uuid().optional(),
+    /** `mandate`: an administrator's administration or mandate contract, not an employment
+     * contract (Codul fiscal art. 76 alin. (2) lit. o)); `mainJob` then says whether the person
+     * declared the main job (funcția de bază) there. The same for every version. */
+    kind: z.enum(['employment', 'mandate']).default('employment'),
+  })
+  .strict();
+
+const label = z.string().trim().min(1).max(120);
+/** A benefit in kind of the month, with the document its value comes from (norme pct. 14 alin.
+ * (3): the computation is attached to the payroll). */
+export const benefitEntry = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('car'),
+      label,
+      /** The vehicle's input value, or the month's rent paid to a third party. */
+      inputValue: money.optional(),
+      rent: money.optional(),
+      /** Private and total kilometres of the month, for mixed use. */
+      km: z
+        .object({
+          personal: z.number().int().min(0).max(100_000),
+          total: z.number().int().min(1).max(100_000),
+        })
+        .strict()
+        .optional(),
+      passenger: z.boolean(),
+      exclusiveBusiness: z.boolean(),
+      evidenceId: z.uuid(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('housing'),
+      label,
+      value: money,
+      conditions: z.boolean(),
+      evidenceId: z.uuid(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('gift'),
+      label,
+      occasion: z.enum(giftOccasions),
+      persons: z
+        .array(z.object({ recipient: z.enum(['employee', 'child']), value: money }).strict())
+        .min(1)
+        .max(20),
+      evidenceId: z.uuid(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('insurance'),
+      label,
+      premium: money,
+      health: z.boolean(),
+      evidenceId: z.uuid(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('other'),
+      label,
+      value: money,
+      basis: z.string().trim().min(1).max(300),
+      evidenceId: z.uuid(),
+    })
+    .strict(),
+]);
+
+export const garnishmentInput = z
+  .object({
+    contractId: z.uuid(),
+    /** The creditor the withheld amounts are paid to. */
+    partyId: z.uuid(),
+    kind: z.enum(garnishmentKinds),
+    reference: z.string().trim().min(1).max(100),
+    receivedOn: localDate,
+    total: money,
+    /** What the order says to withhold each month: an amount, or a share of the net pay. */
+    monthly: money.optional(),
+    share: z.tuple([z.number().int().min(1).max(100), z.number().int().min(1).max(100)]).optional(),
+    evidenceId: z.uuid(),
+  })
+  .strict();
+export const garnishmentReleaseInput = z
+  .object({ garnishmentId: z.uuid(), releasedOn: localDate, evidenceId: z.uuid() })
+  .strict();
+export const regesInput = z
+  .object({
+    contractId: z.uuid(),
+    termsSeq: z.number().int().min(1),
+    event: z.enum(['start', 'change', 'end']),
+    transmittedOn: localDate,
+    /** The receipt REGES-ONLINE gave. */
+    evidenceId: z.uuid(),
   })
   .strict();
 
 export const runInput = z
   .object({
     month,
+    /** A month already posted is computed again only as a correction: an error found after
+     * posting (or filing), or a retroactive change of a contract's terms, with the document that
+     * shows it. Amounts owed for earlier months by law or a court's decision (art. 146 alin.
+     * (9)–(9^1), D112 tip_rec 2) are not covered. */
+    correction: z
+      .object({ reason: z.enum(['error', 'retroactive', 'legal']), evidenceId: z.uuid() })
+      .strict()
+      .optional(),
     /** Working days in the month: weekdays less the public holidays of Codul muncii art. 139,
      * unless the company's calendar differs. */
     workingDays: z.number().int().min(1).max(23).optional(),
@@ -149,6 +284,23 @@ export const runInput = z
                       .trim()
                       .regex(/^[0-9A-Za-z]{1,3}$/)
                       .optional(),
+                    /** The child's CNP (codes 09, 91) or the patient's (17), kept sealed. */
+                    careCnp: z
+                      .string()
+                      .regex(/^\d{13}$/)
+                      .optional(),
+                    /** The emergency's code (06, D_11) or the infectious disease's (05, 51, D_12). */
+                    urgencyCode: z
+                      .string()
+                      .regex(/^\d{1,3}$/)
+                      .optional(),
+                    infectiousCode: z
+                      .string()
+                      .regex(/^\d{1,2}$/)
+                      .optional(),
+                    /** For a work accident or occupational disease (02–04): the territorial
+                     * pension house confirmed it (Legea nr. 346/2002 art. 19 alin. (7)). */
+                    accidentConfirmed: z.boolean().optional(),
                   })
                   .strict(),
               )
@@ -156,11 +308,17 @@ export const runInput = z
               .optional(),
             /** The base of an episode starting this month when the payroll does not hold six of
              * the previous twelve months: from the employee's stage certificate (adeverința de
-             * stagiu), the insured incomes, each month capped, and the insured working days. */
+             * stagiu), the insured incomes, each month capped, and the insured working days. For a
+             * work accident (02–04) without a posted month: the monthly average of the gross
+             * salary income and the working days of the certificate's month (Legea nr. 346/2002
+             * art. 19). */
             sickBase: z
               .object({ income: money, days: z.number().int().min(1).max(140) })
               .strict()
               .optional(),
+            /** The month's benefits in kind, in the order the employer sets for the 33% cap of
+             * art. 76 alin. (4^1) (alin. (4^2)). */
+            benefits: z.array(benefitEntry).max(20).optional(),
           })
           .strict(),
       )
@@ -203,10 +361,10 @@ export class Sealer {
   }
 }
 
-/** The month's posted payroll run: the one its posting read. */
-export async function postedRun(tx: Transaction, companyId: string, month: string) {
-  const [row] = await tx
-    .select({ input: proposalVersions.input })
+/** The month's posted payroll runs, by round: each posting's run, while its entry stands. */
+export async function postedRuns(tx: Transaction, companyId: string, month: string) {
+  const rows = await tx
+    .select({ input: proposalVersions.input, subject: proposals.subjectKey })
     .from(entries)
     .innerJoin(
       proposals,
@@ -223,11 +381,22 @@ export async function postedRun(tx: Transaction, companyId: string, month: strin
     .where(
       and(
         eq(entries.companyId, companyId),
-        eq(proposals.subjectKey, `payroll:${month}:1`),
+        like(proposals.subjectKey, `payroll:${month}:%`),
         entryStands('"acc_entries"'),
       ),
     );
-  return row ? (JSON.parse(row.input) as { runId: string }).runId : undefined;
+  return rows
+    .map((row) => ({
+      round: Number(row.subject.split(':')[2]),
+      runId: (JSON.parse(row.input) as { runId: string }).runId,
+    }))
+    .sort((a, b) => a.round - b.round);
+}
+
+/** The month's posted payroll run: the latest round standing, which a correction makes the
+ * month's. */
+export async function postedRun(tx: Transaction, companyId: string, month: string) {
+  return (await postedRuns(tx, companyId, month)).at(-1)?.runId;
 }
 
 const previousMonth = (month: string, back: number) => {
@@ -263,6 +432,12 @@ export type StoredSick = {
   place?: (typeof d112PrescriptionPlaces)[number];
   /** The diagnosis code, sealed for the company. */
   diagnosisSealed?: string;
+  /** The child's or patient's CNP, sealed for the company. */
+  careCnpSealed?: string;
+  urgencyCode?: string;
+  infectiousCode?: string;
+  /** A work accident or occupational disease the pension house confirmed. */
+  accidentConfirmed?: boolean;
   /** Working days of the certificate, all suspended. */
   days: number;
   unpaidDays: number;
@@ -293,6 +468,36 @@ const zero = {
   net: 0n,
   cam: 0n,
 };
+
+/** The codes of work accidents and occupational diseases (Legea nr. 346/2002). */
+const accidentCodes = ['02', '03', '04'];
+
+/** The pay items of a certificate's two parts, by how its code is taxed (`ro.sick.codes`). */
+function sickKinds(rule: SickCodeRule) {
+  if (rule.payer === 'employer_then_pension_house')
+    return { employer: 'accident_employer' as const, fund: 'accident_fund' as const };
+  return {
+    employer: rule.cass ? ('sick_employer' as const) : ('sick_employer_nocass' as const),
+    fund: !rule.taxable
+      ? ('sick_fund_exempt' as const)
+      : rule.cass
+        ? ('sick_fund' as const)
+        : ('sick_fund_nocass' as const),
+  };
+}
+
+/** Benefits as the line keeps them: amounts as strings. */
+function benefitRecord(results: readonly BenefitResult[]) {
+  return results.map((result) => ({
+    kind: result.kind,
+    label: result.label,
+    taxable: result.taxable.map((part) => ({ field: part.field, amount: String(part.amount) })),
+    exempt: result.exempt.map((part) => ({ field: part.field, amount: String(part.amount) })),
+    exemptCents: String(result.exemptCents),
+    steps: result.steps.map((item) => ({ ...item, amount: String(item.amount) })),
+  }));
+}
+export type StoredBenefit = ReturnType<typeof benefitRecord>[number];
 
 export class Payroll {
   private readonly sealer: Sealer;
@@ -444,8 +649,18 @@ export class Payroll {
             .orderBy(desc(employmentTerms.seq))
             .limit(1)
         : [];
+      requireCondition(
+        input.kind === 'employment' || !input.minimumExemption,
+        'MANDATE_TERMS',
+        'Contribuția minimă (art. 146 alin. (5^6)) este a contractelor de muncă: un mandat nu are excepție de la ea.',
+      );
       if (input.contractId) {
         requireCondition(last, 'CONTRACT', 'Contractul nu există.', 404);
+        requireCondition(
+          last.kind === input.kind,
+          'TERMS_KIND',
+          'O versiune nouă a contractului păstrează felul lui (contract de muncă sau mandat).',
+        );
         requireCondition(
           last.employeeId === input.employeeId && input.effectiveFrom >= last.effectiveFrom,
           'TERMS_ORDER',
@@ -471,6 +686,7 @@ export class Payroll {
         unionDuesBani: parseMoney(input.unionDues, 'RON'),
         minimumExemption: input.minimumExemption ?? null,
         evidenceId: input.evidenceId ?? null,
+        kind: input.kind,
         createdBy: actor.actorId,
       });
       return { contractId, seq };
@@ -516,30 +732,61 @@ export class Payroll {
    */
   prepareRun(actor: Actor, key: string, input: z.infer<typeof runInput>) {
     return this.commands.run(actor, key, 'payroll.runs.prepare', input, 'write', async (tx) => {
-      const round = 1;
       const monthDays = input.workingDays ?? workingDays(input.month as Month);
-      const [posted] = await tx
-        .select({ id: entries.id })
-        .from(entries)
-        .innerJoin(
-          proposals,
-          and(eq(proposals.companyId, entries.companyId), eq(proposals.id, entries.proposalId)),
-        )
-        .where(
-          and(
-            eq(entries.companyId, actor.companyId),
-            eq(proposals.subjectKey, `payroll:${input.month}:${round}`),
-            entryStands('"acc_entries"'),
-          ),
-        );
+      // A posted month is computed again only as a correction, a later round that books the
+      // difference (`payroll.recognize`) and makes the month's D112 rectifying.
+      const posted = (await postedRuns(tx, actor.companyId, input.month)).at(-1);
       requireCondition(
-        !posted,
+        !posted || input.correction,
         'RUN_POSTED',
-        `Statul de plată pentru ${input.month} este înregistrat; corecțiile nu sunt încă suportate.`,
+        `Statul de plată pentru ${input.month} este înregistrat: o corecție se calculează cu motivul și documentul ei (correction).`,
       );
+      requireCondition(
+        posted || !input.correction,
+        'CORRECTION_NOTHING',
+        `Luna ${input.month} nu are un stat de plată înregistrat de corectat.`,
+      );
+      requireCondition(
+        input.correction?.reason !== 'legal',
+        'CORRECTION_LEGAL',
+        'Salariile sau diferențele stabilite prin lege ori prin hotărâre judecătorească pentru perioade anterioare (Codul fiscal art. 78 alin. (3)–(4), art. 146 alin. (9)–(9^1), D112 cu tip_rec 2) nu sunt acoperite de aplicație.',
+      );
+      if (input.correction) {
+        const [file] = await tx
+          .select({ id: evidence.id })
+          .from(evidence)
+          .where(
+            and(
+              eq(evidence.companyId, actor.companyId),
+              eq(evidence.id, input.correction.evidenceId),
+            ),
+          );
+        requireCondition(file, 'EVIDENCE', 'Documentul corecției nu este disponibil.', 404);
+      }
+      const round = posted ? posted.round + 1 : 1;
       const start = monthStart(input.month as Month);
       const end = monthEnd(input.month as Month);
       const rules = await this.rules(tx, actor.companyId);
+      if (input.correction?.reason === 'retroactive') {
+        let reading: string | null = null;
+        try {
+          reading = rules.param<string>(
+            'ro.payroll.correction.retroactive',
+            'payroll_month_start',
+            start,
+          );
+        } catch (error) {
+          if (!(error instanceof RuleGapError)) throw error;
+        }
+        requireCondition(
+          reading === 'recompute_month',
+          'RULE_GAP',
+          'Regula corecției retroactive (ro.payroll.correction.retroactive) nu acoperă luna.',
+        );
+      }
+      const { loaded: profile } = await loadState(tx, actor.companyId, { profile: true });
+      const regime = profileAt(profile, 'income_tax', end);
+      const minimumNet = this.minimumNet(input.month, monthDays, rules);
       // Since when a lowered base salary loses the minimum-wage relief, if the month has one.
       let frozenSince: string | null = null;
       try {
@@ -595,6 +842,13 @@ export class Payroll {
           continue;
         }
         const issues: PayIssue[] = [];
+        const mandate = terms.kind === 'mandate';
+        if (mandate && (entry?.leaveDays || entry?.sickLeave?.length))
+          issues.push({
+            code: 'MANDATE_LEAVE',
+            message:
+              'Pentru un contract de mandat, concediul de odihnă și concediul medical nu sunt calculate de aplicație (Codul muncii nu se aplică mandatului; asigurarea pentru concedii medicale a administratorului este de stabilit cu expertul contabil).',
+          });
         const full = terms.startDate <= start && (!terms.endDate || terms.endDate >= end);
         const changed = versions.some(
           (version) => version.effectiveFrom > start && version.effectiveFrom <= end,
@@ -653,7 +907,7 @@ export class Payroll {
               historyAmount: String(history.amount),
               historyDays: history.days,
               months: history.months,
-              clause: 'L53/2003:art.150',
+              clause: 'L53/2003-A:art.150',
             };
           }
         }
@@ -687,7 +941,88 @@ export class Payroll {
                   },
                 ]
               : undefined);
-        const items = ownItems && sick ? [...ownItems, ...sick.items] : ownItems;
+        // Benefits in kind: valued with their documents, the taxable part an item of the month.
+        let benefitResults: BenefitResult[] = [];
+        if (entry?.benefits?.length) {
+          const valued = await this.benefits(
+            tx,
+            actor.companyId,
+            contractId,
+            input.month,
+            entry.benefits,
+            { baseSalary: terms.baseSalaryBani, micro: regime ? regime === 'micro' : null },
+            rules,
+          );
+          issues.push(...valued.issues);
+          benefitResults = valued.results;
+        }
+        // Vouchers within Legea nr. 165/2018 (`ro.payroll.voucher.limits`): an excess is a benefit
+        // in every base, declared with the others.
+        let voucherItems = ownItems;
+        const voucherKinds: PayItemKind[] = ['meal_vouchers', 'holiday_vouchers'];
+        const statedOf = (kind: PayItemKind) =>
+          (ownItems ?? [])
+            .filter((item) => item.kind === kind)
+            .reduce((total, item) => total + item.amount, 0n);
+        const meal = statedOf('meal_vouchers');
+        const holiday = statedOf('holiday_vouchers');
+        if (ownItems && (meal || holiday) && activeDays !== undefined)
+          try {
+            const split = voucherExcess(
+              input.month as Month,
+              { meal, holiday },
+              {
+                daysWorked: activeDays - (entry?.leaveDays ?? 0),
+                holidayEarlier: holiday
+                  ? await this.holidayVouchersEarlier(tx, actor.companyId, contractId, input.month)
+                  : 0n,
+                minimumWage:
+                  BigInt(
+                    rules.param<string>('ro.payroll.minimum_wage', 'payroll_month_start', start),
+                  ) * 100n,
+              },
+              rules,
+            );
+            issues.push(...split.issues);
+            if (split.excess.length) {
+              benefitResults = [...benefitResults, ...split.excess];
+              const labelOf = (kind: PayItemKind) =>
+                ownItems.find((item) => item.kind === kind)!.label;
+              voucherItems = [
+                ...ownItems.filter((item) => !voucherKinds.includes(item.kind)),
+                ...(split.meal
+                  ? [
+                      {
+                        kind: 'meal_vouchers' as const,
+                        amount: split.meal,
+                        label: labelOf('meal_vouchers'),
+                      },
+                    ]
+                  : []),
+                ...(split.holiday
+                  ? [
+                      {
+                        kind: 'holiday_vouchers' as const,
+                        amount: split.holiday,
+                        label: labelOf('holiday_vouchers'),
+                      },
+                    ]
+                  : []),
+              ];
+            }
+          } catch (error) {
+            if (!(error instanceof RuleGapError)) throw error;
+            issues.push({ code: 'RULE_GAP', message: error.message });
+          }
+        const benefitItems = benefitResults.flatMap((result) => {
+          const taxable = benefitTotals([result]).taxable;
+          return taxable
+            ? [{ kind: 'benefit' as const, amount: taxable, label: result.label }]
+            : [];
+        });
+        const items = voucherItems
+          ? [...voucherItems, ...(sick?.items ?? []), ...benefitItems]
+          : voucherItems;
         if (!items)
           issues.push({
             code: 'SALARY_ITEMS',
@@ -719,6 +1054,7 @@ export class Payroll {
             childrenInSchool: terms.childrenInSchool,
             unionDues: terms.unionDuesBani,
             minimumExemption: (terms.minimumExemption as PayInput['minimumExemption']) ?? null,
+            ...(mandate ? { mandate: true } : {}),
             baseReduced: frozenSince
               ? versions.some(
                   (version, index) =>
@@ -730,6 +1066,32 @@ export class Payroll {
               : false,
           };
           computed = calculatePay(payInput, rules);
+        }
+        // Garnishments take from the net pay, in the Labour Code's order and within the limits.
+        let garnished: { orderId: string; partyId: string; amount: bigint }[] = [];
+        if (computed.result) {
+          const orders = await this.ordersOf(tx, actor.companyId, contractId, end);
+          if (orders.length) {
+            const taken = garnish(
+              input.month as Month,
+              computed.result.net,
+              orders.map((order) => order.order),
+              {
+                minimumNet,
+                protectedIndemnities: (sick?.items.length ?? 0) > 0,
+              },
+              rules,
+            );
+            if (taken.issues.length)
+              computed = { result: null, issues: [...computed.issues, ...taken.issues] };
+            else {
+              computed.result.steps.push(...taken.steps);
+              garnished = taken.withheld.map((item) => ({
+                ...item,
+                partyId: orders.find((order) => order.order.id === item.orderId)!.partyId,
+              }));
+            }
+          }
         }
         const amounts = computed.result ?? zero;
         lines.push({
@@ -743,10 +1105,22 @@ export class Payroll {
             ...(payInput ?? { activeDays: activeDays ?? null, items: items ?? null }),
             ...(leave ? { leave } : {}),
             ...(sick ? { sick: sick.record } : {}),
+            ...(benefitResults.length ? { benefits: benefitRecord(benefitResults) } : {}),
           }),
           result: canonical(
             computed.result
-              ? { steps: computed.result.steps, deduction: computed.result.deduction }
+              ? {
+                  steps: computed.result.steps,
+                  deduction: computed.result.deduction,
+                  ...(garnished.length
+                    ? {
+                        garnishments: garnished.map((item) => ({
+                          ...item,
+                          amount: String(item.amount),
+                        })),
+                      }
+                    : {}),
+                }
               : { issues: computed.issues },
           ),
           cash: amounts.cash,
@@ -779,6 +1153,13 @@ export class Payroll {
         workingDays: monthDays,
         resultHash,
         issues: issueCount,
+        ...(posted
+          ? {
+              corrects: posted.runId,
+              correctionReason: input.correction!.reason as 'error' | 'retroactive',
+              correctionEvidenceId: input.correction!.evidenceId,
+            }
+          : {}),
         createdBy: actor.actorId,
       });
       await tx.insert(payrollRunEvents).values({
@@ -790,7 +1171,7 @@ export class Payroll {
       });
       await tx.insert(payrollLines).values(lines.map((line) => ({ ...line, runId: id })));
       for (const previous of await this.runsOf(tx, actor.companyId, input.month))
-        if (previous.id !== id && previous.state === 'prepared')
+        if (previous.id !== id && previous.state === 'prepared' && previous.round === round)
           await tx.insert(payrollRunEvents).values({
             companyId: actor.companyId,
             runId: previous.id,
@@ -861,6 +1242,7 @@ export class Payroll {
         to: given.to as LocalDate,
         continuation: Boolean(given.continues),
         hospitalized: given.hospitalized,
+        ...(accidentCodes.includes(given.code) && given.urgencyCode ? { emergency: true } : {}),
       };
       if (!given.from.startsWith(month)) {
         issues.push({
@@ -886,7 +1268,39 @@ export class Payroll {
         });
         continue;
       }
-      let base = earlier?.base;
+      // A work accident is paid under Legea nr. 346/2002 once the pension house confirmed it; how
+      // an unconfirmed one is paid and declared in the meantime (section D's codes 02–04, art. 33
+      // alin. (4)–(5)) the texts leave to the expert.
+      const accident = accidentCodes.includes(given.code);
+      if (accident && !given.accidentConfirmed) {
+        issues.push({
+          code: 'SICK_ACCIDENT_UNCONFIRMED',
+          message: `Certificatul ${given.series} ${given.number} (cod ${given.code}) este pentru un accident de muncă sau o boală profesională neconfirmată de casa teritorială de pensii: plata și declararea până la confirmare (Legea nr. 346/2002 art. 19 alin. (7), art. 33 alin. (4)–(5); D112 secțiunea D) se stabilesc cu expertul contabil.`,
+        });
+        continue;
+      }
+      // A work accident's episode keeps its monthly average (the months before the risk, art. 33
+      // alin. (1)) over the working days of each month it is paid in (art. 19 alin. (4)).
+      let base =
+        earlier?.base && accident
+          ? { income: earlier.base.income, days: workingDays(month as Month) }
+          : earlier?.base;
+      if (!base && accident) {
+        const history = await this.accidentHistory(tx, companyId, contractId, month);
+        base = entry.sickBase
+          ? { income: parseMoney(entry.sickBase.income, 'RON'), days: entry.sickBase.days }
+          : history.months
+            ? { income: history.income / BigInt(history.months), days: workingDays(month as Month) }
+            : undefined;
+        if (!base) {
+          issues.push({
+            code: 'SICK_BASE',
+            message:
+              'Statul nu are luni postate pentru baza accidentului de muncă (Legea nr. 346/2002 art. 19): completați în sickBase media lunară a veniturilor brute și zilele lucrătoare ale lunii.',
+          });
+          continue;
+        }
+      }
       if (!base) {
         const history = await this.sickHistory(tx, companyId, contractId, month, rules);
         base = entry.sickBase
@@ -919,7 +1333,7 @@ export class Payroll {
       // A continuation whose episode reaches another percentage than its own certificate: art.
       // 17 alin. (1^2) recalculates the earlier month from July 2026, which is not built yet.
       const tier = (value: number) => (value <= 7 ? 1 : value <= 14 ? 2 : 3);
-      if (earlier && tier(days) !== tier(length)) {
+      if (given.code === '01' && earlier && tier(days) !== tier(length)) {
         issues.push({
           code: 'SICK_RECALCULATION',
           message: `Episodul certificatului ${given.series} ${given.number} ajunge la ${days} zile: procentul și recalcularea lunii anterioare (art. 17 alin. (1^2)) se stabilesc cu expertul contabil.`,
@@ -928,14 +1342,21 @@ export class Payroll {
       }
       suspendedDays += result.days;
       const label = `Concediu medical ${given.series} ${given.number}, cod ${given.code}`;
+      // The code decides the bases: CASS only for 01 and 07 here, no tax on what art. 62 lit. c)
+      // leaves out (`ro.sick.codes`).
+      const kinds = sickKinds(result.rule);
       if (result.employer)
         items.push({
-          kind: 'sick_employer',
+          kind: kinds.employer,
           amount: result.employer,
           label: `${label} (angajator)`,
         });
       if (result.fund)
-        items.push({ kind: 'sick_fund', amount: result.fund, label: `${label} (FNUASS)` });
+        items.push({
+          kind: kinds.fund,
+          amount: result.fund,
+          label: `${label} (${accident ? 'bugetul asigurărilor sociale de stat' : 'FNUASS'})`,
+        });
       const episode: Episode = {
         reduced: (earlier?.reduced ?? false) || result.unpaidDays > 0 || given.hospitalized,
         employerDays: (earlier?.employerDays ?? 0) + result.employerDays,
@@ -958,6 +1379,10 @@ export class Payroll {
         ...(given.diagnosis
           ? { diagnosisSealed: this.sealer.seal(companyId, given.diagnosis) }
           : {}),
+        ...(given.careCnp ? { careCnpSealed: this.sealer.seal(companyId, given.careCnp) } : {}),
+        ...(given.urgencyCode ? { urgencyCode: given.urgencyCode } : {}),
+        ...(given.infectiousCode ? { infectiousCode: given.infectiousCode } : {}),
+        ...(accident ? { accidentConfirmed: true } : {}),
         days: result.days,
         unpaidDays: result.unpaidDays,
         employerDays: result.employerDays,
@@ -970,6 +1395,41 @@ export class Payroll {
       });
     }
     return { issues, items, record, suspendedDays };
+  }
+
+  /** The base of a work accident's episode starting in `month` (Legea nr. 346/2002 art. 19 alin.
+   * (1)–(2)): the gross salary income at this employer in the posted runs of the six months
+   * before, uncapped, and how many of them there are. */
+  private async accidentHistory(
+    tx: Transaction,
+    companyId: string,
+    contractId: string,
+    month: string,
+  ) {
+    let income = 0n;
+    let months = 0;
+    for (let back = 1; back <= 6; back += 1) {
+      const runId = await postedRun(tx, companyId, previousMonth(month, back));
+      if (!runId) continue;
+      const [line] = await tx
+        .select({ result: payrollLines.result })
+        .from(payrollLines)
+        .where(
+          and(
+            eq(payrollLines.companyId, companyId),
+            eq(payrollLines.runId, runId),
+            eq(payrollLines.contractId, contractId),
+          ),
+        );
+      if (!line) continue;
+      const steps =
+        (JSON.parse(line.result) as { steps?: { code: string; amount: string }[] }).steps ?? [];
+      const gross = steps.find((step) => step.code === 'gross');
+      if (!gross) continue;
+      income += BigInt(gross.amount);
+      months += 1;
+    }
+    return { income, months };
   }
 
   /** The base of an episode starting in `month`: the six most recent of the twelve previous
@@ -1063,6 +1523,607 @@ export class Payroll {
     return { amount, days, months: months.join(',') };
   }
 
+  /** A month's benefits valued (Codul fiscal art. 76): each with its document, the health
+   * insurance against the year's 400 euro at the BNR rate of the month's last day. */
+  /** The holiday vouchers a contract received earlier in the fiscal year, within the ceiling of
+   * Legea nr. 165/2018 art. 24 alin. (3), from the posted runs. */
+  private async holidayVouchersEarlier(
+    tx: Transaction,
+    companyId: string,
+    contractId: string,
+    month: string,
+  ) {
+    let total = 0n;
+    for (let m = 1; m < Number(month.slice(5, 7)); m += 1) {
+      const runId = await postedRun(
+        tx,
+        companyId,
+        `${month.slice(0, 4)}-${String(m).padStart(2, '0')}`,
+      );
+      if (!runId) continue;
+      const [line] = await tx
+        .select({ input: payrollLines.input })
+        .from(payrollLines)
+        .where(
+          and(
+            eq(payrollLines.companyId, companyId),
+            eq(payrollLines.runId, runId),
+            eq(payrollLines.contractId, contractId),
+          ),
+        );
+      const stored = line
+        ? (JSON.parse(line.input) as { items?: { kind: string; amount: string }[] | null })
+        : {};
+      for (const item of stored.items ?? [])
+        if (item.kind === 'holiday_vouchers') total += BigInt(item.amount);
+    }
+    return total;
+  }
+
+  private async benefits(
+    tx: Transaction,
+    companyId: string,
+    contractId: string,
+    month: string,
+    given: readonly z.infer<typeof benefitEntry>[],
+    context: { baseSalary: bigint; micro: boolean | null },
+    rules: RuleContext,
+  ) {
+    for (const benefit of given) {
+      const [file] = await tx
+        .select({ id: evidence.id })
+        .from(evidence)
+        .where(and(eq(evidence.companyId, companyId), eq(evidence.id, benefit.evidenceId)));
+      requireCondition(
+        file,
+        'EVIDENCE',
+        `Documentul avantajului „${benefit.label}” nu este disponibil.`,
+        404,
+      );
+    }
+    const end = monthEnd(month as Month);
+    let eurRate: string | null = null;
+    if (given.some((benefit) => benefit.kind === 'insurance' && benefit.health)) {
+      const [rate] = await tx
+        .select({ rate: fxRates.rate, date: fxRates.rateDate, multiplier: fxRates.multiplier })
+        .from(fxRates)
+        .where(
+          and(eq(fxRates.source, 'BNR'), eq(fxRates.currency, 'EUR'), lte(fxRates.rateDate, end)),
+        )
+        .orderBy(desc(fxRates.rateDate), desc(fxRates.revision))
+        .limit(1);
+      // A rate more than 7 days old counts as missing, as everywhere in the engine.
+      if (rate && rate.multiplier === 1 && addDays(rate.date as LocalDate, 7) >= end)
+        eurRate = rate.rate;
+    }
+    // The health insurance left out of income earlier this year, from the posted runs.
+    let yearToDate = 0n;
+    for (let m = 1; m < Number(month.slice(5, 7)); m += 1) {
+      const runId = await postedRun(
+        tx,
+        companyId,
+        `${month.slice(0, 4)}-${String(m).padStart(2, '0')}`,
+      );
+      if (!runId) continue;
+      const [line] = await tx
+        .select({ input: payrollLines.input })
+        .from(payrollLines)
+        .where(
+          and(
+            eq(payrollLines.companyId, companyId),
+            eq(payrollLines.runId, runId),
+            eq(payrollLines.contractId, contractId),
+          ),
+        );
+      const stored = line ? (JSON.parse(line.input) as { benefits?: StoredBenefit[] }) : {};
+      for (const item of stored.benefits ?? []) yearToDate += BigInt(item.exemptCents);
+    }
+    const minimumWage =
+      BigInt(
+        rules.param<string>(
+          'ro.payroll.minimum_wage',
+          'payroll_month_start',
+          monthStart(month as Month),
+        ),
+      ) * 100n;
+    const inputs: BenefitInput[] = given.map((benefit) => {
+      const lei = (value: string) => parseMoney(value, 'RON');
+      switch (benefit.kind) {
+        case 'car':
+          return {
+            kind: 'car',
+            label: benefit.label,
+            inputValue: benefit.inputValue === undefined ? null : lei(benefit.inputValue),
+            rent: benefit.rent === undefined ? null : lei(benefit.rent),
+            km: benefit.km ?? null,
+            passenger: benefit.passenger,
+            exclusiveBusiness: benefit.exclusiveBusiness,
+          };
+        case 'housing':
+          return { ...benefit, value: lei(benefit.value) };
+        case 'gift':
+          return {
+            ...benefit,
+            persons: benefit.persons.map((person) => ({ ...person, value: lei(person.value) })),
+          };
+        case 'insurance':
+          return {
+            kind: 'insurance',
+            label: benefit.label,
+            premium: lei(benefit.premium),
+            health: benefit.health,
+            eurRate,
+            yearToDateCents: yearToDate,
+          };
+        default:
+          return { ...benefit, value: lei(benefit.value) };
+      }
+    });
+    try {
+      return evaluateBenefits(
+        month as Month,
+        inputs,
+        { baseSalary: context.baseSalary, minimumWage, micro: context.micro },
+        rules,
+      );
+    } catch (error) {
+      if (!(error instanceof RuleGapError)) throw error;
+      return { results: [], issues: [{ code: 'RULE_GAP', message: error.message }] };
+    }
+  }
+
+  /** The net pay of a full-time contract at the minimum wage, at the main job, without dependents:
+   * the net minimum wage below which the Codul de procedură civilă (art. 729 alin. (3)) protects
+   * a salary from garnishment (a reading of `ro.garnishment.limits`). */
+  private minimumNet(month: string, monthDays: number, rules: RuleContext) {
+    try {
+      const minimumWage =
+        BigInt(
+          rules.param<string>(
+            'ro.payroll.minimum_wage',
+            'payroll_month_start',
+            monthStart(month as Month),
+          ),
+        ) * 100n;
+      const { result } = calculatePay(
+        {
+          month: month as Month,
+          baseSalary: minimumWage,
+          dailyHours: 8,
+          mainJob: true,
+          workingDays: monthDays,
+          activeDays: monthDays,
+          items: [{ kind: 'salary', amount: minimumWage, label: 'Salariu minim' }],
+          dependents: 0,
+          under26: false,
+          childrenInSchool: 0,
+          unionDues: 0n,
+          minimumExemption: null,
+        },
+        rules,
+      );
+      return result?.net ?? null;
+    } catch (error) {
+      if (!(error instanceof RuleGapError)) throw error;
+      return null;
+    }
+  }
+
+  /** A contract's garnishment orders in force at `end`, with the debt still owed after what the
+   * posted runs withheld. */
+  private async ordersOf(tx: Transaction, companyId: string, contractId: string, end: string) {
+    const rows = await tx
+      .select({ order: garnishments, released: garnishmentReleases.releasedOn })
+      .from(garnishments)
+      .leftJoin(
+        garnishmentReleases,
+        and(
+          eq(garnishmentReleases.companyId, garnishments.companyId),
+          eq(garnishmentReleases.garnishmentId, garnishments.id),
+        ),
+      )
+      .where(and(eq(garnishments.companyId, companyId), eq(garnishments.contractId, contractId)));
+    const inForce = rows.filter(
+      (row) => row.order.receivedOn <= end && (!row.released || row.released > end),
+    );
+    if (!inForce.length) return [];
+    const withheld = await this.garnished(tx, companyId, contractId);
+    return inForce.map(({ order }) => ({
+      partyId: order.partyId,
+      order: {
+        id: order.id,
+        kind: order.kind,
+        receivedOn: order.receivedOn,
+        monthly:
+          order.monthlyBani !== null
+            ? { amount: order.monthlyBani }
+            : { share: [order.shareNumerator!, order.shareDenominator!] as [number, number] },
+        remaining: order.totalBani - (withheld.get(order.id) ?? 0n),
+      } satisfies GarnishmentOrder,
+    }));
+  }
+
+  /** What the posted runs withheld for each order of a contract. */
+  private async garnished(tx: Transaction, companyId: string, contractId: string) {
+    const rows = await tx
+      .select({ result: payrollLines.result, month: payrollRuns.month, id: payrollRuns.id })
+      .from(payrollLines)
+      .innerJoin(
+        payrollRuns,
+        and(
+          eq(payrollRuns.companyId, payrollLines.companyId),
+          eq(payrollRuns.id, payrollLines.runId),
+        ),
+      )
+      .where(and(eq(payrollLines.companyId, companyId), eq(payrollLines.contractId, contractId)));
+    const months = new Map<string, string | undefined>();
+    const totals = new Map<string, bigint>();
+    for (const row of rows) {
+      if (!months.has(row.month)) months.set(row.month, await postedRun(tx, companyId, row.month));
+      if (months.get(row.month) !== row.id) continue;
+      const result = JSON.parse(row.result) as {
+        garnishments?: { orderId: string; amount: string }[];
+      };
+      for (const item of result.garnishments ?? [])
+        totals.set(item.orderId, (totals.get(item.orderId) ?? 0n) + BigInt(item.amount));
+    }
+    return totals;
+  }
+
+  /** A garnishment order the employer received, with its document. */
+  recordGarnishment(actor: Actor, key: string, input: z.infer<typeof garnishmentInput>) {
+    return this.commands.run(
+      actor,
+      key,
+      'payroll.garnishments.record',
+      input,
+      'write',
+      async (tx) => {
+        const [terms] = await tx
+          .select({ contractId: employmentTerms.contractId })
+          .from(employmentTerms)
+          .where(
+            and(
+              eq(employmentTerms.companyId, actor.companyId),
+              eq(employmentTerms.contractId, input.contractId),
+            ),
+          )
+          .limit(1);
+        requireCondition(terms, 'CONTRACT', 'Contractul nu există.', 404);
+        const [party] = await tx
+          .select({ id: parties.id })
+          .from(parties)
+          .where(and(eq(parties.companyId, actor.companyId), eq(parties.id, input.partyId)));
+        requireCondition(party, 'PARTY', 'Creditorul nu este un partener al companiei.', 404);
+        const [file] = await tx
+          .select({ id: evidence.id })
+          .from(evidence)
+          .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.id, input.evidenceId)));
+        requireCondition(
+          file,
+          'EVIDENCE',
+          'Adresa de înființare a popririi nu este disponibilă.',
+          404,
+        );
+        requireCondition(
+          (input.monthly === undefined) !== (input.share === undefined) &&
+            (!input.share || input.share[0] <= input.share[1]),
+          'GARNISHMENT_MONTHLY',
+          'Adresa popririi spune fie suma de reținut lunar, fie partea din venitul net.',
+        );
+        const id = this.commands.ids();
+        await tx.insert(garnishments).values({
+          id,
+          companyId: actor.companyId,
+          contractId: input.contractId,
+          partyId: input.partyId,
+          kind: input.kind,
+          reference: input.reference,
+          receivedOn: input.receivedOn,
+          totalBani: parseMoney(input.total, 'RON'),
+          monthlyBani: input.monthly === undefined ? null : parseMoney(input.monthly, 'RON'),
+          shareNumerator: input.share?.[0] ?? null,
+          shareDenominator: input.share?.[1] ?? null,
+          evidenceId: input.evidenceId,
+          createdBy: actor.actorId,
+        });
+        return { id };
+      },
+    );
+  }
+
+  /** A garnishment lifted from a date (ridicarea popririi). */
+  releaseGarnishment(actor: Actor, key: string, input: z.infer<typeof garnishmentReleaseInput>) {
+    return this.commands.run(
+      actor,
+      key,
+      'payroll.garnishments.release',
+      input,
+      'write',
+      async (tx) => {
+        const [order] = await tx
+          .select({ id: garnishments.id })
+          .from(garnishments)
+          .where(
+            and(
+              eq(garnishments.companyId, actor.companyId),
+              eq(garnishments.id, input.garnishmentId),
+            ),
+          );
+        requireCondition(order, 'NOT_FOUND', 'Poprirea nu există.', 404);
+        await tx.insert(garnishmentReleases).values({
+          companyId: actor.companyId,
+          garnishmentId: input.garnishmentId,
+          releasedOn: input.releasedOn,
+          evidenceId: input.evidenceId,
+          createdBy: actor.actorId,
+        });
+        return { garnishmentId: input.garnishmentId };
+      },
+    );
+  }
+
+  listGarnishments(actor: Actor) {
+    return this.commands.db.read(async (tx) => {
+      const rows = await tx
+        .select({ order: garnishments, released: garnishmentReleases.releasedOn })
+        .from(garnishments)
+        .leftJoin(
+          garnishmentReleases,
+          and(
+            eq(garnishmentReleases.companyId, garnishments.companyId),
+            eq(garnishmentReleases.garnishmentId, garnishments.id),
+          ),
+        )
+        .where(eq(garnishments.companyId, actor.companyId))
+        .orderBy(asc(garnishments.receivedOn), asc(garnishments.id));
+      const withheld = new Map<string, Map<string, bigint>>();
+      const items = [];
+      for (const { order, released } of rows) {
+        if (!withheld.has(order.contractId))
+          withheld.set(
+            order.contractId,
+            await this.garnished(tx, actor.companyId, order.contractId),
+          );
+        const taken = withheld.get(order.contractId)!.get(order.id) ?? 0n;
+        items.push({
+          id: order.id,
+          contractId: order.contractId,
+          partyId: order.partyId,
+          kind: order.kind,
+          reference: order.reference,
+          receivedOn: order.receivedOn,
+          total: lei(order.totalBani),
+          monthly: order.monthlyBani === null ? null : lei(order.monthlyBani),
+          share:
+            order.shareNumerator === null ? null : [order.shareNumerator, order.shareDenominator],
+          withheld: lei(taken),
+          remaining: lei(order.totalBani - taken),
+          releasedOn: released ?? null,
+        });
+      }
+      return items;
+    });
+  }
+
+  /** A transmission to REGES-ONLINE a person made, with its receipt. */
+  recordReges(actor: Actor, key: string, input: z.infer<typeof regesInput>) {
+    return this.commands.run(actor, key, 'payroll.reges.record', input, 'write', async (tx) => {
+      const [terms] = await tx
+        .select()
+        .from(employmentTerms)
+        .where(
+          and(
+            eq(employmentTerms.companyId, actor.companyId),
+            eq(employmentTerms.contractId, input.contractId),
+            eq(employmentTerms.seq, input.termsSeq),
+          ),
+        );
+      requireCondition(terms, 'CONTRACT', 'Versiunea contractului nu există.', 404);
+      requireCondition(
+        terms.kind === 'employment',
+        'REGES_MANDATE',
+        'În REGES-ONLINE se înregistrează contractele individuale de muncă, nu contractele de mandat.',
+      );
+      const [file] = await tx
+        .select({ id: evidence.id })
+        .from(evidence)
+        .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.id, input.evidenceId)));
+      requireCondition(file, 'EVIDENCE', 'Recipisa REGES-ONLINE nu este disponibilă.', 404);
+      await tx.insert(regesRecords).values({
+        companyId: actor.companyId,
+        contractId: input.contractId,
+        termsSeq: input.termsSeq,
+        event: input.event,
+        transmittedOn: input.transmittedOn,
+        evidenceId: input.evidenceId,
+        createdBy: actor.actorId,
+      });
+      return { contractId: input.contractId, termsSeq: input.termsSeq, event: input.event };
+    });
+  }
+
+  /**
+   * What REGES-ONLINE needs from the employer, contract by contract (an external obligation: the
+   * engine records the transmissions, never submits them): the contract by the day before its
+   * start (Codul muncii art. 16 alin. (2), HG nr. 295/2025 art. 5 alin. (1) lit. a)); each change
+   * of its terms by the day before it takes effect, or within 20 working days for the salary
+   * (art. 5 alin. (3)–(4)); its end at the latest on its date (art. 5 alin. (1) lit. f)); a
+   * corrected start date has no deadline and blocks (`regesDeadline`). Mandates are not
+   * registered.
+   */
+  listReges(actor: Actor) {
+    return this.commands.db.read(async (tx) =>
+      this.regesDue(tx, actor.companyId, bucharestDate(this.commands.clock())),
+    );
+  }
+
+  /** The REGES-ONLINE events of the contracts, those since the register replaced Revisal (the
+   * `since` of `ro.deadline.reges.start` on `today`; earlier events were Revisal's). */
+  async regesDue(tx: Transaction, companyId: string, today: LocalDate) {
+    const rules = await this.rules(tx, companyId);
+    let since: string | null = null;
+    try {
+      since = rules.param<{ since: string }>(
+        'ro.deadline.reges.start',
+        'payroll_month_start',
+        monthStart(today.slice(0, 7) as Month),
+      ).since;
+    } catch (error) {
+      if (!(error instanceof RuleGapError)) throw error;
+    }
+    const rows = await tx
+      .select()
+      .from(employmentTerms)
+      .where(and(eq(employmentTerms.companyId, companyId), eq(employmentTerms.kind, 'employment')))
+      .orderBy(asc(employmentTerms.contractId), asc(employmentTerms.seq));
+    const recorded = await tx
+      .select()
+      .from(regesRecords)
+      .where(eq(regesRecords.companyId, companyId));
+    const done = (contractId: string, seq: number, event: string) =>
+      recorded.find(
+        (row) => row.contractId === contractId && row.termsSeq === seq && row.event === event,
+      ) ?? null;
+    const items = [];
+    for (const row of rows) {
+      const previous = rows.find(
+        (other) => other.contractId === row.contractId && other.seq === row.seq - 1,
+      );
+      const events: ('start' | 'change' | 'end')[] = [];
+      const changed: RegesField[] = [];
+      if (previous) {
+        if (previous.baseSalaryBani !== row.baseSalaryBani) changed.push('salary');
+        if (previous.dailyHours !== row.dailyHours) changed.push('hours');
+        if (previous.occupation !== row.occupation) changed.push('occupation');
+        // An end date given to an open-ended contract is its end, not a change of its duration.
+        if (previous.endDate !== row.endDate && previous.endDate !== null) changed.push('end_date');
+        if (previous.startDate !== row.startDate) changed.push('start_date');
+      }
+      if (row.seq === 1) events.push('start');
+      else if (changed.length) events.push('change');
+      if (row.endDate && (!previous || previous.endDate !== row.endDate)) events.push('end');
+      for (const event of events) {
+        const effective =
+          event === 'end' ? row.endDate! : event === 'start' ? row.startDate : row.effectiveFrom;
+        if (since && effective < since) continue;
+        let deadline: string | null = null;
+        let blocked: string | null = null;
+        let rule = `ro.deadline.reges.${event}`;
+        try {
+          ({ deadline, blocked, rule } = regesDeadline(
+            event,
+            effective as LocalDate,
+            changed,
+            rules,
+          ));
+        } catch (error) {
+          if (!(error instanceof RuleGapError)) throw error;
+          blocked = error.message;
+        }
+        const record = done(row.contractId, row.seq, event);
+        items.push({
+          contractId: row.contractId,
+          termsSeq: row.seq,
+          event,
+          effective,
+          deadline,
+          blocked,
+          rule,
+          transmittedOn: record?.transmittedOn ?? null,
+          evidenceId: record?.evidenceId ?? null,
+          late: Boolean(record && deadline && record.transmittedOn > deadline),
+        });
+      }
+    }
+    return items;
+  }
+
+  /**
+   * The worklist's payroll items (`payroll.due`): each REGES-ONLINE transmission not recorded,
+   * blocking once its deadline passed or when the deadline is not sourced; and each month
+   * corrected after its D112 was filed, whose rectifying D112 is still to prepare.
+   */
+  async work(tx: Transaction, companyId: string, today: LocalDate): Promise<YearEndWorkItem[]> {
+    const items: YearEndWorkItem[] = [];
+    const events = { start: 'începerea', change: 'modificarea', end: 'încetarea' } as const;
+    for (const due of await this.regesDue(tx, companyId, today)) {
+      if (due.transmittedOn) continue;
+      const late = due.deadline !== null && today > due.deadline;
+      items.push({
+        subject: { kind: 'contract', id: `${due.contractId}:${due.termsSeq}:${due.event}` },
+        severity: late || due.blocked ? 'block' : 'warn',
+        period: due.effective.slice(0, 7),
+        message: due.deadline
+          ? `REGES-ONLINE: ${events[due.event]} contractului din ${due.effective} se transmite până la ${due.deadline}${late ? ' (termen depășit)' : ''}; înregistrați recipisa.`
+          : `REGES-ONLINE: ${events[due.event]} contractului din ${due.effective} se transmite în registru; ${due.blocked}`,
+        details: {
+          contractId: due.contractId,
+          termsSeq: due.termsSeq,
+          event: due.event,
+          deadline: due.deadline,
+          rules: [due.rule],
+        },
+        next: [
+          {
+            operation: 'payroll.reges.record',
+            by: 'human',
+            inputHint: { contractId: due.contractId, termsSeq: due.termsSeq, event: due.event },
+          },
+        ],
+      });
+    }
+    // A month corrected after its D112 was filed: the filed return declares an earlier run.
+    const rows = await tx
+      .select({
+        id: artifacts.id,
+        period: artifacts.period,
+        state: artifactEvents.state,
+        detail: artifactEvents.detail,
+      })
+      .from(artifacts)
+      .innerJoin(
+        artifactEvents,
+        and(
+          eq(artifactEvents.companyId, artifacts.companyId),
+          eq(artifactEvents.artifactId, artifacts.id),
+        ),
+      )
+      .where(and(eq(artifacts.companyId, companyId), eq(artifacts.kind, 'D112')))
+      .orderBy(asc(artifactEvents.seq));
+    const returns = new Map<string, { period: string; runId: string | null; filed: boolean }>();
+    for (const row of rows) {
+      const item = returns.get(row.id) ?? { period: row.period, runId: null, filed: false };
+      if (row.state === 'prepared' && row.detail)
+        item.runId = (JSON.parse(row.detail) as { runId?: string }).runId ?? null;
+      if (row.state === 'submitted' || row.state === 'accepted') item.filed = true;
+      returns.set(row.id, item);
+    }
+    const months = [
+      ...new Set([...returns.values()].filter((item) => item.filed).map((item) => item.period)),
+    ];
+    for (const month of months.sort()) {
+      const current = await postedRun(tx, companyId, month);
+      const declared = [...returns.values()].filter((item) => item.period === month);
+      if (!current || declared.some((item) => item.runId === current)) continue;
+      items.push({
+        subject: { kind: 'declaration', id: `D112:${month}` },
+        severity: 'block',
+        period: month,
+        message: `Statul de plată pentru ${month} a fost corectat după depunerea D112: depuneți D112 rectificativă pentru lună (OPANAF nr. 605/2026 anexa nr. 6 cap. II pct. 2).`,
+        details: { month, runId: current, rules: ['ro.payroll.correction.retroactive'] },
+        next: [
+          {
+            operation: 'declarations.prepare',
+            by: 'agent',
+            inputHint: { kind: 'D112', period: month, options: { rectifying: true } },
+          },
+        ],
+      });
+    }
+    return items;
+  }
+
   getRun(actor: Actor, runId: string) {
     return this.commands.db.read((tx) => this.view(tx, actor.companyId, runId));
   }
@@ -1080,7 +2141,7 @@ export class Payroll {
 
   private async runsOf(tx: Transaction, companyId: string, runMonth: string) {
     const runs = await tx
-      .select({ id: payrollRuns.id })
+      .select({ id: payrollRuns.id, round: payrollRuns.round })
       .from(payrollRuns)
       .where(and(eq(payrollRuns.companyId, companyId), eq(payrollRuns.month, runMonth)));
     return Promise.all(
@@ -1091,7 +2152,7 @@ export class Payroll {
           .where(and(eq(payrollRunEvents.companyId, companyId), eq(payrollRunEvents.runId, run.id)))
           .orderBy(desc(payrollRunEvents.seq))
           .limit(1);
-        return { id: run.id, state: last!.state, seq: last!.seq };
+        return { id: run.id, round: run.round, state: last!.state, seq: last!.seq };
       }),
     );
   }
@@ -1121,11 +2182,17 @@ export class Payroll {
       id: run.id,
       month: run.month,
       round: run.round,
+      corrects: run.corrects ?? null,
+      correctionReason: run.correctionReason ?? null,
       workingDays: run.workingDays,
       state: last!.state,
       issues: run.issues,
       lines: rows.map(({ line, name }) => {
-        const result = JSON.parse(line.result) as { issues?: PayIssue[] };
+        const result = JSON.parse(line.result) as {
+          issues?: PayIssue[];
+          steps?: { code: string; amount: string }[];
+          garnishments?: { orderId: string; partyId: string; amount: string }[];
+        };
         return {
           contractId: line.contractId,
           employeeId: line.employeeId,
@@ -1141,6 +2208,14 @@ export class Payroll {
           unionDues: lei(line.unionDues),
           net: lei(line.net),
           cam: lei(line.cam),
+          inKind: lei(
+            BigInt(result.steps?.find((step) => step.code === 'benefits')?.amount ?? '0'),
+          ),
+          garnished: (result.garnishments ?? []).map((item) => ({
+            orderId: item.orderId,
+            partyId: item.partyId,
+            amount: lei(BigInt(item.amount)),
+          })),
           issues: result.issues ?? [],
         };
       }),

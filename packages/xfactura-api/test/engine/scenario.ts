@@ -16,6 +16,7 @@ import { Engine } from '../../source/engine/engine';
 import { outputSchema } from '../../source/engine/kernel/operations';
 import type { EFacturaPort } from '../../source/engine/adapters/efactura';
 import type { TaxpayerRegistryPort } from '../../source/engine/adapters/anaf-taxpayers';
+import type { ViesPort } from '../../source/engine/adapters/vies';
 import type { DeclarationValidator } from '../../source/engine/adapters/declaration-validator';
 import type { DeclarationKind } from '../../source/engine/modules/declarations';
 import type { Treatment } from 'xfactura-core/kernel';
@@ -51,6 +52,8 @@ export async function scenario(
     cui?: string;
     efactura?: EFacturaPort;
     taxpayers?: TaxpayerRegistryPort;
+    /** VIES on-the-Web, a fake in tests. */
+    vies?: ViesPort;
     /** The engine's time; the wall's by default. */
     clock?: () => number;
     /** The engine's identifiers, and its people's; random by default. */
@@ -78,6 +81,7 @@ export async function scenario(
   const engine = new Engine(db, objects, secret, {
     ...(options.efactura ? { efactura: options.efactura } : {}),
     ...(options.taxpayers ? { taxpayers: options.taxpayers } : {}),
+    ...(options.vies ? { vies: options.vies } : {}),
     ...(options.clock ? { clock: options.clock } : {}),
     ...(options.ids ? { ids: options.ids } : {}),
     ...(options.declarations ? { declarations: options.declarations } : {}),

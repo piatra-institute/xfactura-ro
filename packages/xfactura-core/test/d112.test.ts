@@ -253,7 +253,7 @@ describe('D112 namespace and catalogues', () => {
   });
 
   test('lists the codes the structure allows for the covered fields', () => {
-    expect(d112InsuredTypes.map(([type]) => type)).toEqual(['1', '51']);
+    expect(d112InsuredTypes.map(([type]) => type)).toEqual(['1', '51', '6']);
     expect(d112ContractTypes).toEqual(['N', 'P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7']);
     expect(d112Reasons.map(([reason]) => reason)).toEqual(['2', '3', '4', '5', '7', '8', '9']);
     expect(d112Obligations.map(([code, budget]) => `${code}:${budget}`)).toEqual([
@@ -931,6 +931,13 @@ describe('D112 medical leave', () => {
     });
     expect(calculation.medicalLeave).toEqual({
       incapacity: { ...row(2, 11, 9, 2), employer: 1545n, fund: 368n },
+      isolation: { ...row(0, 0, 0, 0), employer: 0n, fund: 0n },
+      prevention: { ...row(0, 0, 0, 0), employer: 0n, fund: 0n },
+      quarantine: { ...row(0, 0, 0, 0), employer: 0n, fund: 0n },
+      maternity: { ...row(0, 0, 0, 0), employer: 0n, fund: 0n },
+      childCare: { ...row(0, 0, 0, 0), employer: 0n, fund: 0n },
+      oncologyCare: { ...row(0, 0, 0, 0), employer: 0n, fund: 0n },
+      maternalRisk: { ...row(0, 0, 0, 0), employer: 0n, fund: 0n },
       byPercent: {
         '55': { ...row(1, 4, 4, 0), employer: 624n, fund: 0n },
         '65': { ...row(1, 7, 5, 2), employer: 921n, fund: 368n },

@@ -63,9 +63,10 @@ describe('operation metadata', () => {
     ).toEqual([]);
   });
 
-  test('what reaches ANAF says so', () => {
+  test('what reaches ANAF (or VIES) says so', () => {
     expect(ids((operation) => operation.externalEffect)).toEqual([
       'parties.checkStatus',
+      'parties.checkVies',
       'spv.connect.finish',
       'spv.refresh',
       'spv.submit',

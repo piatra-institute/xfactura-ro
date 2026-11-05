@@ -335,10 +335,10 @@ export const documents = sqliteTable(
     /** What every copy of the same document shares, whatever its source (`documentIdentity`):
      * a later copy joins the earliest one's group (`same_as`). Null without one. */
     identityKey: text('identity_key'),
-    /** Where the content comes from: `efactura`, `issued`, `ubl_upload`, `invoicer` or
-     * `extracted` (read by an agent from a PDF or a photo). */
+    /** Where the content comes from: `efactura`, `issued`, `ubl_upload`, `invoicer`, `amef` (a
+     * fiscal cash register's export) or `extracted` (read by an agent from a PDF or a photo). */
     authority: text('authority', {
-      enum: ['efactura', 'issued', 'ubl_upload', 'invoicer', 'extracted'],
+      enum: ['efactura', 'issued', 'ubl_upload', 'invoicer', 'amef', 'extracted'],
     }),
     /** An extracted document's checks (`checkDocument`), as recorded. */
     checks: text('checks_json'),
@@ -934,6 +934,11 @@ export const lines = sqliteTable(
     index('line_account').on(t.companyId, t.account, t.entryId),
     index('line_open_item').on(t.companyId, t.openItemId),
     index('line_party').on(t.companyId, t.partyId),
+    // A tax period's settlement lines (the state loader's and `inv:stale_read`'s tax-period read
+    // version), only those lines being indexed.
+    index('line_tax_settlement')
+      .on(t.companyId, t.taxSettlementTax, t.taxSettlementPeriod)
+      .where(sql`tax_settlement_tax is not null`),
     foreignKey({
       columns: [t.companyId, t.entryId],
       foreignColumns: [entries.companyId, entries.id],
@@ -1518,6 +1523,215 @@ export const assetFiscal = sqliteTable(
   ],
 );
 
+// The stock register (G1): the item catalogue, the warehouses (gestiuni), and the layers and
+// moves the ledger's entries post, as lines are (an entry writes its layers and moves before its
+// header, which seals them).
+
+export const stockItemVatCategories = ['standard', 'reduced', 'exempt', 'outside'] as const;
+export const stockItems = sqliteTable(
+  'acc_stock_items',
+  {
+    id: text('id').notNull(),
+    companyId: companyId(),
+    code: text('code').notNull(),
+    name: text('name').notNull(),
+    /** UN/ECE Recommendation 20 code of the unit of measure (H87 a piece, KGM a kilogram). */
+    unit: text('unit').notNull(),
+    /** The NC8 code of the combined nomenclature (D406 Products, Intrastat), when known. */
+    nc8: text('nc8'),
+    /** The stock account its layers are on (371 goods, 301 raw materials, 381 packaging). */
+    account: text('account').notNull(),
+    /** How it is normally taxed when sold; the rate is the register's on the sale's date. */
+    vatCategory: text('vat_category', { enum: stockItemVatCategories }),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.id] }),
+    uniqueIndex('stock_item_code').on(t.companyId, t.code),
+    foreignKey({
+      columns: [t.companyId, t.account],
+      foreignColumns: [ledgerAccounts.companyId, ledgerAccounts.code],
+    }),
+  ],
+);
+
+export const warehouses = sqliteTable(
+  'acc_warehouses',
+  {
+    id: text('id').notNull(),
+    companyId: companyId(),
+    code: text('code').notNull(),
+    name: text('name').notNull(),
+    /** The person responsible for it (gestionarul), as the documents name them. */
+    keeper: text('keeper').notNull(),
+    /** The keeper as an employee or other party, when recorded. */
+    keeperPartyId: text('keeper_party_id'),
+    /** The keeper's appointment (decizia de numire), when recorded. */
+    evidenceId: text('evidence_id'),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.id] }),
+    uniqueIndex('warehouse_code').on(t.companyId, t.code),
+    foreignKey({
+      columns: [t.companyId, t.keeperPartyId],
+      foreignColumns: [parties.companyId, parties.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.evidenceId],
+      foreignColumns: [evidence.companyId, evidence.id],
+    }),
+  ],
+);
+
+export const stockLayerMethodValues = ['fifo', 'lifo', 'average', 'periodic'] as const;
+export const stockLayers = sqliteTable(
+  'acc_stock_layers',
+  {
+    id: text('id').notNull(),
+    companyId: companyId(),
+    itemId: text('item_id').notNull(),
+    warehouseId: text('warehouse_id').notNull(),
+    account: text('account').notNull(),
+    method: text('method', { enum: stockLayerMethodValues }).notNull(),
+    date: text('date').notNull(),
+    mayGoNegative: integer('may_go_negative', { mode: 'boolean' }).notNull(),
+    originEntryId: text('origin_entry_id').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.id] }),
+    index('stock_layer_origin').on(t.companyId, t.originEntryId),
+    index('stock_layer_position').on(t.companyId, t.itemId, t.warehouseId),
+    foreignKey({
+      columns: [t.companyId, t.originEntryId],
+      foreignColumns: [entries.companyId, entries.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.itemId],
+      foreignColumns: [stockItems.companyId, stockItems.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.warehouseId],
+      foreignColumns: [warehouses.companyId, warehouses.id],
+    }),
+  ],
+);
+
+export const stockMoves = sqliteTable(
+  'acc_stock_moves',
+  {
+    companyId: companyId(),
+    entryId: text('entry_id').notNull(),
+    moveNo: counter('move_no').notNull(),
+    itemId: text('item_id').notNull(),
+    warehouseId: text('warehouse_id').notNull(),
+    account: text('account').notNull(),
+    layerId: text('layer_id').notNull(),
+    /** Signed thousandths of the item's unit. */
+    quantity: bani('quantity').notNull(),
+    bani: bani('bani').notNull(),
+    /** The entry's line (one-based) whose amount the move is part of; none between warehouses. */
+    lineNo: counter('line_no'),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.entryId, t.moveNo] }),
+    // A position's moves counted without reading them (its read version, `inv:stale_read`), and
+    // a layer's balance summed from the index alone (`inv:stock_layer_balance`, the state loader).
+    index('stock_move_position').on(t.companyId, t.itemId, t.warehouseId, t.entryId),
+    index('stock_move_layer').on(t.companyId, t.layerId, t.quantity, t.bani),
+    index('stock_move_account').on(t.companyId, t.account),
+    foreignKey({
+      columns: [t.companyId, t.entryId],
+      foreignColumns: [entries.companyId, entries.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.layerId],
+      foreignColumns: [stockLayers.companyId, stockLayers.id],
+    }),
+    check('stock_move_amount', sql`${t.quantity} <> 0 or ${t.bani} <> 0`),
+  ],
+);
+
+/**
+ * A fiscal cash register (aparat de marcat electronic fiscal, OUG nr. 28/1999) the company uses:
+ * tracked, never driven (G2). Its unique number (NUI, the first 10 characters of its files' ids,
+ * OPANAF nr. 146/2018) identifies its Z reports; the fiscal series is printed on its receipts.
+ */
+export const cashRegisters = sqliteTable(
+  'acc_cash_registers',
+  {
+    id: text('id').notNull(),
+    companyId: companyId(),
+    /** The register's unique identification number (NUI). */
+    code: text('code').notNull(),
+    /** The fiscal series printed on its receipts and reports. */
+    fiscalSeries: text('fiscal_series').notNull(),
+    /** Where it is installed: the working point's address. */
+    location: text('location').notNull(),
+    /** The warehouse it sells goods from, when it sells goods. */
+    warehouseId: text('warehouse_id'),
+    /** The day it was put into use (fiscalized). */
+    activeFrom: text('active_from').notNull(),
+    /** The fiscalization record (bonul de fiscalizare, procesul-verbal). */
+    evidenceId: text('evidence_id').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.id] }),
+    uniqueIndex('cash_register_code').on(t.companyId, t.code),
+    foreignKey({
+      columns: [t.companyId, t.warehouseId],
+      foreignColumns: [warehouses.companyId, warehouses.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.evidenceId],
+      foreignColumns: [evidence.companyId, evidence.id],
+    }),
+  ],
+);
+
+export const cashRegisterEventKinds = [
+  'anaf_registered',
+  'service_contract',
+  'memory_replaced',
+  'journal_replaced',
+  'failure',
+  'repaired',
+  'closed',
+] as const;
+/** What happened to a register, numbered per register, each with its document: its ANAF
+ * registration, its service contract, a fiscal memory or journal replaced, a failure (the special
+ * register of OUG nr. 28/1999 art. 1 alin. (8)) and its repair, its being taken out of use. */
+export const cashRegisterEvents = sqliteTable(
+  'acc_cash_register_events',
+  {
+    companyId: companyId(),
+    registerId: text('register_id').notNull(),
+    seq: counter('seq').notNull(),
+    kind: text('kind', { enum: cashRegisterEventKinds }).notNull(),
+    date: text('date').notNull(),
+    /** The document's number (the registration's, the contract's), when it has one. */
+    reference: text('reference'),
+    evidenceId: text('evidence_id').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.registerId, t.seq] }),
+    foreignKey({
+      columns: [t.companyId, t.registerId],
+      foreignColumns: [cashRegisters.companyId, cashRegisters.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.evidenceId],
+      foreignColumns: [evidence.companyId, evidence.id],
+    }),
+  ],
+);
+
 /** The CNP of an individual partner (a shareholder, a buyer), sealed, for the declarations that
  * must carry it; the party itself keeps only its hash. */
 export const partyCnps = sqliteTable(
@@ -1749,6 +1963,11 @@ export const employmentTerms = sqliteTable(
     unionDuesBani: bani('union_dues_bani').notNull(),
     minimumExemption: text('minimum_exemption'),
     evidenceId: text('evidence_id'),
+    /** `employment`: an individual employment contract; `mandate`: an administrator's
+     * administration or mandate contract (Codul fiscal art. 76 alin. (2) lit. o)). */
+    kind: text('kind', { enum: ['employment', 'mandate'] })
+      .notNull()
+      .default('employment'),
     createdBy: author(),
     createdAt: createdAt(),
   },
@@ -1779,6 +1998,11 @@ export const payrollRuns = sqliteTable(
     resultHash: text('result_hash').notNull(),
     /** Lines the rules could not settle: such a run is not posted. */
     issues: counter('issues').notNull(),
+    /** A correction (a round after the first): the posted run it corrects, why, and the document
+     * that shows it. */
+    corrects: text('corrects_run_id'),
+    correctionReason: text('correction_reason', { enum: ['error', 'retroactive'] }),
+    correctionEvidenceId: text('correction_evidence_id'),
     createdBy: author(),
     createdAt: createdAt(),
   },
@@ -1843,6 +2067,96 @@ export const payrollLines = sqliteTable(
     foreignKey({
       columns: [t.companyId, t.contractId, t.termsSeq],
       foreignColumns: [employmentTerms.companyId, employmentTerms.contractId, employmentTerms.seq],
+    }),
+  ],
+);
+
+/** A garnishment order (adresă de înființare a popririi) on an employee's salary, as the
+ * employer received it: never changed; a release is a row of its own. */
+export const garnishments = sqliteTable(
+  'acc_garnishments',
+  {
+    id: text('id').notNull(),
+    companyId: companyId(),
+    contractId: text('contract_id').notNull(),
+    /** The creditor the withheld amounts are paid to (427). */
+    partyId: text('party_id').notNull(),
+    kind: text('kind', { enum: ['maintenance', 'state', 'public_damage', 'other'] }).notNull(),
+    /** The order's number and the day the employer received it (the order within a rank). */
+    reference: text('reference').notNull(),
+    receivedOn: text('received_on').notNull(),
+    /** The debt to recover, in bani. */
+    totalBani: bani('total_bani').notNull(),
+    /** What the order says to withhold each month: an amount, or a share of the net pay. */
+    monthlyBani: bani('monthly_bani'),
+    shareNumerator: counter('share_numerator'),
+    shareDenominator: counter('share_denominator'),
+    evidenceId: text('evidence_id').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.id] }),
+    index('garnishment_contract').on(t.companyId, t.contractId),
+    foreignKey({
+      columns: [t.companyId, t.partyId],
+      foreignColumns: [parties.companyId, parties.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.evidenceId],
+      foreignColumns: [evidence.companyId, evidence.id],
+    }),
+  ],
+);
+
+/** A garnishment lifted (ridicarea popririi) from a date, with its document. */
+export const garnishmentReleases = sqliteTable(
+  'acc_garnishment_releases',
+  {
+    companyId: companyId(),
+    garnishmentId: text('garnishment_id').notNull(),
+    releasedOn: text('released_on').notNull(),
+    evidenceId: text('evidence_id').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.garnishmentId] }),
+    foreignKey({
+      columns: [t.companyId, t.garnishmentId],
+      foreignColumns: [garnishments.companyId, garnishments.id],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.evidenceId],
+      foreignColumns: [evidence.companyId, evidence.id],
+    }),
+  ],
+);
+
+/** A transmission to REGES-ONLINE recorded by a person: the engine does not submit it. */
+export const regesRecords = sqliteTable(
+  'acc_reges_records',
+  {
+    companyId: companyId(),
+    contractId: text('contract_id').notNull(),
+    /** The terms version it registers: 1 for the contract's start, a later one for a change. */
+    termsSeq: counter('terms_seq').notNull(),
+    event: text('event', { enum: ['start', 'change', 'end'] }).notNull(),
+    transmittedOn: text('transmitted_on').notNull(),
+    /** The receipt REGES-ONLINE gave, as evidence. */
+    evidenceId: text('evidence_id').notNull(),
+    createdBy: author(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.companyId, t.contractId, t.termsSeq, t.event] }),
+    foreignKey({
+      columns: [t.companyId, t.contractId, t.termsSeq],
+      foreignColumns: [employmentTerms.companyId, employmentTerms.contractId, employmentTerms.seq],
+    }),
+    foreignKey({
+      columns: [t.companyId, t.evidenceId],
+      foreignColumns: [evidence.companyId, evidence.id],
     }),
   ],
 );

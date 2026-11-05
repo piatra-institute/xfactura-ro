@@ -5,6 +5,14 @@ import type { MicroConditionsAnswer, QuestionRequest } from '../../questions/kin
 import { RuleGapError, type DateAxis, type RuleContext } from '../../rules';
 import { addDays, addMonthsToDate, daysBetween, type LocalDate } from '../../time';
 import { individualForms, type EntityForm } from '../entity';
+import {
+  determineVatDistance,
+  determineVatIoss,
+  determineVatOss,
+  distanceWatch,
+  type DistanceSale,
+} from '../oss/determine';
+import { determineIntrastat, intrastatWatches, type IntrastatMonth } from '../trade/intrastat';
 import type {
   MicroEmployee,
   MicroLinked,
@@ -31,6 +39,14 @@ export const determinationAxes = [
   'vat.cash',
   'vat.status',
   'vat.eu',
+  // Sales to consumers in other Member States (core ro/oss): the place of supply (art. 278^1),
+  // the Union scheme (art. 315) and the import scheme (art. 315^2).
+  'vat.distance',
+  'vat.oss',
+  'vat.ioss',
+  // Intrastat (core ro/trade, INS): whether the company is a data provider, by flow.
+  'intrastat.arrivals',
+  'intrastat.dispatches',
 ] as const;
 export type DeterminationAxis = (typeof determinationAxes)[number];
 
@@ -80,6 +96,13 @@ export interface YearFigures {
   euGoodsAcquisitions: Known<boolean>;
   /** The BNR EUR rate valid at the year's close. */
   eurRate: Known<FxQuote>;
+  /** Distance sales and TBE services to consumers in other Member States, without VAT (art.
+   * 278^1 alin. (1) lit. b)): the D300's „Total an precedent” of the next year. */
+  distanceTurnover?: Known<bigint>;
+  /** Intra-Union acquisitions and supplies of goods (core ro/trade): INS's Intrastat threshold
+   * of the next year reads them. */
+  intrastatArrivals?: Known<bigint>;
+  intrastatDispatches?: Known<bigint>;
 }
 
 /** The current year's movements, for what is checked during the year. */
@@ -98,6 +121,11 @@ export interface YearActivity {
   /** Services across the EU border, from the documents: invoices from suppliers established in
    * another member state and to customers there, by date (art. 317 alin. (1) lit. b)–c)). */
   euServices?: readonly EuService[];
+  /** Distance sales and TBE services to consumers in other Member States, by tax point (core
+   * ro/oss): what the threshold of art. 278^1 is cumulated over. */
+  distance?: readonly DistanceSale[];
+  /** Intra-Union goods by the month they moved (core ro/trade): the Intrastat thresholds. */
+  intrastat?: readonly IntrastatMonth[];
 }
 
 /** An invoice for services across the EU border, as the documents show it. */
@@ -289,7 +317,7 @@ export function average(total: number, count: number): string {
 }
 
 /** Collects a determination's computation as it is made. */
-class Draft {
+export class Draft {
   lines: string[] = [];
   clauses = new Set<string>();
   versions = new Set<string>();
@@ -402,7 +430,7 @@ class Draft {
 }
 
 /** Runs a determination, turning a missing rule into a RULE_GAP. */
-function guarded(draft: Draft, run: () => Determination): Determination {
+export function guarded(draft: Draft, run: () => Determination): Determination {
   try {
     return run();
   } catch (error) {
@@ -1617,6 +1645,11 @@ export function determineYear(context: DeterminationContext, rules: RuleContext)
     determineCashVat(context, rules),
     determineVatStatus(context, rules),
     determineVatEu(context, rules),
+    determineVatDistance(context, rules),
+    determineVatOss(context, rules),
+    determineVatIoss(context, rules),
+    determineIntrastat(context, rules, 'arrivals'),
+    determineIntrastat(context, rules, 'dispatches'),
   ];
 }
 
@@ -1708,6 +1741,11 @@ export function thresholdWatches(
         message: `Livrările cu locul în România din ${year}, ${lei(value)} lei, față de plafonul de scutire de ${threshold} lei (art. 310).`,
       });
     }
+  }
+  if (status === 'normal_vat') {
+    const distance = safe(() => distanceWatch(context, rules, at));
+    if (distance) watch(distance);
+    for (const intrastat of safe(() => intrastatWatches(context, rules)) ?? []) watch(intrastat);
   }
   if (status === 'normal_vat' && recordedAt(context.facts, 'vat.cash', at) === 'yes') {
     const ceiling = safe(() =>

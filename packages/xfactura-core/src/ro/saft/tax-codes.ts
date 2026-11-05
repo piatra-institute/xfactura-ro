@@ -37,6 +37,9 @@ export type D406VatCodeRow = {
   deduction?: 'full' | 'half' | 'none' | 'prorata';
   /** The supplier applies VAT on collection. */
   cashVat?: true;
+  /** A distance sale or TBE service to a consumer in another Member State with its place in
+   * Romania (art. 278^1 alin. (1); the tax entry's `distance: origin`). */
+  distance?: true;
   /** The SAF-T TaxCode. */
   taxCode: string;
   /** Its description in ANAF's nomenclature, as vatTaxCodes has it. */
@@ -449,6 +452,34 @@ export const d406ExemptCodes: readonly D406VatCodeRow[] = [
   })),
 ];
 
+/**
+ * The agricultural flat rate (V4, src/ro/schemes/agriculture.ts): the compensation a buyer pays a
+ * farmer under art. 315^1 (FR-315, D300 rd. 27), on ANAF's rows "Achiziții de produse și servicii
+ * agricole de la furnizori care aplică regimul special pentru agricultori" at 8%: Achizitii ded
+ * 100% 308301 when deducted, Achizitii neded 358301 when not. The margin schemes' codes (MS-311-*,
+ * MS-312-*) have no row in ANAF's sheets: they are not reported (the caller's problem).
+ */
+export const d406FlatRateCodes: readonly D406VatCodeRow[] = [
+  {
+    direction: 'input',
+    code: 'FR-315',
+    deduction: 'full',
+    taxCode: '308301',
+    description:
+      'Achiziții de produse și servicii agricole de la furnizori care aplică regimul special pentru agricultori',
+    d300: '27',
+  },
+  {
+    direction: 'input',
+    code: 'FR-315',
+    deduction: 'none',
+    taxCode: '358301',
+    description:
+      'Achiziții de produse și servicii agricole de la furnizori care aplică regimul special pentru agricultori',
+    d300: '27',
+  },
+];
+
 /** Adjustments reported at the rate of the VAT they adjust, which their tax entry records. */
 export const d406RatedAdjustments = ['ADJ-300', 'ADJ-304', 'ADJ-305'];
 
@@ -457,10 +488,79 @@ export const d406ReverseCharges = ['RC-EU-SERV', 'RC-NONEU-SERV'];
 /** Whether a tax entry's collected side is reported with its acquisition: the reverse charges
  * across the border and the domestic one's acquisitions. */
 export const d406CollectedWithAcquisition = (code: string) =>
-  d406ReverseCharges.includes(code) || /^TI-A-\d+$/.test(code);
+  d406ReverseCharges.includes(code) || /^(TI-A|AIC|IMP-DEF)-\d+$/.test(code);
 
 /** Whether a TaxCode is of sheet Achizitii baserate: the TaxTable gives it the pro-rata. */
 export const d406BaseRateCode = (taxCode: string) => vatTaxCodes[taxCode]?.kind === 'baserate';
+
+/**
+ * Sales to consumers in other Member States (core ro/oss), from ANAF's sheet Livrari: with the
+ * place in Romania below the threshold of art. 278^1, by rate (D300 rd. 17); declared in the
+ * Union scheme, 310340, whose rate is the consumer state's (D398 only: the writer refuses a code
+ * without a single rate, so such a sale stops the file).
+ */
+export const d406DistanceCodes: readonly D406VatCodeRow[] = [
+  ...(
+    [
+      ['S-21', '310346'],
+      ['S-11', '310356'],
+      ['S-19', '310320'],
+      ['S-9', '310343'],
+      ['S-5', '310328'],
+    ] as const
+  ).map(([code, taxCode]): D406VatCodeRow => ({
+    direction: 'output',
+    code,
+    distance: true,
+    taxCode,
+    description: vatTaxCodes[taxCode]!.description,
+    d300: '17',
+  })),
+  {
+    direction: 'output',
+    code: 'EXP-OSS',
+    taxCode: '310340',
+    description: vatTaxCodes['310340']!.description,
+    d300: '',
+  },
+];
+
+/**
+ * Goods across the border (G3, src/ro/trade), from ANAF's sheets Achizitii ded 100% and Achizitii
+ * neded: an intra-community acquisition of goods from a supplier registered in the Member State
+ * of dispatch (AIC-<rate>, D300 5/5.1/20/20.1; 3002xx, 3502xx) and an import whose VAT is
+ * subject to the simplification measures (IMP-DEF-<rate>, art. 326 alin. (4)–(5), D300 7/22;
+ * 3006xx, 3506xx) are each one operation, reported once with the acquisition by its deduction;
+ * an import whose VAT was paid at customs (IMP-<rate>, D300 24/25; 3012xx, 3512xx) is an
+ * acquisition. Supplies keep V2's codes (EX-IC 310301, EX-EXPORT 310313).
+ */
+export const d406TradeCodes: readonly D406VatCodeRow[] = (
+  [
+    ['AIC', '21', '300204', '350204', '5/5.1/20/20.1'],
+    ['AIC', '11', '300205', '350205', '5/5.1/20/20.1'],
+    ['AIC', '19', '300201', '350201', '5/5.1/20/20.1'],
+    ['IMP-DEF', '21', '300604', '350604', '7/22'],
+    ['IMP-DEF', '11', '300605', '350605', '7/22'],
+    ['IMP-DEF', '19', '300601', '350601', '7/22'],
+    ['IMP', '21', '301204', '351204', '24'],
+    ['IMP', '11', '301205', '351205', '25'],
+    ['IMP', '19', '301201', '351201', '24.1'],
+  ] as const
+).flatMap(([prefix, rate, full, none, d300]): D406VatCodeRow[] =>
+  (
+    [
+      ['full', full],
+      ['none', none],
+    ] as const
+  ).map(([deduction, taxCode]) => ({
+    direction: 'input',
+    code: `${prefix}-${rate}`,
+    deduction,
+    taxCode,
+    description: vatTaxCodes[taxCode]?.description ?? '',
+    d300,
+  })),
+);
 
 /**
  * The TaxCode of a tax entry: a code of vatTaxCodes; null for the collected side of a reverse
@@ -473,15 +573,25 @@ export function d406VatTaxCode(entry: {
   deduction?: 'full' | 'half' | 'none' | 'prorata' | 'partial';
   /** The supplier (the company, for a sale) applies VAT on collection. */
   cashVat?: boolean;
+  /** A sale to a consumer in another Member State below the threshold (`distance: origin`). */
+  distance?: boolean;
 }): string | null | undefined {
   if (entry.direction === 'output' && d406CollectedWithAcquisition(entry.code)) return null;
-  const row = [...d406VatCodes, ...d406DomesticReverseChargeCodes, ...d406ExemptCodes].find(
+  const row = [
+    ...d406VatCodes,
+    ...d406DomesticReverseChargeCodes,
+    ...d406ExemptCodes,
+    ...d406FlatRateCodes,
+    ...d406DistanceCodes,
+    ...d406TradeCodes,
+  ].find(
     (item) =>
       item.direction === entry.direction &&
       item.code === entry.code &&
       (item.rate === undefined || item.rate === entry.rate) &&
       (item.deduction === undefined || item.deduction === entry.deduction) &&
-      (item.cashVat ?? false) === (entry.cashVat ?? false),
+      (item.cashVat ?? false) === (entry.cashVat ?? false) &&
+      (item.distance ?? false) === (entry.distance ?? false),
   );
   return row && vatTaxCodes[row.taxCode] ? row.taxCode : undefined;
 }
@@ -500,5 +610,23 @@ const releaseCodes: Readonly<Record<string, string>> = {
 /** The TaxCode of a release of VAT on collection, by the engine's code; undefined without one. */
 export function d406CashVatReleaseCode(code: string): string | undefined {
   const taxCode = releaseCodes[code];
+  return taxCode && vatTaxCodes[taxCode] ? taxCode : undefined;
+}
+
+/** The sales a fiscal cash register's Z report books (G2), by rate: sheet TVA_NoteContabile,
+ * "Livrări/ prestări pentru care nu există obligația emiterii facturii … conform Art. 319 aliniat
+ * 10 din Cod Fiscal" 3803xx, on the general-ledger entry, as ANAF's SAF-T answers say for the
+ * registers' daily reports (General Ledger Entries, answer 1). */
+const zReportCodes: Readonly<Record<string, string>> = {
+  'S-19': '380301',
+  'S-9': '380302',
+  'S-5': '380303',
+  'S-21': '380305',
+  'S-11': '380306',
+};
+
+/** The TaxCode of a Z report's sales at a rate, by the engine's code; undefined without one. */
+export function d406ZReportCode(code: string): string | undefined {
+  const taxCode = zReportCodes[code];
   return taxCode && vatTaxCodes[taxCode] ? taxCode : undefined;
 }

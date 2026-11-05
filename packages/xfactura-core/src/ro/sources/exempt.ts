@@ -236,6 +236,68 @@ export const exemptClauses: readonly Clause[] = [
     summary:
       'Achizițiile de la persoane neînregistrate (N) se declară cu tip_partener 2, cota 0, fără TVA, cu tipul documentului (1 facturi, 2 borderouri, 3 file din carnet, 4 contracte, 5 alte documente); natura lor (op11) se declară doar și obligatoriu pentru persoanele fizice și partenerii fără cod; rezumatul se face pe fiecare tip de document.',
   },
+  // The order and its instructions as consolidated to 17.09.2025 (OPANAF nr. 2.194/2025), read
+  // in the owner's copy: what the statement lists, for whom, and by when.
+  ...(
+    [
+      [
+        'art.1',
+        'art. 1',
+        'Persoanele înregistrate în scopuri de TVA declară livrările, prestările și achizițiile realizate pe teritoriul României către sau de la orice persoană în sensul art. 266 alin. (1) pct. 24 din Codul fiscal.',
+      ],
+      [
+        'art.8',
+        'art. 8 (modificat prin OPANAF nr. 2.328/2016) și anexa nr. 2 pct. 2',
+        'Declarația se depune până la data de 30 inclusiv a lunii următoare perioadei de raportare (perioada fiscală a decontului), și fără operațiuni; pentru luna ianuarie, până la 28, respectiv 29 februarie.',
+      ],
+      [
+        'anexa3.pct.1',
+        'anexa nr. 3 (procedura de gestiune) pct. 1',
+        'Procedura de gestiune a formularului, nemodificată din 2015, indică încă data de 25 a lunii următoare; art. 8 și instrucțiunile (anexa nr. 2 pct. 2), modificate în 2016, dau data de 30.',
+      ],
+      [
+        'anexa2.pct.1',
+        'anexa nr. 2 pct. 1 lit. a) și b)',
+        'Se declară facturile emise în perioadă pentru operațiunile taxabile în România (inclusiv avansuri, taxare inversă și TVA la încasare), valoarea bonurilor fiscale și a facturilor simplificate emise, și achizițiile taxabile cu locul în România, inclusiv cele pentru care beneficiarul datorează TVA (art. 307 alin. (2), (3), (5), (6) și art. 331), cu excepția celor din D390: facturile primite, borderourile, filele din carnetele de comercializare, contractele încheiate cu persoane fizice și alte documente, precum și valoarea facturilor simplificate și a bonurilor fiscale care au codul de TVA al beneficiarului.',
+      ],
+      [
+        'anexa2.sect1.litD',
+        'anexa nr. 2 secțiunea 1 lit. D și secțiunea a 2-a pct. 10–12',
+        'Pentru persoanele neînregistrate în scopuri de TVA se declară natura bunurilor și serviciilor cumpărate de la persoane fizice (cereale și plante tehnice, deșeuri, masă lemnoasă, terenuri, construcții, alte bunuri și servicii), numărul facturilor, borderourilor, filelor din carnet, contractelor sau altor documente, tipul documentului și valoarea totală a achizițiilor.',
+      ],
+      [
+        'anexa2.sect1.litE-F',
+        'anexa nr. 2 secțiunea 1 lit. E și F',
+        'Cu persoanele impozabile nestabilite în România, neînregistrate și neobligate să se înregistreze, stabilite în alt stat membru (E) sau în afara Uniunii (F), se declară doar operațiunile taxabile cu locul în România și, la achiziții, cele pentru care beneficiarul datorează TVA potrivit art. 307 alin. (2), (3), (5) și (6), care nu sunt în D390; nu se declară exporturile și importurile de bunuri.',
+      ],
+      [
+        'anexa2.sect2.liste',
+        'anexa nr. 2 secțiunea a 2-a (listele operațiunilor taxabile)',
+        'Listele cuprind operațiunile taxabile cu persoane înregistrate în scopuri de TVA (cu taxarea inversă de la art. 331 pe categorii), cu persoane neînregistrate, cu persoane impozabile nestabilite în alte state membre sau în afara Uniunii, și încasările prin aparate de marcat și din activități exceptate.',
+      ],
+      [
+        'anexa2.sect2.pct.2',
+        'anexa nr. 2 secțiunea a 2-a pct. 2',
+        'Tipurile de operațiuni: L și A (facturi, fără cele simplificate), LS și AS (regimurile speciale ale agențiilor de turism și ale bunurilor second-hand, operelor de artă, obiectelor de colecție și antichităților), AÎ (TVA la încasare), V și C (taxarea inversă), N (achiziții de la persoane neînregistrate, pe facturi, borderouri, file din carnetele de comercializare sau contracte), Î1 și Î2 (încasări).',
+      ],
+      [
+        'anexa2.sect2.pct.3',
+        'anexa nr. 2 secțiunea a 2-a pct. 3',
+        'Partenerul se identifică prin CIF, CUI sau codul de TVA; persoana fizică prin CNP sau NIF, obligatoriu când a fost colectat din facturi sau contracte, altfel prin nume și adresă; persoana nestabilită din alt stat membru prin codul de TVA de acolo, iar cea din afara Uniunii prin codul din registrul companiilor din țara de rezidență.',
+      ],
+      [
+        'anexa2.sect2.pct.5',
+        'anexa nr. 2 secțiunea a 2-a pct. 5',
+        'Se înscrie numărul facturilor, borderourilor, filelor, contractelor sau al altor documente; factura cu operațiuni la cote diferite se numără o singură dată, la operațiunea cu TVA cea mai mare (la TVA egală, la cota cea mai mare), cu 0 la celelalte; la taxarea inversă, factura cu mai multe bunuri sau servicii se numără la operațiunea cu TVA cea mai mare.',
+      ],
+    ] as const
+  ).map(([id, locator, summary]): Clause => ({
+    id: `OPANAF3769/2015-A:${id}`,
+    source: 'OPANAF3769/2015-A',
+    locator,
+    status: 'located',
+    summary,
+  })),
   {
     id: 'ANAF/Cod-fiscal-consolidat:art.271(3)',
     source: 'ANAF/Cod-fiscal-consolidat',

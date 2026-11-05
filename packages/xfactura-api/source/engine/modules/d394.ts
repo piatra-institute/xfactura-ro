@@ -4,7 +4,9 @@ import type { Party } from 'xfactura-core/einvoice';
 import { profileAt, vatPeriodOf, type ReadSetEntry } from 'xfactura-core/kernel';
 import {
   checkD394,
+  d394InvoiceCounts,
   d394Namespace,
+  d394PartnerAbroad,
   d394Rates,
   d394RefundFlags,
   d394UnregisteredProductCodes,
@@ -20,14 +22,16 @@ import {
 } from 'xfactura-core/ro/declarations/d394';
 import { parseMoney } from 'xfactura-core/money';
 import { supplierAppliesCashVat } from 'xfactura-core/ro/cash-vat';
-import { counties } from 'xfactura-core/ro/geo';
+import { counties, euVatPrefixes } from 'xfactura-core/ro/geo';
 import { isValidCnp, isValidCui } from 'xfactura-core/ro/identifiers';
+import { crossBorderCodes } from 'xfactura-core/ro/treatments/cross-border';
 import { invoiceKinds } from 'xfactura-core/ro/treatments/invoices';
 import { regimeCodes } from 'xfactura-core/ro/treatments/vat-registration';
 import { adjustmentCodes, allExemptCodes, exemptCodes } from 'xfactura-core/ro/exempt';
 import { payeeKinds } from 'xfactura-core/ro/treatments/withholding';
+import { schemeCodes } from 'xfactura-core/ro/schemes';
 import { vatPeriodEnd } from 'xfactura-core/ro/treatments/vat-settlement';
-import type { RuleContext } from 'xfactura-core/rules';
+import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
 import type { LocalDate } from 'xfactura-core/time';
 import { invoiceDocumentSchema } from 'xfactura-core/ubl/invoice-document';
 import type { Transaction } from '../db/database';
@@ -47,6 +51,8 @@ import { entryStands } from '../kernel/ledger';
 import { loadState } from '../kernel/state';
 import { periodStart, rounding, sellerDetails } from './d300';
 import { receiptEntries, receiptSections, reverseChargeOperations } from './receipts';
+import { cashRegisterSections } from './retail';
+import { isD394SchemeEntry, schemeSections } from './schemes';
 import type { DeclarationKind, DeclarationProblem } from './declarations';
 import { Sealer } from './payroll';
 
@@ -124,7 +130,9 @@ const rateOf = (code: string) => {
   const rate = /^S-(\d+)$/.exec(code)?.[1];
   return rate && (d394Rates as readonly string[]).includes(rate) ? (rate as D394Rate) : null;
 };
-/** Codes reported elsewhere (D390, D300 rows 3 and 7): services across the border. */
+/** Codes reported elsewhere (D390, D300 rows 3 and 7): services across the border. Services
+ * bought from outside the Union, whose VAT the company owes (art. 307 alin. (2)), are not in D390:
+ * D394 lists them with partners of type 4 (`abroad`). */
 const crossBorder = /^(RC|EXP)-/;
 /** Exempt operations and adjustments: D394 lists the taxable operations on the national
  * territory and the acquisitions from persons not registered for VAT (OPANAF nr. 3.769/2015,
@@ -141,9 +149,16 @@ function statementPeriod(period: string): D394['period'] {
   return { year: Number(period.slice(0, 4)), month: Number(period.slice(5, 7)) };
 }
 
-/** Purchases that may be acquisitions from persons not registered for VAT (N): exempt ones and
- * those outside the scope of VAT (category O). */
-const unregisteredCodes: readonly string[] = [exemptCodes.purchase, 'O'];
+/** Purchases that may be acquisitions from persons not registered for VAT (N): exempt ones,
+ * those outside the scope of VAT (category O), items bought for resale under the margin scheme
+ * (from a dealer registered for VAT they are AS, `schemeSections`) and a farmer's products under
+ * the flat rate (V4). */
+const unregisteredCodes: readonly string[] = [
+  exemptCodes.purchase,
+  'O',
+  schemeCodes.goodsPurchase,
+  schemeCodes.flatRate,
+];
 
 /** The rent and intellectual property owed to individuals under a contract (`payees.recognize`)
  * and posted in the period, as they stand. */
@@ -246,16 +261,24 @@ async function inputsOf(tx: Transaction, companyId: string, period: string) {
   });
   // A change of regime (V1): only the days of the normal regime, and not the regularizations of a
   // late registration or of the capital goods, which are no invoices.
-  const normal = (ledger.loaded.taxLedger.get(`VAT|${period}`)?.entries ?? []).filter(
+  const days = (ledger.loaded.taxLedger.get(`VAT|${period}`)?.entries ?? []).filter(
     (entry) =>
-      !crossBorder.test(entry.code) &&
       !(Object.values(regimeCodes) as string[]).includes(entry.code) &&
       profileAt(ledger.loaded, 'vat.status', entry.taxPoint) === 'normal_vat',
+  );
+  const normal = days.filter((entry) => !crossBorder.test(entry.code));
+  // Services bought from outside the Union with the VAT self-assessed: the collected entry holds
+  // the VAT (the deducted one repeats it), as for the domestic reverse charge.
+  const abroad = days.filter(
+    (entry) => entry.code === crossBorderCodes.purchase.nonEu && entry.direction === 'output',
   );
   // Exempt purchases and purchases outside the scope of VAT: acquisitions N from a supplier not
   // registered for VAT, not listed from one registered.
   const unregistered = normal.filter(
-    (entry) => entry.direction === 'input' && unregisteredCodes.includes(entry.code),
+    (entry) =>
+      entry.direction === 'input' &&
+      unregisteredCodes.includes(entry.code) &&
+      !isD394SchemeEntry(entry),
   );
   const all = normal.filter(
     (entry) => !notListed.includes(entry.code) && !unregistered.includes(entry),
@@ -287,7 +310,7 @@ async function inputsOf(tx: Transaction, companyId: string, period: string) {
   );
   const documentIds = [
     ...new Set([
-      ...[...entries, ...unregistered].flatMap((entry) =>
+      ...[...entries, ...unregistered, ...abroad].flatMap((entry) =>
         entry.documentId ? [entry.documentId] : [],
       ),
       ...issued.map((row) => row.number.documentId),
@@ -330,6 +353,7 @@ async function inputsOf(tx: Transaction, companyId: string, period: string) {
     entries,
     releases,
     unregistered,
+    abroad,
     payees,
     cnps,
     parties: read.loaded.parties,
@@ -376,6 +400,7 @@ export function d394Declaration(
         entries,
         releases,
         unregistered,
+        abroad,
         payees,
         cnps,
         parties,
@@ -428,20 +453,40 @@ export function d394Declaration(
         });
       const roundToLeu = await rounding(rules, tx, companyId, periodStart(period), problems);
 
-      // Operations, grouped by type, rate and partner; credit notes reduce their group.
+      // Operations, grouped by type, rate and partner; credit notes reduce their group. Each
+      // group keeps its documents' VAT: an invoice with operations at several rates counts once,
+      // for the rate with the largest VAT (`d394InvoiceCounts`).
       const groups = new Map<
         string,
         {
           type: D394Operation['type'];
           rate: D394Rate;
           partner: D394Partner;
-          documents: Set<string>;
+          documents: Map<string, bigint>;
           base: bigint;
           vat: bigint;
         }
       >();
-      // Receipts (rezumat2) and the domestic reverse charge (V, C) have sections of their own.
-      const special = receiptEntries(entries);
+      // Receipts (rezumat2), the domestic reverse charge (V, C) and the special schemes (LS, AS,
+      // informatii) have sections of their own.
+      const special = receiptEntries(entries.filter((entry) => !isD394SchemeEntry(entry)));
+      const schemes = schemeSections(
+        entries.filter(isD394SchemeEntry),
+        (entry) => {
+          const body = invoiceDocumentSchema.safeParse(
+            entry.documentId ? documents.get(entry.documentId)?.body : undefined,
+          );
+          return body.success
+            ? (entry.direction === 'output' ? body.data.customer : body.data.supplier).name
+            : (entry.attributes.number ?? '');
+        },
+        (entry) => {
+          const row = entry.partyId ? details.get(entry.partyId) : undefined;
+          return row ? (JSON.parse(row.details) as Party) : undefined;
+        },
+        roundToLeu ?? ((bani) => bani / 100n),
+        problems,
+      );
       for (const entry of special.ordinary) {
         const rate = rateOf(entry.code);
         const document = entry.documentId ? documents.get(entry.documentId) : undefined;
@@ -470,6 +515,17 @@ export function d394Declaration(
         } else if (isValidCnp(taxId) || (counterparty.country === 'RO' && isValidCui(taxId))) {
           partner = { kind: 'unregistered', code: taxId, name: counterparty.name };
           key = `2|${taxId}`;
+        } else if (counterparty.country !== 'RO' && taxId) {
+          // A taxable person established abroad, not registered in Romania, by its code there
+          // (OPANAF nr. 3.769/2015 anexa nr. 2 secțiunea 1 lit. E–F, secțiunea a 2-a pct. 3).
+          const abroadPartner = d394PartnerAbroad(
+            counterparty.country,
+            taxId,
+            counterparty.name,
+            euVatPrefixes,
+          )!;
+          partner = abroadPartner;
+          key = `${abroadPartner.region}|${abroadPartner.code}`;
         } else {
           // Without a code, the partner's address identifies it.
           const row = details.get(entry.partyId);
@@ -502,15 +558,91 @@ export function d394Declaration(
           type,
           rate,
           partner,
-          documents: new Set<string>(),
+          documents: new Map<string, bigint>(),
           base: 0n,
           vat: 0n,
         };
-        group.documents.add(entry.documentId!);
+        group.documents.set(
+          entry.documentId!,
+          (group.documents.get(entry.documentId!) ?? 0n) + entry.taxBani,
+        );
         group.base += entry.baseBani;
         group.vat += entry.taxBani;
         groups.set(groupKey, group);
       }
+
+      // Services bought from outside the Union (art. 307 alin. (2)): acquisitions C at the
+      // standard rate of their tax point, with partners of type 4, without products (anexa nr. 2
+      // secțiunea 1 lit. F pct. 8–10).
+      const context = await rules(tx, companyId);
+      for (const entry of abroad) {
+        const body = invoiceDocumentSchema.safeParse(
+          entry.documentId ? documents.get(entry.documentId)?.body : undefined,
+        );
+        const number = entry.attributes.number ?? entry.documentId;
+        if (!body.success) {
+          problems.push({
+            code: 'D394_OPERATION',
+            message: `Achiziția de servicii din afara Uniunii ${number} nu are factură.`,
+          });
+          continue;
+        }
+        const supplier = body.data.supplier;
+        // The code RC-NONEU-SERV is booked only for a supplier outside the Union.
+        const partner = d394PartnerAbroad(
+          entry.attributes.counterpartyCountry ?? supplier.country,
+          entry.attributes.counterpartyTaxId ?? supplier.taxId,
+          supplier.name,
+          euVatPrefixes,
+        );
+        if (!partner || partner.region !== 'nonEu') {
+          problems.push({
+            code: 'D394_PARTNER_CODE',
+            message: `Prestatorul ${supplier.name}, stabilit în afara Uniunii, se declară cu codul din registrul companiilor din țara lui (tip partener 4): factura ${number} nu îl are.`,
+          });
+          continue;
+        }
+        let rate: string;
+        try {
+          rate = context.param<string>('ro.vat.rate', 'vat_chargeability_date', entry.taxPoint, {
+            category: 'S',
+          });
+        } catch (error) {
+          if (!(error instanceof RuleGapError)) throw error;
+          problems.push({ code: 'RULE_GAP', message: error.message });
+          continue;
+        }
+        if (!(d394Rates as readonly string[]).includes(rate)) {
+          problems.push({
+            code: 'D394_RATE',
+            message: `Cota ${rate} a achiziției ${number} nu se declară în D394.`,
+          });
+          continue;
+        }
+        const groupKey = `C|${rate}|nonEu|${partner.code}`;
+        const group = groups.get(groupKey) ?? {
+          type: 'C' as const,
+          rate: rate as D394Rate,
+          partner,
+          documents: new Map<string, bigint>(),
+          base: 0n,
+          vat: 0n,
+        };
+        group.documents.set(
+          entry.documentId!,
+          (group.documents.get(entry.documentId!) ?? 0n) + entry.taxBani,
+        );
+        group.base += entry.baseBani;
+        group.vat += entry.taxBani;
+        groups.set(groupKey, group);
+      }
+      const counts = d394InvoiceCounts(
+        [...groups.entries()].map(([key, group]) => ({
+          key,
+          rate: group.rate,
+          documents: group.documents,
+        })),
+      );
 
       // Acquisitions from persons not registered for VAT (N; OPANAF nr. 3.769/2015 art. 1 and
       // anexa nr. 2 secțiunea a 2-a pct. 2, ANAF's structure of 15.09.2025): per partner and
@@ -568,13 +700,11 @@ export function d394Declaration(
         const supplier = body.data.supplier;
         const taxId = supplier.taxId.toUpperCase().replace(/\s+/g, '');
         const number = entry.attributes.number ?? body.data.number;
-        if (supplier.country !== 'RO') {
-          problems.push({
-            code: 'D394_ACQUISITION_N',
-            message: `Achiziția ${number} este de la ${supplier.name}, nestabilit în România: achizițiile de la persoane nestabilite, neînregistrate în scopuri de TVA, nu sunt acoperite.`,
-          });
-          continue;
-        }
+        // From a supplier established abroad: not listed. N is for persons not registered in
+        // Romania (secțiunea 1 lit. D), and with non-established partners only the taxable
+        // operations with the place in Romania whose VAT the beneficiary owes are declared (lit.
+        // E–F pct. 10): an exempt or out-of-scope purchase is neither.
+        if (supplier.country !== 'RO') continue;
         if (/^RO/.test(taxId)) {
           if (!isValidCui(taxId))
             problems.push({
@@ -583,7 +713,10 @@ export function d394Declaration(
             });
           continue;
         }
-        const nature = options.natures?.[entry.documentId!] ?? null;
+        // An item bought under the margin scheme is goods: other goods (34) unless stated.
+        const nature =
+          options.natures?.[entry.documentId!] ??
+          (entry.code === schemeCodes.goodsPurchase ? '34' : null);
         let partner: D394Partner;
         let key: string;
         if (isValidCui(taxId) && !isValidCnp(taxId)) {
@@ -815,16 +948,19 @@ export function d394Declaration(
           : {}),
         affiliates: options.affiliates,
         operations: [
-          ...[...groups.values()].map(({ documents: ids, base, vat, ...group }) => ({
+          ...[...groups.entries()].map(([key, { documents: _ids, base, vat, ...group }]) => ({
             ...group,
-            invoices: ids.size,
+            invoices: counts.get(key) ?? 0,
             base: Number(roundToLeu(base)),
             vat: Number(roundToLeu(vat)),
           })),
           ...reverseChargeOperations(special.reverse, documents, roundToLeu, problems),
+          ...schemes.operations,
           ...unregisteredOperations,
         ],
         simplified: receiptSections(special.receipts, roundToLeu, problems),
+        // The cash registers' receipts (G2): op2 I1 by month, the receipts invoiced left out.
+        cashRegisters: cashRegisterSections(special.registers, roundToLeu, problems),
         series: seriesList,
         issuedInvoices: {
           own: issued.length + (options.outsideSeries?.invoices ?? 0),
@@ -842,6 +978,7 @@ export function d394Declaration(
             }
           : {}),
         ...(options.refund ? { refund: options.refund as D394['refund'] } : {}),
+        ...(Object.keys(schemes.margins).length ? { margins: schemes.margins } : {}),
       };
       problems.push(
         ...checkD394(model)
@@ -861,7 +998,9 @@ export function d394Declaration(
             partner:
               operation.partner.kind === 'registered'
                 ? operation.partner.cui
-                : operation.partner.name,
+                : operation.partner.kind === 'nonEstablished'
+                  ? operation.partner.code
+                  : operation.partner.name,
             invoices: operation.invoices,
             base: operation.base,
             vat: operation.vat,

@@ -18,10 +18,28 @@ import {
   type InventoryList,
 } from '../ro/yearend/documents';
 import {
+  customsDeclarationInput,
+  customsDeclarationSchema,
+  customsDocumentKind,
+  tradeIdentity,
+  viesCheckInput,
+  viesCheckSchema,
+  viesDocumentKind,
+  type CustomsDeclaration,
+  type ViesCheck,
+} from '../ro/trade/documents';
+import {
   extractedInvoiceVersion,
   invoiceDocumentSchema,
   type InvoiceDocument,
 } from '../ubl/invoice-document';
+import {
+  isZReportKind,
+  zReportDocumentSchema,
+  zReportInput,
+  zReportKind,
+  type ZReportDocument,
+} from '../ro/retail/documents';
 import { Amount, dateSchema, moneySchema, signedMoneySchema } from '../values';
 
 /*
@@ -45,6 +63,11 @@ export const documentKinds = {
   taxStatement: taxDocumentKinds.statement,
   /** The annual inventory's lists (ro/yearend/documents.ts). */
   inventoryList: inventoryDocumentKind,
+  /** A customs declaration of import or export, and a VIES answer (ro/trade/documents.ts). */
+  customsDeclaration: customsDocumentKind,
+  viesCheck: viesDocumentKind,
+  /** A fiscal cash register's daily closing report (ro/retail/documents.ts). */
+  zReport: zReportKind,
 } as const;
 export type DocumentKind = (typeof documentKinds)[keyof typeof documentKinds];
 /** The kinds `documents.record` accepts. */
@@ -58,6 +81,9 @@ export const extractedKinds = [
   documentKinds.taxDecision,
   documentKinds.taxStatement,
   documentKinds.inventoryList,
+  documentKinds.customsDeclaration,
+  documentKinds.viesCheck,
+  documentKinds.zReport,
 ] as const;
 export type ExtractedKind = (typeof extractedKinds)[number];
 export const isInvoiceKind = (kind: string) =>
@@ -75,9 +101,17 @@ export const isTaxKind = (kind: string) =>
  * - `issued`: issued by the engine itself (`sales.issue`);
  * - `ubl_upload`: a UBL XML file uploaded by a person or an agent;
  * - `invoicer`: the browser invoicer's export;
+ * - `amef`: a fiscal cash register's own export (`retail.importZ`, ro/retail/documents.ts);
  * - `extracted`: read by an agent from a PDF or a photo (`documents.record`).
  */
-export const authorities = ['efactura', 'issued', 'ubl_upload', 'invoicer', 'extracted'] as const;
+export const authorities = [
+  'efactura',
+  'issued',
+  'ubl_upload',
+  'invoicer',
+  'amef',
+  'extracted',
+] as const;
 export type Authority = (typeof authorities)[number];
 
 /** A field's source: the line of the file's text layer (`evidence.read`) it was read from. */
@@ -330,7 +364,10 @@ export type ExtractedBody =
   | ContractDocument
   | TaxDecisionDocument
   | TaxStatementDocument
-  | InventoryList;
+  | InventoryList
+  | CustomsDeclaration
+  | ViesCheck
+  | ZReportDocument;
 
 /** The body an extracted document of `kind` is stored with, from what the agent read. */
 export function extractedBody(kind: ExtractedKind, body: unknown): ExtractedBody {
@@ -343,6 +380,10 @@ export function extractedBody(kind: ExtractedKind, body: unknown): ExtractedBody
     return taxStatementDocumentSchema.parse(taxStatementDocumentInput.parse(body));
   if (kind === documentKinds.inventoryList)
     return inventoryListSchema.parse(inventoryListInput.parse(body));
+  if (kind === documentKinds.customsDeclaration)
+    return customsDeclarationSchema.parse(customsDeclarationInput.parse(body));
+  if (kind === documentKinds.viesCheck) return viesCheckSchema.parse(viesCheckInput.parse(body));
+  if (isZReportKind(kind)) return zReportDocumentSchema.parse(zReportInput.parse(body));
   if (typeof body !== 'object' || body === null || !('parserVersion' in body))
     return extractedInvoiceBody(kind, extractedInvoiceInput.parse(body));
   // The UBL parser's full shape, as `documents.get` returns it, is accepted too.
@@ -428,6 +469,9 @@ export function documentIdentity(kind: string, body: unknown, companyTaxId: stri
     if (!parsed.success) return null;
     return hashOf(['tax.statement', companyTaxId, parsed.data.source, parsed.data.asOf]);
   }
+  // A customs declaration by its MRN; a VIES answer by the code, the date and its consultation.
+  if (kind === documentKinds.customsDeclaration || kind === documentKinds.viesCheck)
+    return tradeIdentity(kind, body);
   // An inventory list by its date and title: the same list recorded twice is one group.
   if (kind === documentKinds.inventoryList) {
     const parsed = inventoryListSchema.safeParse(body);
@@ -437,6 +481,19 @@ export function documentIdentity(kind: string, body: unknown, companyTaxId: stri
       companyTaxId,
       parsed.data.date,
       normalizedNumber(parsed.data.title),
+    ]);
+  }
+  // A Z report by the register and its number: a photo of it and the register's export of the
+  // same day are one group.
+  if (isZReportKind(kind)) {
+    const parsed = zReportDocumentSchema.safeParse(body);
+    if (!parsed.success) return null;
+    return hashOf([
+      'zreport',
+      normalizedTaxId(parsed.data.seller.taxId),
+      normalizedNumber(parsed.data.register),
+      String(Number(parsed.data.number)),
+      parsed.data.issueDate,
     ]);
   }
   return null;

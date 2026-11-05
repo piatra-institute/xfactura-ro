@@ -3,6 +3,7 @@ import { formatMoney, isSupportedCurrency, LEDGER_CURRENCY, parseMoney } from '.
 import type { LocalDate } from '../../time';
 import { normalizedTaxId } from '../../documents/schemas';
 import type { InventoryList } from './documents';
+import { compareStock, type RegisterPosition } from '../stock/count';
 
 /*
  * The annual inventory's results (OMF nr. 2.861/2009 pct. 35): what the lists found compared with
@@ -46,6 +47,13 @@ export interface InventoryBooks {
   partners?: readonly BookPartner[];
   /** The stock accounts' balances (class 3). */
   stock: readonly { account: string; bani: bigint }[];
+  /** The stock register (G1) on the date, when it explains every stock account's balance: its
+   * positions and the catalogue the lists' codes are read against. */
+  register?: {
+    positions: readonly RegisterPosition[];
+    items: ReadonlyMap<string, { id: string; account: string; unit: string }>;
+    warehouses: ReadonlyMap<string, string>;
+  };
 }
 
 export type InventoryDifference =
@@ -63,10 +71,25 @@ export type InventoryDifference =
       book: bigint;
       confirmed: bigint | null;
       status: 'confirmed' | 'disputed' | 'no_reply';
+    }
+  | {
+      kind: 'stock';
+      itemId: string;
+      code: string;
+      warehouse: string;
+      unit: string;
+      /** Thousandths of the unit. */
+      book: bigint;
+      counted: bigint;
+      bani: bigint;
     };
 
 export interface InventoryGap {
-  code: 'INVENTORY_UNLISTED' | 'INVENTORY_CASH_UNCOUNTED' | 'INVENTORY_BANK_UNCONFIRMED';
+  code:
+    | 'INVENTORY_UNLISTED'
+    | 'INVENTORY_CASH_UNCOUNTED'
+    | 'INVENTORY_BANK_UNCONFIRMED'
+    | 'INVENTORY_STOCK_UNLISTED';
   message: string;
 }
 
@@ -228,12 +251,34 @@ export function compareInventory(
       }
   }
 
-  // Stock: by quantity only until the stock module exists (G1), so nothing is compared.
+  // Stock: the register's positions against the lists, when the register explains every stock
+  // account (G1; `inventory.stock` books what differs); otherwise nothing is compared.
+  if (books.register) {
+    const stock = compareStock(
+      lists.flatMap((list) => list.stock ?? []),
+      books.register.positions,
+      books.register,
+    );
+    for (const message of [...stock.gaps, ...stock.problems])
+      gaps.push({ code: 'INVENTORY_STOCK_UNLISTED', message });
+    for (const item of stock.differences)
+      differences.push({
+        kind: 'stock',
+        itemId: item.item,
+        code: item.code,
+        warehouse: item.warehouseCode,
+        unit: item.unit,
+        book: item.book,
+        counted: item.counted,
+        bani: item.bani,
+      });
+    return { date: books.date, sections, differences, gaps, unsupported };
+  }
   const stockHeld = books.stock.filter((row) => row.bani !== 0n);
   if (stockHeld.length || lists.some((list) => (list.stock ?? []).length > 0))
     unsupported.push({
       code: 'INVENTORY_STOCK',
-      message: `Stocurile${stockHeld.length ? ` (${stockHeld.map((row) => row.account).join(', ')})` : ''} nu se pot compara cu listele de inventariere: evidența stocurilor pe articole și cantități nu este încă acoperită (G1), iar diferențele lor se înregistrează în afara aplicației.`,
+      message: `Stocurile${stockHeld.length ? ` (${stockHeld.map((row) => row.account).join(', ')})` : ''} nu se pot compara cu listele de inventariere: conturile de stocuri țin solduri în afara gestiunii pe articole (G1), care se preiau cu stock.opening; până atunci diferențele lor se înregistrează în afara aplicației.`,
       details: { accounts: stockHeld.map((row) => row.account) },
     });
 
@@ -270,6 +315,16 @@ export function differenceView(difference: InventoryDifference): JsonValue {
         found: money(difference.kind === 'cash' ? difference.counted : difference.confirmed),
       };
     }
+    case 'stock':
+      return {
+        kind: difference.kind,
+        code: difference.code,
+        warehouse: difference.warehouse,
+        unit: difference.unit,
+        book: `${difference.book / 1000n}.${String(difference.book % 1000n).padStart(3, '0')}`,
+        counted: `${difference.counted / 1000n}.${String(difference.counted % 1000n).padStart(3, '0')}`,
+        value: lei(difference.bani),
+      };
     case 'partner': {
       const money = (minor: bigint) =>
         formatMoney(

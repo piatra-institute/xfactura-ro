@@ -4,7 +4,9 @@ import {
   calculateD394,
   checkD394,
   d394Counties,
+  d394InvoiceCounts,
   d394Namespace,
+  d394PartnerAbroad,
   d394Rates,
   d394RefundFlags,
   writeD394,
@@ -12,7 +14,7 @@ import {
   type D394Operation,
   type D394Partner,
 } from '../src/ro/declarations/d394';
-import { counties } from '../src/ro/geo';
+import { counties, euVatPrefixes } from '../src/ro/geo';
 
 const registered = (cui: string, name: string): D394Partner => ({ kind: 'registered', cui, name });
 const operation = (
@@ -114,7 +116,7 @@ describe('D394 calculation', () => {
   test('summarizes by partner type and rate, and by rate', () => {
     const calculation = calculateD394(monthly);
     expect(calculation.operationsReported).toBe(true);
-    expect(calculation.partners).toEqual({ registered: 4, unregistered: 0 });
+    expect(calculation.partners).toEqual({ registered: 4, unregistered: 0, eu: 0, nonEu: 0 });
     expect(calculation.byPartner.map((summary) => [summary.partnerType, summary.rate])).toEqual([
       [1, '21'],
       [1, '11'],
@@ -147,7 +149,7 @@ describe('D394 calculation', () => {
         ],
       }),
     );
-    expect(calculation.partners).toEqual({ registered: 1, unregistered: 3 });
+    expect(calculation.partners).toEqual({ registered: 1, unregistered: 3, eu: 0, nonEu: 0 });
     expect(calculation.byPartner[2]).toEqual({
       partnerType: 2,
       rate: '21',
@@ -258,7 +260,9 @@ describe('D394 calculation', () => {
     expect(() => calculateD394(one({ type: 'A', partner: individual('1900101400012') }))).toThrow(
       'livrări (L) și achiziții (N)',
     );
-    expect(() => calculateD394(one({ type: 'LS' as 'L' }))).toThrow('nu este acoperit');
+    // The special schemes' supplies (LS) are written (V4); their acquisitions under VAT on
+    // collection (ASI) are not.
+    expect(() => calculateD394(one({ type: 'ASI' as 'L' }))).toThrow('nu este acoperit');
     // N: from an unregistered partner, at rate 0, with its document, the nature for individuals.
     const n = (patch: Partial<D394Operation>) =>
       one({
@@ -350,6 +354,94 @@ describe('D394 XML', () => {
       '<op1 tip="A" tip_partener="1" cota="21" cuiP="16341004" denP="Furnizor Unu SRL"' +
         ' nrFact="3" baza="3000" tva="630"/>',
     );
+  });
+
+  test('writes partners established abroad as types 3 and 4, with C for the VAT owed', () => {
+    const outside = d394PartnerAbroad('US', '94-1234567', 'Example Inc.', euVatPrefixes)!;
+    const german = d394PartnerAbroad('DE', '123456789', 'Beispiel GmbH', euVatPrefixes)!;
+    expect([outside, german]).toEqual([
+      { kind: 'nonEstablished', region: 'nonEu', code: '94-1234567', name: 'Example Inc.' },
+      { kind: 'nonEstablished', region: 'eu', code: 'DE123456789', name: 'Beispiel GmbH' },
+    ]);
+    // Without a code the partner is declared as not registered, by its address; Romania is not
+    // abroad.
+    expect(d394PartnerAbroad('FR', ' ', 'Dupont', euVatPrefixes)).toBeNull();
+    expect(d394PartnerAbroad('RO', '14399840', 'Client Unu SRL', euVatPrefixes)).toBeNull();
+    const statement = model({
+      ...issued,
+      operations: [
+        operation('L', '21', registered('14399840', 'Client Unu SRL'), 2, 1000, 210),
+        operation('L', '21', german, 1, 400, 84),
+        operation('C', '21', outside, 1, 500, 105),
+      ],
+    });
+    expect(checkD394(statement)).toEqual([]);
+    const calculation = calculateD394(statement);
+    expect(calculation.partners).toEqual({ registered: 1, unregistered: 0, eu: 1, nonEu: 1 });
+    // nrCui1–4 and rezumat2's bazaL (1000 + 400) and bazaA (C: 500).
+    expect(calculation.controlSum).toBe(3n + 1400n + 500n);
+    const xml = writeD394(statement);
+    expect([
+      attribute(xml, 'nrCui3', 'informatii'),
+      attribute(xml, 'nrCui4', 'informatii'),
+    ]).toEqual(['1', '1']);
+    expect(elements(xml, 'rezumat1').slice(1)).toEqual([
+      '<rezumat1 tip_partener="3" cota="21" facturiL="1" bazaL="400" tvaL="84" facturiC="0"' +
+        ' bazaC="0" tvaC="0"/>',
+      '<rezumat1 tip_partener="4" cota="21" facturiL="0" bazaL="0" tvaL="0" facturiC="1"' +
+        ' bazaC="500" tvaC="105"/>',
+    ]);
+    expect(elements(xml, 'op1').slice(1)).toEqual([
+      '<op1 tip="L" tip_partener="3" cota="21" cuiP="DE123456789" denP="Beispiel GmbH"' +
+        ' nrFact="1" baza="400" tva="84"/>',
+      '<op1 tip="C" tip_partener="4" cota="21" cuiP="94-1234567" denP="Example Inc."' +
+        ' nrFact="1" baza="500" tva="105"/>',
+    ]);
+    // Only L and C, without products, and each code once per type and rate.
+    const refused = model({
+      ...issued,
+      operations: [
+        operation('A', '21', outside, 1, 500, 105),
+        {
+          ...operation('C', '21', german, 1, 500, 105),
+          products: [{ code: '22', invoices: 1, base: 500, vat: 105 }],
+        },
+        operation('L', '21', german, 1, 400, 84),
+        operation('L', '21', german, 1, 400, 84),
+      ],
+    });
+    expect(checkD394(refused).map((check) => check.code)).toEqual([
+      'D394_OPERATION',
+      'D394_PRODUCTS',
+      'D394_DUPLICATE',
+    ]);
+  });
+
+  test('counts an invoice with several rates once, for the largest VAT, the highest rate on a tie', () => {
+    const counts = d394InvoiceCounts([
+      // F1: 100 lei VAT at 21% and 110 lei at 11%; F2: 21 lei at 21% and 21 lei at 11%; F3 only
+      // at 21%; a credit note counts by the size of its VAT.
+      {
+        key: 'L21',
+        rate: '21',
+        documents: new Map([
+          ['F1', 10000n],
+          ['F2', 2100n],
+          ['F3', 1n],
+        ]),
+      },
+      {
+        key: 'L11',
+        rate: '11',
+        documents: new Map([
+          ['F1', 11000n],
+          ['F2', 2100n],
+        ]),
+      },
+      { key: 'L9', rate: '9', documents: new Map([['N1', -900n]]) },
+      { key: 'L5', rate: '5', documents: new Map([['N1', 500n]]) },
+    ]);
+    expect(Object.fromEntries(counts)).toEqual({ L21: 2, L11: 1, L9: 1, L5: 0 });
   });
 
   test('writes individuals by code or by address', () => {

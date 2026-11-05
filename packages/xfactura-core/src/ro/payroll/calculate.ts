@@ -10,8 +10,19 @@ import type { DeductionTable, MinimumWageRelief, SupplementaryDeduction } from '
  * art. 220^4). Bonuses are kept apart because annual leave pay is averaged without them. The sick
  * pay for ordinary illness (code 01), the employer's part and the fund's, is salary income for the
  * tax (art. 76 alin. (1)) and in the CAS and CASS bases (art. 139 alin. (1) lit. o), art. 157
- * alin. (1) lit. v)); the fund's part is not in the CAM base (art. 220^5). Benefits in kind have
- * their own rules and are not modelled yet.
+ * alin. (1) lit. v)); the fund's part is not in the CAM base (art. 220^5). The other indemnity
+ * codes (`ro.sick.codes`): those of incapacity other than 01 are taxed but outside the CASS base
+ * (art. 155 alin. (1) lit. i)); those FNUASS bears for maternity, maternal risk and care are
+ * neither taxed (art. 62 lit. c)) nor in the CASS base; all are in the CAS base (art. 139 alin. (1)
+ * lit. o)), none borne by FNUASS in CAM's (art. 220^5). The indemnity of a work accident or
+ * occupational disease (Legea nr. 346/2002, codes 02–04) is salary income for the tax (art. 76
+ * alin. (1)), outside the CASS base (art. 155 alin. (1) lit. i), norme pct. 3 alin. (9)) and the
+ * CAS base (the state budget's part: art. 141 lit. a), norme pct. 41; the employer's 3 days as
+ * D112 computes B4_7, from OUG nr. 158/2005's indemnities only), its state budget's part outside
+ * CAM's (art. 220^5); that part is recovered from the pension house like FNUASS's, on 4382. A
+ * benefit in kind (`benefit`, valued by
+ * `evaluateBenefits`) is income not paid in money, in every base (art. 139 alin. (1) lit. a), 157
+ * alin. (1) lit. a), 220^4 alin. (1) lit. a)).
  */
 export const payItemKinds = [
   'salary',
@@ -21,15 +32,30 @@ export const payItemKinds = [
   'holiday_vouchers',
   'sick_employer',
   'sick_fund',
+  'sick_employer_nocass',
+  'sick_fund_nocass',
+  'sick_fund_exempt',
+  'accident_employer',
+  'accident_fund',
+  'benefit',
 ] as const;
+const sickKinds: readonly PayItemKind[] = [
+  'sick_employer',
+  'sick_fund',
+  'sick_employer_nocass',
+  'sick_fund_nocass',
+  'sick_fund_exempt',
+];
+const fundKinds: readonly PayItemKind[] = ['sick_fund', 'sick_fund_nocass', 'sick_fund_exempt'];
+const accidentKinds: readonly PayItemKind[] = ['accident_employer', 'accident_fund'];
 const moneyKinds: readonly PayItemKind[] = [
   'salary',
   'bonus',
   'leave',
-  'sick_employer',
-  'sick_fund',
+  ...sickKinds,
+  ...accidentKinds,
 ];
-const sickKinds: readonly PayItemKind[] = ['sick_employer', 'sick_fund'];
+const voucherKinds: readonly PayItemKind[] = ['meal_vouchers', 'holiday_vouchers'];
 export type PayItemKind = (typeof payItemKinds)[number];
 
 /** Why the minimum contribution for the contract's active days does not apply (art. 146 alin.
@@ -65,6 +91,10 @@ export interface PayInput {
   /** The base salary was lowered since the minimum-wage relief's ordinance: no relief. */
   baseReduced?: boolean;
   minimumExemption: MinimumExemption | null;
+  /** Remuneration under an administration or mandate contract (art. 76 alin. (2) lit. o)), not
+   * an employment contract: no minimum wage, minimum-wage relief or minimum contribution (art.
+   * 146 alin. (5^6) is for employment contracts). */
+  mandate?: boolean;
 }
 
 export type PayStep = { code: string; amount: bigint; clauses: readonly string[] };
@@ -73,9 +103,15 @@ export type PayIssue = { code: string; message: string };
 /** Every amount is in bani; contributions, the tax base and the tax are whole lei. */
 export interface PayResult {
   minimumWage: bigint;
+  /** Salary income for the tax: money, vouchers and benefits in kind, without the indemnities
+   * art. 62 lit. c) leaves out. */
   gross: bigint;
   cash: bigint;
   vouchers: bigint;
+  /** Benefits in kind, taxable. */
+  inKind: bigint;
+  /** Indemnities paid in money that are not taxed (art. 62 lit. c)). */
+  exempt: bigint;
   /** The minimum-wage amount left out of the bases. */
   relief: bigint;
   casBase: bigint;
@@ -85,6 +121,10 @@ export interface PayResult {
    * employer pays and recovers. */
   sickEmployer: bigint;
   sickFund: bigint;
+  /** A work accident's or occupational disease's indemnity: the employer's days, and the state
+   * social insurance budget's, which the employer pays and recovers from the pension house. */
+  accidentEmployer: bigint;
+  accidentFund: bigint;
   /** Withheld from the employee. */
   cas: bigint;
   cass: bigint;
@@ -181,26 +221,32 @@ function compute(input: PayInput, rules: RuleContext) {
     return amount;
   };
 
-  const cash = sum(
-    input.items.filter((item) => moneyKinds.includes(item.kind)).map((item) => item.amount),
-  );
-  const vouchers = sum(
-    input.items.filter((item) => !moneyKinds.includes(item.kind)).map((item) => item.amount),
-  );
   const ofKind = (kinds: readonly PayItemKind[]) =>
     sum(input.items.filter((item) => kinds.includes(item.kind)).map((item) => item.amount));
+  const cash = ofKind(moneyKinds);
+  const vouchers = ofKind(voucherKinds);
+  const inKind = ofKind(['benefit']);
   const sick = ofKind(sickKinds);
-  const sickEmployer = ofKind(['sick_employer']);
-  const sickFund = ofKind(['sick_fund']);
-  const gross = step('gross', cash + vouchers, [
+  const sickEmployer = ofKind(['sick_employer', 'sick_employer_nocass']);
+  const sickFund = ofKind(fundKinds);
+  const exempt = ofKind(['sick_fund_exempt']);
+  const noCass = ofKind(['sick_employer_nocass', 'sick_fund_nocass', 'sick_fund_exempt']);
+  const accidentEmployer = ofKind(['accident_employer']);
+  const accidentFund = ofKind(['accident_fund']);
+  const accident = accidentEmployer + accidentFund;
+  const mandate = input.mandate === true;
+  if (inKind) step('benefits', inKind, [code('art.76(3)')]);
+  if (exempt) step('sick.exempt', exempt, [code('art.62(c)')]);
+  const gross = step('gross', cash + vouchers + inKind - exempt, [
     code('art.76(3)(h)'),
-    ...(sick ? [code('art.76(1)')] : []),
+    ...(sick || accident ? [code('art.76(1)')] : []),
+    ...(mandate ? [code('art.76(2)(o)')] : []),
   ]);
   const fullTime = input.dailyHours === 8;
   const hours = BigInt(input.dailyHours);
 
   // The base salary is at least the minimum wage for the contract's working time.
-  if (input.baseSalary * 8n < minimumWage * hours)
+  if (!mandate && input.baseSalary * 8n < minimumWage * hours)
     issues.push({
       code: 'BELOW_MINIMUM_WAGE',
       message: 'Salariul de bază este sub salariul minim brut pe țară pentru norma contractului.',
@@ -211,7 +257,13 @@ function compute(input: PayInput, rules: RuleContext) {
   // the ordinance, with salary in money up to the ceiling. For part of a month the law lists what
   // reduces the amount but not how, so such a month is left to the expert.
   let relief = 0n;
-  if (fullTime && input.mainJob && !input.baseReduced && input.baseSalary === minimumWage) {
+  if (
+    !mandate &&
+    fullTime &&
+    input.mainJob &&
+    !input.baseReduced &&
+    input.baseSalary === minimumWage
+  ) {
     const { amount, grossCeiling } = param<MinimumWageRelief>('ro.payroll.minimum_wage_relief');
     if (cash <= BigInt(grossCeiling) * 100n) {
       if (input.activeDays !== input.workingDays)
@@ -219,6 +271,12 @@ function compute(input: PayInput, rules: RuleContext) {
           code: 'RELIEF_UNSETTLED',
           message:
             'Suma neimpozabilă pentru salariul minim se diminuează pentru o lună incompletă (OUG nr. 89/2025 art. III alin. (4)), fără ca textul să arate cum: stabiliți-o cu expertul contabil.',
+        });
+      else if (inKind)
+        issues.push({
+          code: 'RELIEF_BENEFIT',
+          message:
+            'OUG nr. 89/2025 art. III nu spune dacă avantajele în natură intră în plafonul venitului brut al sumei neimpozabile: stabiliți luna cu expertul contabil.',
         });
       else relief = min(BigInt(amount) * 100n, cash);
     }
@@ -228,19 +286,31 @@ function compute(input: PayInput, rules: RuleContext) {
   const casRate = param<string>('ro.payroll.cas.rate');
   const cassRate = param<string>('ro.payroll.cass.rate');
   if (sickEmployer) step('sick.employer', sickEmployer, [code('art.139(1)(o)')]);
-  if (sickFund) step('sick.fund', sickFund, [code('art.139(1)(o)')]);
-  const casBase = step('cas.base', cash - relief, [
+  // What the employer pays and recovers, from FNUASS and from the pension house: the booking
+  // reads it as one claim (4382).
+  if (sickFund || accidentFund)
+    step('sick.fund', sickFund + accidentFund, [
+      ...(sickFund ? [code('art.139(1)(o)')] : []),
+      ...(accidentFund ? ['L346/2002-A:art.34'] : []),
+    ]);
+  if (accident) step('accident', accident, ['L346/2002-A:art.33', 'L346/2002-A:art.34']);
+  const casBase = step('cas.base', cash + inKind - relief - accident, [
     code('art.139(1)'),
     code('art.142(r)'),
     ...(sick ? [code('art.139(1)(o)')] : []),
+    ...(accident ? [code('art.141(a)'), code('norme.art.141.pct.41')] : []),
+    ...(mandate ? [code('art.139(1)(d)')] : []),
   ]);
-  const cassBase = step('cass.base', gross - relief, [
+  const cassBase = step('cass.base', cash + vouchers + inKind - noCass - accident - relief, [
     code('art.157'),
     ...(sick ? [code('art.157(1)(v)')] : []),
+    ...(noCass || accident ? [code('art.155(1)(i)')] : []),
+    ...(mandate ? [code('art.157(1)(e)')] : []),
   ]);
-  const camBase = step('cam.base', cash - relief - sickFund, [
+  const camBase = step('cam.base', cash + inKind - relief - sickFund - accidentFund, [
     code('art.220^4'),
-    ...(sickFund ? [code('art.220^5')] : []),
+    ...(sickFund || accidentFund ? [code('art.220^5')] : []),
+    ...(mandate ? [code('art.220^4(1)(d)')] : []),
   ]);
   const cas = step('cas', contribution(casBase, casRate), [code('art.138(a)')]);
   const cass = step('cass', contribution(cassBase, cassRate), [code('art.156')]);
@@ -251,11 +321,12 @@ function compute(input: PayInput, rules: RuleContext) {
   // pay is for the days the contract is suspended, so it does not count towards the minimum.
   let casEmployer = 0n;
   let cassEmployer = 0n;
-  if (!input.minimumExemption && input.activeDays > 0) {
+  if (!mandate && !input.minimumExemption && input.activeDays > 0) {
     const days = BigInt(input.activeDays);
     const of = BigInt(input.workingDays);
     const activeCas = casBase - sick;
-    const activeCass = cassBase - sick;
+    // Only the indemnities in the CASS base come off it: those outside it never entered.
+    const activeCass = cassBase - (sick - noCass);
     if (activeCas * of < minimumWage * days || activeCass * of < minimumWage * days) {
       const { amount } = param<MinimumWageRelief>('ro.payroll.minimum_wage_relief');
       const minimumBase = toLeu((minimumWage - BigInt(amount) * 100n) * days, of, amountRounding);
@@ -270,12 +341,21 @@ function compute(input: PayInput, rules: RuleContext) {
     if (cassEmployer) step('cass.employer', cassEmployer, [code('art.168(6^1)')]);
   }
 
-  // The tax: on the net income, less the personal deduction and union dues at the main job.
-  const netIncome = gross - relief - cas - cass;
+  // The tax: on the net income, less the personal deduction and union dues at the main job. The
+  // CAS of an indemnity the tax leaves out is not deducted from the taxable income.
+  const casTaxable = exempt ? contribution(casBase - exempt, casRate) : cas;
+  if (exempt) step('cas.taxable', casTaxable, [code('art.78(2)(a)'), code('art.62(c)')]);
+  const netIncome = gross - relief - casTaxable - cass;
   let basic = 0n;
   let young = 0n;
   let children = 0n;
-  if (input.mainJob) {
+  // A mandate's remuneration is deducted from only where the person declares the main job there
+  // (`ro.payroll.mandate.deduction`, an interpretation awaiting review).
+  const deducts =
+    input.mainJob &&
+    (!mandate ||
+      param<'main_job_declared'>('ro.payroll.mandate.deduction') === 'main_job_declared');
+  if (deducts) {
     const table = param<DeductionTable>('ro.payroll.personal_deduction');
     const supplementary = param<SupplementaryDeduction>('ro.payroll.supplementary_deduction');
     const excess = gross - minimumWage;
@@ -292,7 +372,7 @@ function compute(input: PayInput, rules: RuleContext) {
     if (input.under26 && withinSpan) young = percentOfMinimum(supplementary.youngPercent);
     children = BigInt(supplementary.perChild) * 100n * BigInt(input.childrenInSchool);
   }
-  const unionDeducted = input.mainJob ? input.unionDues : 0n;
+  const unionDeducted = deducts ? input.unionDues : 0n;
   const total = min(basic + young + children, max(0n, netIncome - unionDeducted));
   if (basic) step('deduction.basic', basic, [code('art.77'), D112]);
   if (young) step('deduction.young', young, [code('art.77'), D112]);
@@ -306,7 +386,7 @@ function compute(input: PayInput, rules: RuleContext) {
       1n,
       param<'leu_half_down'>('ro.payroll.tax_base_rounding'),
     ),
-    [code('art.78(2)(a)'), code('norme.art.64.pct.4')],
+    [code(deducts ? 'art.78(2)(a)' : 'art.78(2)(b)'), code('norme.art.64.pct.4')],
   );
   const tax = step('tax', contribution(taxBase, param<string>('ro.payroll.income_tax.rate')), [
     code('art.64(1)(b)'),
@@ -325,12 +405,16 @@ function compute(input: PayInput, rules: RuleContext) {
     gross,
     cash,
     vouchers,
+    inKind,
+    exempt,
     relief,
     casBase,
     cassBase,
     camBase,
     sickEmployer,
     sickFund,
+    accidentEmployer,
+    accidentFund,
     cas,
     cass,
     casEmployer,
@@ -341,7 +425,7 @@ function compute(input: PayInput, rules: RuleContext) {
     unionDues: input.unionDues,
     net,
     cam,
-    cost: gross + casEmployer + cassEmployer + cam,
+    cost: cash + vouchers + inKind + casEmployer + cassEmployer + cam,
     steps,
   };
   return { result: issues.length ? null : result, issues };

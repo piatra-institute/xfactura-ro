@@ -39,6 +39,9 @@ const chart: [code: string, controlKind: string | null, postable?: boolean][] = 
   ['4426', 'tax'],
   ['4427', 'tax'],
   ['4423', 'tax'],
+  // The stock register's: goods and their expense.
+  ['371', null],
+  ['607', null],
 ];
 
 export type World = Awaited<ReturnType<typeof createWorld>>;

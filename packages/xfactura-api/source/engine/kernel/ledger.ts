@@ -1,8 +1,16 @@
-import { and, eq, max, sql } from 'drizzle-orm';
+import { and, eq, gte, like, lt, max, or, sql, type SQL } from 'drizzle-orm';
 import { canonical } from 'xfactura-core/hash';
 import type { Effect } from 'xfactura-core/kernel';
 import type { Transaction } from '../db/database';
-import { entries, lines, openItems, scheduleRows, taxEntries } from '../db/schema';
+import {
+  entries,
+  lines,
+  openItems,
+  scheduleRows,
+  stockLayers,
+  stockMoves,
+  taxEntries,
+} from '../db/schema';
 
 // Bounded multi-row inserts keep each statement well under SQLite's host-parameter limit.
 const CHUNK = 400;
@@ -49,6 +57,27 @@ export const holdsSubject = (proposal: string) =>
     and not exists (select 1 from acc_entries hse
       where hse.company_id = ${proposal}.company_id and hse.proposal_id = ${proposal}.id
         and not ${standsText('hse')}))`);
+
+/**
+ * A company's lines on accounts under any of `prefixes`, as `account LIKE 'prefix%'` reads them,
+ * in place of the condition on the lines' company. A prefix of digits and dots (an account
+ * code's synthetic part) is the range of codes that start with it, which the account index
+ * (`line_account`) serves; SQLite's case-insensitive LIKE would read every line. Each range
+ * carries the company, so that several are read one by one (a multi-index OR) rather than along a
+ * company-wide index. Without prefixes, every line of the company.
+ */
+export function linesUnder(companyId: string, prefixes: readonly string[]): SQL {
+  const company = eq(lines.companyId, companyId);
+  if (!prefixes.length) return company;
+  if (!prefixes.every((prefix) => /^[0-9.]+$/.test(prefix)))
+    return and(company, or(...prefixes.map((prefix) => like(lines.account, `${prefix}%`))))!;
+  const ranges = prefixes.map((prefix) => {
+    const after =
+      prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
+    return and(company, gte(lines.account, prefix), lt(lines.account, after))!;
+  });
+  return ranges.length === 1 ? ranges[0]! : or(...ranges)!;
+}
 
 /** The text stored as `effect_json`; the entry invariant reads the approved effect from it. */
 export function serializeEffect(effect: Effect) {
@@ -154,6 +183,40 @@ export async function writeEntry(tx: Transaction, header: EntryHeader, effect: E
       })),
     ),
     (chunk) => tx.insert(scheduleRows).values(chunk),
+  );
+  // The stock register's layers and moves (effect@2), sealed by the header like the lines.
+  await insertChunked(effect.stockLayers ?? [], (chunk) =>
+    tx.insert(stockLayers).values(
+      chunk.map((layer) => ({
+        id: layer.ref,
+        companyId,
+        itemId: layer.item,
+        warehouseId: layer.warehouse,
+        account: layer.account,
+        method: layer.method,
+        date: layer.date,
+        mayGoNegative: layer.mayGoNegative,
+        originEntryId: entryId,
+      })),
+    ),
+  );
+  await insertChunked(
+    (effect.stockMoves ?? []).map((move, index) => ({ move, moveNo: index + 1 })),
+    (chunk) =>
+      tx.insert(stockMoves).values(
+        chunk.map(({ move, moveNo }) => ({
+          companyId,
+          entryId,
+          moveNo,
+          itemId: move.item,
+          warehouseId: move.warehouse,
+          account: move.account,
+          layerId: move.layer,
+          quantity: move.quantity,
+          bani: move.bani,
+          lineNo: move.line === undefined ? null : move.line + 1,
+        })),
+      ),
   );
   const [numbering] = await tx
     .select({ number: max(entries.number) })

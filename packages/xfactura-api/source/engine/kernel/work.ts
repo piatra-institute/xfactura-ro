@@ -5,7 +5,9 @@ import { canonical, hashOf } from 'xfactura-core/hash';
 import type { Issue, JsonValue } from 'xfactura-core/kernel';
 import { documentTotals, normalizedNumber } from 'xfactura-core/documents/schemas';
 import { questionOf, type QuestionRequest } from 'xfactura-core/questions/kinds';
+import { euVatPrefixes } from 'xfactura-core/ro/geo';
 import { externalReturns } from 'xfactura-core/ro/obligations';
+import { mentionedScheme } from 'xfactura-core/ro/schemes';
 import type { ParameterRegister } from 'xfactura-core/rules';
 import {
   addDays,
@@ -90,7 +92,13 @@ export const workKinds = [
   'taxaccount.correction',
   'vat.prorata',
   'vat.capitalGoods',
+  'margin.travel',
   'yearend.review',
+  'payroll.due',
+  'goods.proof',
+  'etransport.uit',
+  'efactura.due',
+  'retail.register',
   'close.finding',
   'period.unclosed',
   'rule.gap',
@@ -1115,6 +1123,54 @@ function vatAdjustmentDetector(source: VatAdjustmentWorkOf): Detector {
   };
 }
 
+// The special VAT schemes: a travel agency's sales under the margin scheme that no computation
+// of a period's margin counted (core ro/schemes/agent.ts).
+
+/** An item of the special schemes' module, as the worklist reads it. */
+export type SchemeWorkItem = {
+  kind: 'margin.travel';
+  subject: { kind: string; id: string };
+  severity: 'block' | 'warn';
+  period: string;
+  message: string;
+  details: { [key: string]: JsonValue };
+  next: WorkStep[];
+};
+export type SchemeWorkOf = (
+  tx: Transaction,
+  companyId: string,
+  today: LocalDate,
+) => Promise<SchemeWorkItem[]>;
+
+function schemeDetector(source: SchemeWorkOf): Detector {
+  const cursorOf = (item: SchemeWorkItem) => `${item.kind}|${item.subject.kind}:${item.subject.id}`;
+  return {
+    id: 'schemes',
+    kinds: ['margin.travel'],
+    async list({ tx, companyId, today }, page) {
+      const found = (await source(tx, companyId, today))
+        .sort((a, b) => cursorOf(a).localeCompare(cursorOf(b)))
+        .filter((item) =>
+          page.only !== undefined
+            ? item.subject.id === page.only
+            : page.after === null || cursorOf(item) > page.after,
+        );
+      const items = found.slice(0, page.limit).map((item): Draft => ({
+        kind: item.kind,
+        subject: item.subject,
+        severity: item.severity,
+        due: null,
+        period: item.period,
+        message: item.message,
+        details: item.details,
+        next: item.next,
+        cursor: cursorOf(item),
+      }));
+      return { items, next: found.length > page.limit ? items.at(-1)!.cursor : null };
+    },
+  };
+}
+
 // The year-end in full: the annual inventory and its differences, the impairments, the
 // provisions, the cut-off, the result, the year close and the next year's opening (core
 // ro/yearend/agent.ts).
@@ -1149,6 +1205,41 @@ function yearEndDetector(source: YearEndWorkOf): Detector {
         );
       const items = found.slice(0, page.limit).map((item): Draft => ({
         kind: 'yearend.review',
+        subject: item.subject,
+        severity: item.severity,
+        due: null,
+        period: item.period,
+        message: item.message,
+        details: item.details,
+        next: item.next,
+        cursor: cursorOf(item),
+      }));
+      return { items, next: found.length > page.limit ? items.at(-1)!.cursor : null };
+    },
+  };
+}
+
+// Payroll's external obligations and follow-ups: REGES-ONLINE transmissions, a rectifying D112
+// after a correction (core ro/payroll/agent.ts).
+
+/** An item of the payroll module, as the worklist reads it. */
+export type PayrollWorkOf = YearEndWorkOf;
+
+function payrollDetector(source: PayrollWorkOf): Detector {
+  const cursorOf = (item: YearEndWorkItem) => `${item.subject.kind}:${item.subject.id}`;
+  return {
+    id: 'payroll',
+    kinds: ['payroll.due'],
+    async list({ tx, companyId, today }, page) {
+      const found = (await source(tx, companyId, today))
+        .sort((a, b) => cursorOf(a).localeCompare(cursorOf(b)))
+        .filter((item) =>
+          page.only !== undefined
+            ? item.subject.id === page.only
+            : page.after === null || cursorOf(item) > page.after,
+        );
+      const items = found.slice(0, page.limit).map((item): Draft => ({
+        kind: 'payroll.due',
         subject: item.subject,
         severity: item.severity,
         due: null,
@@ -1451,8 +1542,9 @@ const documentsDetector: Detector = {
         and(
           eq(documents.companyId, companyId),
           position(documents.id, page),
-          // Contracts, statements of the tax account and inventory lists book nothing.
-          sql`${q(documents.kind)} not in ('contract', 'tax.statement', 'inventory.list')`,
+          // Contracts, statements of the tax account and inventory lists book nothing; customs
+          // declarations and VIES answers are read by the booking of their invoice (G3).
+          sql`${q(documents.kind)} not in ('contract', 'tax.statement', 'inventory.list', 'customs.declaration', 'vies.check')`,
           // Once per group: its root stands for it.
           sql`not exists (select 1 from ${documentLinks} g
             where g.company_id = ${q(documents.companyId)} and g.from_id = ${q(documents.id)}
@@ -1486,20 +1578,73 @@ const documentsDetector: Detector = {
           (JSON.parse(row.body) as { taxes?: { category?: string }[] }).taxes?.some(
             (tax) => tax.category === 'AE',
           ) === true;
+        // An invoice whose exemption reason states «regimul marjei» (V4): its scheme.
+        const margin =
+          (row.kind === 'invoice.issued' || row.kind === 'invoice.received') && !foreign
+            ? mentionedScheme(
+                JSON.parse(row.body) as { taxes?: { exemptionReason: string | null }[] },
+              )
+            : null;
+        // An issued invoice to a customer in another Member State without a VAT code of its state:
+        // a sale to a consumer, below or above the threshold of art. 278^1 (core ro/oss).
+        const customer = (JSON.parse(row.body) as { customer?: { taxId?: string } }).customer;
+        const state = foreign ? euVatPrefixes[row.country!] : undefined;
+        const euConsumer =
+          (row.kind === 'invoice.issued' || row.kind === 'creditNote.issued') &&
+          state !== undefined &&
+          !(
+            (customer?.taxId ?? '').toUpperCase().startsWith(state) &&
+            /\d/.test((customer?.taxId ?? '').slice(2))
+          );
+        const marginStep = (scheme: NonNullable<typeof margin>) =>
+          propose(row.kind === 'invoice.issued' ? 'margin.sale' : 'margin.purchase', {
+            documentId: row.id,
+            scheme: scheme === 'travel' ? 'travel' : 'goods',
+            ...(scheme !== 'travel' && row.kind !== 'invoice.issued' ? { goods: scheme } : {}),
+          });
+        // Goods across the border (G3): an issued invoice in K is an intra-community supply, one
+        // in G an export; a received one in K from another Member State an intra-community
+        // acquisition; one from outside the Union an import, unless it is services.
+        const categories = new Set(
+          ((JSON.parse(row.body) as { taxes?: { category?: string }[] }).taxes ?? []).map(
+            (tax) => tax.category,
+          ),
+        );
+        const goods =
+          credit || receipt
+            ? null
+            : row.kind === 'invoice.issued' && categories.has('K')
+              ? 'goods.euSupply'
+              : row.kind === 'invoice.issued' && categories.has('G') && foreign && !state
+                ? 'goods.export'
+                : row.kind === 'invoice.received' && categories.has('K') && state
+                  ? 'goods.euAcquisition'
+                  : null;
         const steps: WorkStep[] = receipt
           ? [propose('receipts.recognize', { documentId: row.id })]
-          : reverse && !credit
-            ? [propose('invoices.reverseCharge', { documentId: row.id })]
-            : row.kind === 'tax.decision'
-              ? [propose('tax.decision', { documentId: row.id })]
-              : credit
-                ? [propose('invoices.credit', { documentId: row.id })]
-                : foreign
-                  ? [
-                      propose('invoices.crossBorder', { documentId: row.id }),
-                      propose('invoices.recognize', { documentId: row.id }),
-                    ]
-                  : [propose('invoices.recognize', { documentId: row.id })];
+          : row.kind === 'zreport'
+            ? [propose('retail.zReport', { documentId: row.id })]
+            : goods
+              ? [propose(goods, { documentId: row.id })]
+              : margin
+                ? [marginStep(margin)]
+                : euConsumer
+                  ? [propose('invoices.euConsumer', { documentId: row.id })]
+                  : reverse && !credit
+                    ? [propose('invoices.reverseCharge', { documentId: row.id })]
+                    : row.kind === 'tax.decision'
+                      ? [propose('tax.decision', { documentId: row.id })]
+                      : credit
+                        ? [propose('invoices.credit', { documentId: row.id })]
+                        : foreign
+                          ? [
+                              propose('invoices.crossBorder', { documentId: row.id }),
+                              ...(row.kind === 'invoice.received' && !state
+                                ? [propose('goods.import', { documentId: row.id })]
+                                : []),
+                              propose('invoices.recognize', { documentId: row.id }),
+                            ]
+                          : [propose('invoices.recognize', { documentId: row.id })];
         return {
           kind: 'document.unproposed',
           subject: { kind: 'document', id: row.id },
@@ -2063,6 +2208,104 @@ function autonomyDetector(autonomy: AutonomyWork): Detector {
   };
 }
 
+// Goods across the border (G3): exempt supplies whose proof is pending, transports without
+// their RO e-Transport code (core ro/trade/agent.ts).
+
+/** An item of the trade module, as the worklist reads it. */
+export type TradeWorkItem = {
+  kind: 'goods.proof' | 'etransport.uit';
+  subject: { kind: string; id: string };
+  severity: 'block' | 'warn';
+  due: string | null;
+  period: string;
+  message: string;
+  details: { [key: string]: JsonValue };
+  next: WorkStep[];
+};
+export type TradeWorkOf = (
+  tx: Transaction,
+  companyId: string,
+  today: LocalDate,
+) => Promise<TradeWorkItem[]>;
+
+function tradeDetector(source: TradeWorkOf): Detector {
+  const cursorOf = (item: TradeWorkItem) => `${item.kind}|${item.subject.kind}:${item.subject.id}`;
+  return {
+    id: 'trade',
+    kinds: ['goods.proof', 'etransport.uit'],
+    async list({ tx, companyId, today }, page) {
+      const found = (await source(tx, companyId, today))
+        .sort((a, b) => cursorOf(a).localeCompare(cursorOf(b)))
+        .filter((item) =>
+          page.only !== undefined
+            ? item.subject.id === page.only
+            : page.after === null || cursorOf(item) > page.after,
+        );
+      const items = found.slice(0, page.limit).map((item): Draft => ({
+        kind: item.kind,
+        subject: item.subject,
+        severity: item.severity,
+        due: item.due,
+        period: item.period,
+        message: item.message,
+        details: item.details,
+        next: item.next,
+        cursor: cursorOf(item),
+      }));
+      return { items, next: found.length > page.limit ? items.at(-1)!.cursor : null };
+    },
+  };
+}
+
+// Retail and B2C (G2): issued invoices due to RO e-Factura, the fiscal cash registers' external
+// obligations (core ro/retail/agent.ts).
+
+/** An item of the retail module, as the worklist reads it. */
+export type RetailWorkItem = {
+  kind: 'efactura.due' | 'retail.register';
+  subject: { kind: string; id: string };
+  severity: 'block' | 'warn';
+  due: string | null;
+  period: string;
+  message: string;
+  details: { [key: string]: JsonValue };
+  next: WorkStep[];
+};
+export type RetailWorkOf = (
+  tx: Transaction,
+  companyId: string,
+  today: LocalDate,
+) => Promise<RetailWorkItem[]>;
+
+function retailDetector(source: RetailWorkOf): Detector {
+  const cursorOf = (item: RetailWorkItem) => `${item.kind}|${item.subject.kind}:${item.subject.id}`;
+  return {
+    id: 'retail',
+    kinds: ['efactura.due', 'retail.register'],
+    async list({ tx, companyId, today }, page) {
+      const found = (await source(tx, companyId, today))
+        .sort((a, b) => cursorOf(a).localeCompare(cursorOf(b)))
+        .filter((item) =>
+          page.only !== undefined
+            ? item.subject.id === page.only
+            : page.after === null || cursorOf(item) > page.after,
+        );
+      const items = found.slice(0, page.limit).map((item): Draft => ({
+        kind: item.kind,
+        subject: item.subject,
+        severity: item.severity,
+        due: item.due,
+        period: item.period,
+        message: item.message,
+        details: item.details,
+        next: item.next,
+        cursor: cursorOf(item),
+      }));
+      return { items, next: found.length > page.limit ? items.at(-1)!.cursor : null };
+    },
+  };
+}
+
 /** What the detectors read beyond the kernel's tables. */
 export interface WorkSources {
   closeChecks: () => CloseCheck[];
@@ -2075,8 +2318,16 @@ export interface WorkSources {
   annual: AnnualWorkOf;
   taxaccount: TaxAccountWorkOf;
   vatAdjustments: VatAdjustmentWorkOf;
+  /** The special VAT schemes' items; none without it (a test engine). */
+  schemes?: SchemeWorkOf;
   /** The year-end's review; none without it (a test engine). */
   yearEnd?: YearEndWorkOf;
+  /** Payroll's REGES-ONLINE transmissions and rectifying D112s; none without it. */
+  payroll?: PayrollWorkOf;
+  /** Goods across the border's pending proofs and RO e-Transport codes; none without it. */
+  trade?: TradeWorkOf;
+  /** Retail's e-Factura deadlines and cash registers' obligations; none without it. */
+  retail?: RetailWorkOf;
 }
 
 /** The detectors in worklist order: decisions and blocked work first, then intake. */
@@ -2091,7 +2342,11 @@ export function workDetectors(sources: WorkSources): Detector[] {
     annualDetector(sources.annual),
     taxAccountDetector(sources.taxaccount),
     vatAdjustmentDetector(sources.vatAdjustments),
+    ...(sources.schemes ? [schemeDetector(sources.schemes)] : []),
     ...(sources.yearEnd ? [yearEndDetector(sources.yearEnd)] : []),
+    ...(sources.payroll ? [payrollDetector(sources.payroll)] : []),
+    ...(sources.trade ? [tradeDetector(sources.trade)] : []),
+    ...(sources.retail ? [retailDetector(sources.retail)] : []),
     closeDetector(sources.closeChecks),
     rulesDetector(sources.register),
     betterSourceDetector,

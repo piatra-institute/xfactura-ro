@@ -4,6 +4,7 @@ import { LocalObjectStore } from './adapters/object-store';
 import { Engine } from './engine';
 import { AnafKits, DukIntegrator, saftKitId } from './adapters/declaration-validator';
 import { AnafTaxpayers } from './adapters/anaf-taxpayers';
+import { ViesService } from './adapters/vies';
 
 /**
  * The engine as configured for this installation: its database, object store, ANAF's validator
@@ -28,6 +29,8 @@ export async function createEngine(options: ReturnType<typeof config> = config()
     ...(options.anaf ? { anaf: options.anaf } : {}),
     // ANAF's public registers of taxpayers need no credentials.
     taxpayers: new AnafTaxpayers(),
+    // VIES on-the-Web needs no credentials either; it is called only when a person asks.
+    vies: new ViesService(),
   });
   return { db, objects, engine, options };
 }

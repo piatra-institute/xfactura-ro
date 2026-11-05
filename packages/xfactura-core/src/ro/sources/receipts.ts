@@ -16,6 +16,28 @@ const declarations = 'https://static.anaf.ro/static/10/Anaf/Declaratii_R/Aplicat
 
 export const receiptSources: readonly LegalSource[] = [
   {
+    // An ANAF county office's reminder for the Q3 2026 return: it confirms the 30th that art. 8
+    // and the instructions set, against the 25th left in the management procedure (anexa nr. 3).
+    id: 'ANAF/AJFP-Ialomita-394-2026',
+    kind: 'official_document',
+    title:
+      'AJFP Ialomița, comunicat nr. ILG-DEX 7605/25.09.2026: 30 septembrie 2026, termen limită pentru depunerea formularului 394',
+    issuer: 'ANAF',
+    publication: null,
+    urls: [
+      'https://static.anaf.ro/static/3/Ploiesti/20260925104315_comunicat-termen_formular_394_30_septembrie_2026.pdf',
+    ],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/3/Ploiesti/20260925104315_comunicat-termen_formular_394_30_septembrie_2026.pdf',
+        sha256: '46328ccf128a7ec405efe20c3b015d8274d8dda6e15d9dd5642144f6c3746299',
+        retrievedOn: '2026-11-06',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
     id: 'ANAF/D394',
     kind: 'official_document',
     title:
@@ -65,6 +87,14 @@ const cf = (id: string, locator: string, summary: string): Clause => ({
 });
 
 export const receiptClauses: readonly Clause[] = [
+  {
+    id: 'ANAF/AJFP-Ialomita-394-2026:termen',
+    source: 'ANAF/AJFP-Ialomita-394-2026',
+    locator: 'comunicat, primul paragraf',
+    status: 'located',
+    summary:
+      'Miercuri, 30 septembrie 2026 este termenul limită de depunere a formularului 394 pentru perioada de raportare precedentă, cea declarată pentru decontul de TVA (art. 322).',
+  },
   cf(
     'art.319(10)(a)',
     'art. 319 alin. (10) lit. a)',
@@ -187,5 +217,22 @@ export const receiptClauses: readonly Clause[] = [
     status: 'located',
     summary:
       'Livrările cu taxare inversă (V, cota 0) și achizițiile cu taxare inversă (C, la cota taxei), pe partener, cu defalcarea pe codurile de produs ale nomenclatorului.',
+  },
+  // The D394 instructions as consolidated to 17.09.2025 (OPANAF nr. 3.769/2015 anexa nr. 2).
+  {
+    id: 'OPANAF3769/2015-A:anexa2.sect1.litI.pct.1.5',
+    source: 'OPANAF3769/2015-A',
+    locator: 'anexa nr. 2 secțiunea 1 lit. I pct. 1.5',
+    status: 'located',
+    summary:
+      'Se declară, pe cote, baza achizițiilor pentru care s-au primit bonuri fiscale care îndeplinesc condițiile unei facturi simplificate și au înscris codul de TVA al beneficiarului; facturile simplificate sunt excluse din numărul și valorile facturilor primite (lit. C pct. 8–11).',
+  },
+  {
+    id: 'OPANAF3769/2015-A:anexa2.sect1.litC.pct.14-17',
+    source: 'OPANAF3769/2015-A',
+    locator: 'anexa nr. 2 secțiunea 1 lit. C pct. 14–17 și secțiunea a 2-a (taxarea inversă)',
+    status: 'located',
+    summary:
+      'Livrările și achizițiile cu taxare inversă după art. 331 se declară separat de celelalte operațiuni: numărul facturilor, baza (și, la achiziții, TVA), pe fiecare cod de TVA al partenerului, categorie de bunuri sau servicii și cotă.',
   },
 ];

@@ -62,6 +62,14 @@ The parallel pilot preserves input manifests, frozen versions, reference outputs
 
 Produce reproducible signed conformance reports with real executed counts, failures/skips, software/profile/package/corpus/oracle/validator hashes. Claims stay draft until their gates pass. Clean-room Compose and restoration tests prove self-hosting independence and recovery.
 
+## Performance
+
+`bun run test:perf` loads a year of 100,080 posted lines and 10,080 stock moves through the real proposal path (policies, the database's guards) and holds the engine to what it reaches, so a regression fails rather than only showing in a log:
+- `close.perf.test.ts`: each month, December's year-end review included, closes through the full request, approve and execute review in under 500 ms; the year posts in under 12 s; the median stock receipt of the last two months costs less than three times that of the first two (twenty times before the stock checks read by index). That ratio is independent of the machine, so it catches a check that reads the whole register for each receipt.
+- `work.perf.test.ts`: each worklist page and `work.get` take under 300 ms.
+
+SQLite has no statistics here (no `ANALYZE`), so it takes `company_id = ?` for a selective condition and will walk a company-wide index, one table lookup per row, rather than a narrower one. Queries and trigger bodies are written so that the index that limits the rows is the planner's only good choice: an account prefix is a range (`linesUnder` in kernel/ledger.ts), not a case-insensitive `LIKE`; a scan of a company's lines starts from its entries (`CROSS JOIN`); a unary `+` keeps a grouping from choosing an index for its order; counts and balances read covering indexes. A new query or check on the posting or close path should be checked with `EXPLAIN QUERY PLAN` for `(company_id=?)` alone. To find where time goes, `bun --cpu-prof-md` profiles a run, and wrapping the libSQL transaction's `execute` times each statement, triggers included.
+
 ## Official validators
 
 `bun run validators:fetch` installs the artifacts pinned in `scripts/validators/sources.json` into `.validators/`, checking each SHA-256. `bun run test:official` runs them on the writers: the UBL 2.1 schema and the CEN EN 16931 rules on e-Factura, ANAF's DUKIntegrator on every declaration, and broken documents that must be rejected. Without an artifact, Java or `xmllint`, a test is skipped, never passed.

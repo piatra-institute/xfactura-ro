@@ -103,4 +103,21 @@ export const receiptAnchors: Readonly<Record<string, readonly Anchor[]>> = {
       to: 'publicată în MONITORUL OFICIAL nr. 594 din 17 iunie 2022',
     },
   ],
+  // The D394 instructions, consolidated to 17.09.2025.
+  'OPANAF3769/2015-A:anexa2.sect1.litI.pct.1.5': [
+    {
+      from: '1.5. valoarea totală a bazei impozabile aferentă achizițiilor de bunuri și servicii pentru care s-au primit bonuri fiscale',
+      to: '(24%, 21%, 20%, 19%, 11%, 9%, 5%);',
+    },
+  ],
+  'OPANAF3769/2015-A:anexa2.sect1.litC.pct.14-17': [
+    {
+      from: '14. numărul total al facturilor emise de către persoana impozabilă pentru livrările',
+      to: 'defalcate pe cote de TVA și pe categorii de bunuri și servicii pentru care se aplică taxarea inversă, conform art. 331 din Codul fiscal.',
+    },
+    {
+      from: '– valorile totale înscrise în facturile emise/primite aferente tranzacțiilor pentru care se aplică taxarea inversă',
+      to: 'pentru fiecare cotă defalcată de TVA.',
+    },
+  ],
 };

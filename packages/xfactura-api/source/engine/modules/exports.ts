@@ -174,6 +174,30 @@ export async function companyRecords(tx: Tx, companyId: string) {
       .select()
       .from(s.assetFiscal)
       .where(eq(s.assetFiscal.companyId, companyId)),
+    acc_stock_items: await tx
+      .select()
+      .from(s.stockItems)
+      .where(eq(s.stockItems.companyId, companyId)),
+    acc_warehouses: await tx
+      .select()
+      .from(s.warehouses)
+      .where(eq(s.warehouses.companyId, companyId)),
+    acc_stock_layers: await tx
+      .select()
+      .from(s.stockLayers)
+      .where(eq(s.stockLayers.companyId, companyId)),
+    acc_stock_moves: await tx
+      .select()
+      .from(s.stockMoves)
+      .where(eq(s.stockMoves.companyId, companyId)),
+    acc_cash_registers: await tx
+      .select()
+      .from(s.cashRegisters)
+      .where(eq(s.cashRegisters.companyId, companyId)),
+    acc_cash_register_events: await tx
+      .select()
+      .from(s.cashRegisterEvents)
+      .where(eq(s.cashRegisterEvents.companyId, companyId)),
     acc_employees: await tx.select().from(s.employees).where(eq(s.employees.companyId, companyId)),
     acc_employment_terms: await tx
       .select()
@@ -191,6 +215,18 @@ export async function companyRecords(tx: Tx, companyId: string) {
       .select()
       .from(s.payrollLines)
       .where(eq(s.payrollLines.companyId, companyId)),
+    acc_garnishments: await tx
+      .select()
+      .from(s.garnishments)
+      .where(eq(s.garnishments.companyId, companyId)),
+    acc_garnishment_releases: await tx
+      .select()
+      .from(s.garnishmentReleases)
+      .where(eq(s.garnishmentReleases.companyId, companyId)),
+    acc_reges_records: await tx
+      .select()
+      .from(s.regesRecords)
+      .where(eq(s.regesRecords.companyId, companyId)),
     acc_schedules: await tx.select().from(s.schedules).where(eq(s.schedules.companyId, companyId)),
     acc_questions: await tx.select().from(s.questions).where(eq(s.questions.companyId, companyId)),
     acc_question_answers: await tx

@@ -6,11 +6,13 @@ import type {
   Issue,
   JsonValue,
   LineSpec,
+  JournalClass,
   OpenItemKind,
   ScheduleRow,
+  StockMoveSpec,
   TaxEntrySpec,
 } from './effect';
-import type { OpenItemInfo } from './validate';
+import type { OpenItemInfo, StockLayerInfo } from './validate';
 import type { DataClass, Toolset } from './contract';
 
 /**
@@ -58,6 +60,89 @@ export interface ReadPlan {
    * after the proposal, or a newer one, makes it stale.
    */
   partyStatus?: { partyId: string; date: LocalDate }[];
+  /** The stock register: the positions (an item in a warehouse) with their layers, and the
+   * catalogue's cards of the items read. */
+  stock?: StockQuery;
+}
+
+/**
+ * What a treatment reads of the stock register. A position is read whole, layers and all, with
+ * the number of moves posted on it as its version: a move landing on it (another sale of the
+ * same item) makes the proposal stale. A position nothing moved yet is a read too.
+ */
+export interface StockQuery {
+  /** Each item in each named warehouse. */
+  positions?: { item: string; warehouse: string }[];
+  /** The positions the moves of this posted entry touched (a reversal). */
+  touchedBy?: string;
+  /** Every position of the register, as one read whose version is the register's moves (the
+   * inventory, the write-downs, the period's costing, the D406 stock file). */
+  all?: boolean;
+  /** Catalogue cards to load even without a position (a receipt's new items). */
+  items?: string[];
+  /** Warehouses to load. */
+  warehouses?: string[];
+  /** Every item of the catalogue and every warehouse (an inventory list names items by code). */
+  catalogue?: boolean;
+  /** With each layer's flows in a date range: what it held before, what entered and what left
+   * (the periodic average's month). */
+  flows?: { from: LocalDate; to: LocalDate };
+}
+
+/** What moved on a layer in a date range, signed: entries (quantities zero or more, value-only
+ * moves among them) and exits (quantities below zero). */
+export interface StockFlows {
+  opening: { quantity: bigint; bani: bigint };
+  entered: { quantity: bigint; bani: bigint };
+  left: { quantity: bigint; bani: bigint };
+}
+
+/** The read key of a stock position, as `Loaded.stock` and the read-set hold it. */
+export const stockPositionKey = (item: string, warehouse: string) => `${item}|${warehouse}`;
+/** The read-set id of a read of the whole register. */
+export const stockRegisterKey = '*';
+
+/** A stock layer as the register holds it. */
+export interface StockLayerState extends StockLayerInfo {
+  date: LocalDate;
+  originEntryId: string;
+  /** The posting order of the entry that created it. */
+  seq: number;
+  /** On request (`flows`). */
+  flows?: StockFlows;
+}
+
+/** An item in a warehouse: its layers in FIFO order (by date, then posting), with what each
+ * holds after every posted move. */
+export interface StockPosition {
+  item: string;
+  warehouse: string;
+  /** Moves posted on the position: its version in the read-set. */
+  moves: number;
+  layers: readonly StockLayerState[];
+}
+
+/** An item of the catalogue, as recorded. */
+export interface StockItemRecord {
+  id: string;
+  code: string;
+  name: string;
+  /** UN/ECE Recommendation 20 code of its unit of measure (H87 a piece, KGM a kilogram). */
+  unit: string;
+  /** The NC8 code of the combined nomenclature, when known (D406 Products, Intrastat). */
+  nc8: string | null;
+  /** The stock account its layers are on (371 goods, 301 raw materials, …). */
+  account: string;
+  /** The VAT category it is normally sold in (S, E, …), for the invoicer's lines. */
+  vatCategory: string | null;
+}
+
+/** A warehouse (gestiune) and the person responsible for it (gestionarul). */
+export interface WarehouseRecord {
+  id: string;
+  code: string;
+  name: string;
+  keeper: string;
 }
 
 /** What ANAF's register held about a Romanian party on a date, as one snapshot recorded it. */
@@ -222,7 +307,9 @@ export interface ReadSetEntry {
     | 'documentSource'
     /** A question a proposal's basis cites, by its id: the version is its latest answer's id
      * (the engine adds it, and loads the answer into `Loaded.answers`). */
-    | 'answer';
+    | 'answer'
+    /** A stock position (`item|warehouse`) or the whole register (`*`): its moves posted. */
+    | 'stock';
   id: string;
   version: string;
 }
@@ -309,10 +396,14 @@ export interface PostedEntry {
   id: string;
   number: number;
   date: LocalDate;
+  /** `general` when omitted. */
+  journalClass?: JournalClass;
   journalCode: string;
   description: string;
   lines: LineSpec[];
   taxEntries: TaxEntrySpec[];
+  /** The stock moves it posted, with their layers' ids; none when omitted. */
+  stockMoves?: StockMoveSpec[];
   /** For a reversal (`ledger.reverse`), the entry it reverses. */
   reverses?: string;
 }
@@ -398,6 +489,10 @@ export interface PayrollLineState {
   /** The sick pay borne by the health insurance fund, within `cash`: the employer pays it and
    * recovers it from the fund. */
   sickFund: bigint;
+  /** Benefits in kind, taxable: salary income not paid in money. */
+  inKind: bigint;
+  /** What garnishment orders take from the net pay, each owed to its creditor on 427. */
+  garnishments: readonly { orderId: string; partyId: string; amount: bigint }[];
 }
 
 export interface PayrollRunState {
@@ -407,6 +502,8 @@ export interface PayrollRunState {
   state: 'prepared' | 'superseded';
   /** Problems found when it was computed: such a run is not posted. */
   issues: number;
+  /** The posted run of the month this one corrects (a round after the first), or null. */
+  corrects: string | null;
   lines: readonly PayrollLineState[];
 }
 
@@ -455,6 +552,11 @@ export interface Loaded {
   partyStatus: ReadonlyMap<string, PartyStatus>;
   /** By question id: the answers the proposal's basis cites, and only those. */
   answers: ReadonlyMap<string, AnswerRecord>;
+  /** By `stockPositionKey`: the positions read, each with its layers. */
+  stock: ReadonlyMap<string, StockPosition>;
+  /** The catalogue's items and the warehouses read. */
+  stockItems: ReadonlyMap<string, StockItemRecord>;
+  warehouses: ReadonlyMap<string, WarehouseRecord>;
 }
 
 /** The company profile value on an axis at a date, or null when nothing is recorded. */

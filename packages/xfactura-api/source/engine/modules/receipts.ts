@@ -1,6 +1,7 @@
 import type { DocumentRecord, TaxLedgerEntry } from 'xfactura-core/kernel';
 import { isValidCui } from 'xfactura-core/ro/identifiers';
 import {
+  d394InvoiceLeads,
   d394Rates,
   type D394Operation,
   type D394Product,
@@ -18,16 +19,19 @@ import type { DeclarationProblem } from './declarations';
  * reverse-charged supplies of cereals, phones, circuits and consoles (bifa_*).
  */
 
-/** The entries D394 reports in sections of their own, and the rest. */
+/** The entries D394 reports in sections of their own, and the rest: the cash registers' Z
+ * reports (G2, op2), with the receipts invoiced taken out of them, among them. */
 export function receiptEntries(entries: readonly TaxLedgerEntry[]) {
   const receipts: TaxLedgerEntry[] = [];
   const reverse: TaxLedgerEntry[] = [];
+  const registers: TaxLedgerEntry[] = [];
   const ordinary: TaxLedgerEntry[] = [];
   for (const entry of entries)
     if (entry.attributes.simplified === 'receipt') receipts.push(entry);
+    else if (entry.attributes.documentType === 'zreport') registers.push(entry);
     else if (isReverseChargeCode(entry.code)) reverse.push(entry);
     else ordinary.push(entry);
-  return { receipts, reverse, ordinary };
+  return { receipts, reverse, registers, ordinary };
 }
 
 const rateOf = (code: string) => {
@@ -69,7 +73,9 @@ export function receiptSections(
  * self-assessed rate, read from the output entry: the input one repeats it) by partner, with
  * their products. A product's amounts are rounded to whole lei and the operation is their sum;
  * on an invoice with several products, the invoice counts for the one with the largest base (V)
- * or VAT (C), as the structure's nrFactPR says.
+ * or VAT (C), as the structure's nrFactPR says; an invoice with acquisitions at several rates
+ * counts once, for the rate with the largest VAT (OPANAF nr. 3.769/2015 anexa nr. 2 secțiunea a
+ * 2-a pct. 5), and 0 for the others.
  */
 export function reverseChargeOperations(
   entries: readonly TaxLedgerEntry[],
@@ -119,19 +125,33 @@ export function reverseChargeOperations(
     group.byDocument.set(entry.documentId!, products);
     groups.set(key, group);
   }
-  return [...groups.values()].map((group) => {
+  // Which group each invoice counts in: one per invoice, across the rates of its acquisitions.
+  const lead = d394InvoiceLeads(
+    [...groups].map(([key, group]) => ({
+      key,
+      rate: group.rate,
+      documents: new Map(
+        [...group.byDocument].map(([document, products]) => [
+          document,
+          [...products.values()].reduce((sum, value) => sum + value.vat, 0n),
+        ]),
+      ),
+    })),
+  );
+  return [...groups.entries()].map(([key, group]) => {
     const totals = new Map<string, { invoices: number; base: bigint; vat: bigint }>();
-    for (const products of group.byDocument.values()) {
+    for (const [document, products] of group.byDocument) {
       // The product the invoice counts for: the largest, the lowest code on a tie.
-      let lead = '';
+      let leading = '';
       let largest = -1n;
       for (const [code, value] of [...products].sort(([a], [b]) => (a < b ? -1 : 1))) {
         const weight = group.type === 'V' ? value.base : value.vat;
-        if (weight > largest) [lead, largest] = [code, weight];
+        if (weight > largest) [leading, largest] = [code, weight];
       }
+      const counted = lead.get(document) === key;
       for (const [code, value] of products) {
         const held = totals.get(code) ?? { invoices: 0, base: 0n, vat: 0n };
-        held.invoices += code === lead ? 1 : 0;
+        held.invoices += counted && code === leading ? 1 : 0;
         held.base += value.base;
         held.vat += value.vat;
         totals.set(code, held);
@@ -149,7 +169,8 @@ export function reverseChargeOperations(
       type: group.type,
       rate: group.rate,
       partner: { kind: 'registered' as const, cui: group.cui, name: group.name },
-      invoices: group.byDocument.size,
+      invoices: [...group.byDocument.keys()].filter((document) => lead.get(document) === key)
+        .length,
       base: products.reduce((sum, product) => sum + product.base, 0),
       vat: products.reduce((sum, product) => sum + product.vat, 0),
       products,

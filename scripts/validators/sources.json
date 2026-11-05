@@ -133,6 +133,15 @@
     },
     {
       "name": "anaf-saft",
+      "description": "ANAF D398 validator J1.0.11 (29.04.2025) and PDF generator P1.0.2: the special VAT return (Declaratie speciala de TVA, VAT Return) of the special schemes of Codul fiscal art. 314, 315 and 315^2, structure A1.0.10 of 04.09.2024 (schema d398_20211101.xsd, namespace mfp:anaf:dgti:d398:declaratie:v1). Installed in the SAF-T kit: like D212's, it needs the newer `dec` library (dec.DECTagCtx) and fails in the general kit with NoClassDefFoundError",
+      "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/D398_20250429.zip",
+      "sha256": "153bfceda25743e014d3464ef94a6ae7d42cb9db46d05af15d05305999497bba",
+      "extract": ["D398/D398Validator.jar", "D398/D398Pdf.jar"],
+      "into": "duk_SAFT_an_luna/dist/lib",
+      "flatten": true
+    },
+    {
+      "name": "anaf-saft",
       "description": "ANAF D212 validator and PDF generator (J13.0.1 / P10.0.0, 01.08.2025): structure D212_A1.0.3, namespace v11, an_r 2025 only (income of 2024, OPANAF 1929/2025); ANAF publishes none for an_r 2026. Installed in the SAF-T kit: only its newer `dec` library (dec.DECTagCtx) loads this validator, which fails in the general kit with NoClassDefFoundError",
       "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/D212Validator_01082025.zip",
       "sha256": "58abef98dd0e5147dfe8c6842014d04c9595841000f8a13a0113b6b78ca61f4d",

@@ -1,10 +1,16 @@
 import { exemptAnchors } from './anchors-exempt';
 import { nonpayerAnchors } from './anchors-nonpayers';
+import { payrollAnchors } from './anchors-payroll';
 import { saftAnchors } from './anchors-saft';
 import { receiptAnchors } from './anchors-receipts';
+import { schemeAnchors } from './anchors-schemes';
+import { ossAnchors } from './anchors-oss';
 import { taxAccountAnchors } from './anchors-taxaccount';
 import { withholdingAnchors } from './anchors-withholding';
 import { yearEndAnchors } from './anchors-yearend';
+import { stockAnchors } from './anchors-stock';
+import { retailAnchors } from './anchors-retail';
+import { tradeAnchors } from './anchors-trade';
 import type { Anchor } from './types';
 
 /**
@@ -389,6 +395,12 @@ export const clauseAnchors: Readonly<Record<string, readonly Anchor[]>> = {
   ...taxAccountAnchors,
   ...saftAnchors,
   ...receiptAnchors,
+  ...schemeAnchors,
+  ...ossAnchors,
   ...withholdingAnchors,
   ...yearEndAnchors,
+  ...stockAnchors,
+  ...retailAnchors,
+  ...tradeAnchors,
+  ...payrollAnchors,
 };

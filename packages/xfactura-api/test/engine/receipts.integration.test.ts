@@ -602,3 +602,50 @@ describe('invoices.reverseCharge and the returns', () => {
     });
   });
 });
+
+describe('goods bought on a receipt (G1)', () => {
+  test('the receipt’s goods enter the warehouse at their cost, its deducted VAT apart', async () => {
+    const { s, receipt, post } = await company();
+    for (const [axis, value] of Object.entries({
+      'policy.stock.valuation': 'fifo',
+      'policy.stock.inventory': 'permanent',
+      'policy.stock.negative': 'refuse',
+    }))
+      await s.invoke(s.owner, 'profile.record', {
+        axis,
+        value,
+        effectiveFrom: '2026-01-01',
+        evidenceId: (await s.evidence(`${axis}.pdf`)).id,
+      });
+    const paper = await s.invoke<{ id: string }>(s.owner, 'stock.items.create', {
+      code: 'HRT-1',
+      name: 'Hârtie A4',
+      unit: 'XBX',
+      account: '3028',
+    });
+    const depot = await s.invoke<{ id: string }>(s.owner, 'stock.warehouses.create', {
+      code: 'D1',
+      name: 'Depozit',
+      keeper: 'Ionescu Maria',
+    });
+    // 2 boxes of paper, 121,00 lei with 21% VAT: 100,00 into stock, 21,00 deducted.
+    const document = await receipt('0077', {
+      lines: [{ description: 'Hârtie A4', gross: '121.00', vatRate: '21' }],
+      taxes: [{ rate: '21', gross: '121.00', tax: '21.00' }],
+      totals: { gross: '121.00', tax: '21.00' },
+    });
+    const proposal = await s.propose('receipts.recognize', {
+      documentId: document.id,
+      account: '3028',
+      payment: { method: 'card' },
+      stock: { warehouseId: depot.id, lines: [{ line: '1', itemId: paper.id, quantity: '2' }] },
+    });
+    expect(
+      proposal.effect?.lines.map((line) => `${line.side} ${line.account} ${line.amount}`),
+    ).toEqual(['D 3028 100.00', 'D 4426 21.00', 'C 401 121.00']);
+    expect(proposal.effect?.stockMoves?.map((move) => `${move.quantity} ${move.amount}`)).toEqual([
+      '2.000 100.00',
+    ]);
+    await post(proposal);
+  });
+});

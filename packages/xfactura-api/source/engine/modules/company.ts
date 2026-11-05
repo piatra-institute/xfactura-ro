@@ -6,6 +6,7 @@ import { canonical, hashOf } from 'xfactura-core/hash';
 import { accountCodePattern } from 'xfactura-core/kernel';
 import { chartAmendments, controlKindOf, referenceChart } from 'xfactura-core/ro/chart';
 import { impairmentPolicies } from 'xfactura-core/ro/yearend';
+import { stockPolicyAxes } from 'xfactura-core/ro/stock';
 import {
   booksSystems,
   entityFormOf,
@@ -95,6 +96,17 @@ export const profileAxes = {
   // its notification to ANAF; `special` approved or imposed by the Ministry (alin. (16)–(17)),
   // `opted_out` not to deduct the VAT of purchases for both kinds of operations (alin. (20)).
   'vat.prorata': prorataValues,
+  // Sales to consumers in other Member States (core ro/oss): where they take place (Codul fiscal
+  // art. 278^1: in Romania below the threshold, at the destination above it or by the option of
+  // alin. (3)), the Union scheme the destination's VAT is declared in (art. 315; `non_union` is
+  // art. 314's, not a Romanian company's) and the import scheme (art. 315^2, not covered).
+  'vat.distance': ['origin', 'destination', 'option'],
+  'vat.oss': ['none', 'union', 'non_union'],
+  'vat.ioss': ['none', 'registered', 'intermediary'],
+  // Intrastat (core ro/trade): whether the company provides INS's statistical data for a flow,
+  // from the month the year's determination gives, confirmed with INS's notice.
+  'intrastat.arrivals': ['none', 'provider'],
+  'intrastat.dispatches': ['none', 'provider'],
   income_tax: ['micro', 'profit'],
   // The system of declaring and paying the profit tax (Codul fiscal art. 41): quarterly
   // (alin. (1)), or annual with quarterly prepayments, an option for at least two years
@@ -117,7 +129,12 @@ export const profileAxes = {
   'payroll.period': ['monthly', 'quarterly'],
   'size.category': ['micro', 'small', 'medium_large'],
   'vat.threshold': ['under', 'exceeded'],
-  'activity.goods': ['no', 'yes'],
+  // Goods or stock (not covered until G1), or only individual items under the margin scheme of
+  // art. 312, each its purchase document, without quantity stock (V4).
+  'activity.goods': ['no', 'yes', 'margin_goods'],
+  // A farmer in ANAF's register of farmers applying the special regime (Codul fiscal art. 315^1
+  // alin. (5)), from its inscription, with the register's extract (V4).
+  'vat.agriculture': ['none', 'special'],
   // No activity since the company was set up (Legea 82/1991 art. 36 alin. (2)): the inactivity
   // declaration (S1046) instead of the annual statements; a person states it with its evidence.
   'activity.none': ['no', 'yes'],
@@ -138,6 +155,13 @@ export const profileAxes = {
   // How receivables are tested for impairment at the year's end (OMFP 1802/2014 pct. 332, 353):
   // each individually, or every one overdue beyond a number of days (core ro/yearend).
   'policy.impairment.receivables': impairmentPolicies,
+  // The stock register's policies (OMFP 1802/2014 pct. 96, 286, 289–291; core ro/stock): the
+  // output method (FIFO, LIFO, the weighted average after each receipt or monthly), perpetual or
+  // periodic inventory, whether a pool may go below zero, goods at cost or at the retail price.
+  'policy.stock.valuation': stockPolicyAxes['policy.stock.valuation'],
+  'policy.stock.inventory': stockPolicyAxes['policy.stock.inventory'],
+  'policy.stock.negative': stockPolicyAxes['policy.stock.negative'],
+  'policy.stock.retail': stockPolicyAxes['policy.stock.retail'],
 } as const;
 export const profileInput = z
   .object({

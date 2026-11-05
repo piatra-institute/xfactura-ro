@@ -140,6 +140,112 @@ describe('D394 from the books', () => {
     120_000,
   );
 
+  official(
+    'services bought outside the Union are C with partners of type 4, a customer abroad type 3, an invoice at two rates counts once',
+    async () => {
+      const { s, buyer, sell } = await company(new DukIntegrator(dist));
+      const registered = await buyer('Client Unu SRL', '14399840', true);
+      // One invoice at 21% and 11%: it counts for the 21% (VAT 21 lei against 5.50 lei).
+      await sell(registered.id, [service('100'), service('50', '11')], {
+        reducedRateBasis: 'art. 291 alin. (2) lit. h): cazare în sectorul hotelier',
+      });
+      const file = async (number: string, xml: string) =>
+        (
+          await s.invoke<{ id: string }>(s.owner, 'evidence.record', {
+            filename: `${number}.xml`,
+            mediaType: 'application/xml',
+            base64: Buffer.from(xml).toString('base64'),
+          })
+        ).id;
+      // A purchase at 21% and 11%: it counts for the 11% (VAT 22 lei against 21 lei).
+      const twoRates = await s.invoke<{ id: string }>(s.owner, 'invoices.import', {
+        evidenceId: await file(
+          'F-3',
+          invoiceXml({
+            company: cui,
+            number: 'F-3',
+            counterparty: 'RO26000020',
+            date: '2026-10-05',
+            taxes: [
+              { rate: '21', net: '100.00', tax: '21.00' },
+              { rate: '11', net: '200.00', tax: '22.00' },
+            ],
+            net: '300.00',
+            tax: '43.00',
+            gross: '343.00',
+          }),
+        ),
+      });
+      const purchase = await s.propose('invoices.recognize', {
+        documentId: twoRates.id,
+        account: '628',
+      });
+      await s.post(
+        await s.approve(
+          purchase,
+          s.reviewer,
+          purchase.issues.filter((issue) => issue.code === 'REDUCED_RATE').map((i) => i.code),
+        ),
+      );
+      // A German company buying with Romanian VAT: a taxable person established in another
+      // Member State, by its VAT code there.
+      const german = await s.invoke<{ id: string }>(s.owner, 'parties.create', {
+        kind: 'eu_taxable',
+        country: 'DE',
+        taxId: 'DE123456789',
+        name: 'Beispiel GmbH',
+      });
+      await s.invoke(s.owner, 'parties.recordDetails', {
+        partyId: german.id,
+        details: {
+          name: 'Beispiel GmbH',
+          vatId: 'DE123456789',
+          address: { lines: ['Hauptstraße 1'], city: 'Berlin', country: 'DE' },
+        },
+      });
+      await sell(german.id, [service('400')]);
+      // Services from a company established outside the Union, the VAT self-assessed: C with
+      // the partner of type 4, at the standard rate.
+      const abroad = await s.invoke<{ id: string }>(s.owner, 'invoices.import', {
+        evidenceId: await file(
+          'US-1',
+          invoiceXml({
+            company: cui,
+            number: 'US-1',
+            country: 'US',
+            counterparty: '94-1234567',
+            category: 'AE',
+            rate: '0',
+            tax: '0.00',
+            net: '500.00',
+            gross: '500.00',
+            date: '2026-10-15',
+          }),
+        ),
+      });
+      await s.book('invoices.crossBorder', {
+        documentId: abroad.id,
+        account: '628',
+        supply: 'services_general_rule',
+      });
+      const prepared = await prepare(s);
+      const summary = JSON.parse(prepared.steps[0]!.detail!);
+      expect(summary.operations).toEqual([
+        { type: 'L', rate: '21', partner: '14399840', invoices: 1, base: 100, vat: 21 },
+        { type: 'L', rate: '11', partner: '14399840', invoices: 0, base: 50, vat: 6 },
+        { type: 'A', rate: '21', partner: '26000020', invoices: 0, base: 100, vat: 21 },
+        { type: 'A', rate: '11', partner: '26000020', invoices: 1, base: 200, vat: 22 },
+        { type: 'L', rate: '21', partner: 'DE123456789', invoices: 1, base: 400, vat: 84 },
+        { type: 'C', rate: '21', partner: '94-1234567', invoices: 1, base: 500, vat: 105 },
+      ]);
+      expect([prepared.state, prepared.steps.at(-1)?.detail ?? null]).toEqual([
+        'validated_official',
+        null,
+      ]);
+    },
+    120_000,
+  );
+
   test('invoices issued outside the series in the books need their ranges declared', async () => {
     const { s } = await company();
     const { id } = await s.invoke<{ id: string }>(s.owner, 'evidence.record', {
@@ -167,6 +273,21 @@ describe('D394 from the books', () => {
       },
     });
     expect(JSON.parse(prepared.steps[0]!.detail!).issuedInvoices).toBe(1);
+  });
+
+  test('a purchase outside the scope of VAT from a supplier abroad is not listed', async () => {
+    const { s, buy } = await company();
+    // A hotel night in Germany: the place of supply is not in Romania, and with partners not
+    // established here only taxable operations whose VAT the company owes are declared (OPANAF
+    // nr. 3.769/2015 anexa nr. 2 secțiunea 1 lit. E–F pct. 10); N is for persons not registered.
+    await buy('DE-7', 'DE811569869', {
+      country: 'DE',
+      category: 'O',
+      tax: '0.00',
+      gross: '100.00',
+    });
+    const prepared = await prepare(s);
+    expect(JSON.parse(prepared.steps[0]!.detail!).operations).toEqual([]);
   });
 
   test('a supplier charging VAT without a VAT code, and a quarter for a monthly payer, are refused', async () => {

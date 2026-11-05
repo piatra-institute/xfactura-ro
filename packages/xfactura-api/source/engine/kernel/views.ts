@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { Effect } from 'xfactura-core/kernel';
+import { formatQuantity, type Effect } from 'xfactura-core/kernel';
 import { formatMoney } from 'xfactura-core/money';
 
 /** An effect as stored: JSON with bigint values as decimal-integer strings. */
@@ -78,6 +78,33 @@ export const effectView = z.object({
       ),
     }),
   ),
+  /** The stock register's layers the effect creates and its moves (effect@2). */
+  stockLayers: z
+    .array(
+      z.object({
+        id: z.string(),
+        item: z.string(),
+        warehouse: z.string(),
+        account: z.string(),
+        method: z.string(),
+        date: z.string(),
+        mayGoNegative: z.boolean(),
+      }),
+    )
+    .optional(),
+  stockMoves: z
+    .array(
+      z.object({
+        item: z.string(),
+        warehouse: z.string(),
+        account: z.string(),
+        layer: z.string(),
+        quantity: z.string(),
+        amount: money,
+        line: z.number().optional(),
+      }),
+    )
+    .optional(),
   explanation: z.object({ summary: z.string(), details: z.unknown().optional() }),
 });
 
@@ -130,6 +157,18 @@ export function viewEffect(effect: StoredEffect): z.infer<typeof effectView> {
         counterAccount: row.counterAccount,
       })),
     })),
+    ...(effect.stockLayers
+      ? { stockLayers: effect.stockLayers.map(({ ref, ...layer }) => ({ id: ref, ...layer })) }
+      : {}),
+    ...(effect.stockMoves
+      ? {
+          stockMoves: effect.stockMoves.map(({ quantity, bani, ...move }) => ({
+            ...move,
+            quantity: formatQuantity(BigInt(quantity)),
+            amount: ron(bani),
+          })),
+        }
+      : {}),
     explanation: effect.explanation,
   };
 }

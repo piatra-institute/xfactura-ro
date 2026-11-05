@@ -6,8 +6,14 @@ import { taxAccountClauses, taxAccountSources } from './taxaccount';
 import { profitClauses, profitSources } from './profit';
 import { saftClauses, saftSources } from './saft';
 import { withholdingClauses, withholdingSources } from './withholding';
+import { payrollClauses, payrollSources } from './payroll';
 import { receiptClauses, receiptSources } from './receipts';
+import { schemeClauses, schemeSources } from './schemes';
+import { ossClauses, ossSources } from './oss';
 import { yearEndClauses, yearEndSources } from './yearend';
+import { stockClauses, stockSources } from './stock';
+import { tradeClauses, tradeSources } from './trade';
+import { retailClauses, retailSources } from './retail';
 
 /**
  * Where the engine's Romanian rules come from. A source is a legal act or an official
@@ -104,6 +110,28 @@ export const legalSources: readonly LegalSource[] = [
         url: 'https://static.anaf.ro/static/10/Anaf/legislatie/OMFP_1802_2014.pdf',
         sha256: '6e0de23520f49de718dead66462f14d624c527a87e8b27eeb5306ab9cc84ff4c',
         retrievedOn: null,
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  // The regulations as the legislative portal consolidates them, downloaded by the owner (the
+  // portal refuses automated requests). The consolidation stops at the amendments of 1 February
+  // 2022 (OMF nr. 85/2022): later ones, such as the size thresholds of pct. 9 that OMF nr. 2.036/2025
+  // states in lei, are read from their own acts.
+  {
+    id: 'OMFP1802/2014-A',
+    kind: 'act',
+    title:
+      'Reglementările contabile privind situațiile financiare anuale individuale și situațiile financiare anuale consolidate, aprobate prin OMFP nr. 1.802/2014 (forma consolidată a portalului legislativ, cu modificările până la 1 februarie 2022)',
+    issuer: 'Ministerul Finanțelor Publice',
+    publication: 'Monitorul Oficial nr. 963 din 30 decembrie 2014',
+    urls: [],
+    fetch: false,
+    snapshots: [
+      {
+        url: 'https://xfactura.invalid/owner-download/REGLEMENTARI_A_29_12_2014.pdf',
+        sha256: '070c826a779245dd630308f9d2256b33a90dae31fecde9caea584666fa8e00b1',
+        retrievedOn: '2026-11-06',
         mediaType: 'application/pdf',
       },
     ],
@@ -223,15 +251,25 @@ export const legalSources: readonly LegalSource[] = [
       },
     ],
   },
+  // The code as the legislative portal consolidates it, downloaded by the owner (the portal
+  // refuses automated requests). Kept in .sources/L134_2010-A/.
   {
-    id: 'L134/2010',
+    id: 'L134/2010-A',
     kind: 'act',
-    title: 'Legea nr. 134/2010 privind Codul de procedură civilă, republicată',
+    title:
+      'Legea nr. 134/2010 privind Codul de procedură civilă, republicată (forma consolidată a portalului legislativ, actualizată până la 14.12.2025)',
     issuer: 'Parlamentul României',
-    publication: null,
+    publication: 'Monitorul Oficial nr. 247 din 10 aprilie 2015 (republicare)',
     urls: [],
     fetch: false,
-    snapshots: [],
+    snapshots: [
+      {
+        url: 'https://xfactura.invalid/owner-download/COD_PR_CIVILA_A_01_07_2010.pdf',
+        sha256: '1331d41fed8262338246601e9c41e4734fae87aa023e351ddaf38abd8771c14f',
+        retrievedOn: '2026-11-06',
+        mediaType: 'application/pdf',
+      },
+    ],
   },
   {
     id: 'L82/1991',
@@ -282,6 +320,26 @@ export const legalSources: readonly LegalSource[] = [
         url: 'https://static.anaf.ro/static/10/Anaf/legislatie/OPANAF_3769_2015.pdf',
         sha256: '7b489956f8a3846de8c1733291969c9617e924e123d5d7afb3de4cc9aa1c096e',
         retrievedOn: '2026-10-30',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  // The order with its instructions as the legislative portal consolidates them, downloaded by
+  // the owner (the portal refuses automated requests). Kept in .sources/OPANAF3769_2015-A/.
+  {
+    id: 'OPANAF3769/2015-A',
+    kind: 'act',
+    title:
+      'Ordinul președintelui ANAF nr. 3.769/2015 privind declararea livrărilor/prestărilor și achizițiilor efectuate pe teritoriul național de persoanele înregistrate în scopuri de TVA și pentru aprobarea modelului și conținutului declarației informative (394), cu instrucțiunile de completare (forma consolidată a portalului legislativ, actualizată până la 17.09.2025)',
+    issuer: 'ANAF',
+    publication: 'Monitorul Oficial nr. 11 din 7 ianuarie 2016',
+    urls: [],
+    fetch: false,
+    snapshots: [
+      {
+        url: 'https://xfactura.invalid/owner-download/ORDIN_A_3769_23_12_2015.pdf',
+        sha256: '53ea26fb0a90b47f073ec520de3550922bf5979d9fb56fe4781b8f46d439e350',
+        retrievedOn: '2026-11-06',
         mediaType: 'application/pdf',
       },
     ],
@@ -578,15 +636,25 @@ export const legalSources: readonly LegalSource[] = [
       },
     ],
   },
+  // The Labour Code as the legislative portal consolidates it, downloaded by the owner (the
+  // portal refuses automated requests). Kept in .sources/L53_2003-A/.
   {
-    id: 'L53/2003',
+    id: 'L53/2003-A',
     kind: 'act',
-    title: 'Legea nr. 53/2003 – Codul muncii, republicată (forma consolidată din 27.04.2026)',
+    title:
+      'Legea nr. 53/2003 – Codul muncii, republicată (forma consolidată a portalului legislativ, actualizată până la 27.04.2026)',
     issuer: 'Parlamentul României',
     publication: 'Monitorul Oficial nr. 345 din 18 mai 2011 (republicare)',
     urls: ['https://legislatie.just.ro/Public/DetaliiDocument/128647'],
     fetch: false,
-    snapshots: [],
+    snapshots: [
+      {
+        url: 'https://xfactura.invalid/owner-download/CODUL_MUNCII_A_24_01_2003.pdf',
+        sha256: '25e033bafbe05ebf985746842b572ca394e2c65e07f8dcd7edffa4ff8be72fc2',
+        retrievedOn: '2026-11-06',
+        mediaType: 'application/pdf',
+      },
+    ],
   },
   {
     id: 'OUG70/2024',
@@ -606,16 +674,26 @@ export const legalSources: readonly LegalSource[] = [
       },
     ],
   },
+  // The ordinance as the legislative portal consolidates it, downloaded by the owner (the portal
+  // refuses automated requests). Its notes quote OUG nr. 91/2025 art. II as Legea nr. 64/2026
+  // amended it. Kept in .sources/OUG158_2005-A/.
   {
-    id: 'OUG158/2005',
+    id: 'OUG158/2005-A',
     kind: 'act',
     title:
-      'Ordonanța de urgență a Guvernului nr. 158/2005 privind concediile și indemnizațiile de asigurări sociale de sănătate (forma consolidată din 01.07.2026)',
+      'Ordonanța de urgență a Guvernului nr. 158/2005 privind concediile și indemnizațiile de asigurări sociale de sănătate (forma consolidată a portalului legislativ, actualizată până la 01.07.2026)',
     issuer: 'Guvernul României',
     publication: 'Monitorul Oficial nr. 1074 din 29 noiembrie 2005',
     urls: ['https://legislatie.just.ro/Public/DetaliiDocument/66305'],
     fetch: false,
-    snapshots: [],
+    snapshots: [
+      {
+        url: 'https://xfactura.invalid/owner-download/OUG_A_158_17_11_2005.pdf',
+        sha256: 'dd6881304468bc528ee74bbdcf2d86285d4229177592e35f6c713b4372ac9e05',
+        retrievedOn: '2026-11-06',
+        mediaType: 'application/pdf',
+      },
+    ],
   },
   {
     id: 'OMF2036/2025',
@@ -634,17 +712,6 @@ export const legalSources: readonly LegalSource[] = [
         mediaType: 'application/pdf',
       },
     ],
-  },
-  {
-    id: 'OUG91/2025',
-    kind: 'act',
-    title:
-      'Ordonanța de urgență a Guvernului nr. 91/2025, aprobată cu modificări prin Legea nr. 64/2026 (Monitorul Oficial din 15 mai 2026)',
-    issuer: 'Guvernul României',
-    publication: 'Monitorul Oficial din 31 decembrie 2025',
-    urls: ['https://legislatie.just.ro/Public/DetaliiDocument/66305'],
-    fetch: false,
-    snapshots: [],
   },
   {
     id: 'Norme-OUG158/2005',
@@ -903,7 +970,13 @@ export const legalSources: readonly LegalSource[] = [
   ...saftSources,
   ...withholdingSources,
   ...receiptSources,
+  ...schemeSources,
+  ...ossSources,
   ...yearEndSources,
+  ...stockSources,
+  ...payrollSources,
+  ...tradeSources,
+  ...retailSources,
 ];
 
 export const clauses: readonly Clause[] = [
@@ -1218,18 +1291,18 @@ export const clauses: readonly Clause[] = [
       'Amortizarea se aplică valorii de intrare, începe cu luna următoare punerii în funcțiune și continuă până la recuperarea integrală; duratele contabile, stabilite prin politicile contabile, pot diferi de cele fiscale.',
   },
   {
-    id: 'L53/2003:art.139',
-    source: 'L53/2003',
-    locator: 'art. 139 alin. (1) (citit pe portalul legislativ, forma din 27.04.2026)',
-    status: 'pending',
+    id: 'L53/2003-A:art.139',
+    source: 'L53/2003-A',
+    locator: 'art. 139 alin. (1)',
+    status: 'located',
     summary:
       'Zilele de sărbătoare legală nelucrătoare: 1, 2, 6, 7 și 24 ianuarie, Vinerea Mare, prima și a doua zi de Paști, 1 mai, 1 iunie, prima și a doua zi de Rusalii, 15 august, 30 noiembrie, 1 decembrie, prima și a doua zi de Crăciun.',
   },
   {
-    id: 'L53/2003:art.150',
-    source: 'L53/2003',
-    locator: 'art. 150 (citit pe portalul legislativ, forma din 27.04.2026)',
-    status: 'pending',
+    id: 'L53/2003-A:art.150',
+    source: 'L53/2003-A',
+    locator: 'art. 150 alin. (1)–(2)',
+    status: 'located',
     summary:
       'Indemnizația de concediu de odihnă: media zilnică a salariului de bază, a indemnizațiilor și sporurilor cu caracter permanent din ultimele 3 luni, înmulțită cu zilele de concediu, cel puțin salariul de bază pentru perioada respectivă.',
   },
@@ -1250,28 +1323,28 @@ export const clauses: readonly Clause[] = [
       'De la 1 ianuarie 2026 se abrogă art. 5 alin. (8) și (10), art. 7 și art. 8 alin. (1) și (3) din OUG nr. 70/2024; pentru persoanele care aplică TVA la încasare, art. 5 și 8 se suspendă până la 30 septembrie 2026.',
   },
   {
-    id: 'OUG158/2005:art.10(1)',
-    source: 'OUG158/2005',
-    locator: 'art. 10 alin. (1) și (8) (citit pe portalul legislativ, forma din 01.07.2026)',
-    status: 'pending',
+    id: 'OUG158/2005-A:art.10(1)',
+    source: 'OUG158/2005-A',
+    locator: 'art. 10 alin. (1) și (8)',
+    status: 'located',
     summary:
       'Baza de calcul a indemnizației este media veniturilor brute lunare din ultimele 6 luni din cele 12 ale stagiului, până la 12 salarii minime brute pe țară lunar; din durata concediului, în zile calendaristice, se plătesc zilele lucrătoare.',
   },
   {
-    id: 'OUG158/2005:art.12',
-    source: 'OUG158/2005',
-    locator: 'art. 12 (citit pe portalul legislativ, forma din 01.07.2026)',
-    status: 'pending',
+    id: 'OUG158/2005-A:art.12',
+    source: 'OUG158/2005-A',
+    locator: 'art. 12',
+    status: 'located',
     summary:
-      'Indemnizația pentru incapacitate temporară de muncă se suportă de angajator din prima până în a 5-a zi și din FNUASS din ziua următoare.',
+      'Indemnizația pentru incapacitate temporară de muncă se suportă de angajator din prima până în a 5-a zi și din FNUASS din ziua următoare; pentru persoanele cu măsura izolării (Legea nr. 136/2020), din FNUASS din prima zi.',
   },
   {
-    id: 'OUG158/2005:art.17(1)',
-    source: 'OUG158/2005',
-    locator: 'art. 17 alin. (1), (1^2) și (2) (citit pe portalul legislativ, forma din 01.07.2026)',
-    status: 'pending',
+    id: 'OUG158/2005-A:art.17(1)',
+    source: 'OUG158/2005-A',
+    locator: 'art. 17 alin. (1) și (1^2)',
+    status: 'located',
     summary:
-      '55% din baza de calcul pentru certificatele de până la 7 zile, 65% pentru cele între 8 și 14 zile, 75% pentru cele de peste 15 zile; 100% pentru afecțiunile de la alin. (2). Din 1 iulie 2026, diferențele rezultate din recalcularea unui episod prelungit în luna următoare se includ în veniturile lunii în care se determină (alin. (1^2)).',
+      'Pentru boli obișnuite sau accidente în afara muncii, pe fiecare episod: 55% din baza de calcul pentru certificatele de până la 7 zile, 65% pentru cele între 8 și 14 zile, 75% pentru cele de peste 15 zile. Din 1 iulie 2026, diferențele rezultate din recalcularea unui episod prelungit în luna următoare se includ în veniturile lunii în care se determină (alin. (1^2)).',
   },
   {
     id: 'OMF2036/2025:anexa4.pct6',
@@ -1282,11 +1355,11 @@ export const clauses: readonly Clause[] = [
       'Situația veniturilor și cheltuielilor din datele informative ale microentităților, cu conturile fiecărui rând; legată de contul de profit și pierdere (F20) prin regulile validatorului S1005.',
   },
   {
-    id: 'OUG91/2025:art.II',
-    source: 'OUG91/2025',
+    id: 'OUG158/2005-A:nota.OUG91-2025.art.II',
+    source: 'OUG158/2005-A',
     locator:
-      'art. II alin. (1), (1^1), (4) și (5), modificat prin Legea nr. 64/2026 (citit în notele formei consolidate a OUG nr. 158/2005 din 01.07.2026)',
-    status: 'pending',
+      'nota după art. 51: OUG nr. 91/2025 art. II alin. (1), (1^1), (4) și (5), cu modificările Legii nr. 64/2026',
+    status: 'located',
     summary:
       'Pentru certificatele eliberate între 1 februarie 2026 și 31 decembrie 2027 indemnizația se diminuează cu o zi, o singură dată pe episod; angajatorul suportă zilele 2–6, FNUASS de a doua zi după acestea. Nu se diminuează concediile de la art. 2 alin. (1) lit. c), d^1) și e), pentru pacienții din programele naționale de sănătate și pentru cei internați.',
   },
@@ -2053,10 +2126,10 @@ export const clauses: readonly Clause[] = [
       'Creanțele administrate de organul fiscal central scadente sau de declarat la 25 decembrie se plătesc și se declară până la 21 decembrie; dacă 21 decembrie este zi nelucrătoare, până în ultima zi lucrătoare dinaintea ei.',
   },
   {
-    id: 'L134/2010:art.181(2)',
-    source: 'L134/2010',
-    locator: 'art. 181 alin. (2) (de citit)',
-    status: 'pending',
+    id: 'L134/2010-A:art.181(2)',
+    source: 'L134/2010-A',
+    locator: 'art. 181 alin. (2)',
+    status: 'located',
     summary:
       'Un termen care se împlinește într-o zi nelucrătoare se prelungește până la sfârșitul primei zile lucrătoare următoare.',
   },
@@ -2484,7 +2557,13 @@ export const clauses: readonly Clause[] = [
   ...saftClauses,
   ...withholdingClauses,
   ...receiptClauses,
+  ...schemeClauses,
+  ...ossClauses,
   ...yearEndClauses,
+  ...stockClauses,
+  ...payrollClauses,
+  ...tradeClauses,
+  ...retailClauses,
 ];
 
 const sourceById = new Map(legalSources.map((source) => [source.id, source]));

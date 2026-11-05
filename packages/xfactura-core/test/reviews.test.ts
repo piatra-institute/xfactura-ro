@@ -346,36 +346,57 @@ describe('review queue', () => {
       ['interpretation', ['ro.taxaccount.distribution']],
       ['interpretation', ['ro.vat.simplified_invoice.limit_eur']],
       ['interpretation', ['ro.rent.tax_rate']],
+      ['interpretation', ['ro.efactura.b2c']],
       ['interpretation', ['ro.nonresident.tax_rate']],
+      ['interpretation', ['ro.payroll.mandate.deduction']],
+      ['interpretation', ['ro.payroll.voucher.limits']],
+      ['interpretation', ['ro.sick.codes']],
       ['interpretation', ['ro.vat.deduction.limited']],
       ['interpretation', ['ro.vat.exemption.threshold']],
       ['interpretation', ['ro.nonresident.certificate_days']],
       ['interpretation', ['ro.vat.rate']],
       ['interpretation', ['ro.ip.tax_rate']],
+      ['interpretation', ['ro.stock.methods']],
       ['interpretation', ['ro.vat.capital_goods.minimum']],
+      ['interpretation', ['ro.vat.distance.threshold']],
+      ['interpretation', ['ro.vat.intra_eu.vies']],
       ['interpretation', ['ro.vat.prorata']],
       ['interpretation', ['ro.deadline.D112.quarterly']],
       ['interpretation', ['ro.profit.legal_reserve']],
       ['interpretation', ['ro.payroll.quarterly']],
+      ['interpretation', ['ro.retail.zreport']],
+      ['interpretation', ['ro.sick.accident']],
+      ['interpretation', ['ro.stock.retail.coefficient']],
       ['interpretation', ['ro.taxaccount.advance']],
       ['interpretation', ['ro.vat.capital_goods']],
+      ['interpretation', ['ro.vat.flat_rate.agriculture']],
+      ['interpretation', ['ro.vat.intra_eu.transport']],
       ['interpretation', ['ro.vat.registration.annualized']],
       ['interpretation', ['ro.vat.reverse_charge.domestic']],
       ['interpretation', ['ro.vat.special.payable_account']],
       ['interpretation', ['ro.vat.stock_adjustment']],
       ['interpretation', ['ro.micro.revenue_limit_eur']],
+      ['interpretation', ['ro.garnishment.limits']],
+      ['interpretation', ['ro.payroll.correction.retroactive']],
       ['interpretation', ['ro.vat.late_registration']],
+      ['interpretation', ['ro.vat.margin.goods']],
+      ['interpretation', ['ro.vat.margin.travel']],
       ['interpretation', ['ro.d406.start']],
       ['interpretation', ['ro.deadline.S1003']],
       ['interpretation', ['ro.impairment.accounts']],
       ['interpretation', ['ro.profit.sponsorship']],
+      ['interpretation', ['ro.vat.oss.return']],
       ['interpretation', ['ro.micro.linked']],
       ['interpretation', ['ro.profit.loss_carryforward']],
       ['interpretation', ['ro.provisions.accounts']],
+      ['interpretation', ['ro.vat.oss.declarations']],
+      ['interpretation', ['ro.vat.oss.payable_account']],
       ['interpretation', ['ro.deadline.D406.assets']],
       ['interpretation', ['ro.profit.social_limit']],
       ['interpretation', ['ro.size.thresholds']],
+      ['interpretation', ['ro.stock.accounts']],
       ['interpretation', ['ro.taxaccount.accounts']],
+      ['interpretation', ['ro.vat.import']],
       ['interpretation', ['ro.pit.norma']],
       ['interpretation', ['ro.pit.sources']],
       ['interpretation', ['ro.inventory.accounts']],
@@ -388,12 +409,12 @@ describe('review queue', () => {
     const micro = rows.find((row) => row.key === 'ro.micro.revenue_limit_eur')!;
     expect(micro.deadline).toMatchObject({ obligation: 'D100.micro', due: '2027-01-25' });
     expect(micro.urgency).toBe(2);
-    // Every key with a spec is annotated, but the half-year report has no return of its own
-    // whose deadline ranks it (the engine does not prepare it).
-    expect(missing).toHaveLength(base.register.keys().length - reviewSpecs.length + 1);
-    expect(missing.find((row) => row.key === 'ro.halfyear.report')!.missing).toEqual([
-      'obligations (urgency)',
-    ]);
+    // Every key with a spec is annotated, but the half-year report and REGES-ONLINE have no tax
+    // return whose deadline ranks them (the engine does not prepare the report; the register is
+    // the Labour Inspectorate's).
+    expect(missing).toHaveLength(base.register.keys().length - reviewSpecs.length + 2);
+    for (const key of ['ro.halfyear.report', 'ro.deadline.reges.change'])
+      expect(missing.find((row) => row.key === key)!.missing).toEqual(['obligations (urgency)']);
     expect(missing.find((row) => row.key === 'ro.deadline.D300')!.missing).toEqual([
       'spec (readings, cases, minutes)',
       'reach',

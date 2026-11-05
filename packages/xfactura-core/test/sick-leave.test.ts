@@ -92,7 +92,7 @@ describe('sick leave for ordinary illness', () => {
     const codes = (cert: SickCertificate) =>
       sickIndemnity(cert, base, fresh, rules()).issues.map((issue) => issue.code);
     expect(codes(certificate('2026-09-01', '2026-09-15'))).toEqual(['SICK_TIER']);
-    expect(codes(certificate('2026-09-07', '2026-09-11', { code: '02' }))).toEqual(['SICK_CODE']);
+    expect(codes(certificate('2026-09-07', '2026-09-11', { code: '10' }))).toEqual(['SICK_CODE']);
     expect(codes(certificate('2026-09-28', '2026-10-02'))).toEqual(['SICK_DATES']);
     expect(codes(certificate('2026-01-12', '2026-01-16'))).toEqual(['RULE_GAP']);
     expect(

@@ -2,6 +2,9 @@ import { z, type ZodType } from 'zod';
 import type { Issue, JsonValue } from '../kernel';
 import { annualDisclosures, annualDocument, annualInformative } from '../ro/annual/questions';
 import { provisionsReview, receivableCollectibility, untakenLeave } from '../ro/yearend/questions';
+import { supplierItem } from '../ro/stock/questions';
+import { etransportUit, goodsProof } from '../ro/trade/questions';
+import { zGoods } from '../ro/retail/questions';
 import { isLocalDate } from '../time';
 
 /*
@@ -226,6 +229,32 @@ const payrollAbsences = define({
   period: (params) => params.month,
 });
 
+/** A benefit in kind an employee received in a month, with the document of its value. */
+const benefitAnswer = z
+  .object({
+    employeeId: z.uuid(),
+    kind: z.enum(['car', 'housing', 'gift', 'insurance', 'other']),
+    description: text(300),
+    /** The value as the document shows it (the vehicle's input value, the rent, the premium). */
+    value: z.string().regex(/^(0|[1-9]\d*)(\.\d{1,2})?$/),
+    evidenceId: z.uuid(),
+  })
+  .strict();
+
+const payrollBenefits = define({
+  id: 'payroll.benefits',
+  summary:
+    "A month's benefits in kind before its payroll is prepared (Codul fiscal art. 76 alin. (3)–(4^1)): a company car used privately, housing, gifts, insurance premiums, vouchers above the legal limit, each with the document its value comes from; none is an empty list.",
+  holds: 'perPeriod',
+  subjects: ['company', 'employee'],
+  params: z.object({ month }).strict(),
+  answer: () => z.object({ benefits: z.array(benefitAnswer).max(500) }).strict(),
+  prompt: (subject, params) =>
+    `Ce avantaje în natură a primit ${subject.kind === 'employee' ? 'salariatul' : 'fiecare salariat'} în luna ${params.month} (autoturismul firmei folosit în scop personal, locuință, cadouri, prime de asigurare, tichete peste limita legală)? Atașați documentul valorii fiecăruia; dacă nu au fost, răspundeți cu o listă goală.`,
+  evidence: (value) => value.benefits.map((item) => item.evidenceId),
+  period: (params) => params.month,
+});
+
 const evidenceMissing = define({
   id: 'evidence.missing',
   summary:
@@ -390,6 +419,13 @@ export const yearFigureNames = [
   'averageEmployees',
   /** Whether goods were acquired from other EU states (`yes` or `no`). */
   'euGoodsAcquisitions',
+  /** Distance sales and TBE services to consumers in other EU states, without VAT: the
+   * threshold of art. 278^1 (the D300's „Total an precedent”). */
+  'distanceTurnover',
+  /** Intra-Union acquisitions and supplies of goods, without VAT: the Intrastat thresholds
+   * (INS) of the next year. */
+  'intrastatArrivals',
+  'intrastatDispatches',
 ] as const;
 export type YearFigureName = (typeof yearFigureNames)[number];
 const figureValue: Record<YearFigureName, z.ZodType<string>> = {
@@ -401,6 +437,9 @@ const figureValue: Record<YearFigureName, z.ZodType<string>> = {
   totalAssets: amount,
   averageEmployees: z.string().regex(/^(0|[1-9]\d{0,5})(\.\d{1,2})?$/),
   euGoodsAcquisitions: z.enum(['yes', 'no']),
+  distanceTurnover: amount,
+  intrastatArrivals: amount,
+  intrastatDispatches: amount,
 };
 
 const yearFigures = define({
@@ -651,7 +690,8 @@ const obligationFiled = define({
   subjects: ['obligation'],
   params: z
     .object({
-      kind: z.string().regex(/^D\d{3}$/),
+      // A return filed through ANAF's portal (D700, D710), or INS's Intrastat declaration.
+      kind: z.string().regex(/^(D\d{3}|Intrastat\.(arrivals|dispatches))$/),
       period: z.string().regex(/^\d{4}(-(0[1-9]|1[0-2]|Q[1-4]))?$/),
     })
     .strict(),
@@ -823,11 +863,55 @@ const capitalGoodUse = define({
 });
 export type CapitalGoodUseAnswer = z.infer<ReturnType<typeof capitalGoodUse.answer>>;
 
+/**
+ * Whether a farmer is in ANAF's register of farmers applying the special regime (Registrul
+ * agricultorilor care aplică regimul special, Codul fiscal art. 315^1 alin. (5)), and from when:
+ * the buyer deducts the flat-rate compensation only for a supply made while the farmer is in it
+ * (norme pct. 87^1 alin. (15)). The register is public on ANAF's site; its extract is the proof.
+ */
+const farmerRegister = define({
+  id: 'farmer.register',
+  summary:
+    "Whether, and from when, a supplier is in ANAF's register of farmers applying the special regime (art. 315^1 alin. (5)), shown by the register's extract: the buyer deducts the flat-rate compensation only for supplies made while the farmer is in it (norme pct. 87^1 alin. (15)).",
+  holds: 'untilChanged',
+  subjects: ['party'],
+  params: z
+    .object({
+      /** The supply's date the answer matters on. */
+      date: day.optional(),
+      documentId: z.uuid().optional(),
+    })
+    .strict(),
+  answer: () =>
+    z
+      .object({
+        /** In the register, or not (struck off, never entered). */
+        registered: z.boolean(),
+        /** From when the farmer is in the register; for `registered: false`, the day the
+         * extract was taken. */
+        from: day,
+        /** Until when, for a farmer struck off since (art. 315^1 alin. (14), (15)). */
+        until: day.optional(),
+        /** The register's extract, from ANAF's site, or the farmer's registration. */
+        evidenceId: z.uuid(),
+      })
+      .strict()
+      .refine((value) => value.until === undefined || value.until >= value.from, {
+        message: 'Data radierii este după data înscrierii.',
+        path: ['until'],
+      }),
+  prompt: (subject, params) =>
+    `Este furnizorul ${subject.id} înscris în Registrul agricultorilor care aplică regimul special (art. 315^1 alin. (5) din Codul fiscal, publicat pe site-ul ANAF)${params.date ? ` la ${params.date}` : ''}, și de la ce dată? Atașați extrasul din registru: compensația în cotă forfetară se deduce numai dacă agricultorul era înscris la data livrării (norme pct. 87^1 alin. (15)).`,
+  evidence: (value) => [value.evidenceId],
+});
+export type FarmerRegisterAnswer = z.infer<ReturnType<typeof farmerRegister.answer>>;
+
 /** Every kind of question, by id. */
 export const questionKinds = {
   'vehicle.use': vehicleUse,
   'deferral.schedule': deferralSchedule,
   'payroll.absences': payrollAbsences,
+  'payroll.benefits': payrollBenefits,
   'evidence.missing': evidenceMissing,
   choice,
   'profile.fact': profileFact,
@@ -839,6 +923,7 @@ export const questionKinds = {
   'obligation.filed': obligationFiled,
   'vat.refund': vatRefund,
   'capitalGood.use': capitalGoodUse,
+  'farmer.register': farmerRegister,
   'nonresident.payee': nonresidentPayee,
   'nonresident.certificate': nonresidentCertificate,
   'annual.informative': annualInformative,
@@ -847,6 +932,10 @@ export const questionKinds = {
   'receivable.collectibility': receivableCollectibility,
   'leave.untaken': untakenLeave,
   'provisions.review': provisionsReview,
+  'stock.item': supplierItem,
+  'goods.proof': goodsProof,
+  'etransport.uit': etransportUit,
+  'retail.goods': zGoods,
 } as const;
 export type QuestionKindId = keyof typeof questionKinds;
 export const questionKindIds = Object.keys(questionKinds) as [QuestionKindId, ...QuestionKindId[]];

@@ -37,6 +37,7 @@ import { supplierAppliesCashVat } from 'xfactura-core/ro/cash-vat';
 import {
   d406BaseRateCode,
   d406CashVatReleaseCode,
+  d406ZReportCode,
   d406RatedAdjustments,
   d406ReverseCharges,
   d406VatTaxCode,
@@ -67,6 +68,7 @@ import {
 import { justifyingDocuments } from '../kernel/reports';
 import { loadState, mergeStates } from '../kernel/state';
 import { assetsAuthorization, assetsInputs, disposalsOption, prepareAssets } from './d406-assets';
+import { prepareStock, stockInputs, stockPeriod } from './d406-stock';
 import { periodStart, sellerDetails } from './d300';
 import type { DeclarationKind, DeclarationProblem } from './declarations';
 import { Sealer } from './payroll';
@@ -267,6 +269,8 @@ const productKinds: readonly [RegExp, 'goods' | 'services'][] = [
   [/^70[1-37]/, 'goods'],
   [/^60/, 'goods'],
   [/^21/, 'goods'],
+  // Goods received into the stock register (G1): raw materials, goods, packaging.
+  [/^3[0-8]/, 'goods'],
 ];
 
 const lei = (bani: bigint) => formatScaled(bani, 2);
@@ -629,24 +633,33 @@ export function d406Declaration(
     description:
       'Fișierul standard de control fiscal (D406, SAF-T): lunar sau trimestrial, și anual pentru active',
     tax: null,
-    // A month or a quarter (L, T), or the financial year of the assets file (A).
-    period: z.string().regex(/^\d{4}(-(0[1-9]|1[0-2]|Q[1-4]))?$/),
+    // A month or a quarter (L, T), the financial year of the assets file (A), or the month or
+    // quarter ANAF asks the stock file for (C, `2026-03-C`).
+    period: z.string().regex(/^\d{4}(-(0[1-9]|1[0-2]|Q[1-4]))?(?:-C)?$/),
     format(period) {
+      if (stockPeriod(period))
+        return periodStart(period.slice(0, -2)).slice(0, 7) >= firstPeriod
+          ? `D406 C ${d406Namespace}`
+          : null;
       if (annual(period))
         return Number(period) >= firstAssetsYear ? `D406 A ${d406Namespace}` : null;
       return periodStart(period).slice(0, 7) >= firstPeriod ? `D406 ${d406Namespace}` : null;
     },
     options: d406Options,
     inputs: async (tx, companyId, period) =>
-      annual(period)
-        ? assetsInputs(tx, companyId, period)
-        : (await booksOf(tx, companyId, period)).inputs,
+      stockPeriod(period)
+        ? stockInputs(tx, companyId, period)
+        : annual(period)
+          ? assetsInputs(tx, companyId, period)
+          : (await booksOf(tx, companyId, period)).inputs,
     authorization: (tx, companyId, artifact) =>
       annual(artifact.period)
         ? assetsAuthorization(tx, companyId, artifact.period)
         : Promise.resolve([]),
     async prepare(tx, companyId, period, raw) {
       const options = d406Options.parse(raw);
+      if (stockPeriod(period))
+        return prepareStock(tx, companyId, period, options, bucharestDate(clock()));
       if (annual(period))
         return prepareAssets(
           tx,
@@ -747,6 +760,15 @@ export function d406Declaration(
       const cnps = new Map(books.cnps.map((row) => [row.partyId, row.cnpSealed]));
       const personal = new Map<string, string>();
       const ids = new Map<string, string>();
+      // A non-EU partner's VAT code in its state, as its recorded details give it (G3).
+      const foreignVatId = (partyId: string, country: string) => {
+        const row = books.details.get(partyId);
+        const vatId = row
+          ? ((JSON.parse(row.details) as Party).vatId ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+          : '';
+        const code = vatId.startsWith(country) ? vatId.slice(country.length) : vatId;
+        return code.length > 1 ? code : null;
+      };
       for (const party of [...parties.values()]) {
         const taxId = (party.taxId ?? '').toUpperCase().replace(/\s+/g, '');
         const prefix = euVatPrefixes[party.country];
@@ -770,6 +792,18 @@ export function d406Declaration(
           ids.set(
             party.id,
             d406PartyId({ kind: 'eu', country: prefix, vat: taxId.slice(prefix.length) }),
+          );
+        else if (!prefix && foreignVatId(party.id, party.country))
+          // A partner outside the Union registered for VAT in its state, its code recorded with
+          // its details (`parties.recordDetails`, vatId): 02, the country and that code (the
+          // structure's S.C.1); one not registered (06, a code the company assigns) is not built.
+          ids.set(
+            party.id,
+            d406PartyId({
+              kind: 'foreign',
+              country: party.country,
+              code: foreignVatId(party.id, party.country)!,
+            }),
           );
         else
           problem(
@@ -887,6 +921,19 @@ export function d406Declaration(
         const found: { tax: (typeof taxes)[number]; code: string }[] = [];
         for (const tax of taxes) {
           const attributes = JSON.parse(tax.attributes) as Record<string, string>;
+          // A cash register's day (G2): its sales need no invoice (art. 319 alin. (10)), 3803xx
+          // by rate. An invoice issued for receipts (its two entries cancel out) has no lines.
+          if (attributes.documentType === 'zreport' || attributes.fiscalReceipt) {
+            if (attributes.invoiced || attributes.fiscalReceipt) continue;
+            const code = d406ZReportCode(tax.code);
+            if (code) found.push({ tax, code });
+            else
+              problem(
+                'D406_TAX_CODE',
+                `Raportul Z cu codul ${tax.code} din nota ${number} nu are un cod de taxă SAF-T stabilit.`,
+              );
+            continue;
+          }
           // VAT on collection released by a collection or payment (4428 to 4427, or 4426 to
           // 4428): one note without a source document, reported once, by its chargeable side.
           if (attributes.release) {
@@ -935,6 +982,8 @@ export function d406Declaration(
               tax.direction === 'output'
                 ? attributes.cashVat !== undefined
                 : supplierAppliesCashVat(attributes.cashVat),
+            // A sale to a consumer in another Member State with the place in Romania (core ro/oss).
+            ...(attributes.distance === 'origin' ? { distance: true } : {}),
           });
           if (code === null) {
             // The collected side of a reverse charge: its acquisition carries the code.
@@ -1016,8 +1065,26 @@ export function d406Declaration(
         // each VAT goes to the lines of its category, shared by their amounts. Otherwise the base
         // of an entry's VAT is its first line that is neither a partner's nor VAT.
         const parts = books.allocations.get(header.id);
+        // A Z report's VAT goes on its revenue lines, not on the cash, card or stock lines (G2).
+        const zReport =
+          vat.length > 0 &&
+          vat.every(({ tax }) => JSON.parse(tax.attributes).documentType === 'zreport');
+        // A sale's goods out of the stock register (G1: the stock account against 60x) carry no
+        // VAT: its base lines are its revenue's (G3).
+        const sold =
+          vat.length > 0 &&
+          vat.every(({ tax }) => tax.direction === 'output') &&
+          own.some((line) => /^7/.test(line.account));
         const found = baseLinesOf(
-          own.flatMap((line, index) => (isBase(line) ? [{ index, account: line.account }] : [])),
+          own.flatMap((line, index) =>
+            isBase(line) &&
+            (!zReport || /^70/.test(line.account)) &&
+            !(sold && /^(3|60)/.test(line.account)) &&
+            // The customs debt of an import (446, G3) is the authority's, not a base.
+            !(vat.length > 0 && /^446/.test(line.account))
+              ? [{ index, account: line.account }]
+              : [],
+          ),
           parts,
         );
         if (!found)
@@ -1194,6 +1261,20 @@ export function d406Declaration(
         const baseLine = bases[0];
         const item = partnerLine ? books.items.get(partnerLine.openItemId!) : undefined;
         const party = item ? ids.get(item.partyId) : undefined;
+        // An invoice issued for fiscal receipts (G2) has no entry of its own: ANAF's answers report
+        // it among the sales invoices as type 751 with code 310327, which is not written yet.
+        if (
+          !own.length &&
+          books.periodTaxes.some(
+            (tax) => tax.entryId === header.id && JSON.parse(tax.attributes).fiscalReceipt,
+          )
+        ) {
+          problem(
+            'D406_RECEIPT_INVOICE',
+            `Factura ${number}, emisă pentru bonuri fiscale, se raportează ca factură în scopuri contabile (tip 751, cod 310327), ceea ce nu este încă scris.`,
+          );
+          continue;
+        }
         if (!partnerLine || !baseLine || !party) continue;
         const vat = entryVat.get(header.id) ?? [];
         if (!vat.length) {

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   accountCodePattern,
+  isStockAccount,
   partyStatusKey,
   profileAt,
   turnoverKey,
@@ -25,6 +26,7 @@ import {
   parseScaled,
 } from '../../money';
 import { normalizePlate, questionIssue } from '../../questions/kinds';
+import { invoiceStockInput, invoiceStockQuery, receiveInvoiceStock } from '../stock/invoices';
 import { RuleGapError, type RuleContext } from '../../rules';
 import type { LocalDate } from '../../time';
 import {
@@ -134,6 +136,10 @@ export const receiptRecognitionInput = z
       .max(20)
       .optional(),
     payment: receiptPayment,
+    /** Goods bought on the receipt into a warehouse (the stock register, G1): its parts then on
+     * the items' stock accounts, each receipt line (by its position from 1) an item, with the
+     * quantity in its unit. */
+    stock: invoiceStockInput.optional(),
     /** The expense report (decont) an employee's receipt is justified with. */
     reportEvidenceId: z.uuid().optional(),
   })
@@ -392,6 +398,7 @@ export const receiptRecognition: Treatment<ReceiptRecognitionInput> = {
       ? { openItems: [{ ids: [input.payment.advanceId] }] }
       : {}),
     ...(input.payment.method === 'employee' ? { parties: [input.payment.partyId] } : {}),
+    ...(input.stock ? { stock: invoiceStockQuery(input.stock) } : {}),
   }),
   followUp(input, loaded) {
     const record = loaded.documents.get(input.documentId);
@@ -471,7 +478,7 @@ export const receiptRecognition: Treatment<ReceiptRecognitionInput> = {
           path: null,
         }));
     for (const part of parts)
-      if (!/^6/.test(part.account))
+      if (!/^6/.test(part.account) && !(input.stock && isStockAccount(part.account)))
         issues.push(block('ACCOUNT', 'Folosiți un cont de cheltuieli (6xx).', at(part, 'account')));
     if (input.allocations) {
       for (const part of parts)
@@ -746,6 +753,29 @@ export const receiptRecognition: Treatment<ReceiptRecognitionInput> = {
         memo: `BF ${body.number}`,
       });
     }
+    // The goods it brings into a warehouse (G1): each part's value over its lines.
+    const stock = input.stock
+      ? receiveInvoiceStock({
+          stock: input.stock,
+          loaded,
+          rules,
+          date: taxPoint,
+          partyId,
+          documentId: record.id,
+          invoiceLines: body.lines.map((line, index) => ({
+            id: String(index + 1),
+            key: line.vatRate,
+            net: ron(line.gross.replace(/^-/, '')) * (line.gross.startsWith('-') ? -1n : 1n),
+          })),
+          parts: parts.map((part, index) => ({
+            account: part.account,
+            vat: part.rate,
+            line: index,
+          })),
+          lines,
+        })
+      : null;
+    if (stock) issues.push(...stock.issues);
     const deductedTotal = deducted.reduce((sum, value) => sum + value, 0n);
     const reason = outcome && !outcome.simplified ? outcome.reason : null;
     const effect: Effect = {
@@ -755,9 +785,10 @@ export const receiptRecognition: Treatment<ReceiptRecognitionInput> = {
       journalCode: 'CUMPARARI',
       description: `Bon fiscal ${body.number} ${body.seller.name}`.slice(0, 500),
       lines,
-      openItems,
+      openItems: [...openItems, ...(stock?.openItems ?? [])],
       taxEntries,
       schedules: [],
+      ...(stock?.book ? stock.book.effectPart() : {}),
       explanation: {
         summary: simplified
           ? `Bon fiscal ${body.number} din ${body.issueDate}, factură simplificată: total ${body.totals.gross} lei, TVA ${body.totals.tax} lei, dedusă ${lei(deductedTotal)} lei; ${paymentText(payment)}.`
@@ -778,6 +809,7 @@ export const receiptRecognition: Treatment<ReceiptRecognitionInput> = {
             : {}),
           ...(body.buyerTaxId ? { buyerTaxId: body.buyerTaxId } : {}),
           payment: payment.method,
+          ...(stock ? { stock: stock.details } : {}),
           ...(cashAfter !== null ? { cashBalance: lei(cashAfter) } : {}),
           ...(vehicles.decided.length
             ? { vehicles: vehicles.decided, vehicleClauses: VEHICLE_CLAUSES }

@@ -28,19 +28,35 @@ export const obligationKinds = [
   'D700.micro_entry',
   'D700.micro_exit',
   'D700.micro_exit_january',
+  'D398',
+  // INS's Intrastat declaration (core ro/trade), filed with INS outside the engine.
+  'Intrastat',
 ] as const;
 export type ObligationKind = (typeof obligationKinds)[number];
 
-/** Returns the company files outside the engine, through ANAF's portal: the engine computes when
- * they are due, and a person records the filing (`obligation.filed`). */
-export const externalReturns: readonly string[] = ['D700'];
+/** Returns the company files outside the engine, through ANAF's portal (D700) or with INS (the
+ * Intrastat declarations, by flow): the engine computes when they are due, and a person records
+ * the filing (`obligation.filed`). */
+export const externalReturns: readonly string[] = [
+  'D700',
+  'Intrastat.arrivals',
+  'Intrastat.dispatches',
+];
 
 const deadlineKinds = [
   /** A day of the month after the period's last month, or that month's last day when it is
    * shorter (D394's 30th is the 28th or 29th in February). */
-  z.object({ kind: z.literal('next_month_day'), day: z.number().int().min(1).max(31) }).strict(),
-  /** The last calendar day of the month after the period. */
-  z.object({ kind: z.literal('next_month_last_day') }).strict(),
+  z
+    .object({
+      kind: z.literal('next_month_day'),
+      day: z.number().int().min(1).max(31),
+      /** Kept even on a non-working day (INS's Intrastat: „întotdeauna data de 15”). */
+      fixed: z.literal(true).optional(),
+    })
+    .strict(),
+  /** The last calendar day of the month after the period; `fixed` when the text keeps it even
+   * on a non-working day (the special VAT returns, art. 314 alin. (7^1), 315 alin. (6^1)). */
+  z.object({ kind: z.literal('next_month_last_day'), fixed: z.literal(true).optional() }).strict(),
   /** The last day of February of the year after the period's. */
   z.object({ kind: z.literal('february_last_day') }).strict(),
   /** A number of days after the period's last day. */
@@ -143,10 +159,21 @@ export const obligationVersions: ParameterVersion[] = [
     '2026-01-01',
   ),
   version('ro.deadline.D390', day25, ['OPANAF591/2016:anexa4.pct.1.1'], '2016-01-01'),
+  // INS's Intrastat declaration: „întotdeauna data de 15 a lunii următoare celei de referință”
+  // (www.intrastat.ro), read as not moved off a non-working day.
+  version(
+    'ro.deadline.Intrastat',
+    { kind: 'next_month_day', day: 15, fixed: true },
+    ['INS/Intrastat:termen', 'INS/Intrastat:norme.obligati'],
+    '2025-01-01',
+  ),
+  // The 30th (art. 8 and the instructions, anexa nr. 2 pct. 2, both as rewritten in 2016 and
+  // unchanged in the consolidation of 17.09.2025); the management procedure's 25th (anexa nr. 3
+  // pct. 1) is the text of 2015, left unamended.
   version(
     'ro.deadline.D394',
     { kind: 'next_month_day', day: 30 },
-    ['OPANAF2328/2016:art.I'],
+    ['OPANAF2328/2016:art.I', 'OPANAF3769/2015-A:art.8', 'ANAF/AJFP-Ialomita-394-2026:termen'],
     '2016-07-01',
   ),
   version('ro.deadline.D112', day25, ['ANAF/Cod-fiscal-consolidat:art.147(1)'], '2016-01-01'),
@@ -328,12 +355,20 @@ export const obligationVersions: ParameterVersion[] = [
     ],
     '2025-01-01',
   ),
+  // The Union scheme's special VAT return (D398): the last calendar day of the month after the
+  // quarter, even a non-working one (art. 315 alin. (6^1)).
+  version(
+    'ro.deadline.D398',
+    { kind: 'next_month_last_day', fixed: true },
+    ['ANAF/Cod-fiscal-consolidat:art.315(6)-(6^1)'],
+    '2026-01-01',
+  ),
   version(
     'ro.deadline.shift',
     { nonWorking: 'next_working_day', december25: 'december_21_or_previous_working_day' },
     [
       'ANAF/Cod-procedura-fiscala-2019:art.75',
-      'L134/2010:art.181(2)',
+      'L134/2010-A:art.181(2)',
       'ANAF/Cod-procedura-fiscala-2019:art.155(2)',
     ],
     '2016-01-01',
@@ -393,8 +428,8 @@ function shifted(nominal: LocalDate, shift: DeadlineShift) {
  * The last day to file a return for a period (its first and last day: a month, a quarter, a
  * year or, for dividends, the month of payment). Throws RuleGapError where the deadline is not
  * sourced. The move off non-working days applies to every deadline, ANAF's "ultima zi
- * calendaristică" included, as the procedure code's general rule (art. 75) reads; the expert
- * reviews that reading. Where the texts disagree (`conflict`), every reading is returned and the
+ * calendaristică" included, as the procedure code's general rule (art. 75) reads (the expert
+ * reviews that reading), except a `fixed` one, whose own text keeps the day (D398). Where the texts disagree (`conflict`), every reading is returned and the
  * earliest is the one to file by: the engine does not settle it.
  */
 export function obligationDue(
@@ -417,7 +452,10 @@ export function obligationDue(
   );
   if (deadline.kind !== 'conflict') {
     const nominal = nominalOf(deadline, period);
-    return { nominal, due: shifted(nominal, shift), versions };
+    const fixed =
+      (deadline.kind === 'next_month_last_day' || deadline.kind === 'next_month_day') &&
+      deadline.fixed;
+    return { nominal, due: fixed ? nominal : shifted(nominal, shift), versions };
   }
   const readings = deadline.readings
     .map((reading) => {

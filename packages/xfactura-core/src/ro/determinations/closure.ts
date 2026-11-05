@@ -8,6 +8,8 @@ import { d112Filing } from '../payroll/quarterly';
 import type { LocalDate } from '../../time';
 import { provisionalProrata } from '../exempt/facts';
 import { d406Begun, type D406StartAt } from '../saft/applicability';
+import { ossClosureRules } from '../oss/closure';
+import { tradeClosureRules } from '../trade/closure';
 import {
   confirmQuestion,
   factQuestion,
@@ -28,7 +30,7 @@ import {
  * gap, never a pass. Each item records the rule and the slots, with their basis, it came from.
  */
 
-export const CLOSURE_VERSION = 'ro-closure@6';
+export const CLOSURE_VERSION = 'ro-closure@7';
 
 export type ClosureStatus = 'ELIGIBLE' | 'NEEDS_EVIDENCE' | 'UNSUPPORTED';
 
@@ -46,7 +48,7 @@ export interface ClosureBooks {
    * alin. (11)). */
   payrollEventMonths: readonly string[];
   /** Months with services across the EU border, supplied or bought, and intra-community
-   * supplies of goods (D390). */
+   * supplies and acquisitions of goods (D390). */
   euServiceMonths: readonly string[];
   /** Months with supplies exempt without the right of deduction (EX-292): the company is mixed
    * and applies a pro-rata (art. 300). */
@@ -68,8 +70,13 @@ export interface ClosureBooks {
   /** The services bought from abroad with the VAT owed by the company (RC-… output entries), by
    * tax point: outside VAT they are declared in D301 (art. 324). */
   reverseCharges?: readonly { date: string; documentId: string; code: string }[];
-  /** Months with lines on stock accounts (class 3). */
+  /** Months with lines on stock accounts (class 3), a dealer's items under the margin scheme
+   * (on 371, each its purchase document) left out. */
   stockMonths: readonly string[];
+  /** The special VAT schemes the books show (V4), by month: a travel agency's margins and sales
+   * (`travel`), a dealer's items bought or sold under the margin scheme (`goods`), purchases
+   * under the agricultural flat rate (`flat_rate`). */
+  schemes?: readonly { month: string; scheme: 'travel' | 'goods' | 'flat_rate' }[];
   /** Months with sponsorship expenses (6582). */
   sponsorshipMonths: readonly string[];
   /** Months with payroll taxes booked (444, 431x, 436) and no employment contract running. */
@@ -1656,6 +1663,77 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
       },
     });
   }
+  // The special VAT schemes (V4): registered persons' regimes. Their D300 and D394 rows are
+  // covered; the SAF-T has no code for the margin schemes, so a company's D406 of those months
+  // cannot be prepared.
+  for (const year of years) {
+    const marked = (books.schemes ?? []).filter(
+      (item) => item.month.startsWith(`${year}-`) && months.includes(item.month),
+    );
+    if (!marked.length) continue;
+    const schemeMonths = [...new Set(marked.map((item) => item.month))].sort();
+    const marginMonths = [
+      ...new Set(marked.filter((item) => item.scheme !== 'flat_rate').map((item) => item.month)),
+    ].sort();
+    rules.push({
+      id: `scope.schemes@${year}`,
+      clauses: [`${CODE}:art.311(4)-(6)`, `${CODE}:art.312(2)-(4)`, `${CODE}:art.315^1(17)-(18)`],
+      reads: schemeMonths.flatMap((month) => [`vat@${month}`, `form@${month}`]),
+      derives: [],
+      run(read, emit) {
+        const outside = schemeMonths.filter((month) => {
+          const vat = read(`vat@${month}`);
+          return vat.state === 'known' && vat.value !== 'normal_vat';
+        });
+        if (outside.length)
+          emit.unsupported({
+            trigger: 'SPECIAL_SCHEME_NON_VAT',
+            message: `Operațiuni în regimurile speciale de TVA (marja, cota forfetară) în ${outside.join(', ')}, în care firma nu este înregistrată în scopuri de TVA: aceste regimuri sunt ale persoanelor înregistrate.`,
+            missingCapabilities: ['SPECIAL_SCHEME_NON_VAT'],
+            evidenceIds: [],
+            resolution: 'Verificați regimul de TVA înregistrat (vat.status) și înregistrările.',
+          });
+        // A PFA, II or IF files no D406; a company, or a form not yet known, does.
+        const d406 = marginMonths.filter((month) => {
+          const form = read(`form@${month}`);
+          return !(form.state === 'known' && individualForms.includes(form.value as EntityForm));
+        });
+        if (d406.length)
+          emit.unsupported({
+            trigger: 'MARGIN_SCHEME_D406',
+            message: `Operațiuni în regimul marjei (art. 311, 312) în ${d406.join(', ')}: nomenclatorul SAF-T al ANAF nu are un cod de taxă pentru regimul marjei, deci D406 al acestor perioade nu se întocmește din aplicație.`,
+            missingCapabilities: ['D406_MARGIN_TAX_CODE'],
+            evidenceIds: [],
+            resolution:
+              'D406 al perioadei întocmit în afara aplicației, atribuit explicit, până când ANAF publică un cod pentru regimul marjei.',
+          });
+      },
+    });
+  }
+  // A farmer applying the special regime (art. 315^1): its VAT side is booked, but neither the
+  // income tax of agricultural activities (art. 103–107) nor the turnover of art. 310 without
+  // the agricultural supplies (alin. (4) lit. c)).
+  if (
+    months.length &&
+    recordedAt(facts, 'vat.agriculture', lastDay(input.interval.to)) === 'special'
+  )
+    rules.push({
+      id: 'scope.agriculture',
+      clauses: [`${CODE}:art.315^1(1)-(4)`],
+      reads: [],
+      derives: [],
+      run(_read, emit) {
+        emit.unsupported({
+          trigger: 'AGRICULTURE_FARMER',
+          message:
+            'Firma este agricultor în regimul special (vat.agriculture special): facturile cu compensația în cotă forfetară se înregistrează, dar impozitul pe venitul din activități agricole (art. 103–107 din Codul fiscal) și plafonul de scutire al art. 310 fără livrările agricole (art. 315^1 alin. (4) lit. c)) nu sunt calculate.',
+          missingCapabilities: ['AGRICULTURAL_INCOME', 'VAT_THRESHOLD_AGRICULTURE'],
+          evidenceIds: [],
+          resolution:
+            'Venitul agricol și plafonul de TVA stabilite în afara aplicației, atribuite explicit.',
+        });
+      },
+    });
   // A range wholly before the books: nothing to read, nothing to ask.
   if (!months.length) return rules;
   rules.push({
@@ -1667,10 +1745,11 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
       if (books.stockMonths.length)
         emit.unsupported({
           trigger: 'GOODS_STOCK',
-          message: `Registrele au conturi de stocuri (clasa 3) în ${books.stockMonths.join(', ')}: gestiunea stocurilor nu este încă acoperită.`,
-          missingCapabilities: ['STOCK'],
+          message: `Registrele au înregistrări pe conturi de stocuri (clasa 3) în ${books.stockMonths.join(', ')} pe care gestiunea pe articole nu le explică: intrări și ieșiri fără mișcări de stoc, diferențe de preț sau ajustări în afara gestiunii.`,
+          missingCapabilities: ['STOCK_OUTSIDE_REGISTER'],
           evidenceIds: [],
-          resolution: 'Modulul stocurilor (G1).',
+          resolution:
+            'Înregistrările prin gestiune (recepție, descărcare, bon de consum) sau preluarea soldului în gestiune (stock.opening).',
         });
       if (books.sponsorshipMonths.length)
         emit.unsupported({
@@ -1720,15 +1799,42 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
           'activity.goods',
           'Nu este înregistrat dacă firma vinde sau ține bunuri în stoc (activity.goods).',
         );
-      else if (goods === 'yes')
-        emit.unsupported({
-          trigger: 'GOODS_STOCK',
-          message:
-            'Firma declară că lucrează cu bunuri: gestiunea stocurilor nu este încă acoperită.',
-          missingCapabilities: ['STOCK'],
-          evidenceIds: [],
-          resolution: 'Modulul stocurilor (G1).',
-        });
+      else if (goods === 'yes') {
+        // Goods kept in the stock register (G1) at cost, covered once its written policies are
+        // recorded (OMFP 1802/2014 pct. 96, 289–291); or at their retail price (G2, pct. 286
+        // alin. (8)), on the perpetual inventory only (pct. 291 alin. (5)), its Z reports and
+        // monthly discharges checked at each month's close.
+        const retail = recordedAt(facts, 'policy.stock.retail', last) === 'retail';
+        const method = recordedAt(facts, 'policy.stock.valuation', last);
+        const inventory = recordedAt(facts, 'policy.stock.inventory', last);
+        if (!method && !retail)
+          factNeed(
+            emit,
+            'policy.stock.valuation',
+            'Nu este înregistrată metoda de evaluare a ieșirilor din gestiune (policy.stock.valuation: FIFO, LIFO, CMP după fiecare recepție sau lunar).',
+          );
+        if (!inventory)
+          factNeed(
+            emit,
+            'policy.stock.inventory',
+            'Nu este înregistrată metoda de evidență a stocurilor (policy.stock.inventory: inventar permanent sau intermitent).',
+          );
+        if (!retail && !recordedAt(facts, 'policy.stock.negative', last))
+          factNeed(
+            emit,
+            'policy.stock.negative',
+            'Nu este înregistrat dacă politicile contabile admit stocuri negative (policy.stock.negative).',
+          );
+        if (retail && inventory === 'intermittent')
+          emit.unsupported({
+            trigger: 'RETAIL_INTERMITTENT',
+            message:
+              'Firma ține mărfurile la preț cu amănuntul cu inventarul intermitent: metoda global-valorică nu se aplică cu inventarul intermitent (OMFP 1802/2014 pct. 291 alin. (5)).',
+            missingCapabilities: ['RETAIL_INTERMITTENT'],
+            evidenceIds: [],
+            resolution: 'Inventarul permanent, sau mărfurile ținute la cost.',
+          });
+      }
       const regime = recordedAt(facts, 'regime.excluded', last);
       if (!regime)
         factNeed(
@@ -1746,6 +1852,10 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
         });
     },
   });
+  // Sales to consumers in other Member States and the One Stop Shop (core ro/oss).
+  rules.push(...ossClosureRules(input, months));
+  // INS's Intrastat declarations (core ro/trade).
+  rules.push(...tradeClosureRules(input, months));
   return rules;
 }
 

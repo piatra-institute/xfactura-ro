@@ -169,4 +169,77 @@ export const exemptAnchors: Readonly<Record<string, readonly Anchor[]>> = {
       to: 'cu excepţia celor de la rândurile 20.1, 22.1, 26.1 şi 26.2.',
     },
   ],
+  // The D394 order and its instructions, consolidated to 17.09.2025.
+  'OPANAF3769/2015-A:art.1': [
+    {
+      from: 'Persoanele impozabile înregistrate în scopuri de TVA în România sunt obligate',
+      to: 'modificările și completările ulterioare.',
+    },
+  ],
+  'OPANAF3769/2015-A:art.8': [
+    {
+      from: 'Declarația menționată la art. 2 se depune la organul fiscal competent',
+      to: '29 februarie, după caz.',
+    },
+    {
+      from: '2. Declarația se depune la organul fiscal competent până în data de 30',
+      to: 'până la data de 28, respectiv 29 februarie.',
+    },
+  ],
+  'OPANAF3769/2015-A:anexa3.pct.1': [
+    {
+      from: '1. Declarația se depune până în data de 25 inclusiv',
+      to: 'la organul fiscal competent.',
+    },
+  ],
+  'OPANAF3769/2015-A:anexa2.pct.1': [
+    {
+      from: '1. Declarația se completează și se depune de către:',
+      to: 'dacă au înscris codul de înregistrare în scopuri de TVA al beneficiarului.',
+    },
+  ],
+  'OPANAF3769/2015-A:anexa2.sect1.litD': [
+    {
+      from: 'D. Rezumatul declarației privind operațiuni desfășurate cu persoane neînregistrate',
+      to: 'efectuate de la persoane neînregistrate în scopuri de TVA.',
+    },
+    {
+      from: 'de la lit. D - se înscrie natura bunurilor/serviciilor achiziționate',
+      to: 'de la persoane neînregistrate în scopuri de TVA.',
+    },
+  ],
+  'OPANAF3769/2015-A:anexa2.sect1.litE-F': [
+    {
+      from: 'E. Rezumatul declarației privind operațiunile desfășurate cu persoane impozabile nestabilite',
+      to: '(formular 390).',
+    },
+    {
+      from: 'F. Rezumat declarație privind operațiunile desfășurate cu persoane impozabile neînregistrate',
+      to: '(formular 390).',
+    },
+  ],
+  'OPANAF3769/2015-A:anexa2.sect2.liste': [
+    {
+      from: 'Listele operațiunilor taxabile efectuate pe teritoriul național cuprind',
+      to: 'exceptate de la obligația utilizării aparatelor de marcat electronice fiscale.',
+    },
+  ],
+  'OPANAF3769/2015-A:anexa2.sect2.pct.2': [
+    {
+      from: 'se înscrie tipul operațiunii efectuate, și anume:',
+      to: 'în fiecare lună din perioada de raportare.',
+    },
+  ],
+  'OPANAF3769/2015-A:anexa2.sect2.pct.3': [
+    {
+      from: '- se înscriu, după caz:– CIF cod de identificare fiscală',
+      to: 'nestabilită pe teritoriul Uniunii Europene.',
+    },
+  ],
+  'OPANAF3769/2015-A:anexa2.sect2.pct.5': [
+    {
+      from: 'se înscrie numărul total al facturilor emise/primite/numărul total al borderourilor',
+      to: 'valoarea 0 pentru restul operațiunilor.',
+    },
+  ],
 };

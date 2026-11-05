@@ -56,6 +56,9 @@ export function emptyLoaded(profile: ProfileFact[]): Loaded {
     profitPostings: [],
     partyStatus: new Map(),
     answers: new Map(),
+    stock: new Map(),
+    stockItems: new Map(),
+    warehouses: new Map(),
   };
 }
 

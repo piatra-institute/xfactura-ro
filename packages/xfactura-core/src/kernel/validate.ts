@@ -1,13 +1,16 @@
 import { INT64_MAX, isSupportedCurrency, LEDGER_CURRENCY, parseDecimal } from '../money';
 import { isLocalDate, type LocalDate } from '../time';
 import {
+  isStockAccount,
   openItemKinds,
+  stockLayerMethods,
   type ControlKind,
   type Effect,
   type Issue,
   type JsonValue,
   type OpenItemKind,
   type Side,
+  type StockLayerMethod,
 } from './effect';
 
 export const accountCodePattern = /^[1-9]\d{1,3}(?:\.[A-Z0-9_-]{1,24}){0,4}$/;
@@ -33,9 +36,34 @@ export interface OpenItemInfo {
   balanceMinor: bigint;
 }
 
+/** A stock layer as recorded before this effect, taken from the proposal's read-set. */
+export interface StockLayerInfo {
+  id: string;
+  item: string;
+  warehouse: string;
+  account: string;
+  method: StockLayerMethod;
+  mayGoNegative: boolean;
+  /** Thousandths of the item's unit. */
+  quantity: bigint;
+  bani: bigint;
+}
+
+/** An item of the stock catalogue: the stock account its layers are on, its unit of measure. */
+export interface StockItemInfo {
+  id: string;
+  account: string;
+  unit: string;
+}
+
 export interface EffectContext {
   account(code: string): AccountInfo | undefined;
   openItem(id: string): OpenItemInfo | undefined;
+  /** The layers the effect's moves consume or add to, as the read-set holds them. */
+  stockLayer?(id: string): StockLayerInfo | undefined;
+  /** The catalogue's items and the warehouses the effect names. */
+  stockItem?(id: string): StockItemInfo | undefined;
+  warehouse?(id: string): boolean;
 }
 
 const isOpenItemKind = (kind: ControlKind | null): kind is OpenItemKind =>
@@ -66,7 +94,13 @@ function validRate(rate: string) {
  */
 export function validateEffect(effect: Effect, context: EffectContext): Issue[] {
   const issues: Issue[] = [];
-  if (effect.schema !== 'effect@1')
+  const moves = effect.stockMoves ?? [];
+  if (
+    (effect.schema !== 'effect@1' && effect.schema !== 'effect@2') ||
+    (effect.schema === 'effect@1' &&
+      (effect.stockMoves !== undefined || effect.stockLayers !== undefined)) ||
+    (effect.schema === 'effect@2' && moves.length === 0)
+  )
     issues.push(block('EFFECT_SCHEMA', 'Formatul efectului contabil nu este cunoscut.'));
   if (!isLocalDate(effect.date)) {
     issues.push(block('EFFECT_DATE', 'Data înregistrării nu este validă.', 'date'));
@@ -165,6 +199,16 @@ export function validateEffect(effect: Effect, context: EffectContext): Issue[] 
         block('OPEN_ITEM_NOT_CONTROL', `Contul ${line.account} nu are poziții deschise.`, path),
       );
 
+    // An account kept at retail price (G2) takes only lines tagged with their warehouse, which
+    // the retail treatments write: never a general entry's, never VAT on collection's.
+    if (account.controlKind === 'retail' && !line.analytics?.item?.startsWith('retail:'))
+      issues.push(
+        block(
+          'RETAIL_ACCOUNT',
+          `Contul ${line.account} ține mărfurile unei gestiuni la preț cu amănuntul: se înregistrează doar prin tratamentele metodei (retail.*, recepția cu retail).`,
+          path,
+        ),
+      );
     if (account.controlKind === 'tax') taxLines.add(index);
     else if (line.taxSettlement)
       issues.push(
@@ -274,6 +318,8 @@ export function validateEffect(effect: Effect, context: EffectContext): Issue[] 
       );
   }
 
+  issues.push(...validateStock(effect, context));
+
   effect.schedules.forEach((schedule, index) => {
     const path = `schedules.${index}`;
     const item = itemFor(schedule.openItem);
@@ -309,5 +355,149 @@ export function validateEffect(effect: Effect, context: EffectContext): Issue[] 
         );
     }
   });
+  return issues;
+}
+
+/**
+ * The stock register's part of an effect (`effect@2`): the layers it creates are on their item's
+ * stock account, in a known warehouse, and used; each move enters or leaves a layer of its own
+ * item, warehouse and account; the moves naming a line add up to its signed amount (debit
+ * positive), and those naming none move goods between warehouses, netting to zero; no layer ends
+ * below zero unless it may, nor holds a value without a quantity.
+ */
+function validateStock(effect: Effect, context: EffectContext): Issue[] {
+  const issues: Issue[] = [];
+  const moves = effect.stockMoves ?? [];
+  const created = new Map<string, StockLayerInfo>();
+  (effect.stockLayers ?? []).forEach((layer, index) => {
+    const path = `stockLayers.${index}`;
+    if (created.has(layer.ref) || context.stockLayer?.(layer.ref))
+      issues.push(block('STOCK_LAYER_DUPLICATE', 'Lotul de stoc este definit de două ori.', path));
+    if (!isStockAccount(layer.account))
+      issues.push(
+        block('STOCK_ACCOUNT', `Contul ${layer.account} nu este un cont de stocuri.`, path),
+      );
+    const item = context.stockItem?.(layer.item);
+    if (!item) issues.push(block('STOCK_ITEM_UNKNOWN', 'Articolul de stoc nu există.', path));
+    else if (item.account !== layer.account)
+      issues.push(
+        block(
+          'STOCK_ITEM_ACCOUNT',
+          `Articolul se ține în contul ${item.account}, nu în ${layer.account}.`,
+          path,
+        ),
+      );
+    if (!context.warehouse?.(layer.warehouse))
+      issues.push(block('STOCK_WAREHOUSE_UNKNOWN', 'Gestiunea nu există.', path));
+    if (
+      !(stockLayerMethods as readonly string[]).includes(layer.method) ||
+      !isLocalDate(layer.date)
+    )
+      issues.push(block('STOCK_LAYER', 'Lotul de stoc nu este valid.', path));
+    created.set(layer.ref, { ...layer, id: layer.ref, quantity: 0n, bani: 0n });
+  });
+  const layerOf = (id: string) => created.get(id) ?? context.stockLayer?.(id);
+
+  const used = new Set<string>();
+  const explained = new Map<number, bigint>();
+  const transfers = new Map<string, bigint>();
+  const transferred = new Map<string, bigint>();
+  const deltas = new Map<string, { quantity: bigint; bani: bigint }>();
+  moves.forEach((move, index) => {
+    const path = `stockMoves.${index}`;
+    if (move.quantity === 0n && move.bani === 0n)
+      issues.push(block('STOCK_MOVE_ZERO', 'Mișcarea de stoc nu are cantitate sau valoare.', path));
+    if (move.quantity !== 0n && move.bani !== 0n && move.quantity < 0n !== move.bani < 0n)
+      issues.push(
+        block('STOCK_MOVE_SIGN', 'Cantitatea și valoarea mișcării au semne diferite.', path),
+      );
+    if (absolute(move.quantity) > INT64_MAX || absolute(move.bani) > INT64_MAX)
+      issues.push(block('STOCK_MOVE_RANGE', 'Mișcarea depășește limita de stocare.', path));
+    const account = context.account(move.account);
+    if (!isStockAccount(move.account) || !account?.postable)
+      issues.push(
+        block('STOCK_ACCOUNT', `Contul ${move.account} nu este un cont de stocuri.`, path),
+      );
+    const layer = layerOf(move.layer);
+    if (!layer) {
+      issues.push(block('STOCK_LAYER_UNKNOWN', 'Lotul de stoc nu este disponibil.', path));
+      return;
+    }
+    used.add(move.layer);
+    if (
+      layer.item !== move.item ||
+      layer.warehouse !== move.warehouse ||
+      layer.account !== move.account
+    )
+      issues.push(
+        block(
+          'STOCK_MOVE_LAYER',
+          'Mișcarea este pe alt articol, gestiune sau cont decât lotul.',
+          path,
+        ),
+      );
+    const delta = deltas.get(move.layer) ?? { quantity: 0n, bani: 0n };
+    delta.quantity += move.quantity;
+    delta.bani += move.bani;
+    deltas.set(move.layer, delta);
+    if (move.line === undefined) {
+      transfers.set(move.account, (transfers.get(move.account) ?? 0n) + move.bani);
+      const key = `${move.account}|${move.item}`;
+      transferred.set(key, (transferred.get(key) ?? 0n) + move.quantity);
+      return;
+    }
+    const line = effect.lines[move.line];
+    if (!line || line.account !== move.account)
+      issues.push(
+        block('STOCK_MOVE_LINE', 'Mișcarea indică o linie care nu este pe contul ei.', path),
+      );
+    else explained.set(move.line, (explained.get(move.line) ?? 0n) + move.bani);
+  });
+  for (const [index, total] of explained) {
+    const line = effect.lines[index]!;
+    const signed = line.side === 'D' ? line.bani : -line.bani;
+    if (total !== signed)
+      issues.push(
+        block(
+          'STOCK_LINE_MISMATCH',
+          'Valoarea mișcărilor de stoc diferă de suma liniei.',
+          `lines.${index}`,
+          { line: signed.toString(), moves: total.toString() },
+        ),
+      );
+  }
+  if ([...transfers.values(), ...transferred.values()].some((total) => total !== 0n))
+    issues.push(
+      block(
+        'STOCK_TRANSFER_UNBALANCED',
+        'Mișcările dintre gestiuni nu se compensează pe cont și pe articol.',
+        'stockMoves',
+      ),
+    );
+  for (const reference of created.keys())
+    if (!used.has(reference))
+      issues.push(
+        block('STOCK_LAYER_UNUSED', 'Lotul de stoc nu are nicio mișcare.', 'stockLayers'),
+      );
+  for (const [reference, delta] of deltas) {
+    const layer = layerOf(reference)!;
+    const quantity = layer.quantity + delta.quantity;
+    const bani = layer.bani + delta.bani;
+    if (!layer.mayGoNegative && (quantity < 0n || bani < 0n))
+      issues.push(
+        block('STOCK_NEGATIVE', 'Stocul lotului ar deveni negativ.', undefined, {
+          layer: reference,
+          quantity: quantity.toString(),
+          bani: bani.toString(),
+        }),
+      );
+    else if (quantity === 0n && bani !== 0n)
+      issues.push(
+        block('STOCK_RESIDUAL', 'Lotul epuizat ar rămâne cu valoare.', undefined, {
+          layer: reference,
+          bani: bani.toString(),
+        }),
+      );
+  }
   return issues;
 }

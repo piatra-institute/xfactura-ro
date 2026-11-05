@@ -105,8 +105,26 @@ export function snapshotText(file: string, mediaType: string): string | { unavai
   if (cached) return cached;
   let text: string | { unavailable: string };
   if (mediaType === 'text/html') text = htmlText(readFileSync(file, 'utf8'));
-  else if (mediaType.startsWith('text/')) text = tidy(readFileSync(file, 'utf8'));
-  else if (mediaType === 'application/pdf') {
+  else if (mediaType.startsWith('text/') || mediaType === 'application/xml')
+    text = tidy(readFileSync(file, 'utf8'));
+  else if (mediaType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
+    // A workbook's text: its shared strings, one per line, in the workbook's order.
+    const result = spawnSync('unzip', ['-p', file, 'xl/sharedStrings.xml'], {
+      maxBuffer: 256 * 1024 * 1024,
+    });
+    text =
+      result.error || result.status !== 0
+        ? {
+            unavailable: result.error
+              ? 'no unzip to read the workbook'
+              : `unzip failed (${result.status})`,
+          }
+        : tidy(
+            [...result.stdout.toString('utf8').matchAll(/<si>([\s\S]*?)<\/si>/g)]
+              .map((item) => htmlText(item[1]!.replace(/<[^>]+>/g, '')))
+              .join('\n'),
+          );
+  } else if (mediaType === 'application/pdf') {
     const result = spawnSync('pdftotext', ['-enc', 'UTF-8', file, '-'], {
       maxBuffer: 256 * 1024 * 1024,
     });

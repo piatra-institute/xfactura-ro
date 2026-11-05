@@ -51,6 +51,21 @@ export const reviewProfiles: readonly ReviewProfile[] = [
     title: 'PFA, II și IF în partidă simplă',
     defined: 'docs/PFA_II_IF.md (identificator introdus de catalogul revizuirilor)',
   },
+  {
+    id: 'RO-GOODS-01',
+    title: 'Comerț cu mărfuri, gestiunea stocurilor pe articole (G1)',
+    defined: 'docs/CONFORMANCE.md (fațetă)',
+  },
+  {
+    id: 'RO-GOODS-EU',
+    title: 'Bunuri în Uniune, importuri și exporturi (G3)',
+    defined: 'docs/CONFORMANCE.md (fațetă)',
+  },
+  {
+    id: 'RO-RETAIL',
+    title: 'Comerț cu amănuntul: case de marcat, rapoarte Z, preț cu amănuntul și B2C (G2)',
+    defined: 'docs/CONFORMANCE.md (fațetă)',
+  },
 ];
 
 /** What a wrong value costs: a wrong tax amount (3), a rejected filing (2), a presentation (1). */
@@ -160,6 +175,98 @@ export const keyAnnotations: Readonly<Record<string, KeyAnnotation>> = {
     },
     obligations: ['D112', 'D112.quarterly'],
   },
+  'ro.payroll.mandate.deduction': {
+    reach: {
+      estimate: 2,
+      profiles: ['RO-PAY', 'RO-TAX-MICRO'],
+      basis:
+        'Small companies whose administrator is paid under a mandate, often instead of an employee.',
+    },
+    risk: {
+      kind: 'tax_amount',
+      basis: 'The personal deduction lowers the wage tax withheld each month.',
+    },
+    obligations: ['D112'],
+  },
+  'ro.garnishment.limits': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-PAY'],
+      basis: 'Employers who receive a garnishment order on an employee’s salary.',
+    },
+    risk: {
+      kind: 'tax_amount',
+      basis:
+        'Withholding more than the code allows is void (the sanction after the limits), and the employer answers for it.',
+    },
+    obligations: ['D112'],
+  },
+  'ro.sick.codes': {
+    reach: {
+      estimate: 2,
+      profiles: ['RO-PAY'],
+      basis:
+        'Employers with an employee on medical leave; isolation certificates are the case in question.',
+    },
+    risk: {
+      kind: 'tax_amount',
+      basis:
+        'The day paid or not changes the indemnity FNUASS bears, what the employer recovers and section D of D112.',
+    },
+    obligations: ['D112'],
+  },
+  'ro.sick.accident': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-PAY'],
+      basis:
+        'Employers with a work accident or an occupational disease the pension house confirmed.',
+    },
+    risk: {
+      kind: 'tax_amount',
+      basis:
+        'The indemnity paid, what the employer recovers from the pension house, and D112 B3 and C3.',
+    },
+    obligations: ['D112'],
+  },
+  'ro.payroll.voucher.limits': {
+    reach: {
+      estimate: 2,
+      profiles: ['RO-PAY'],
+      basis: 'Employers who grant meal or holiday vouchers, most of those with employees.',
+    },
+    risk: {
+      kind: 'tax_amount',
+      basis: 'CAS and CAM on what exceeds the law, and D112 E3_44.',
+    },
+    obligations: ['D112'],
+  },
+  // REGES-ONLINE is not a tax return: no obligation's deadline ranks the key.
+  'ro.deadline.reges.change': {
+    reach: {
+      estimate: 2,
+      profiles: ['RO-PAY'],
+      basis:
+        'Every employer who changes a salary, often by an addendum signed before or after it applies.',
+    },
+    risk: {
+      kind: 'filing_rejection',
+      basis:
+        'A change transmitted late is a contravention (HG nr. 295/2025 art. 9 alin. (3)), fined 5,000 to 8,000 lei.',
+    },
+  },
+  'ro.payroll.correction.retroactive': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-PAY'],
+      basis: 'Employers who raise a salary for a month already closed.',
+    },
+    risk: {
+      kind: 'tax_amount',
+      basis: 'The tax and the deduction of the difference, and which D112 declares it.',
+    },
+    obligations: ['D112'],
+  },
   'ro.pit.sources': {
     reach: {
       estimate: 1,
@@ -245,6 +352,86 @@ export const keyAnnotations: Readonly<Record<string, KeyAnnotation>> = {
     },
     obligations: ['D101', 'S1005', 'S1003'],
   },
+  'ro.stock.accounts': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-GOODS-01'],
+      basis:
+        'Every company keeping goods or materials in the register, at each count; no pilot company keeps stock yet.',
+    },
+    risk: {
+      kind: 'presentation',
+      basis:
+        "The account decides the result's presentation (cost of goods or other revenue); the result is the same.",
+    },
+    obligations: ['S1005', 'S1003', 'D406'],
+  },
+  'ro.retail.zreport': {
+    reach: {
+      estimate: 2,
+      profiles: ['RO-RETAIL'],
+      basis:
+        'Every company with a fiscal cash register, each day it sells: the Z report is booked by its means of payment.',
+    },
+    risk: {
+      kind: 'presentation',
+      basis:
+        'The account tickets wait on (5328 or a claim on their issuer) moves the balance sheet, not the result or the VAT.',
+    },
+    obligations: ['D406'],
+  },
+  'ro.stock.retail.coefficient': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-RETAIL'],
+      basis:
+        'Shops keeping goods at their retail price: every month, the markup discharged on the goods sold.',
+    },
+    risk: {
+      kind: 'tax_amount',
+      basis:
+        'The coefficient sets the cost of the goods sold each month, so the taxable profit of the quarter.',
+    },
+    obligations: ['D101', 'D100.profit', 'S1005', 'D406'],
+  },
+  'ro.efactura.b2c': {
+    reach: {
+      estimate: 2,
+      profiles: ['RO-RETAIL', 'RO-SRV-02'],
+      basis:
+        'Every invoice to an individual, and the invoices a shop issues at a buyer’s request for a receipt.',
+    },
+    risk: {
+      kind: 'filing_rejection',
+      basis:
+        'An invoice not transmitted within the deadline is fined (OUG nr. 120/2021 art. 13^2).',
+    },
+    obligations: ['D394'],
+  },
+  'ro.deadline.efactura': {
+    reach: {
+      estimate: 3,
+      profiles: ['RO-SRV-01', 'RO-SRV-02', 'RO-RETAIL'],
+      basis: 'Every invoice issued to a buyer in Romania.',
+    },
+    risk: {
+      kind: 'filing_rejection',
+      basis: 'The worklist dates each invoice’s transmission from it.',
+    },
+  },
+  'ro.stock.methods': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-GOODS-01'],
+      basis:
+        'Every company keeping stock: its output method values each exit; no pilot company keeps stock yet.',
+    },
+    risk: {
+      kind: 'tax_amount',
+      basis: 'The cost of goods sold, so the taxable profit of the period, depends on the method.',
+    },
+    obligations: ['D101', 'D100.profit', 'S1005', 'D406'],
+  },
   'ro.provisions.accounts': {
     reach: {
       estimate: 2,
@@ -319,6 +506,55 @@ export const keyAnnotations: Readonly<Record<string, KeyAnnotation>> = {
       basis: 'A loss counted as expired or still usable changes the taxable profit by up to 70%.',
     },
     obligations: ['D101'],
+  },
+  'ro.vat.distance.threshold': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-SRV-02', 'RO-SRV-03'],
+      basis:
+        'A VAT-registered company selling e-books, courses, software or goods at a distance to consumers in other Member States.',
+    },
+    risk: {
+      kind: 'tax_amount',
+      basis:
+        'Which state’s VAT a sale owes: Romanian VAT (D300 rd. 17) or the consumer state’s (D398).',
+    },
+    obligations: ['D300', 'D398'],
+  },
+  'ro.vat.oss.declarations': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-SRV-02', 'RO-SRV-03'],
+      basis: 'A company registered in the Union scheme (OSS).',
+    },
+    risk: { kind: 'presentation', basis: 'D300 rd. 3 holds the OSS sales or not; no VAT changes.' },
+    obligations: ['D300'],
+  },
+  'ro.vat.oss.payable_account': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-SRV-02', 'RO-SRV-03'],
+      basis: 'A company registered in the Union scheme (OSS).',
+    },
+    risk: {
+      kind: 'presentation',
+      basis: 'The account of the VAT owed through D398; the amount does not change.',
+    },
+    obligations: ['D398'],
+  },
+  'ro.vat.oss.return': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-SRV-02', 'RO-SRV-03'],
+      basis:
+        'A company registered in the Union scheme refunding a sale of a quarter already declared.',
+    },
+    risk: {
+      kind: 'filing_rejection',
+      basis:
+        'A refund reducing the quarter’s operations may make them negative, which ANAF’s structure refuses.',
+    },
+    obligations: ['D398'],
   },
   'ro.vat.special.payable_account': {
     reach: {
@@ -514,6 +750,40 @@ export const keyAnnotations: Readonly<Record<string, KeyAnnotation>> = {
     },
     obligations: ['D300', 'D394'],
   },
+  // The special VAT schemes (V4): margin schemes and the agricultural flat rate.
+  'ro.vat.margin.travel': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-SRV-02'],
+      basis:
+        'Travel agencies and tour operators selling single services in their own name (margin.travel each VAT period).',
+    },
+    risk: { kind: 'tax_amount', basis: "The period's margin sets the VAT collected on rd. 9." },
+    obligations: ['D300', 'D394'],
+  },
+  'ro.vat.margin.goods': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-SRV-02'],
+      basis:
+        'Dealers in second-hand goods, works of art, collectors items and antiques reselling under the scheme (margin.sale).',
+    },
+    risk: { kind: 'tax_amount', basis: "Each item's margin sets the VAT collected on rd. 9." },
+    obligations: ['D300', 'D394'],
+  },
+  'ro.vat.flat_rate.agriculture': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-SRV-02', 'RO-PFA'],
+      basis:
+        'VAT payers buying agricultural products or services from farmers in the register (invoices.flatRate); farmers (PFA, II, IF) invoicing the compensation.',
+    },
+    risk: {
+      kind: 'tax_amount',
+      basis: 'The percent sets the compensation paid and deducted on rd. 27.',
+    },
+    obligations: ['D300', 'D394', 'D406'],
+  },
   // Withholding (O1): rent and intellectual property paid to individuals, non-residents.
   'ro.dividend.tax_rate': {
     reach: {
@@ -578,6 +848,46 @@ export const keyAnnotations: Readonly<Record<string, KeyAnnotation>> = {
     },
     obligations: ['D100.withholding', 'D207'],
   },
+  'ro.vat.intra_eu.vies': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-GOODS-EU'],
+      basis:
+        'Every intra-community supply of goods: the buyer’s code checked in VIES some days before or after the supply.',
+    },
+    risk: {
+      kind: 'tax_amount',
+      basis:
+        'A supply whose code was not valid when the VAT became chargeable is taxable in Romania at the standard rate.',
+    },
+    obligations: ['D300', 'D390'],
+  },
+  'ro.vat.intra_eu.transport': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-GOODS-EU'],
+      basis:
+        'Intra-community supplies whose transport is shown by one document only, or by the seller’s own truck.',
+    },
+    risk: {
+      kind: 'tax_amount',
+      basis: 'Without the exemption, the supply owes Romanian VAT from its chargeable event.',
+    },
+    obligations: ['D300', 'D390'],
+  },
+  'ro.vat.import': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-GOODS-EU', 'RO-SRV-03'],
+      basis: 'Every import of goods invoiced in a currency, with the customs declaration later.',
+    },
+    risk: {
+      kind: 'presentation',
+      basis:
+        'The rate the goods enter at moves their cost and the exchange difference of the payable; the VAT is the declaration’s.',
+    },
+    obligations: ['S1005', 'S1003', 'D406'],
+  },
   'ro.nonresident.certificate_days': {
     reach: {
       estimate: 1,
@@ -616,4 +926,6 @@ export const obligationCadence: Readonly<
   'D700.micro_entry': ['year'],
   'D700.micro_exit': ['year'],
   'D700.micro_exit_january': ['year'],
+  D398: ['quarter'],
+  Intrastat: ['month'],
 };

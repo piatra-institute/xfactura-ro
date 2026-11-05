@@ -32,6 +32,10 @@ import { loadState } from '../kernel/state';
 import type { DeclarationKind, DeclarationProblem } from './declarations';
 import { standing } from './questions';
 import { reverseChargeFlags } from './receipts';
+import { schemeCodes } from 'xfactura-core/ro/schemes';
+import { ossCode, type OssDeclarations } from 'xfactura-core/ro/oss';
+import { distanceInformation } from './d398';
+import { tradeCodes } from 'xfactura-core/ro/trade';
 
 const vatPeriod = z.string().regex(/^\d{4}-(0[1-9]|1[0-2]|Q[1-4])$/);
 export const d300Options = z
@@ -88,7 +92,10 @@ export const d300Options = z
  * and 33 (deducted), by `ro.vat.late_registration`; the capital goods' adjustment on row 34
  * (R31_2), signed, by `ro.vat.capital_goods`. Those input entries are not part of row 31.
  */
-const rowsByCode: Record<'output' | 'input', Record<string, [string, string | null][] | null>> = {
+const rowsByCode: Record<
+  'output' | 'input',
+  Record<string, [string | null, string | null][] | null>
+> = {
   output: {
     'S-21': [['R9_1', 'R9_2']],
     'S-11': [['R10_1', 'R10_2']],
@@ -162,6 +169,44 @@ Object.assign(rowsByCode.input, {
   [adjustmentCodes.prorata]: [],
   [adjustmentCodes.stock]: [],
 });
+// The special schemes (V4): the margins' VAT of travel agencies and dealers on rd. 9, base and
+// VAT ("operaţiunile supuse regimurilor speciale ... determinate pe baza situaţiilor de calcul",
+// OPANAF nr. 174/2026); a travel agency's sales at their price carry no VAT of their own (the
+// period's margin does); purchases under a scheme on rd. 29, base only; the agricultural flat
+// rate's compensation on rd. 27, VAT column only, and its deduction in rd. 31.
+Object.assign(rowsByCode.output, {
+  [schemeCodes.travel('21')]: [['R9_1', 'R9_2']],
+  [schemeCodes.goods('21')]: [['R9_1', 'R9_2']],
+  [schemeCodes.travelSale]: [],
+});
+Object.assign(rowsByCode.input, {
+  [schemeCodes.travelPurchase]: [['R26_1', null]],
+  [schemeCodes.goodsPurchase]: [['R26_1', null]],
+  // The farmer's supply is under a special regime (rd. 29), its compensation on rd. 27.
+  [schemeCodes.flatRate]: [
+    ['R26_1', null],
+    [null, 'R43_2'],
+  ],
+});
+// Goods across the border (G3, core ro/trade), by rate: an intra-community acquisition on rd. 5
+// and its subset 5.1 (a supplier registered in the Member State of dispatch, as every AIC the
+// engine books is), repeated as deductible on rd. 20 and 20.1; an import whose VAT was not paid at
+// customs (art. 326 alin. (4)–(5)) on rd. 7, repeated on rd. 22; an import whose VAT was paid at
+// customs on rd. 24 (21%, 19% on 24.1) or 25 (11%) (OPANAF nr. 174/2026, rd. 5, 7, 20, 22, 24, 25).
+for (const rate of ['21', '11', '19']) {
+  Object.assign(rowsByCode.output, {
+    [tradeCodes.acquisition(rate)]: [
+      ['R5_1', 'R5_2'],
+      ['R5_1_1', 'R5_1_2'],
+    ],
+    [tradeCodes.importDeferred(rate)]: [['R7_1', 'R7_2']],
+  });
+  Object.assign(rowsByCode.input, {
+    [tradeCodes.acquisition(rate)]: null,
+    [tradeCodes.importDeferred(rate)]: null,
+    [tradeCodes.importPaid(rate)]: rowsByCode.input[`S-${rate}`],
+  });
+}
 /** Input entries declared on rd. 34 (`R31_2`), signed. */
 const adjustments: readonly string[] = [
   regimeCodes.capitalGoods,
@@ -485,7 +530,7 @@ async function salesWithoutVat(
         sql`not exists (select 1 from ${taxEntries} t where t.company_id = ${documents.companyId}
           and t.document_id = ${documents.id} and t.direction = 'output'
           and (t.code like 'S-%' or t.code like 'EXP-%' or t.code like 'EX-%'
-            or t.code like 'TI-%'))`,
+            or t.code like 'TI-%' or t.code like 'MS-%'))`,
       ),
     );
 }
@@ -501,17 +546,20 @@ async function inputsOf(tx: Transaction, companyId: string, period: string) {
   const previous = await previousReturn(tx, companyId, period);
   const deferred = await deferredVat(tx, companyId, period);
   const late = await lateCoverage(tx, companyId);
+  // Distance sales and TBE services to EU consumers (core ro/oss): the information section.
+  const distance = await distanceInformation(tx, companyId, vatPeriodEnd(period));
   const inputs: ReadSetEntry[] = [
     ...readSet,
     deferred.read,
     late.read,
+    distance.read,
     ...(seller ? [{ kind: 'party' as const, id: seller.partyId, version: seller.hash }] : []),
     // The return whose balances this one carries: replacing it makes this one stale.
     ...(previous
       ? [{ kind: 'artifact' as const, id: previous.period, version: previous.artifactId }]
       : []),
   ];
-  return { loaded, seller, inputs, deferred: deferred.entries, late: late.ranges };
+  return { loaded, seller, inputs, deferred: deferred.entries, late: late.ranges, distance };
 }
 
 /** The return's pro-rata header (art. 300; OPANAF nr. 174/2026, "Pro rata de deducere"). */
@@ -589,7 +637,11 @@ export function d300Declaration(
     async prepare(tx, companyId, period, raw) {
       const options = d300Options.parse(raw);
       const problems: DeclarationProblem[] = [];
-      const { loaded, seller, inputs, deferred, late } = await inputsOf(tx, companyId, period);
+      const { loaded, seller, inputs, deferred, late, distance } = await inputsOf(
+        tx,
+        companyId,
+        period,
+      );
       const previous = await previousReturn(tx, companyId, period);
       if (previous && options.previous)
         problems.push({
@@ -630,6 +682,22 @@ export function d300Declaration(
         });
 
       const roundToLeu = await rounding(rules, tx, companyId, periodStart(period), problems);
+      let placement: OssDeclarations['d300'] | null | undefined;
+      const ossPlacement = async () => {
+        if (placement !== undefined) return placement;
+        try {
+          placement = (await rules(tx, companyId)).param<OssDeclarations>(
+            'ro.vat.oss.declarations',
+            'reporting_period_start',
+            periodStart(period),
+          ).d300;
+        } catch (error) {
+          if (!(error instanceof RuleGapError)) throw error;
+          problems.push({ code: 'RULE_GAP', message: error.message });
+          placement = null;
+        }
+        return placement;
+      };
       const totals = new Map<string, bigint>();
       const add = (element: string, bani: bigint) =>
         totals.set(element, (totals.get(element) ?? 0n) + bani);
@@ -644,6 +712,19 @@ export function d300Declaration(
           add('R31_2', entry.deductibleBani);
           continue;
         }
+        // Sales to consumers in other Member States (core ro/oss): below the threshold of art.
+        // 278^1, with the place in Romania, on rd. 17 (R64), credit notes included; declared in
+        // the Union scheme, where `ro.vat.oss.declarations` places them (none, or rd. 3).
+        if (entry.direction === 'output' && entry.attributes.distance === 'origin') {
+          add('R64_1', entry.baseBani);
+          add('R64_2', entry.taxBani);
+          continue;
+        }
+        if (entry.code === ossCode) {
+          const placement = await ossPlacement();
+          if (placement === 'R3') add('R3_1', entry.baseBani);
+          continue;
+        }
         const rows = rowsByCode[entry.direction][entry.code];
         if (rows === undefined) {
           problems.push({
@@ -653,12 +734,17 @@ export function d300Declaration(
           continue;
         }
         for (const [base, vat] of rows ?? []) {
-          add(base, entry.baseBani);
+          if (base) add(base, entry.baseBani);
           if (vat) add(vat, entry.taxBani);
         }
         if (entry.direction === 'input' && !regularization) deducted += entry.deductibleBani;
       }
       if (deducted !== 0n) add('R28_2', deducted);
+      if (distance.problem) problems.push(distance.problem);
+      if (distance.values) {
+        add('total_precedent', distance.values.previous);
+        add('total_curent', distance.values.current);
+      }
       for (const [element, bani] of Object.entries(deferredRows(deferred, period, problems)))
         add(element, bani);
       // The pro-rata of art. 300: the provisional one of the period's year, and the definitive in

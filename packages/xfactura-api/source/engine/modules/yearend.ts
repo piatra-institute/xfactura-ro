@@ -1,4 +1,5 @@
-import { and, asc, desc, eq, gte, inArray, isNotNull, like, lte, or, sql } from 'drizzle-orm';
+import { keepsRegister, stockAccounts, stockPositions } from './stock';
+import { and, asc, desc, eq, gte, inArray, isNotNull, lte, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireCondition } from 'xfactura-core/errors';
 import type { JsonValue, Loaded } from 'xfactura-core/kernel';
@@ -44,6 +45,7 @@ import {
   employmentTerms,
   entries,
   fiscalYears,
+  ledgerAccounts,
   lines,
   openItems,
   parties,
@@ -51,10 +53,12 @@ import {
   proposals,
   proposalVersions,
   treasuryAccounts,
+  stockItems,
+  warehouses,
 } from '../db/schema';
 import type { ActionHandler } from '../kernel/actions';
 import type { Actor, Commands } from '../kernel/commands';
-import { entryStands, holdsSubject } from '../kernel/ledger';
+import { entryStands, holdsSubject, linesUnder } from '../kernel/ledger';
 import type { CloseCheck, Finding } from '../kernel/periods';
 import { loadState } from '../kernel/state';
 import type { WorkStep, YearEndWorkItem } from '../kernel/work';
@@ -129,25 +133,42 @@ async function yearById(tx: Transaction, companyId: string, id: string) {
 // ---------------------------------------------------------------------------------------------
 // The books at a date
 
-/** Each account's balance per currency, debit less credit, from every line dated by `to`. */
-async function accountBalances(tx: Transaction, companyId: string, to: string) {
+/**
+ * Each account's balance per currency, debit less credit, from every line dated by `to`, with its
+ * movement in lei from `from` on (`moved`). The entries dated by then are read first and each
+ * one's lines together (CROSS JOIN keeps the entries outermost), not every line along an index.
+ */
+async function ledgerAt(tx: Transaction, companyId: string, to: string, from: string) {
   const currency = sql<string>`coalesce(${lines.currency}, 'RON')`;
-  return (
-    await tx
-      .select({
-        account: lines.account,
-        currency,
-        bani: sql<bigint>`sum(${sign} * ${lines.bani})`.mapWith(BigInt),
-        minor: sql<bigint>`sum(${sign} * coalesce(${lines.currencyMinor}, ${lines.bani}))`.mapWith(
+  return tx
+    .select({
+      account: lines.account,
+      currency,
+      bani: sql<bigint>`sum(${sign} * ${lines.bani})`.mapWith(BigInt),
+      minor: sql<bigint>`sum(${sign} * coalesce(${lines.currencyMinor}, ${lines.bani}))`.mapWith(
+        BigInt,
+      ),
+      moved:
+        sql<bigint>`sum(CASE WHEN ${entries.date} >= ${from} THEN ${sign} * ${lines.bani} ELSE 0 END)`.mapWith(
           BigInt,
         ),
-      })
-      .from(lines)
-      .innerJoin(entries, posted)
-      .where(and(eq(lines.companyId, companyId), lte(entries.date, to)))
-      .groupBy(lines.account, currency)
-      .orderBy(asc(lines.account), asc(currency))
-  ).filter((row) => row.bani !== 0n || row.minor !== 0n);
+    })
+    .from(entries)
+    .crossJoin(lines)
+    .where(and(eq(entries.companyId, companyId), lte(entries.date, to), posted))
+    .groupBy(lines.account, currency)
+    .orderBy(asc(lines.account), asc(currency));
+}
+
+/** The balances of `ledgerAt`'s rows: those not nil, without their movement. */
+const balancesOf = (rows: Awaited<ReturnType<typeof ledgerAt>>) =>
+  rows
+    .filter((row) => row.bani !== 0n || row.minor !== 0n)
+    .map(({ account, currency, bani, minor }) => ({ account, currency, bani, minor }));
+
+/** Each account's balance per currency, debit less credit, from every line dated by `to`. */
+async function accountBalances(tx: Transaction, companyId: string, to: string) {
+  return balancesOf(await ledgerAt(tx, companyId, to, to));
 }
 
 type ItemBalance = {
@@ -170,35 +191,41 @@ async function itemBalances(
   to: string,
 ): Promise<ItemBalance[]> {
   return (
-    await tx
-      .select({
-        id: openItems.id,
-        kind: openItems.kind,
-        account: openItems.controlAccount,
-        partyId: openItems.partyId,
-        currency: openItems.currency,
-        dueDate: openItems.dueDate,
-        originDate: sql<string>`(select o.date from acc_entries o
+    (
+      await tx
+        .select({
+          id: openItems.id,
+          kind: openItems.kind,
+          account: openItems.controlAccount,
+          partyId: openItems.partyId,
+          currency: openItems.currency,
+          dueDate: openItems.dueDate,
+          originDate: sql<string>`(select o.date from acc_entries o
           where o.company_id = ${openItems.companyId} and o.id = ${openItems.originEntryId})`,
-        bani: sql<bigint>`sum(${sign} * ${lines.bani})`.mapWith(BigInt),
-        minor: sql<bigint>`sum(${sign} * coalesce(${lines.currencyMinor}, ${lines.bani}))`.mapWith(
-          BigInt,
-        ),
-      })
-      .from(lines)
-      .innerJoin(entries, posted)
-      .innerJoin(
-        openItems,
-        and(eq(openItems.companyId, lines.companyId), eq(openItems.id, lines.openItemId)),
-      )
-      .where(and(eq(lines.companyId, companyId), lte(entries.date, to)))
-      .groupBy(openItems.id)
-      .orderBy(asc(openItems.id))
-  ).map((row) => ({
-    ...row,
-    // A currency item's lines all carry its currency; one in lei counts in bani.
-    minor: row.currency === LEDGER_CURRENCY ? row.bani : row.minor,
-  }));
+          bani: sql<bigint>`sum(${sign} * ${lines.bani})`.mapWith(BigInt),
+          minor:
+            sql<bigint>`sum(${sign} * coalesce(${lines.currencyMinor}, ${lines.bani}))`.mapWith(
+              BigInt,
+            ),
+        })
+        .from(lines)
+        .innerJoin(entries, posted)
+        .innerJoin(
+          openItems,
+          and(eq(openItems.companyId, lines.companyId), eq(openItems.id, lines.openItemId)),
+        )
+        // Only the lines naming an item, along their index (`line_open_item`).
+        .where(
+          and(eq(lines.companyId, companyId), isNotNull(lines.openItemId), lte(entries.date, to)),
+        )
+        .groupBy(openItems.id)
+        .orderBy(asc(openItems.id))
+    ).map((row) => ({
+      ...row,
+      // A currency item's lines all carry its currency; one in lei counts in bani.
+      minor: row.currency === LEDGER_CURRENCY ? row.bani : row.minor,
+    }))
+  );
 }
 
 /** The lines tagged with an analytics item on accounts under a prefix, dated by `to`: credit
@@ -215,14 +242,7 @@ async function taggedBalances(tx: Transaction, companyId: string, prefixes: stri
       })
       .from(lines)
       .innerJoin(entries, posted)
-      .where(
-        and(
-          eq(lines.companyId, companyId),
-          isNotNull(lines.item),
-          lte(entries.date, to),
-          or(...prefixes.map((prefix) => like(lines.account, `${prefix}%`))),
-        ),
-      )
+      .where(and(linesUnder(companyId, prefixes), isNotNull(lines.item), lte(entries.date, to)))
       .groupBy(lines.item, lines.account)
   ).map((row) => ({ item: row.item!, account: row.account, bani: row.bani }));
 }
@@ -346,6 +366,16 @@ async function inventoryBooks(
   at?: BooksAt,
 ) {
   const balances = at?.balances ?? (await accountBalances(tx, companyId, date));
+  const retail = new Set(
+    (
+      await tx
+        .select({ code: ledgerAccounts.code })
+        .from(ledgerAccounts)
+        .where(
+          and(eq(ledgerAccounts.companyId, companyId), eq(ledgerAccounts.controlKind, 'retail')),
+        )
+    ).map((row) => row.code),
+  );
   // The cash desks and banks used in the year, with their balance (zero ones too).
   const used = await tx
     .selectDistinct({
@@ -355,12 +385,7 @@ async function inventoryBooks(
     .from(lines)
     .innerJoin(entries, posted)
     .where(
-      and(
-        eq(lines.companyId, companyId),
-        gte(entries.date, from),
-        lte(entries.date, date),
-        or(like(lines.account, '531%'), like(lines.account, '512%')),
-      ),
+      and(linesUnder(companyId, ['531', '512']), gte(entries.date, from), lte(entries.date, date)),
     );
   const desk = (prefix: string): BookCash[] => {
     const keys = new Set([
@@ -413,8 +438,47 @@ async function inventoryBooks(
     bank: desk('512'),
     partners: [...partners.values()],
     stock: balances
-      .filter((row) => row.account.startsWith('3') && row.currency === LEDGER_CURRENCY)
+      // Goods at retail price (G2) are counted at sale price by `retail.count`, not by these lists.
+      .filter(
+        (row) =>
+          row.account.startsWith('3') &&
+          row.currency === LEDGER_CURRENCY &&
+          !retail.has(row.account),
+      )
       .map((row) => ({ account: row.account, bani: row.bani })),
+    ...(await stockRegisterAt(tx, companyId, date)),
+  };
+}
+
+/** The stock register on a date, when it explains every stock account (G1): the count's stock is
+ * then compared with it, and its differences are `inventory.stock`'s. */
+async function stockRegisterAt(tx: Transaction, companyId: string, date: LocalDate) {
+  if (!(await keepsRegister(tx, companyId))) return {};
+  const accounts = await stockAccounts(tx, companyId, date);
+  if (accounts.some((row) => row.outside !== 0n)) return {};
+  const items = await tx.select().from(stockItems).where(eq(stockItems.companyId, companyId));
+  const stores = await tx.select().from(warehouses).where(eq(warehouses.companyId, companyId));
+  const itemOf = new Map(items.map((row) => [row.id, row]));
+  const storeOf = new Map(stores.map((row) => [row.id, row]));
+  const positions = (await stockPositions(tx, companyId, { date }))
+    .filter((held) => held.quantity !== 0n || held.bani !== 0n)
+    .map((held) => ({
+      item: held.item,
+      code: itemOf.get(held.item)!.code,
+      name: itemOf.get(held.item)!.name,
+      unit: itemOf.get(held.item)!.unit,
+      account: held.account,
+      warehouse: held.warehouse,
+      warehouseCode: storeOf.get(held.warehouse)?.code ?? '',
+      quantity: held.quantity,
+      bani: held.bani,
+    }));
+  return {
+    register: {
+      positions,
+      items: new Map(items.map((row) => [row.code, row])),
+      warehouses: new Map(stores.map((row) => [row.code, row.id])),
+    },
   };
 }
 
@@ -597,8 +661,9 @@ export async function yearEndReview(
     items.push({ id: `${item.check}|${about}`, ...rest });
   };
 
-  // The books at the year's last day, read once.
-  const balances = await accountBalances(tx, companyId, end);
+  // The books at the year's last day, read once, with each account's movement in the year.
+  const ledger = await ledgerAt(tx, companyId, end, year.from);
+  const balances = balancesOf(ledger);
   const all = await itemBalances(tx, companyId, end);
   // The annual inventory (OMF nr. 2.861/2009 pct. 2, 4): its lists, what they leave out, and
   // the differences they found.
@@ -664,6 +729,21 @@ export async function yearEndReview(
         next: [propose('inventory.differences', { date: end, documentIds: lists })],
       });
   }
+  // The stock register's differences (G1): booked by `inventory.stock` on the count's date.
+  const counted = comparison.differences.filter((item) => item.kind === 'stock');
+  if (
+    counted.length &&
+    !single &&
+    !(await postingsOf(tx, companyId, ['inventory.stock'], end, end)).length
+  )
+    push({
+      check: 'inventory.differences',
+      about: 'stock',
+      severity: 'block',
+      message: `Inventarierea de la ${end} a constatat ${counted.length} diferențe de stoc neînregistrate: propuneți inventory.stock cu decizia administratorului și cauza fiecărei lipse.`,
+      details: { date: end, differences: counted.map(differenceView) },
+      next: [propose('inventory.stock', { date: end, documentIds: lists })],
+    });
   const impaired = comparison.differences.filter((item) => item.kind === 'asset.impaired');
   if (impaired.length && !single) {
     const booked = new Set(
@@ -1113,25 +1193,15 @@ export async function yearEndReview(
         ],
       });
   }
-  // The year's own revenue and expenses, as the closing journal closes them.
-  const result = (
-    await tx
-      .select({
-        account: lines.account,
-        bani: sql<bigint>`sum(${sign} * ${lines.bani})`.mapWith(BigInt),
-      })
-      .from(lines)
-      .innerJoin(entries, posted)
-      .where(
-        and(
-          eq(lines.companyId, companyId),
-          gte(entries.date, year.from),
-          lte(entries.date, year.to),
-          or(like(lines.account, '6%'), like(lines.account, '7%')),
-        ),
-      )
-      .groupBy(lines.account)
-  ).filter((row) => row.bani !== 0n);
+  // The year's own revenue and expenses, as the closing journal closes them: their movement in
+  // the year, from the books read above.
+  const moved = new Map<string, bigint>();
+  for (const row of ledger)
+    if (row.account.startsWith('6') || row.account.startsWith('7'))
+      moved.set(row.account, (moved.get(row.account) ?? 0n) + row.moved);
+  const result = [...moved]
+    .filter(([, bani]) => bani !== 0n)
+    .map(([account, bani]) => ({ account, bani }));
   if (result.length)
     push({
       check: 'result',

@@ -20,6 +20,11 @@ export type FingerprintEffect = {
     deductibleBani: Amount;
   }[];
   schedules: { method: string; rows: { due: string; bani: Amount; counterAccount: string }[] }[];
+  /** effect@2: the stock moves, by item, warehouse and account; an effect without them
+   * fingerprints as before. */
+  stockMoves?:
+    | { item: string; warehouse: string; account: string; quantity: Amount; bani: Amount }[]
+    | undefined;
 };
 
 const text = (value: Amount) => (typeof value === 'bigint' ? value.toString() : value);
@@ -61,6 +66,19 @@ export function effectFingerprint(effect: FingerprintEffect): string {
         ...schedule.rows.map((row) => `${row.due}/${text(row.bani)}/${row.counterAccount}`),
       ]),
     ),
+    ...(effect.stockMoves?.length
+      ? {
+          stock: sorted(
+            effect.stockMoves.map((move) => [
+              move.item,
+              move.warehouse,
+              move.account,
+              text(move.quantity),
+              text(move.bani),
+            ]),
+          ),
+        }
+      : {}),
   });
 }
 

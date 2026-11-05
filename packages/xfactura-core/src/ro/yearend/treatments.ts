@@ -1,3 +1,5 @@
+import { registerExplainsStock } from '../stock/inventory';
+import { nextDay, registerAt } from '../stock/count';
 import { z } from 'zod';
 import {
   financialYearOf,
@@ -215,6 +217,13 @@ export const inventoryDifferences: Treatment<InventoryInput> = {
       itemLines: { prefixes: ['29'] },
       turnover: [queries.cash, queries.stock],
       foreignBalances: { at: input.date },
+      // The stock register on the date: when it explains the stock accounts, the count's stock
+      // differences are `inventory.stock`'s.
+      stock: {
+        all: true,
+        catalogue: true,
+        flows: { from: nextDay(input.date), to: '9999-12-31' as LocalDate },
+      },
       parties: [...new Set(input.imputations.map((item) => item.partyId))],
       profile: true,
     };
@@ -252,20 +261,34 @@ export const inventoryDifferences: Treatment<InventoryInput> = {
         })),
       ...foreign.map((row) => ({ ...row })),
     ];
+    const stockBalances = (loaded.turnover.get(turnoverKey(queries.stock)) ?? [])
+      .filter((row) => row.debit !== row.credit)
+      .map((row) => ({ account: row.account, bani: row.debit - row.credit }));
     const comparison = compareInventory(
       lists.map((list) => list.body),
       {
         date: input.date,
         assets: assetsAt(loaded, input.date).map((asset) => bookAsset(loaded, asset, input.date)),
         cash,
-        stock: (loaded.turnover.get(turnoverKey(queries.stock)) ?? [])
-          .filter((row) => row.debit !== row.credit)
-          .map((row) => ({ account: row.account, bani: row.debit - row.credit })),
+        stock: stockBalances,
+        ...(registerExplainsStock(loaded, stockBalances)
+          ? {
+              register: {
+                positions: registerAt(loaded),
+                items: new Map([...loaded.stockItems.values()].map((item) => [item.code, item])),
+                warehouses: new Map(
+                  [...loaded.warehouses.values()].map((store) => [store.code, store.id]),
+                ),
+              },
+            }
+          : {}),
       },
     );
     for (const problem of comparison.unsupported)
       issues.push(block(problem.code, problem.message, undefined, problem.details ?? null));
-    for (const gap of comparison.gaps) issues.push(block(gap.code, gap.message));
+    // The stock's own gaps are `inventory.stock`'s.
+    for (const gap of comparison.gaps)
+      if (gap.code !== 'INVENTORY_STOCK_UNLISTED') issues.push(block(gap.code, gap.message));
 
     const lines: LineSpec[] = [];
     const openItems: OpenItemSpec[] = [];

@@ -196,8 +196,31 @@ function resolveRefs(effect: Effect, proposalId: string): Effect {
   );
   const resolve = (reference: string | undefined) =>
     reference === undefined ? undefined : (items.get(reference) ?? reference);
+  const layers = new Map(
+    (effect.stockLayers ?? []).map((layer) => [
+      layer.ref,
+      derivedId(proposalId, 'stockLayer', layer.ref),
+    ]),
+  );
   return {
     ...effect,
+    // effect@2 only: an effect without them keeps neither key, so it hashes as before.
+    ...(effect.stockLayers
+      ? {
+          stockLayers: effect.stockLayers.map((layer) => ({
+            ...layer,
+            ref: layers.get(layer.ref)!,
+          })),
+        }
+      : {}),
+    ...(effect.stockMoves
+      ? {
+          stockMoves: effect.stockMoves.map((move) => ({
+            ...move,
+            layer: layers.get(move.layer) ?? move.layer,
+          })),
+        }
+      : {}),
     lines: effect.lines.map((line) =>
       line.openItem === undefined ? line : { ...line, openItem: resolve(line.openItem)! },
     ),
@@ -215,6 +238,7 @@ function accountCodes(effect: Effect) {
     ...new Set([
       ...effect.lines.map((line) => line.account),
       ...effect.schedules.flatMap((schedule) => schedule.rows.map((row) => row.counterAccount)),
+      ...(effect.stockMoves ?? []).map((move) => move.account),
     ]),
   ];
 }
@@ -504,10 +528,18 @@ export class Proposals {
     }
     if (effect) {
       const accounts = await loadAccounts(tx, companyId, accountCodes(effect));
+      const layers = new Map(
+        [...loaded.stock.values()].flatMap((position) =>
+          position.layers.map((layer) => [layer.id, layer] as const),
+        ),
+      );
       issues.push(
         ...validateEffect(effect, {
           account: (code) => accounts.get(code),
           openItem: (id) => loaded.openItems.get(id),
+          stockLayer: (id) => layers.get(id),
+          stockItem: (id) => loaded.stockItems.get(id),
+          warehouse: (id) => loaded.warehouses.has(id),
         }),
         ...(await this.placement(tx, companyId, effect, loaded)),
       );

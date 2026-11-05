@@ -15,12 +15,26 @@ import {
 } from './nonpayers';
 import { capitalMinimumSpec, prorataSpec, stockAdjustmentSpec } from './exempt';
 import { d112QuarterlySpec, pitNormaSpec, pitSourcesSpec } from './pf';
+import {
+  garnishmentLimitsSpec,
+  mandateDeductionSpec,
+  retroactiveCorrectionSpec,
+  regesChangeSpec,
+  sickAccidentSpec,
+  sickCodesSpec,
+  voucherLimitsSpec,
+} from './payroll';
 import { legalReserveSpec, lossCarryforwardSpec, socialLimitSpec, sponsorshipSpec } from './profit';
 import { d406AssetsDeadlineSpec, d406PresentationSpec, d406StartSpec } from './saft';
 import { reverseChargeSpec, simplifiedInvoiceSpec } from './receipts';
+import { flatRateSpec, goodsMarginSpec, travelMarginSpec } from './schemes';
+import { distanceThresholdSpec, ossDeclarationsSpec, ossPayableSpec, ossReturnSpec } from './oss';
 import { accountsSpec, advanceSpec, distributionSpec } from './taxaccount';
 import { vatDeductionLimitedSpec, vatRateSpec, vatReducedRateSpec } from './vat';
 import { impairmentAccountsSpec, inventoryAccountsSpec, provisionAccountsSpec } from './yearend';
+import { stockAccountsSpec, stockMethodsSpec } from './stock';
+import { importSpec, transportSpec, viesSpec } from './trade';
+import { efacturaB2cSpec, retailCoefficientSpec, retailZReportSpec } from './retail';
 import {
   certificateDaysSpec,
   dividendRateSpec,
@@ -64,6 +78,9 @@ export const reviewSpecs: readonly ReviewSpec[] = [
   capitalMinimumSpec,
   simplifiedInvoiceSpec,
   reverseChargeSpec,
+  travelMarginSpec,
+  goodsMarginSpec,
+  flatRateSpec,
   rentRateSpec,
   ipRateSpec,
   nonresidentRateSpec,
@@ -72,4 +89,23 @@ export const reviewSpecs: readonly ReviewSpec[] = [
   inventoryAccountsSpec,
   impairmentAccountsSpec,
   provisionAccountsSpec,
+  mandateDeductionSpec,
+  garnishmentLimitsSpec,
+  retroactiveCorrectionSpec,
+  sickCodesSpec,
+  sickAccidentSpec,
+  voucherLimitsSpec,
+  regesChangeSpec,
+  distanceThresholdSpec,
+  ossDeclarationsSpec,
+  ossPayableSpec,
+  ossReturnSpec,
+  stockAccountsSpec,
+  stockMethodsSpec,
+  viesSpec,
+  transportSpec,
+  importSpec,
+  retailCoefficientSpec,
+  retailZReportSpec,
+  efacturaB2cSpec,
 ];

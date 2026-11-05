@@ -26,10 +26,18 @@ import { isValidCnp, isValidCui } from '../identifiers';
  * (N, OPANAF nr. 3.769/2015 anexa nr. 2 secțiunea a 2-a pct. 2: at rate 0, without VAT, by the
  * document received, tip_document; with op11 by the nature of what was bought, required for an
  * individual or a partner without a code, and rezumat1 per document type with its detaliu,
- * nrN and valN); invoice series; storno, cancelled and self-issued invoices; refund details. The
- * structure lets the sections of other regimes be absent: special schemes (LS, AS),
- * non-established partners (tip_partener 3, 4), cash register receipts (op2, lista) and the
- * travel-agency and second-hand margins.
+ * nrN and valN); the special schemes of travel agencies and second-hand goods, works of art,
+ * collectors' items and antiques (V4: supplies LS and acquisitions AS at rate 0, without VAT, in
+ * rezumat1's facturiLS, bazaLS, facturiAS, bazaAS, and the margins' fields of informatii);
+ * partners established in another Member State or outside the Union, not registered in Romania
+ * (tip_partener 3 and 4, anexa nr. 2 secțiunea 1 lit. E–F: supplies L and the acquisitions whose
+ * VAT the company owes, C, without op11; nrCui3, nrCui4); invoice series; storno, cancelled and
+ * self-issued invoices; refund details. The structure lets the sections of other regimes be
+ * absent: acquisitions under the schemes from suppliers applying VAT on collection (ASI), the
+ * special schemes with non-established partners, and the receipts of activities exempt from
+ * cash registers (op2 I2, lista). The receipts through fiscal cash registers (op2 I1, G2) are
+ * written per month, with rezumat2's baza_incasari_i1 and tva_incasari_i1 and informatii's
+ * nr_BF_i1 and incasari_i1.
  *
  * Amounts are whole lei, N(15), negative for adjustments; invoice counts are non-negative.
  */
@@ -112,7 +120,14 @@ export type D394Partner =
   /** tip_partener 2: not registered for VAT. cuiP is the CUI of an entity or the CNP/NIF of an
    * individual; without one, the address identifies the partner. Each record counts as a partner
    * in nrCui2. */
-  | { kind: 'unregistered'; code?: string; name: string; address?: D394Address };
+  | { kind: 'unregistered'; code?: string; name: string; address?: D394Address }
+  /** tip_partener 3 (`eu`): a taxable person established in another Member State, not
+   * registered and not obliged to register for VAT in Romania, cuiP its VAT code there; 4
+   * (`nonEu`): one established outside the Union, cuiP its code in the companies' register of its
+   * country (OPANAF nr. 3.769/2015 anexa nr. 2 secțiunea 1 lit. E–F, secțiunea a 2-a pct. 3).
+   * Only taxable operations with the place in Romania not in D390: supplies (L) and acquisitions
+   * whose VAT the company owes (C, art. 307 alin. (2), (3), (5) and (6)). */
+  | { kind: 'nonEstablished'; region: 'eu' | 'nonEu'; code: string; name: string };
 
 /** The product codes of op11 and rezumat1's detaliu for registered partners (Nomenclator cod
  * produse, tip_partener 1): cereals by their NC code, summed under 21 in detaliu; 22–31 and 36
@@ -168,6 +183,59 @@ export const d394UnregisteredProductCodes = [
 /** The detaliu code (bun) a product is summed under: 21 for the cereals' NC codes. */
 export const d394ProductGroup = (code: string) => (code.length > 2 ? '21' : code);
 
+type CountedGroup = { key: string; rate: string; documents: ReadonlyMap<string, bigint> };
+
+/**
+ * The group each invoice counts in: an invoice holding operations at several rates counts once,
+ * for the rate with the largest VAT, the highest rate when it is the same (OPANAF nr. 3.769/2015
+ * anexa nr. 2 secțiunea a 2-a pct. 5). A credit note's VAT counts by its size. `documents` maps
+ * each invoice of the group to its VAT there.
+ */
+export function d394InvoiceLeads(groups: readonly CountedGroup[]): Map<string, string> {
+  const lead = new Map<string, { key: string; vat: bigint; rate: number }>();
+  for (const group of groups)
+    for (const [document, vat] of group.documents) {
+      const size = vat < 0n ? -vat : vat;
+      const held = lead.get(document);
+      if (!held || size > held.vat || (size === held.vat && Number(group.rate) > held.rate))
+        lead.set(document, { key: group.key, vat: size, rate: Number(group.rate) });
+    }
+  return new Map([...lead].map(([document, { key }]) => [document, key]));
+}
+
+/** nrFact of each group: the invoices that count in it, 0 for an invoice counted elsewhere. */
+export function d394InvoiceCounts(groups: readonly CountedGroup[]): Map<string, number> {
+  const counts = new Map<string, number>(groups.map((group) => [group.key, 0]));
+  for (const key of d394InvoiceLeads(groups).values()) counts.set(key, (counts.get(key) ?? 0) + 1);
+  return counts;
+}
+
+/**
+ * A partner established outside Romania, by its country and the code on the invoice: in another
+ * Member State, its VAT code there with the state's prefix (tip_partener 3); outside the Union,
+ * its code in the companies' register of its country (4). A code identifies a taxable person
+ * (anexa nr. 2 secțiunea a 2-a pct. 3); without one the partner is an individual or unknown, and
+ * D394 declares it as not registered, by its address.
+ */
+export function d394PartnerAbroad(
+  country: string,
+  taxId: string,
+  name: string,
+  prefixes: Readonly<Record<string, string>>,
+): Extract<D394Partner, { kind: 'nonEstablished' }> | null {
+  const code = taxId.toUpperCase().replace(/\s+/g, '');
+  if (country === 'RO' || !code) return null;
+  const prefix = prefixes[country];
+  return prefix
+    ? {
+        kind: 'nonEstablished',
+        region: 'eu',
+        code: code.startsWith(prefix) ? code : `${prefix}${code}`,
+        name,
+      }
+    : { kind: 'nonEstablished', region: 'nonEu', code, name };
+}
+
 /** tip_document (document_N in rezumat1) of an acquisition of type N: 1 invoices, 2 purchase
  * slips (borderouri de achiziții), 3 sheets of the agricultural sales booklet, 4 contracts, 5
  * other documents. */
@@ -199,9 +267,13 @@ export type D394Operation = {
    * VAT system; AI acquisitions from suppliers applying VAT on collection; V supplies and C
    * acquisitions under the domestic reverse charge (art. 331), registered partners only, with
    * their products; N acquisitions from persons not registered for VAT. Unregistered partners
-   * take only L and N. Simplified invoices are reported per rate, not here. */
-  type: 'L' | 'A' | 'AI' | 'V' | 'C' | 'N';
-  /** cota: 0 for V and N, the self-assessed rate for C. */
+   * take only L and N; non-established ones L and C (the acquisitions whose VAT the company owes,
+   * art. 307 alin. (2)–(6), without products). Simplified invoices are reported per rate, not
+   * here. On an invoice with operations at several rates, the invoice counts once, for the rate
+   * with the largest VAT (the highest rate on a tie), and 0 for the others (anexa nr. 2
+   * secțiunea a 2-a pct. 5). */
+  type: 'L' | 'A' | 'AI' | 'V' | 'C' | 'N' | 'LS' | 'AS';
+  /** cota: 0 for V, N, LS and AS, the self-assessed rate for C. */
   rate: D394Rate | '0';
   partner: D394Partner;
   /** nrFact: invoices (for N, the documents of `document`) with this partner, of this type and
@@ -213,12 +285,27 @@ export type D394Operation = {
   vat: number;
   /** tip_document, for N. */
   document?: D394DocumentType;
-  /** op11, for V and C, and for N its nature (required for an individual, identified by CNP or
-   * NIF, or a partner without a code, and refused for any other, R233.4). */
+  /** op11, for V and C with a registered partner, and for N its nature (required for an
+   * individual, identified by CNP or NIF, or a partner without a code, and refused for any
+   * other, R233.4). */
   products?: D394Product[];
 };
 
 export type D394Amount = { base: number; vat: number };
+
+/** op2 I1 of one month. */
+export type D394CashRegisters = {
+  /** luna: the month, 1–12. */
+  month: number;
+  /** nrAMEF: the registers used in the month. */
+  registers: number;
+  /** nrBF: the receipts issued. */
+  receipts: number;
+  /** total: what they collected. */
+  total: number;
+  /** baza<rate>, TVA<rate>. */
+  byRate: Partial<Record<D394Rate, D394Amount>>;
+};
 
 /** Simplified invoices and receipts of one rate (rezumat2); an absent kind has none. */
 export type D394Simplified = {
@@ -375,6 +462,11 @@ export type D394 = {
   operations: D394Operation[];
   /** rezumat2 inputs by rate; a rate absent here had no simplified invoices or receipts. */
   simplified: Partial<Record<D394Rate, D394Simplified>>;
+  /** op2 I1: each month's receipts through the fiscal cash registers, without the receipts
+   * invoiced (OPANAF nr. 3.769/2015 anexa nr. 2 secțiunea 1 lit. G, secțiunea a 2-a pct. 13–17):
+   * the registers used, the receipts, the total collected and the base and VAT by rate, in whole
+   * lei. Absent or empty without them. */
+  cashRegisters?: D394CashRegisters[];
   /** serieFacturi */
   series: D394InvoiceSeries[];
   /** nrFacturi, nrFacturi_benef, nrFacturi_terti: invoices issued in the period by the company,
@@ -396,13 +488,22 @@ export type D394 = {
   };
   /** solicit: the period's VAT return requests a refund; then every flag is written (0/1). */
   refund?: Record<D394RefundFlag, boolean>;
+  /** The special schemes' information fields, in whole lei (anexa nr. 2 secțiunea 1 lit. I pct.
+   * 6): a travel agency's receipts, costs, margin without VAT and VAT (incasari_ag, costuri_ag,
+   * marja_ag, tva_ag); a dealer's sale and purchase prices, the margin as their difference, VAT
+   * included, and the VAT (pret_vanzare, pret_cumparare, marja_antic, tva_antic). Written only
+   * for a scheme applied in the period. */
+  margins?: {
+    travel?: { receipts: number; costs: number; margin: number; vat: number };
+    goods?: { sales: number; purchases: number; margin: number; vat: number };
+  };
 };
 
 export type D394Totals = { invoices: bigint; base: bigint; vat: bigint };
 
 /** rezumat1: one per partner type and rate present among the operations. */
 export type D394PartnerSummary = {
-  partnerType: 1 | 2;
+  partnerType: 1 | 2 | 3 | 4;
   rate: D394Rate | '0';
   /** document_N: rate 0 of unregistered partners, one summary per document type. */
   document?: D394DocumentType;
@@ -416,8 +517,12 @@ export type D394PartnerSummary = {
   cashVatAcquisitions?: D394Totals;
   /** facturiV, bazaV: rate 0, registered partners only. */
   reverseSupplies?: D394Totals;
-  /** facturiC, bazaC, tvaC: registered partners only. */
+  /** facturiC, bazaC, tvaC: registered and non-established partners. */
   reverseAcquisitions?: D394Totals;
+  /** facturiLS, bazaLS: rate 0, supplies under the special schemes. */
+  specialSupplies?: D394Totals;
+  /** facturiAS, bazaAS: rate 0, acquisitions from registered partners applying them. */
+  specialAcquisitions?: D394Totals;
   /** detaliu: for registered partners the reverse-charge products by code (bun), nrLivV/bazaLivV
    * at rate 0, nrAchizC/bazaAchizC/tvaAchizC at a rate; for unregistered ones at rate 0 the
    * nature of the acquisitions N (bun), nrN/valN. */
@@ -434,14 +539,17 @@ export type D394RateSummary = {
   /** nrFacturiAI, bazaAI, tvaAI */
   cashVatAcquisitions: D394Totals;
   simplified: Record<keyof D394Simplified, { base: bigint; vat: bigint }>;
+  /** baza_incasari_i1, tva_incasari_i1: op2 I1 at the rate. */
+  cashRegisters: { base: bigint; vat: bigint };
 };
 
 export type D394Calculation = {
   namespace: string;
   /** op_efectuate: the statement reports operations, simplified invoices, series or invoices. */
   operationsReported: boolean;
-  /** nrCui1: distinct registered partners; nrCui2: records of unregistered partners. */
-  partners: { registered: number; unregistered: number };
+  /** nrCui1: distinct registered partners; nrCui2: records of unregistered partners; nrCui3,
+   * nrCui4: distinct partners established in another Member State or outside the Union. */
+  partners: { registered: number; unregistered: number; eu: number; nonEu: number };
   byPartner: D394PartnerSummary[];
   byRate: D394RateSummary[];
   /** totalPlata_A: nrCui1–nrCui4 plus every rezumat2 bazaL, bazaA and bazaAI. */
@@ -529,20 +637,47 @@ function inputProblems(model: D394): Problem[] {
     const path = `operations.${index}`;
     const reverse = operation.type === 'V' || operation.type === 'C';
     const unregistered = operation.type === 'N';
-    if (operation.type === 'V' || unregistered ? operation.rate !== '0' : !isRate(operation.rate))
+    const special = operation.type === 'LS' || operation.type === 'AS';
+    if (special) {
+      if (operation.vat !== 0 || operation.products?.length)
+        problems.push({
+          code: 'D394_OPERATION',
+          path: `${path}.vat`,
+          message: 'Operațiunile în regim special (LS, AS) se declară fără TVA și fără produse.',
+        });
+      if (operation.type === 'AS' && operation.partner.kind !== 'registered')
+        problems.push({
+          code: 'D394_OPERATION',
+          path: `${path}.type`,
+          message:
+            'Achizițiile în regim special (AS) se declară de la persoane înregistrate în scopuri de TVA.',
+        });
+    }
+    if (
+      operation.type === 'V' || unregistered || special
+        ? operation.rate !== '0'
+        : !isRate(operation.rate)
+    )
       problems.push({
         code: 'D394_RATE',
         path: `${path}.rate`,
         message: `Cota ${operation.rate} nu se declară în D394 pentru acest tip de operațiune.`,
       });
-    if (reverse && operation.partner.kind !== 'registered')
+    const abroad = operation.partner.kind === 'nonEstablished';
+    if (reverse && !abroad && operation.partner.kind !== 'registered')
       problems.push({
         code: 'D394_OPERATION',
         path: `${path}.type`,
         message:
           'Taxarea inversă internă (V, C) se declară doar cu parteneri înregistrați în scopuri de TVA.',
       });
-    if (reverse) {
+    if (abroad && operation.products?.length)
+      problems.push({
+        code: 'D394_PRODUCTS',
+        path: `${path}.products`,
+        message: 'Operațiunile cu persoane nestabilite în România se declară fără produse (op11).',
+      });
+    if (reverse && !abroad) {
       const products = operation.products ?? [];
       if (!products.length)
         problems.push({
@@ -651,20 +786,30 @@ function inputProblems(model: D394): Problem[] {
         message: 'Tipul documentului se declară doar pentru achizițiile de tip N.',
       });
     if (
-      !['L', 'A', 'AI', 'V', 'C', 'N'].includes(operation.type) ||
-      !['registered', 'unregistered'].includes(operation.partner.kind)
+      !['L', 'A', 'AI', 'V', 'C', 'N', 'LS', 'AS'].includes(operation.type) ||
+      !['registered', 'unregistered', 'nonEstablished'].includes(operation.partner.kind)
     )
       problems.push({
         code: 'D394_OPERATION',
         path: `${path}.type`,
         message: `Tipul de operațiune ${operation.type} nu este acoperit.`,
       });
-    else if (operation.partner.kind === 'unregistered' && !['L', 'N'].includes(operation.type))
+    else if (
+      operation.partner.kind === 'unregistered' &&
+      !['L', 'N', 'LS'].includes(operation.type)
+    )
       problems.push({
         code: 'D394_OPERATION',
         path: `${path}.type`,
         message:
-          'Cu persoane neînregistrate în scopuri de TVA se declară livrări (L) și achiziții (N).',
+          'Cu persoane neînregistrate în scopuri de TVA se declară livrări (L) și achiziții (N), iar livrările în regim special ca LS.',
+      });
+    else if (abroad && !['L', 'C'].includes(operation.type))
+      problems.push({
+        code: 'D394_OPERATION',
+        path: `${path}.type`,
+        message:
+          'Cu persoane nestabilite în România se declară livrări (L) și achizițiile pentru care compania datorează TVA (C).',
       });
     count(`${path}.invoices`, operation.invoices, 'Numărul de facturi');
     amount(`${path}.base`, operation.base, 'Baza impozabilă');
@@ -735,7 +880,14 @@ function add(totals: D394Totals, operation: D394Operation) {
   totals.base += BigInt(operation.base);
   totals.vat += BigInt(operation.vat);
 }
-const partnerType = (partner: D394Partner) => (partner.kind === 'registered' ? 1 : 2);
+const partnerType = (partner: D394Partner): D394PartnerSummary['partnerType'] =>
+  partner.kind === 'registered'
+    ? 1
+    : partner.kind === 'unregistered'
+      ? 2
+      : partner.region === 'eu'
+        ? 3
+        : 4;
 // Rate 0 (reverse-charged supplies) first.
 const byRateOrder = (a: { rate: D394Rate | '0' }, b: { rate: D394Rate | '0' }) =>
   (d394Rates as readonly string[]).indexOf(a.rate) -
@@ -764,6 +916,7 @@ export function calculateD394(model: D394): D394Calculation {
         simplified: Object.fromEntries(
           simplifiedKinds.map((kind) => [kind, { base: 0n, vat: 0n }]),
         ) as D394RateSummary['simplified'],
+        cashRegisters: { base: 0n, vat: 0n },
       };
       rates.set(rate, summary);
     }
@@ -771,42 +924,58 @@ export function calculateD394(model: D394): D394Calculation {
   };
   const registered = new Set<string>();
   let unregistered = 0;
+  const abroad = { eu: new Set<string>(), nonEu: new Set<string>() };
   for (const operation of model.operations) {
     const type = partnerType(operation.partner);
     if (operation.partner.kind === 'registered') registered.add(operation.partner.cui);
-    else unregistered += 1;
-    const key = `${type}|${operation.rate}|${operation.document ?? ''}`;
+    else if (operation.partner.kind === 'unregistered') unregistered += 1;
+    else abroad[operation.partner.region].add(operation.partner.code);
+    // An unregistered partner's supplies under the special schemes are summed with the
+    // acquisitions N by invoice (document_N 1), as the structure places facturiLS there.
+    const document = operation.type === 'LS' && type === 2 ? 'invoice' : operation.document;
+    const key = `${type}|${operation.rate}|${document ?? ''}`;
     let summary = partners.get(key);
     if (!summary) {
       summary =
-        type === 2
-          ? operation.type === 'N'
-            ? {
-                partnerType: 2,
-                rate: '0',
-                document: operation.document!,
-                supplies: zero(),
-                unregisteredAcquisitions: zero(),
-                details: [],
-              }
-            : { partnerType: 2, rate: operation.rate, supplies: zero() }
-          : operation.rate === '0'
-            ? {
-                partnerType: 1,
-                rate: operation.rate,
-                supplies: zero(),
-                reverseSupplies: zero(),
-                details: [],
-              }
-            : {
-                partnerType: 1,
-                rate: operation.rate,
-                supplies: zero(),
-                acquisitions: zero(),
-                cashVatAcquisitions: zero(),
-                reverseAcquisitions: zero(),
-                details: [],
-              };
+        type === 3 || type === 4
+          ? // A non-established partner: supplies (L) and the acquisitions it owes VAT on (C).
+            {
+              partnerType: type,
+              rate: operation.rate,
+              supplies: zero(),
+              reverseAcquisitions: zero(),
+            }
+          : type === 2
+            ? operation.type === 'N' || operation.type === 'LS'
+              ? {
+                  partnerType: 2,
+                  rate: '0',
+                  document: document!,
+                  supplies: zero(),
+                  unregisteredAcquisitions: zero(),
+                  specialSupplies: zero(),
+                  details: [],
+                }
+              : { partnerType: 2, rate: operation.rate, supplies: zero() }
+            : operation.rate === '0'
+              ? {
+                  partnerType: 1,
+                  rate: operation.rate,
+                  supplies: zero(),
+                  reverseSupplies: zero(),
+                  specialSupplies: zero(),
+                  specialAcquisitions: zero(),
+                  details: [],
+                }
+              : {
+                  partnerType: 1,
+                  rate: operation.rate,
+                  supplies: zero(),
+                  acquisitions: zero(),
+                  cashVatAcquisitions: zero(),
+                  reverseAcquisitions: zero(),
+                  details: [],
+                };
       partners.set(key, summary);
     }
     // Rate 0 (V) has no rezumat2: the structure lists none for it.
@@ -820,6 +989,12 @@ export function calculateD394(model: D394): D394Calculation {
     } else if (operation.type === 'AI') {
       add(summary.cashVatAcquisitions!, operation);
       add(byRate!.cashVatAcquisitions, operation);
+    } else if (operation.type === 'LS' || operation.type === 'AS') {
+      // Rate 0: no rezumat2.
+      add(
+        operation.type === 'LS' ? summary.specialSupplies! : summary.specialAcquisitions!,
+        operation,
+      );
     } else if (operation.type === 'N') {
       // Rate 0: no rezumat2. detaliu sums the nature of what was bought (nrN, valN).
       add(summary.unregisteredAcquisitions!, operation);
@@ -860,6 +1035,19 @@ export function calculateD394(model: D394): D394Calculation {
     }
   }
 
+  // op2 I1: rezumat2 sums each rate's receipts through the registers. Op2 writes every rate of
+  // 2025 onwards' structure (21, 11, 20, 19, 9, 5), and the validator requires a rezumat2 for each
+  // (R246–R255), at 0 where nothing was sold at it.
+  if (model.cashRegisters?.length)
+    for (const rate of ['21', '11', '20', '19', '9', '5'] as const) rateSummary(rate);
+  for (const month of model.cashRegisters ?? [])
+    for (const [rate, amount] of Object.entries(month.byRate) as [D394Rate, D394Amount][]) {
+      if (!amount) continue;
+      const summary = rateSummary(rate);
+      summary.cashRegisters.base += BigInt(amount.base);
+      summary.cashRegisters.vat += BigInt(amount.vat);
+    }
+
   const documentOrder = (summary: D394PartnerSummary) =>
     summary.document ? Number(d394DocumentTypes[summary.document]) : 0;
   const byPartner = [...partners.values()].sort(
@@ -870,16 +1058,22 @@ export function calculateD394(model: D394): D394Calculation {
   const controlSum = byRate.reduce(
     (total, summary) =>
       total + summary.supplies.base + summary.acquisitions.base + summary.cashVatAcquisitions.base,
-    BigInt(registered.size + unregistered),
+    BigInt(registered.size + unregistered + abroad.eu.size + abroad.nonEu.size),
   );
   return {
     namespace,
     operationsReported:
       model.operations.length > 0 ||
       byRate.length > 0 ||
+      (model.cashRegisters?.length ?? 0) > 0 ||
       model.series.length > 0 ||
       model.invoices.length > 0,
-    partners: { registered: registered.size, unregistered },
+    partners: {
+      registered: registered.size,
+      unregistered,
+      eu: abroad.eu.size,
+      nonEu: abroad.nonEu.size,
+    },
     byPartner,
     byRate,
     controlSum,
@@ -959,11 +1153,12 @@ export function writeD394(model: D394): string {
       element('informatii', {
         nrCui1: text(calculation.partners.registered),
         nrCui2: text(calculation.partners.unregistered),
-        nrCui3: '0',
-        nrCui4: '0',
-        // Totals of op2 (cash registers), which this module does not write.
-        nr_BF_i1: '0',
-        incasari_i1: '0',
+        nrCui3: text(calculation.partners.eu),
+        nrCui4: text(calculation.partners.nonEu),
+        // Totals of op2: the receipts through the cash registers (I1); those of activities exempt
+        // from them (I2) are not written.
+        nr_BF_i1: text((model.cashRegisters ?? []).reduce((sum, month) => sum + month.receipts, 0)),
+        incasari_i1: text((model.cashRegisters ?? []).reduce((sum, month) => sum + month.total, 0)),
         incasari_i2: '0',
         nrFacturi_terti: text(model.issuedInvoices.byThirdParties),
         nrFacturi_benef: text(model.issuedInvoices.byBeneficiaries),
@@ -971,6 +1166,18 @@ export function writeD394(model: D394): string {
         ...(model.vatOnCollection && byRate('tvaDed', model.vatOnCollection.deductible, true)),
         ...byRate('tvaDedAI', cashVat),
         ...(model.vatOnCollection && byRate('tvaCol', model.vatOnCollection.collected, true)),
+        ...(model.margins?.travel && {
+          incasari_ag: text(model.margins.travel.receipts),
+          costuri_ag: text(model.margins.travel.costs),
+          marja_ag: text(model.margins.travel.margin),
+          tva_ag: text(model.margins.travel.vat),
+        }),
+        ...(model.margins?.goods && {
+          pret_vanzare: text(model.margins.goods.sales),
+          pret_cumparare: text(model.margins.goods.purchases),
+          marja_antic: text(model.margins.goods.margin),
+          tva_antic: text(model.margins.goods.vat),
+        }),
         solicit: flag(model.refund !== undefined),
         ...(model.refund &&
           Object.fromEntries(d394RefundFlags.map(([name]) => [name, flag(model.refund![name])]))),
@@ -984,9 +1191,14 @@ export function writeD394(model: D394): string {
               {
                 tip_partener: '2',
                 cota: '0',
-                // R41, R42: with invoices (document_N 1) the special schemes' supplies, which this
-                // module does not write, are 0; with any other document they are absent.
-                ...(summary.document === 'invoice' ? { facturiLS: '0', bazaLS: '0' } : {}),
+                // R41, R42: with invoices (document_N 1) the special schemes' supplies; with any
+                // other document they are absent.
+                ...(summary.document === 'invoice'
+                  ? {
+                      facturiLS: text(summary.specialSupplies?.invoices ?? 0n),
+                      bazaLS: text(summary.specialSupplies?.base ?? 0n),
+                    }
+                  : {}),
                 facturiN: text(summary.unregisteredAcquisitions.invoices),
                 document_N: d394DocumentTypes[summary.document!],
                 bazaN: text(summary.unregisteredAcquisitions.base),
@@ -1007,10 +1219,10 @@ export function writeD394(model: D394): string {
                 {
                   tip_partener: '1',
                   cota: '0',
-                  facturiLS: '0',
-                  bazaLS: '0',
-                  facturiAS: '0',
-                  bazaAS: '0',
+                  facturiLS: text(summary.specialSupplies?.invoices ?? 0n),
+                  bazaLS: text(summary.specialSupplies?.base ?? 0n),
+                  facturiAS: text(summary.specialAcquisitions?.invoices ?? 0n),
+                  bazaAS: text(summary.specialAcquisitions?.base ?? 0n),
                   facturiV: text(summary.reverseSupplies.invoices),
                   bazaV: text(summary.reverseSupplies.base),
                 },
@@ -1059,8 +1271,8 @@ export function writeD394(model: D394): string {
           ...totals('L', summary.supplies, 'nrFacturiL'),
           ...totals('A', summary.acquisitions, 'nrFacturiA'),
           ...totals('AI', summary.cashVatAcquisitions, 'nrFacturiAI'),
-          baza_incasari_i1: '0',
-          tva_incasari_i1: '0',
+          baza_incasari_i1: text(summary.cashRegisters.base),
+          tva_incasari_i1: text(summary.cashRegisters.vat),
           baza_incasari_i2: '0',
           tva_incasari_i2: '0',
         });
@@ -1104,8 +1316,8 @@ export function writeD394(model: D394): string {
             tip_document: operation.document ? d394DocumentTypes[operation.document] : undefined,
             nrFact: text(operation.invoices),
             baza: text(operation.base),
-            // R232.2: V and N carry no tva, nor their products a tvaPR.
-            tva: operation.type === 'V' || operation.type === 'N' ? undefined : text(operation.vat),
+            // R232.2: V, N, LS and AS carry no tva, nor V's and N's products a tvaPR.
+            tva: ['V', 'N', 'LS', 'AS'].includes(operation.type) ? undefined : text(operation.vat),
           },
           (operation.products ?? []).map((product) =>
             element('op11', {
@@ -1117,6 +1329,32 @@ export function writeD394(model: D394): string {
             }),
           ),
         );
+      }),
+      // op2 I1, a month each: the registers, the receipts, the total and every rate's base and
+      // VAT, an absent rate as 0 (each attribute is required; the validator, R246–R255, then
+      // wants a rezumat2 for each of these rates, which calculateD394 writes).
+      (model.cashRegisters ?? []).map((month) => {
+        const amount = (rate: D394Rate, part: keyof D394Amount) =>
+          text(month.byRate[rate]?.[part] ?? 0);
+        return element('op2', {
+          tip_op2: 'I1',
+          luna: String(month.month),
+          nrAMEF: text(month.registers),
+          nrBF: text(month.receipts),
+          total: text(month.total),
+          baza20: amount('20', 'base'),
+          baza9: amount('9', 'base'),
+          baza5: amount('5', 'base'),
+          TVA20: amount('20', 'vat'),
+          TVA9: amount('9', 'vat'),
+          TVA5: amount('5', 'vat'),
+          baza19: amount('19', 'base'),
+          TVA19: amount('19', 'vat'),
+          baza21: amount('21', 'base'),
+          baza11: amount('11', 'base'),
+          TVA21: amount('21', 'vat'),
+          TVA11: amount('11', 'vat'),
+        });
       }),
     ),
   );
@@ -1175,6 +1413,44 @@ export function checkD394(model: D394): D394Check[] {
   };
   const { period, company, representative, preparer } = model;
   const validPeriod = isPeriod(period);
+  // op2 I1 (validator J8.0.2, R241–R257): one per month, registers and receipts above zero,
+  // the total at least the bases; a total other than the bases with their VAT is a warning.
+  const months = new Set<number>();
+  (model.cashRegisters ?? []).forEach((month, index) => {
+    const path = `cashRegisters.${index}`;
+    if (months.has(month.month))
+      error(
+        'D394_OP2',
+        `${path}.month`,
+        `Luna ${month.month} apare de două ori în încasările prin AMEF.`,
+      );
+    months.add(month.month);
+    if (month.registers <= 0 || month.receipts <= 0)
+      error('D394_OP2', path, 'Încasările prin AMEF (I1) au cel puțin un aparat și un bon fiscal.');
+    const amounts = Object.values(month.byRate).filter(Boolean) as D394Amount[];
+    const bases = amounts.reduce((sum, amount) => sum + amount.base, 0);
+    const vat = amounts.reduce((sum, amount) => sum + amount.vat, 0);
+    if (month.total < bases)
+      error(
+        'D394_OP2',
+        `${path}.total`,
+        'Totalul încasărilor prin AMEF este cel puțin suma bazelor impozabile.',
+      );
+    if (month.total !== bases + vat)
+      add(
+        'warning',
+        'D394_OP2',
+        `${path}.total`,
+        'Totalul încasărilor prin AMEF diferă de baze și TVA.',
+      );
+    if (month.receipts <= month.registers)
+      add(
+        'warning',
+        'D394_OP2',
+        `${path}.receipts`,
+        'Numărul bonurilor fiscale nu depășește numărul aparatelor.',
+      );
+  });
 
   if (!validPeriod) error('D394_PERIOD', 'period', periodMessage);
   else if (!typeMonths[model.type]?.includes(period.month))
@@ -1313,6 +1589,17 @@ export function checkD394(model: D394): D394Check[] {
           'D394_DUPLICATE',
           path,
           `Partenerul ${partner.cui} apare de mai multe ori cu operațiuni ${operation.type} la cota ${operation.rate}%.`,
+        );
+      seen.add(key);
+    } else if (partner.kind === 'nonEstablished') {
+      // R218: cuiP is required for every partner type but 2, and (cuiP, tip, cota) is unique.
+      textField(`${path}.partner.code`, partner.code, 'codul partenerului', 50, true);
+      const key = [partnerType(partner), operation.type, operation.rate, partner.code].join('|');
+      if (seen.has(key))
+        error(
+          'D394_DUPLICATE',
+          path,
+          `Partenerul ${partner.name} apare de mai multe ori cu operațiuni ${operation.type} la cota ${operation.rate}%.`,
         );
       seen.add(key);
     } else {

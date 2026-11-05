@@ -173,7 +173,13 @@ export const vatReducedRateSpec: ReviewSpec = {
   },
   question:
     'Este 11% (de la 01.08.2025) singura cotă redusă pe care parametrul trebuie să o admită, cota de 9% pentru locuințe rămânând un caz tratat separat?',
-  context: ['ANAF/Cod-fiscal-consolidat:L141/2025.art.III', 'ANAF/D300-12.0.0:rd.11'],
+  context: [
+    'ANAF/Cod-fiscal-consolidat:L141/2025.art.III',
+    'ANAF/D300-12.0.0:rd.11',
+    'ANAF/Cod-fiscal-consolidat:art.291(2)(e)-(f)',
+    'OMFP1155/2016:art.1(1)-(2)',
+    'OMFP1155/2016:anexa',
+  ],
   cases: [
     reducedCase({
       title: 'Livrare de alimente cu 11%',
@@ -213,6 +219,7 @@ export const vatReducedRateSpec: ReviewSpec = {
   gaps: [
     'Cotele reduse de 9% și 5% în vigoare înainte de 01.08.2025 nu sunt în registru: forma art. 291 alin. (2) de dinainte nu este în .sources/ (textul consolidat ANAF arată doar forma actuală); facturile cu cotă redusă de dinainte se blochează.',
     'Motorul nu clasifică operațiunile cărora li se aplică cota redusă: confirmarea REDUCED_RATE rămâne la persoana care aprobă.',
+    'Inputurile și serviciile agricole de la art. 291 alin. (2) lit. e) și f) sunt cele „prevăzute prin ordin comun”: în registru este Ordinul nr. 1.155/868/2016 (codurile NC ale îngrășămintelor, pesticidelor și semințelor și cele 34 de servicii din anexă), emis pentru fosta lit. h), cu cota de 9%; dacă un ordin comun mai nou, emis după Legea nr. 141/2025, înlocuiește lista sau separă îngrășămintele și pesticidele chimice (lit. f), până la 31.12.2031) nu este verificat. Normele (pct. 87^1 alin. (3)) citează aceeași anexă pentru serviciile agricole ale regimului forfetar.',
     'Cota de 9% pentru clădirile livrate primăriilor (art. III alin. (4) din Legea nr. 141/2025) nu are caz separat.',
   ],
 };

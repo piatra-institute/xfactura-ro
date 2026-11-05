@@ -105,7 +105,7 @@ describe('issuing', () => {
     expect((await preview({ issueDate: '2026-03-20' })).number).toBe('XF0002');
   });
 
-  test('requires the details of both parties and refuses individuals until B2C is sourced', async () => {
+  test('requires the details of both parties and how an individual identified (B2C)', async () => {
     const { s, preview } = await company();
     const stranger = await s.party('Fără Date SRL', '18547290');
     expect((await preview({ buyerId: stranger.id })).problems.map((p) => p.code)).toEqual([
@@ -117,7 +117,7 @@ describe('issuing', () => {
       name: 'Ion Popescu',
     });
     expect((await preview({ buyerId: person.id })).problems.map((p) => p.code)).toContain(
-      'B2C_PENDING',
+      'B2C_IDENTIFICATION',
     );
     expect(
       (

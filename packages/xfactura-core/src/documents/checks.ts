@@ -17,6 +17,19 @@ import {
   type InventoryList,
 } from '../ro/yearend/documents';
 import {
+  isZReportKind,
+  zReportCitations,
+  zReportProblems,
+  type ZReportDocument,
+} from '../ro/retail/documents';
+import {
+  customsProblems,
+  isCustomsKind,
+  isViesKind,
+  type CustomsDeclaration,
+  type ViesCheck,
+} from '../ro/trade/documents';
+import {
   documentKinds,
   isInvoiceKind,
   isIssuedKind,
@@ -150,6 +163,21 @@ export function companyParty(
     return own((body as InventoryList).company.taxId)
       ? { ok: true }
       : { ok: false, message: 'Lista de inventariere privește altă entitate decât compania.' };
+  // A customs declaration is the company's as importer or exporter; a VIES answer is about the
+  // company's partner, whose code it shows.
+  if (isCustomsKind(kind))
+    return own((body as CustomsDeclaration).declarant.taxId)
+      ? { ok: true }
+      : {
+          ok: false,
+          message: 'Declarația vamală privește alt importator sau exportator decât compania.',
+        };
+  if (isViesKind(kind)) return { ok: true };
+  // A Z report is the company's own register's: the company is its seller.
+  if (isZReportKind(kind))
+    return own((body as ZReportDocument).seller.taxId, (body as ZReportDocument).seller.country)
+      ? { ok: true }
+      : { ok: false, message: 'Raportul Z este al casei de marcat a altui utilizator.' };
   if (isTaxKind(kind)) {
     const document = body as TaxDecisionDocument | TaxStatementDocument;
     return own(document.taxpayer.taxId)
@@ -227,6 +255,36 @@ export function checkDocument(context: CheckContext): {
       ]),
     );
     checks.push(singleDate(list.date, context.today));
+  } else if (isCustomsKind(kind)) {
+    const declaration = body as CustomsDeclaration;
+    const problems = customsProblems(declaration);
+    checks.push(
+      problems.length
+        ? failed('TOTALS', problems.join(' '), problems)
+        : passed('TOTALS', 'Sumele declarației vamale se potrivesc.'),
+    );
+    checks.push(taxIdCheck([{ taxId: declaration.declarant.taxId, country: 'RO' }]));
+    checks.push(singleDate(declaration.acceptedOn, context.today));
+  } else if (isViesKind(kind)) {
+    checks.push(singleDate((body as ViesCheck).requestDate, context.today));
+  } else if (isZReportKind(kind)) {
+    const report = body as ZReportDocument;
+    const problems = zReportProblems(report);
+    checks.push(
+      problems.length
+        ? failed('TOTALS', problems.join(' '), problems)
+        : passed('TOTALS', 'Sumele raportului Z se potrivesc.'),
+    );
+    checks.push(
+      rateCheck(
+        context.rates,
+        report.issueDate,
+        report.taxes.map((tax) => tax.rate),
+        true,
+      ),
+    );
+    checks.push(taxIdCheck([report.seller]));
+    checks.push(singleDate(report.issueDate, context.today));
   } else if (isTaxKind(kind)) {
     const problems = taxDocumentProblems(kind, body);
     checks.push(
@@ -515,6 +573,11 @@ export function requiredCitations(kind: string, body?: unknown): string[] {
   if (kind === documentKinds.receipt)
     return ['issueDate', 'number', 'seller.taxId', 'totals.gross', 'totals.tax'];
   if (kind === documentKinds.contract) return ['date', 'effectiveFrom'];
+  if (isCustomsKind(kind))
+    return ['mrn', 'acceptedOn', 'declarant.taxId', 'totals.customsValue', 'totals.vat'];
+  if (isViesKind(kind)) return ['countryCode', 'vatNumber', 'requestDate', 'valid'];
+  if (isZReportKind(kind))
+    return body === undefined ? [] : zReportCitations(body as ZReportDocument);
   return [
     'issueDate',
     'number',
@@ -575,7 +638,7 @@ export function valueKind(field: string): ValueKind {
   if (/^(number|register|originalInvoiceNumber)$/.test(field)) return 'code';
   if (
     /^totals\.\w+$/.test(field) ||
-    /^(taxes|lines)\.\d+\.(base|tax|gross|net|amount)$/.test(field) ||
+    /^(taxes|lines|payments|items)\.\d+\.(base|tax|gross|net|amount)$/.test(field) ||
     /^rows\.\d+\.(opening|debit|credit|balance)$/.test(field) ||
     /^(vatAccountingTotal|value|recurring\.amount|amount|opening|closing)$/.test(field)
   )

@@ -38,13 +38,26 @@ import type {
   ProfileFact,
   ReadPlan,
   ReadSetEntry,
+  StockItemRecord,
+  StockLayerState,
+  StockMoveSpec,
+  StockPosition,
+  StockFlows,
+  StockQuery,
   TaxEntrySpec,
   TaxPeriodLedger,
+  WarehouseRecord,
 } from 'xfactura-core/kernel';
-import { itemLinesKey, partyStatusKey, turnoverKey } from 'xfactura-core/kernel';
+import {
+  itemLinesKey,
+  partyStatusKey,
+  stockPositionKey,
+  stockRegisterKey,
+  turnoverKey,
+} from 'xfactura-core/kernel';
 import type { LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
-import { entryStands } from './ledger';
+import { entryStands, linesUnder } from './ledger';
 import {
   assetEvents,
   assetFiscal,
@@ -67,8 +80,12 @@ import {
   proposals,
   proposalVersions,
   scheduleRows,
+  stockItems,
+  stockLayers,
+  stockMoves,
   taxEntries,
   treasuryAccounts,
+  warehouses,
 } from '../db/schema';
 
 const date = (value: string) => value as LocalDate;
@@ -139,6 +156,214 @@ function taxEntrySpec(row: typeof taxEntries.$inferSelect): TaxEntrySpec {
       : {}),
     attributes: JSON.parse(row.attributes) as Record<string, string>,
   };
+}
+
+/** A posted stock move as the effect recorded it. */
+export function stockMoveSpec(row: typeof stockMoves.$inferSelect): StockMoveSpec {
+  return {
+    item: row.itemId,
+    warehouse: row.warehouseId,
+    account: row.account,
+    layer: row.layerId,
+    quantity: row.quantity,
+    bani: row.bani,
+    ...(row.lineNo === null ? {} : { line: row.lineNo - 1 }),
+  };
+}
+
+/**
+ * The stock register's positions a query reads, with their layers' balances in FIFO order, and
+ * the catalogue's cards and warehouses they name. Each position read is a read-set entry whose
+ * version is the number of moves posted on it; a read of the whole register is one entry.
+ */
+export async function loadStock(tx: Transaction, companyId: string, query: StockQuery) {
+  const readSet: ReadSetEntry[] = [];
+  const wanted = new Map<string, { item: string; warehouse: string }>();
+  for (const position of query.positions ?? [])
+    wanted.set(stockPositionKey(position.item, position.warehouse), position);
+  if (query.touchedBy)
+    for (const row of await tx
+      .selectDistinct({ item: stockMoves.itemId, warehouse: stockMoves.warehouseId })
+      .from(stockMoves)
+      .where(and(eq(stockMoves.companyId, companyId), eq(stockMoves.entryId, query.touchedBy))))
+      wanted.set(stockPositionKey(row.item, row.warehouse), row);
+  const itemIds = [...new Set([...wanted.values()].map((position) => position.item))];
+  const scope = query.all
+    ? [eq(stockLayers.companyId, companyId)]
+    : [eq(stockLayers.companyId, companyId), inArray(stockLayers.itemId, itemIds)];
+  const layerRows =
+    query.all || itemIds.length
+      ? await tx
+          .select({ layer: stockLayers, seq: entries.seq })
+          .from(stockLayers)
+          .innerJoin(
+            entries,
+            and(
+              eq(entries.companyId, stockLayers.companyId),
+              eq(entries.id, stockLayers.originEntryId),
+            ),
+          )
+          .where(and(...scope))
+          .orderBy(asc(stockLayers.date), asc(entries.seq), asc(stockLayers.id))
+      : [];
+  const moveScope = query.all
+    ? [eq(stockMoves.companyId, companyId)]
+    : [eq(stockMoves.companyId, companyId), inArray(stockMoves.itemId, itemIds)];
+  const balances = new Map<string, { quantity: bigint; bani: bigint }>();
+  const counts = new Map<string, number>();
+  let total = 0;
+  if (query.all || itemIds.length) {
+    // Each layer's balance from the layer index alone (`stock_move_layer`): the items' layers,
+    // whose moves are on their item (`inv:stock_move_layer`), rather than every move of the items.
+    const layerScope = query.all
+      ? [eq(stockMoves.companyId, companyId)]
+      : [
+          eq(stockMoves.companyId, companyId),
+          inArray(
+            stockMoves.layerId,
+            tx
+              .select({ id: stockLayers.id })
+              .from(stockLayers)
+              .where(and(...scope)),
+          ),
+        ];
+    for (const row of await tx
+      .select({
+        layer: stockMoves.layerId,
+        quantity: sql<bigint>`coalesce(sum(${stockMoves.quantity}), 0)`.mapWith(BigInt),
+        bani: sql<bigint>`coalesce(sum(${stockMoves.bani}), 0)`.mapWith(BigInt),
+      })
+      .from(stockMoves)
+      .where(and(...layerScope))
+      .groupBy(stockMoves.layerId))
+      balances.set(row.layer, { quantity: row.quantity, bani: row.bani });
+    for (const row of await tx
+      .select({
+        item: stockMoves.itemId,
+        warehouse: stockMoves.warehouseId,
+        count: sql<number>`count(*)`.mapWith(Number),
+      })
+      .from(stockMoves)
+      .where(and(...moveScope))
+      .groupBy(stockMoves.itemId, stockMoves.warehouseId)) {
+      counts.set(stockPositionKey(row.item, row.warehouse), row.count);
+      total += row.count;
+    }
+  }
+  // Each layer's flows in the range: before it, entering in it, leaving in it.
+  const flows = new Map<string, StockFlows>();
+  if (query.flows && (query.all || itemIds.length)) {
+    const { from, to } = query.flows;
+    const zero = () => ({ quantity: 0n, bani: 0n });
+    for (const row of await tx
+      .select({
+        layer: stockMoves.layerId,
+        part: sql<string>`CASE WHEN ${entries.date} < ${from} THEN 'opening'
+          WHEN ${entries.date} > ${to} THEN 'later'
+          WHEN ${stockMoves.quantity} < 0 THEN 'left' ELSE 'entered' END`,
+        quantity: sql<bigint>`coalesce(sum(${stockMoves.quantity}), 0)`.mapWith(BigInt),
+        bani: sql<bigint>`coalesce(sum(${stockMoves.bani}), 0)`.mapWith(BigInt),
+      })
+      .from(stockMoves)
+      .innerJoin(
+        entries,
+        and(eq(entries.companyId, stockMoves.companyId), eq(entries.id, stockMoves.entryId)),
+      )
+      .where(and(...moveScope))
+      .groupBy(stockMoves.layerId, sql`2`)) {
+      const held = flows.get(row.layer) ?? { opening: zero(), entered: zero(), left: zero() };
+      if (row.part !== 'later')
+        held[row.part as keyof StockFlows] = { quantity: row.quantity, bani: row.bani };
+      flows.set(row.layer, held);
+    }
+  }
+  const positions = new Map<string, StockPosition>();
+  const layersOf = new Map<string, StockLayerState[]>();
+  for (const { layer, seq } of layerRows) {
+    const key = stockPositionKey(layer.itemId, layer.warehouseId);
+    if (!query.all && !wanted.has(key)) continue;
+    const held = balances.get(layer.id) ?? { quantity: 0n, bani: 0n };
+    const list = layersOf.get(key) ?? [];
+    list.push({
+      id: layer.id,
+      item: layer.itemId,
+      warehouse: layer.warehouseId,
+      account: layer.account,
+      method: layer.method,
+      mayGoNegative: layer.mayGoNegative,
+      quantity: held.quantity,
+      bani: held.bani,
+      date: date(layer.date),
+      originEntryId: layer.originEntryId,
+      seq: Number(seq),
+      ...(query.flows
+        ? {
+            flows: flows.get(layer.id) ?? {
+              opening: { quantity: 0n, bani: 0n },
+              entered: { quantity: 0n, bani: 0n },
+              left: { quantity: 0n, bani: 0n },
+            },
+          }
+        : {}),
+    });
+    layersOf.set(key, list);
+  }
+  const keys = query.all ? [...layersOf.keys()] : [...wanted.keys()];
+  for (const key of keys.sort()) {
+    const [item, warehouse] = key.split('|') as [string, string];
+    positions.set(key, {
+      item,
+      warehouse,
+      moves: counts.get(key) ?? 0,
+      layers: layersOf.get(key) ?? [],
+    });
+    if (!query.all) readSet.push({ kind: 'stock', id: key, version: String(counts.get(key) ?? 0) });
+  }
+  // The whole register as one read: any move posted changes its count. A company that never
+  // moved stock reads nothing, so what read the register before it existed hashes as it did; its
+  // first move still makes such a proposal stale on its re-evaluation.
+  if (query.all && total > 0)
+    readSet.push({ kind: 'stock', id: stockRegisterKey, version: String(total) });
+  const itemSet = new Set([...[...positions.values()].map((p) => p.item), ...(query.items ?? [])]);
+  const items = new Map<string, StockItemRecord>();
+  if (itemSet.size || query.catalogue)
+    for (const row of await tx
+      .select()
+      .from(stockItems)
+      .where(
+        and(
+          eq(stockItems.companyId, companyId),
+          ...(query.catalogue ? [] : [inArray(stockItems.id, [...itemSet])]),
+        ),
+      )
+      .orderBy(asc(stockItems.code)))
+      items.set(row.id, {
+        id: row.id,
+        code: row.code,
+        name: row.name,
+        unit: row.unit,
+        nc8: row.nc8,
+        account: row.account,
+        vatCategory: row.vatCategory,
+      });
+  const warehouseSet = new Set([
+    ...[...positions.values()].map((p) => p.warehouse),
+    ...(query.warehouses ?? []),
+  ]);
+  const stores = new Map<string, WarehouseRecord>();
+  if (warehouseSet.size || query.catalogue)
+    for (const row of await tx
+      .select()
+      .from(warehouses)
+      .where(
+        and(
+          eq(warehouses.companyId, companyId),
+          ...(query.catalogue ? [] : [inArray(warehouses.id, [...warehouseSet])]),
+        ),
+      )
+      .orderBy(asc(warehouses.code)))
+      stores.set(row.id, { id: row.id, code: row.code, name: row.name, keeper: row.keeper });
+  return { positions, items, warehouses: stores, readSet };
 }
 
 /** Open items with their balances, as of everything posted so far. */
@@ -236,6 +461,7 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
         number: entries.number,
         seq: entries.seq,
         date: entries.date,
+        journalClass: entries.journalClass,
         journalCode: entries.journalCode,
         description: entries.description,
         subject: proposals.subjectKey,
@@ -257,15 +483,23 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
       .from(taxEntries)
       .where(and(eq(taxEntries.companyId, companyId), inArray(taxEntries.entryId, ids)))
       .orderBy(asc(taxEntries.entryId), asc(taxEntries.taxNo));
+    const moveRows = await tx
+      .select()
+      .from(stockMoves)
+      .where(and(eq(stockMoves.companyId, companyId), inArray(stockMoves.entryId, ids)))
+      .orderBy(asc(stockMoves.entryId), asc(stockMoves.moveNo));
     for (const header of headers) {
+      const moves = moveRows.filter((row) => row.entryId === header.id).map(stockMoveSpec);
       entryMap.set(header.id, {
         id: header.id,
         number: header.number,
         date: date(header.date),
+        journalClass: header.journalClass,
         journalCode: header.journalCode,
         description: header.description,
         lines: lineRows.filter((row) => row.entryId === header.id).map(lineSpec),
         taxEntries: taxRows.filter((row) => row.entryId === header.id).map(taxEntrySpec),
+        ...(moves.length ? { stockMoves: moves } : {}),
         ...(header.subject.startsWith('reverse:')
           ? { reverses: header.subject.slice('reverse:'.length) }
           : {}),
@@ -662,6 +896,7 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
       round: run.round,
       state: last!.state,
       issues: run.issues,
+      corrects: run.corrects ?? null,
       lines: rows.map((row) => ({
         contractId: row.contractId,
         employeeId: row.employeeId,
@@ -676,10 +911,26 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
         unionDues: row.unionDues,
         net: row.net,
         cam: row.cam,
-        ...((steps) => ({
-          camBase: BigInt(steps.find((step) => step.code === 'cam.base')?.amount ?? '0'),
-          sickFund: BigInt(steps.find((step) => step.code === 'sick.fund')?.amount ?? '0'),
-        }))((JSON.parse(row.result) as { steps?: { code: string; amount: string }[] }).steps ?? []),
+        ...((result) => {
+          const steps = result.steps ?? [];
+          const step = (code: string) =>
+            BigInt(steps.find((item) => item.code === code)?.amount ?? '0');
+          return {
+            camBase: step('cam.base'),
+            sickFund: step('sick.fund'),
+            inKind: step('benefits'),
+            garnishments: (result.garnishments ?? []).map((item) => ({
+              orderId: item.orderId,
+              partyId: item.partyId,
+              amount: BigInt(item.amount),
+            })),
+          };
+        })(
+          JSON.parse(row.result) as {
+            steps?: { code: string; amount: string }[];
+            garnishments?: { orderId: string; partyId: string; amount: string }[];
+          },
+        ),
       })),
     });
     readSet.push({ kind: 'payrollRun', id, version: `${run.resultHash}/${last!.state}` });
@@ -689,12 +940,10 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
   for (const query of plan.turnover ?? []) {
     const key = turnoverKey(query);
     if (turnover.has(key)) continue;
-    const prefixes = or(...query.prefixes.map((prefix) => like(lines.account, `${prefix}%`)));
     const range = and(
-      eq(lines.companyId, companyId),
+      linesUnder(companyId, query.prefixes),
       gte(entries.date, query.from),
       lte(entries.date, query.to),
-      prefixes,
     );
     const join = and(eq(entries.companyId, lines.companyId), eq(entries.id, lines.entryId));
     const rows = await tx
@@ -730,11 +979,7 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
   const itemLineMap = new Map<string, ItemLines[]>();
   if (plan.itemLines) {
     const key = itemLinesKey(plan.itemLines);
-    const range = and(
-      eq(lines.companyId, companyId),
-      isNotNull(lines.item),
-      or(...plan.itemLines.prefixes.map((prefix) => like(lines.account, `${prefix}%`))),
-    );
+    const range = and(linesUnder(companyId, plan.itemLines.prefixes), isNotNull(lines.item));
     const join = and(eq(entries.companyId, lines.companyId), eq(entries.id, lines.entryId));
     const side = (which: 'D' | 'C', column: typeof lines.bani | typeof lines.currencyMinor) =>
       sql<bigint>`sum(CASE WHEN ${lines.side} = ${which} THEN COALESCE(${column}, 0) ELSE 0 END)`.mapWith(
@@ -801,7 +1046,7 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
         entries,
         and(eq(entries.companyId, lines.companyId), eq(entries.id, lines.entryId)),
       )
-      .where(and(eq(lines.companyId, companyId), isNotNull(lines.item), like(lines.account, '28%')))
+      .where(and(linesUnder(companyId, ['28']), isNotNull(lines.item)))
       .groupBy(lines.item, lines.account);
     // Each asset's latest fiscal basis (art. 28): a new version changes what the tax deducts.
     const bases = new Map<string, typeof assetFiscal.$inferSelect>();
@@ -949,6 +1194,11 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
     readSet.push({ kind: 'partyStatus', id: key, version: String(row?.seq ?? 0) });
   }
 
+  const stock = plan.stock
+    ? await loadStock(tx, companyId, plan.stock)
+    : { positions: new Map(), items: new Map(), warehouses: new Map(), readSet: [] };
+  readSet.push(...stock.readSet);
+
   const loaded: Loaded = {
     years,
     evidence: evidenceMap,
@@ -969,6 +1219,9 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
     partyStatus: statusMap,
     // A basis's answers, never a plan's: the proposal adds them (`basisAnswers`).
     answers: new Map(),
+    stock: stock.positions,
+    stockItems: stock.items,
+    warehouses: stock.warehouses,
   };
   return { loaded, readSet };
 }
@@ -1017,6 +1270,9 @@ export function mergeStates(
       : second.loaded.profitPostings,
     partyStatus: merge(first.loaded.partyStatus, second.loaded.partyStatus),
     answers: merge(first.loaded.answers, second.loaded.answers),
+    stock: merge(first.loaded.stock, second.loaded.stock),
+    stockItems: merge(first.loaded.stockItems, second.loaded.stockItems),
+    warehouses: merge(first.loaded.warehouses, second.loaded.warehouses),
   };
   const seen = new Set<string>();
   const readSet = [...first.readSet, ...second.readSet]

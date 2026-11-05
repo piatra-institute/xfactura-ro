@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   accountCodePattern,
+  itemLinesKey,
   vatPeriodOf,
   type Effect,
   type FxRate,
@@ -64,10 +65,27 @@ export const settlementInput = z
       .max(5)
       .default([]),
     description: z.string().trim().min(3).max(500).optional(),
+    /** Card sales the acquirer settles net of its fee (G2): each Z report's card takings in
+     * transit on 5125 (`retail.zReport` tags them by report) the movement settles, and the fee
+     * kept, on 627. Only on a receipt in lei. */
+    cards: z
+      .object({
+        account: z.string().regex(/^5125(\.[A-Z0-9_-]{1,24})?$/),
+        settles: z
+          .array(z.object({ documentId: z.uuid(), amount }).strict())
+          .min(1)
+          .max(200),
+        fee: amount,
+        feeAccount: z.string().regex(/^627(\.[A-Z0-9_-]{1,24})?$/),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .refine(
-    (input) => input.allocations.length + input.lines.length + input.opens.length > 0,
+    (input) =>
+      input.allocations.length + input.lines.length + input.opens.length > 0 ||
+      input.cards !== undefined,
     'Explicați mișcarea bancară.',
   );
 export type SettlementInput = z.infer<typeof settlementInput>;
@@ -164,6 +182,8 @@ export const settlement: Treatment<SettlementInput> = {
     movements: [input.movementId],
     openItems: [{ ids: input.allocations.map((allocation) => allocation.openItem), history: true }],
     ...(input.opens.length ? { parties: input.opens.map((open) => open.partyId) } : {}),
+    // The card takings still in transit, by Z report (`cards`).
+    ...(input.cards ? { itemLines: { prefixes: [input.cards.account] } } : {}),
   }),
   followUp(input, loaded) {
     const movement = loaded.movements.get(input.movementId);
@@ -319,6 +339,53 @@ export const settlement: Treatment<SettlementInput> = {
         partyId: open.partyId,
       });
     });
+    // Card takings settled by the acquirer, net of its fee: each Z report's card sales leave
+    // 5125 (as much as is still in transit of them), the fee goes to 627 (OMFP 1802/2014 pct. 302
+    // alin. (2); the function of 627).
+    if (input.cards) {
+      const cards = input.cards;
+      if (!received || foreign)
+        issues.push(block('CARDS', 'Decontarea cardurilor este o încasare în lei.', 'cards'));
+      const transit = new Map(
+        (loaded.itemLines.get(itemLinesKey({ prefixes: [cards.account] })) ?? [])
+          .filter((row) => row.account === cards.account)
+          .map((row) => [row.item, row.debit - row.credit]),
+      );
+      cards.settles.forEach((settle, index) => {
+        const minor = parseMoney(settle.amount, currency);
+        const tag = `zreport:${settle.documentId}`;
+        const held = transit.get(tag) ?? 0n;
+        if (minor > held)
+          issues.push(
+            block(
+              'CARDS_EXCESS',
+              `Raportul Z are ${formatMoney(held, currency)} lei încasați cu cardul în curs de decontare, mai puțin decât ${settle.amount}.`,
+              `cards.settles.${index}`,
+            ),
+          );
+        transit.set(tag, held - minor);
+        explained += minor;
+        settledBani += minor;
+        lines.push({
+          account: cards.account,
+          side: 'C',
+          bani: minor,
+          analytics: { item: tag },
+          memo: 'Decontare carduri',
+        });
+      });
+      const fee = parseMoney(cards.fee, currency);
+      if (fee > 0n) {
+        explained -= fee;
+        settledBani -= fee;
+        lines.push({
+          account: cards.feeAccount,
+          side: 'D',
+          bani: fee,
+          memo: 'Comision acceptare carduri',
+        });
+      }
+    }
     if (explained !== total)
       issues.push(
         block(

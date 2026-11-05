@@ -147,7 +147,7 @@ export const generalJournal: Treatment<GeneralJournalInput> = {
         const kind = controlKindOf(line.account);
         if (!item)
           issues.push(block('NEW_ITEM', 'Poziția nouă nu este declarată.', `${path}.newItem`));
-        else if (!kind || kind === 'tax')
+        else if (!kind || kind === 'tax' || kind === 'retail')
           issues.push(
             block('NOT_CONTROL_ACCOUNT', `Contul ${line.account} nu are poziții deschise.`, path),
           );
@@ -252,6 +252,9 @@ export const reversal: Treatment<ReversalInput> = {
     entries: [input.entryId],
     openItems: [{ touchedBy: input.entryId }],
     profile: true,
+    // The stock positions its moves touched: a reversal returns their goods, or takes them out
+    // again, so it reads what each layer holds now.
+    stock: { touchedBy: input.entryId },
   }),
   evaluate(input, loaded) {
     const issues: Issue[] = [];
@@ -328,16 +331,25 @@ export const reversal: Treatment<ReversalInput> = {
           }
         : {}),
     }));
+    // Its stock moves are mirrored too, on the same layers and lines, in red or black alike: a
+    // receipt reversed takes its goods out of the lot again, an exit returns them to the lots it
+    // consumed. A move between warehouses (a memo entry, without lines) is reversed as one.
+    const moves = (entry.stockMoves ?? []).map((move) => ({
+      ...move,
+      quantity: -move.quantity,
+      bani: -move.bani,
+    }));
     const effect: Effect = {
-      schema: 'effect@1',
+      schema: moves.length ? 'effect@2' : 'effect@1',
       date: input.date,
-      journalClass: 'general',
+      journalClass: moves.length && entry.journalClass === 'memo' ? 'memo' : 'general',
       journalCode: entry.journalCode,
       description: `Stornare nota ${entry.number}: ${input.reason}`,
       lines,
       openItems: [],
       taxEntries,
       schedules: [],
+      ...(moves.length ? { stockLayers: [], stockMoves: moves } : {}),
       explanation: {
         summary: `Stornarea integrală a notei ${entry.number} din ${entry.date}.`,
         details: {

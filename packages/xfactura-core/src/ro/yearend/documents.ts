@@ -12,7 +12,9 @@ import { Amount, dateSchema, moneySchema, signedMoneySchema } from '../../values
  * - bank balances on the statements of the financial year's last day (pct. 29 alin. (2));
  * - receivables and payables as each partner confirmed them on its statement of account, or
  *   disputed, or without a reply (pct. 28);
- * - stock, by quantity only until the stock module exists (G1).
+ * - stock by quantity, each item by its catalogue code in its warehouse, with the commission's
+ *   value where it sets one (a surplus, an intermittent inventory's count): the stock register's
+ *   (G1) differences are `inventory.stock`'s.
  * The commission's appointing decision (pct. 6) is cited; its proces-verbal and the
  * administrator's decision on it (pct. 42–43) are the evidence of the booking of the differences.
  */
@@ -80,6 +82,11 @@ const stockRow = z
     name: label,
     unit: z.string().trim().min(1).max(20),
     quantity,
+    /** The warehouse's (gestiunea's) code, as the stock register keeps it (G1). */
+    warehouse: z.string().trim().min(1).max(20).optional(),
+    /** The commission's value: a surplus's (OMFP 1802/2014 pct. 75 alin. (1)), or the value an
+     * intermittent inventory's count sets the stock at (pct. 291). */
+    value: moneySchema.optional(),
   })
   .strict();
 
@@ -178,7 +185,10 @@ export function inventoryProblems(list: InventoryList): string[] {
     (row) => `${row.taxId ?? row.name}/${row.account}/${row.currency}`,
   ))
     problems.push(`Partenerul ${id} apare de mai multe ori.`);
-  for (const id of duplicates(list.stock ?? [], (row) => `${row.account}/${row.code}`))
+  for (const id of duplicates(
+    list.stock ?? [],
+    (row) => `${row.account}/${row.code}/${row.warehouse ?? ''}`,
+  ))
     problems.push(`Articolul de stoc ${id} apare de mai multe ori.`);
   if (list.commission.decisionDate > list.date)
     problems.push('Comisia este numită după data inventarierii.');
@@ -201,6 +211,9 @@ export function inventoryCitations(list: InventoryList): string[] {
       row.confirmed === null ? [] : [`partners.${index}.confirmed`],
     ),
     ...(list.stock ?? []).map((_, index) => `stock.${index}.quantity`),
+    ...(list.stock ?? []).flatMap((row, index) =>
+      row.value === undefined ? [] : [`stock.${index}.value`],
+    ),
   ];
 }
 

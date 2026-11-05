@@ -57,6 +57,7 @@ export const d112InsuredTypes = [
     '51',
     'Salariat (are CIM cu normă întreagă), beneficiar al măsurii „200 de lei din salariul minim, sumă netaxabilă” cf. OUG nr. 89/2025',
   ],
+  ['6', 'Administratori ai SC/CN/SN/RA, membri CA/CS/CC și reprezentanții lor în AGA/CA'],
 ] as const;
 /** A_1, E3_2: the Nomenclator 5 types covered. */
 export type D112InsuredType = (typeof d112InsuredTypes)[number][0];
@@ -122,9 +123,42 @@ export type D112ObligationCode = (typeof d112Obligations)[number][0];
  */
 export type D112HealthFund = `RO-${string}` | 'OPSNAJ';
 
-/** D_9 (p. 59), Nomenclator 9 (p. 89): the indemnity codes declared, 01 (ordinary illness); the
- * others have their own rules and payers and are refused. */
-export const d112SickCodes = ['01'] as const;
+/** D_9 (p. 59), Nomenclator 9 (p. 89): the indemnity codes declared, those the payroll computes
+ * (`ro.sick.codes`). The work-accident codes (02–04), the reduced working time (10), the transfer
+ * to other work (11) and the supervision of a child in quarantine (92) are refused. */
+export const d112SickCodes = [
+  '01',
+  '05',
+  '06',
+  '07',
+  '08',
+  '09',
+  '12',
+  '13',
+  '14',
+  '15',
+  '16',
+  '17',
+  '51',
+  '91',
+] as const;
+/** The C2 row of a code (Nomenclator 10): incapacity (Rd.1, isolation also Rd.1.1), prevention
+ * (Rd.2, quarantine also Rd.2.2), maternity (Rd.3), child care (Rd.4), care of an oncological
+ * patient (Rd.4.1), maternal risk (Rd.5). */
+const sickGroup = (code: string) =>
+  code === '07'
+    ? 'quarantine'
+    : code === '08'
+      ? 'maternity'
+      : code === '09' || code === '91'
+        ? 'child_care'
+        : code === '17'
+          ? 'oncology_care'
+          : code === '15'
+            ? 'maternal_risk'
+            : 'incapacity';
+/** The codes FNUASS alone bears: D_20 is 0 (p. 61). */
+const fundOnlyCodes = ['07', '08', '09', '91', '15', '17', '51'];
 
 /** D_10 (p. 59), Nomenclator 8 (p. 88–89), in its order: who prescribed the certificate. The
  * validator also accepts 5, CEX, which the XSD's 1–4 does not. */
@@ -168,8 +202,14 @@ export type D112SickCertificate = {
   /** D_17, D_18 (p. 60): the insured income of the base, whole lei, and its working days; D_19
    * (p. 60–61) is computed from them. */
   base: { income: number; days: number };
-  /** D_28 (p. 61–62) */
-  percent: D112SickPercent;
+  /** D_28 (p. 61–62): only for code 01. */
+  percent: D112SickPercent | null;
+  /** D_8, D_8a (p. 58): the child's CNP for codes 09 and 91, the patient's for 17. */
+  careCnp?: string;
+  /** D_11 (p. 59): the medical-surgical emergency of code 06; D_12: the infectious disease of
+   * codes 05 and 51. */
+  urgencyCode?: string;
+  infectiousCode?: string;
   /** D_20, D_21 (p. 61): the indemnity borne by the employer and by FNUASS, whole lei. */
   employer: number;
   fund: number;
@@ -238,6 +278,10 @@ export type D112Insured = {
   };
   /** asiguratD: the month's medical certificates; with any, the insured is declared in section B. */
   sickLeave?: D112SickCertificate[];
+  /** The month's work accidents and occupational diseases the pension house confirmed (Legea nr.
+   * 346/2002), declared in B3 and C3, not in section D: cases (certificates), their working days,
+   * those borne by the state social insurance budget, and the amounts by payer, whole lei. */
+  accidents?: { cases: number; days: number; fundDays: number; employer: number; fund: number };
   /** asiguratE3, and E1 or E2 */
   income: {
     /** E3_3: 1 at the main job (funcția de bază), 2 elsewhere. */
@@ -262,6 +306,10 @@ export type D112Insured = {
     tax: number;
     /** E3_16: the amount paid to the person. */
     paid: number;
+    /** Benefits in kind (art. 76 alin. (3)–(4^1)): the taxable ones in E3_44 (any other in kind)
+     * and E3_58 (insurance premiums), within E3_60; those left out of income in E3_86 (gifts,
+     * within E3_69), E3_78 (housing) and E3_71 (health insurance), within E3_90. Whole lei. */
+    benefits?: Partial<Record<'E3_44' | 'E3_58' | 'E3_86' | 'E3_78' | 'E3_71', number>>;
   };
 };
 
@@ -307,8 +355,11 @@ export type D112InsuredCalculation = {
   id: number;
   /** E3_8, A_sal2: income in money and vouchers. */
   income: bigint;
-  /** E3_60: the vouchers. */
+  /** E3_60: the vouchers and the taxable benefits in kind. */
   benefits: bigint;
+  /** E3_69: income art. 76 alin. (4) leaves out (gifts); E3_90: what alin. (4^1) caps. */
+  exemptIncome: bigint;
+  capped: bigint;
   /** A_13C: the CAS base plus the amount left out, for type 51. */
   reliefIncome: bigint;
   /** A_13P, A_14P, A_11P, A_12P: the limit sums and the contributions due on them. */
@@ -347,6 +398,9 @@ export type D112SickCalculation = {
   /** B2_5: the CAS base of the days worked, B4_7 − B3_7. */
   workBase: bigint;
   certificates: D112CertificateCalculation[];
+  /** B3_8, B3_4, B3_10, B3_9: a work accident's working days, those borne by the state social
+   * insurance budget, and the amounts by payer (B3_11 their sum). */
+  accident: { cases: number; days: number; fundDays: number; employer: bigint; fund: bigint };
 };
 
 /** One row of the employer's C2: cases (certificates), paid working days, of them the employer's
@@ -361,8 +415,19 @@ export type D112MedicalLeaveRow = {
 };
 
 export type D112MedicalLeave = {
-  /** Rd.1, C2_11–C2_16: temporary incapacity for work. */
+  /** Rd.1, C2_11–C2_16: temporary incapacity for work; Rd.1.1, C2_111–C2_116: of it, infectious
+   * diseases with isolation (code 51). */
   incapacity: D112MedicalLeaveRow;
+  isolation: D112MedicalLeaveRow;
+  /** Rd.2, C2_21–C2_26: prevention; Rd.2.2, C2_211–C2_216: of it, quarantine (07). */
+  prevention: D112MedicalLeaveRow;
+  quarantine: D112MedicalLeaveRow;
+  /** Rd.3, Rd.4, Rd.4.1, Rd.5: maternity (08), child care (09, 91), care of an oncological patient
+   * (17), maternal risk (15), all borne by FNUASS. */
+  maternity: D112MedicalLeaveRow;
+  childCare: D112MedicalLeaveRow;
+  oncologyCare: D112MedicalLeaveRow;
+  maternalRisk: D112MedicalLeaveRow;
   /** Rd.1.2–1.4, C2_121–C2_146: code 01 at 55, 65 and 75% of the base. */
   byPercent: Record<D112SickPercent, D112MedicalLeaveRow>;
   /** C2_T6, C2_10, C2_140: borne by FNUASS, which the employer paid and recovers. */
@@ -405,6 +470,9 @@ export type D112Calculation = {
   sickLeaveBase: bigint;
   /** angajatorC2, with any medical certificate. */
   medicalLeave?: D112MedicalLeave;
+  /** angajatorC3 rd. 1 and C1_7, with any work accident: cases, working days, the total and the
+   * part borne by the state social insurance budget, which the employer recovers. */
+  accidents?: { cases: number; days: number; total: bigint; fund: bigint };
   /** C4_baza, C4_ct */
   cam: { base: bigint; amount: bigint };
   /** totalPlata_A */
@@ -575,7 +643,10 @@ function inputProblems(model: D112): Problem[] {
       amount(`${where}.base.income`, certificate.base.income, 'Veniturile bazei de calcul');
       amount(`${where}.employer`, certificate.employer, 'Indemnizația suportată de angajator');
       amount(`${where}.fund`, certificate.fund, 'Indemnizația suportată din FNUASS');
-      if (!(d112SickPercents as readonly string[]).includes(certificate.percent))
+      if (
+        certificate.code === '01' &&
+        !(d112SickPercents as readonly string[]).includes(certificate.percent ?? '')
+      )
         problems.push({
           code: 'D112_SICK_PERCENT',
           path: `${where}.percent`,
@@ -612,10 +683,18 @@ const halfUp = (numerator: bigint, denominator: bigint) =>
 
 function sickCalculation(insured: D112Insured): D112SickCalculation | undefined {
   const certificates = insured.sickLeave ?? [];
-  if (!certificates.length) return undefined;
+  const accidents = insured.accidents;
+  if (!certificates.length && !accidents?.cases) return undefined;
   const employer = sum(certificates, (certificate) => big(certificate.employer));
   const fund = sum(certificates, (certificate) => big(certificate.fund));
   return {
+    accident: {
+      cases: accidents?.cases ?? 0,
+      days: accidents?.days ?? 0,
+      fundDays: accidents?.fundDays ?? 0,
+      employer: big(accidents?.employer ?? 0),
+      fund: big(accidents?.fund ?? 0),
+    },
     days: certificates.reduce((days, item) => days + item.employerDays + item.fundDays, 0),
     employer,
     fund,
@@ -634,7 +713,14 @@ function sickCalculation(insured: D112Insured): D112SickCalculation | undefined 
 
 function insuredCalculation(insured: D112Insured, index: number): D112InsuredCalculation {
   const { employment: work, income, minimum } = insured;
-  const benefits = big(income.mealVouchers) + big(income.holidayVouchers);
+  const inKind = income.benefits ?? {};
+  const field = (key: keyof typeof inKind) => big(inKind[key] ?? 0);
+  // E3_60: the vouchers and the taxable benefits; E3_69 and E3_90: what art. 76 alin. (4) and
+  // (4^1) leave out of income, declared within the gross (E3_8 >= E3_60 + E3_69 + E3_90).
+  const exemptIncome = field('E3_86');
+  const capped = field('E3_78') + field('E3_71');
+  const benefits =
+    big(income.mealVouchers) + big(income.holidayVouchers) + field('E3_44') + field('E3_58');
   const sick = sickCalculation(insured);
   let limit = { casBase: 0n, cas: 0n, cassBase: 0n, cass: 0n };
   if (minimum?.kind === 'due') {
@@ -653,8 +739,10 @@ function insuredCalculation(insured: D112Insured, index: number): D112InsuredCal
   const supplementary = big(income.deduction.young) + big(income.deduction.children);
   return {
     id: index + 1,
-    income: big(income.cash) + benefits,
+    income: big(income.cash) + benefits + exemptIncome + capped,
     benefits,
+    exemptIncome,
+    capped,
     reliefIncome: work.relief > 0 ? big(work.casBase) + big(work.relief) : 0n,
     limit,
     employer: {
@@ -677,15 +765,42 @@ const emptyRow = (): D112MedicalLeaveRow => ({
   fund: 0n,
 });
 
-/** angajatorC2 (p. 15–22) from the certificates: every code 01 certificate is a case of Rd.1 and
- * of the row of its percentage; nothing is recalculated for continuations (Rd.1.5). */
+/** angajatorC2 (p. 15–22) from the certificates: each certificate is a case of its group's row,
+ * a code 01 one also of the row of its percentage, an isolation one of Rd.1.1 and a quarantine one
+ * of Rd.2.2; nothing is recalculated for continuations (Rd.1.5). */
 function medicalLeave(people: readonly D112Insured[]): D112MedicalLeave | undefined {
   const certificates = people.flatMap((person) => person.sickLeave ?? []);
   if (!certificates.length) return undefined;
-  const incapacity = emptyRow();
-  const byPercent = { '55': emptyRow(), '65': emptyRow(), '75': emptyRow() };
-  for (const certificate of certificates)
-    for (const row of [incapacity, byPercent[certificate.percent]]) {
+  const leave: Omit<D112MedicalLeave, 'recoverable'> = {
+    incapacity: emptyRow(),
+    isolation: emptyRow(),
+    prevention: emptyRow(),
+    quarantine: emptyRow(),
+    maternity: emptyRow(),
+    childCare: emptyRow(),
+    oncologyCare: emptyRow(),
+    maternalRisk: emptyRow(),
+    byPercent: { '55': emptyRow(), '65': emptyRow(), '75': emptyRow() },
+  };
+  for (const certificate of certificates) {
+    const group = sickGroup(certificate.code);
+    const rows =
+      group === 'incapacity'
+        ? [
+            leave.incapacity,
+            ...(certificate.code === '51' ? [leave.isolation] : []),
+            ...(certificate.percent ? [leave.byPercent[certificate.percent]] : []),
+          ]
+        : group === 'quarantine'
+          ? [leave.prevention, leave.quarantine]
+          : group === 'maternity'
+            ? [leave.maternity]
+            : group === 'child_care'
+              ? [leave.childCare]
+              : group === 'oncology_care'
+                ? [leave.oncologyCare]
+                : [leave.maternalRisk];
+    for (const row of rows) {
       row.cases += 1;
       row.days += certificate.employerDays + certificate.fundDays;
       row.employerDays += certificate.employerDays;
@@ -693,7 +808,15 @@ function medicalLeave(people: readonly D112Insured[]): D112MedicalLeave | undefi
       row.employer += big(certificate.employer);
       row.fund += big(certificate.fund);
     }
-  return { incapacity, byPercent, recoverable: incapacity.fund };
+  }
+  const recoverable =
+    leave.incapacity.fund +
+    leave.prevention.fund +
+    leave.maternity.fund +
+    leave.childCare.fund +
+    leave.maternalRisk.fund +
+    leave.oncologyCare.fund;
+  return { ...leave, recoverable };
 }
 
 /**
@@ -744,10 +867,13 @@ export function calculateD112(model: D112): D112Calculation {
       pension: people.filter((person) => person.employment.cas > 0).length,
       employees: people.length,
     },
-    grossSalaries: sum(
-      people.filter((person) => person.sickLeaveInsured),
-      (person) => big(person.employment.cassBase),
-    ),
+    // B_brutSalarii = (C3_13 − C3_14) + ΣA_11 + ΣB4_5: the employer's days of a work accident
+    // are in the salary fund (OPANAF nr. 605/2026 anexa nr. 6, secțiunea B rd. 4).
+    grossSalaries:
+      sum(
+        people.filter((person) => person.sickLeaveInsured),
+        (person) => big(person.employment.cassBase),
+      ) + sum(insured, (person) => person.sick?.accident.employer ?? 0n),
     // C1_11 = ΣA_13 + ΣB2_5 + ΣA_13S (p. 13); C1_12 = ΣB3_7 (p. 14).
     normalIncome: sum(
       insured,
@@ -757,6 +883,20 @@ export function calculateD112(model: D112): D112Calculation {
     ),
     sickLeaveBase: sum(insured, (person) => person.sick?.base ?? 0n),
     ...(leave ? { medicalLeave: leave } : {}),
+    ...(insured.some((person) => person.sick?.accident.cases)
+      ? {
+          accidents: {
+            cases: insured.reduce((total, person) => total + (person.sick?.accident.cases ?? 0), 0),
+            days: insured.reduce((total, person) => total + (person.sick?.accident.days ?? 0), 0),
+            total: sum(
+              insured,
+              (person) =>
+                (person.sick?.accident.employer ?? 0n) + (person.sick?.accident.fund ?? 0n),
+            ),
+            fund: sum(insured, (person) => person.sick?.accident.fund ?? 0n),
+          },
+        }
+      : {}),
     cam,
     controlSum: sum(obligations, (obligation) => obligation.payable),
   };
@@ -862,8 +1002,33 @@ export function writeD112(model: D112): string {
           C1_T: '0',
           C1_T3: '0',
           C1_5: '0',
+          // C1_7: what the employer recovers from the pension houses, C3_suma.
+          C1_7: calculation.accidents ? text(calculation.accidents.fund) : undefined,
         }),
         calculation.medicalLeave && medicalLeaveElement(calculation.medicalLeave),
+        // angajatorC3 (p. 22–23): rd. 1, temporary incapacity after a work accident or an
+        // occupational disease; the other rows (transfer, reduced time, courses) are not built.
+        calculation.accidents &&
+          element('angajatorC3', {
+            C3_11: text(calculation.accidents.cases),
+            C3_12: text(calculation.accidents.days),
+            C3_13: text(calculation.accidents.total),
+            C3_14: text(calculation.accidents.fund),
+            C3_21: '0',
+            C3_22: '0',
+            C3_23: '0',
+            C3_24: '0',
+            C3_31: '0',
+            C3_32: '0',
+            C3_33: '0',
+            C3_34: '0',
+            C3_41: '0',
+            C3_42: '0',
+            C3_43: '0',
+            C3_44: '0',
+            C3_total: text(calculation.accidents.total),
+            C3_suma: text(calculation.accidents.fund),
+          }),
         element('angajatorC4', {
           C4_baza: text(calculation.cam.base),
           C4_ct: text(calculation.cam.amount),
@@ -885,22 +1050,30 @@ function medicalLeaveElement(leave: D112MedicalLeave) {
     [`${prefix}6`]: text(values.fund),
   });
   const zero = (...names: string[]) => Object.fromEntries(names.map((name) => [name, '0']));
+  const fund = (prefix: string, suffix: string, values: D112MedicalLeaveRow) => ({
+    [`${prefix}1${suffix}`]: text(values.cases),
+    [`${prefix}2${suffix}`]: text(values.days),
+    [`${prefix}4${suffix}`]: text(values.fundDays),
+    [`${prefix}6${suffix}`]: text(values.fund),
+  });
   const recoverable = text(leave.recoverable);
   return element('angajatorC2', {
     ...row('C2_1', leave.incapacity),
-    // Rd.1.1: infectious diseases with isolation (codes 05 with D_12 35, and 51).
-    ...row('C2_11', emptyRow()),
+    // Rd.1.1: infectious diseases with isolation (code 51).
+    ...row('C2_11', leave.isolation),
     ...row('C2_12', leave.byPercent['55']),
     ...row('C2_13', leave.byPercent['65']),
     ...row('C2_14', leave.byPercent['75']),
     // Rd.1.5: the differences recalculated for continuations (D_20a, D_21a), none here.
     ...zero('C2_155', 'C2_156'),
-    // Rd.2–5: prevention, maternity, child and patient care, maternal risk.
-    ...row('C2_2', emptyRow()),
-    ...row('C2_21', emptyRow()),
-    ...zero('C2_31', 'C2_32', 'C2_34', 'C2_36'),
-    ...zero('C2_41', 'C2_41a', 'C2_42', 'C2_42a', 'C2_44', 'C2_44a', 'C2_46', 'C2_46a'),
-    ...zero('C2_51', 'C2_52', 'C2_54', 'C2_56'),
+    // Rd.2 and 2.2: prevention, of it quarantine. Rd.3–5: maternity, child and patient care,
+    // maternal risk, borne by FNUASS alone: cases, days, FNUASS's days and amount.
+    ...row('C2_2', leave.prevention),
+    ...row('C2_21', leave.quarantine),
+    ...fund('C2_3', '', leave.maternity),
+    ...fund('C2_4', '', leave.childCare),
+    ...fund('C2_4', 'a', leave.oncologyCare),
+    ...fund('C2_5', '', leave.maternalRisk),
     // Rd.6–8: C2_T6 = C2_16 + C2_26 + C2_36 + C2_46 + C2_56 + C2_46a, to recover from FNUASS.
     C2_T6: recoverable,
     C2_10: recoverable,
@@ -938,7 +1111,7 @@ function insuredElement(insured: D112Insured, calculation: D112InsuredCalculatio
       : element('asiguratA', {
           A_1: work.type,
           A_sal1: text(work.baseSalary),
-          A_sal2: text(calculation.income),
+          A_sal2: text(calculation.income - calculation.exemptIncome),
           A_2: flag(work.pensioner),
           A_3: work.contract,
           A_4: String(work.normHours),
@@ -993,6 +1166,13 @@ function insuredElement(insured: D112Insured, calculation: D112InsuredCalculatio
       E3_60: optional(calculation.benefits),
       E3_10: optional(income.mealVouchers),
       E3_75: optional(income.holidayVouchers),
+      E3_58: optional(income.benefits?.E3_58 ?? 0),
+      E3_44: optional(income.benefits?.E3_44 ?? 0),
+      E3_69: optional(calculation.exemptIncome),
+      E3_86: optional(income.benefits?.E3_86 ?? 0),
+      E3_90: optional(calculation.capped),
+      E3_71: optional(income.benefits?.E3_71 ?? 0),
+      E3_78: optional(income.benefits?.E3_78 ?? 0),
       E3_9: contributions,
       E3_19: '0',
       E3_11: String(income.dependents),
@@ -1026,7 +1206,7 @@ function sectionB(
     element('asiguratB1', {
       B1_1: work.type,
       B1_sal1: text(work.baseSalary),
-      B1_sal2: text(calculation.income),
+      B1_sal2: text(calculation.income - calculation.exemptIncome),
       B1_2: flag(work.pensioner),
       B1_3: work.contract,
       B1_4: String(work.normHours),
@@ -1062,21 +1242,23 @@ function sectionB(
     }),
     // B3 (p. 46–48): B3_1 = B3_6 = ΣD_16, B3_7 = B3_12 + B3_13. B3_4, B3_8–B3_11: work
     // accidents; B3_5: unpaid childcare leave; B3_7D: last month's recalculated difference, none.
+    // A work accident: B3_8 its working days (B3_1 = B3_6 + B3_8), B3_4 and B3_9 the state
+    // budget's days and amount, B3_10 the employer's, B3_11 their sum.
     element('asiguratB3', {
-      B3_1: String(sick.days),
+      B3_1: String(sick.days + sick.accident.days),
       B3_2: '0',
       B3_3: '0',
-      B3_4: '0',
+      B3_4: String(sick.accident.fundDays),
       B3_5: '0',
       B3_6: String(sick.days),
       B3_7: text(sick.base),
       B3_7D: '0',
       B3_7S: '0',
       B3_7C: withRelief(sick.base),
-      B3_8: '0',
-      B3_9: '0',
-      B3_10: '0',
-      B3_11: '0',
+      B3_8: String(sick.accident.days),
+      B3_9: text(sick.accident.fund),
+      B3_10: text(sick.accident.employer),
+      B3_11: text(sick.accident.employer + sick.accident.fund),
       B3_12: text(sick.employer),
       B3_13: text(sick.fund),
     }),
@@ -1122,10 +1304,17 @@ function certificateElement(
     D_5: structureDate(certificate.issued),
     D_6: structureDate(certificate.from),
     D_7: structureDate(certificate.to),
+    D_8: certificate.code === '09' || certificate.code === '91' ? certificate.careCnp : undefined,
+    D_8a: certificate.code === '17' ? certificate.careCnp : undefined,
     D_9: certificate.code,
     // D_9a, patients of the national health programmes, is not known to the payroll.
     D_9b: flag(certificate.unpaidDays > 0),
     D_10: String(d112PrescriptionPlaces.indexOf(certificate.place) + 1),
+    D_11: certificate.code === '06' ? certificate.urgencyCode : undefined,
+    D_12:
+      certificate.code === '05' || certificate.code === '51'
+        ? certificate.infectiousCode
+        : undefined,
     D_14a: String(calculation.employerDays),
     D_14: String(certificate.employerDays),
     D_15a: String(certificate.fundDays),
@@ -1137,11 +1326,12 @@ function certificateElement(
     D_19: decimal(calculation.dailyAverage),
     D_20: text(certificate.employer),
     // D_20a, D_21a: required for a continuation of code 01, the recalculated difference.
-    D_20a: continues && '0',
+    D_20a: continues && certificate.code === '01' ? '0' : undefined,
     D_21: text(certificate.fund),
-    D_21a: continues && '0',
-    D_23: certificate.diagnosis,
-    D_28: certificate.percent,
+    D_21a: continues && certificate.code === '01' ? '0' : undefined,
+    // D_23 (p. 61): RM for maternal risk.
+    D_23: certificate.code === '15' ? 'RM' : certificate.diagnosis,
+    D_28: certificate.code === '01' ? (certificate.percent ?? undefined) : undefined,
   });
 }
 
@@ -1558,7 +1748,35 @@ function sickLeaveChecks(
       error(
         'D112_SICK_CODE',
         `${at}.code`,
-        `Concediul medical cu codul de indemnizație ${certificate.code} nu este încă declarat: doar codul 01 (boală obișnuită).`,
+        `Concediul medical cu codul de indemnizație ${certificate.code} nu este declarat de aplicație.`,
+      );
+    if (
+      fundOnlyCodes.includes(certificate.code) &&
+      (certificate.employer || certificate.employerDays)
+    )
+      error(
+        'D112_SICK_PAYER',
+        `${at}.employer`,
+        `Indemnizația cu codul ${certificate.code} se suportă doar din FNUASS (D_20 = 0).`,
+      );
+    const careCnp = ['09', '91', '17'].includes(certificate.code);
+    if (careCnp && (!certificate.careCnp || !isValidCnp(certificate.careCnp)))
+      error(
+        'D112_SICK_CARE',
+        `${at}.careCnp`,
+        `Pentru codul ${certificate.code} se completează CNP-ul ${certificate.code === '17' ? 'pacientului' : 'copilului'} pentru care s-a acordat certificatul (D_8, D_8a).`,
+      );
+    if (certificate.code === '06' && !certificate.urgencyCode)
+      error(
+        'D112_SICK_URGENCY',
+        `${at}.urgencyCode`,
+        'Pentru codul 06 se completează codul urgenței medico-chirurgicale (D_11).',
+      );
+    if (['05', '51'].includes(certificate.code) && !certificate.infectiousCode)
+      error(
+        'D112_SICK_INFECTIOUS',
+        `${at}.infectiousCode`,
+        `Pentru codul ${certificate.code} se completează codul bolii infectocontagioase (D_12).`,
       );
     for (const [key, value, label, max] of [
       ['series', certificate.series, 'seria certificatului', 5],
@@ -1631,14 +1849,14 @@ function sickLeaveChecks(
           `${at}.issued`,
           'Un certificat inițial se acordă în prima lui zi sau a doua zi, în afara excepțiilor structurii (internare, aviz al medicului expert).',
         );
-      if (certificate.percent !== tierOf(length))
+      if (certificate.code === '01' && certificate.percent !== tierOf(length))
         warning(
           'D112_SICK_PERCENT',
           `${at}.percent`,
           `Structura ANAF încadrează un certificat de ${length} zile la ${tierOf(length)}%, nu la ${certificate.percent}%.`,
         );
     }
-    if (certificate.place === 'family_doctor' && length > 10)
+    if (certificate.code === '01' && certificate.place === 'family_doctor' && length > 10)
       error(
         'D112_SICK_DATES',
         `${at}.to`,

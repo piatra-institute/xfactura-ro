@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, lte, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, lte, ne, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { canonical, hashOf } from 'xfactura-core/hash';
 import type { ProfileFact } from 'xfactura-core/kernel';
@@ -59,9 +59,12 @@ import {
   questions,
   questionWithdrawals,
   taxEntries,
+  stockMoves,
 } from '../db/schema';
 import type { Actor, Commands } from '../kernel/commands';
+import { entryStands } from '../kernel/ledger';
 import { halfYearOf } from './annual';
+import { distanceSalesOf } from './d398';
 import { standing } from './questions';
 
 /*
@@ -273,12 +276,14 @@ async function confirmations(
   return result;
 }
 
-/** Each contract's latest terms. */
+/** Each employment contract's latest terms. An administrator's mandate is not an employment
+ * contract: it counts for the micro-enterprise only through art. 51 alin. (4) lit. b), which the
+ * `micro.conditions` answer states, never as a full-time employee. */
 async function contractsOf(tx: Transaction, companyId: string): Promise<Contract[]> {
   const rows = await tx
     .select()
     .from(employmentTerms)
-    .where(eq(employmentTerms.companyId, companyId))
+    .where(and(eq(employmentTerms.companyId, companyId), eq(employmentTerms.kind, 'employment')))
     .orderBy(asc(employmentTerms.contractId), asc(employmentTerms.seq));
   const latest = new Map<string, (typeof rows)[number]>();
   for (const row of rows) latest.set(row.contractId, row);
@@ -592,9 +597,13 @@ async function figuresOf(
         ),
         'books',
       ),
-      euGoodsAcquisitions: (await euGoodsUnknown(tx, companyId, year))
-        ? fromAnswer('euGoodsAcquisitions', (value) => value === 'yes')
-        : known(false, 'books'),
+      euGoodsAcquisitions: (await intrastatFlowsOf(tx, companyId, year)).some(
+        (row) => row.arrivals !== 0n,
+      )
+        ? known(true, 'books')
+        : (await euGoodsUnknown(tx, companyId, year))
+          ? fromAnswer('euGoodsAcquisitions', (value) => value === 'yes')
+          : known(false, 'books'),
       eurRate,
     };
   } else
@@ -642,7 +651,159 @@ async function activityOf(tx: Transaction, companyId: string, year: number): Pro
     start:
       first && first > `${year}-01-01` && first <= `${year}-12-31` ? (first as LocalDate) : null,
     euServices: await euServicesOf(tx, companyId, year),
+    distance: await distanceSalesOf(tx, companyId, year),
+    intrastat: await intrastatFlowsOf(tx, companyId, year),
   };
+}
+
+/**
+ * The year's intra-Union goods by the month they moved (core ro/trade): intra-community
+ * acquisitions (AIC-…, arrivals) and supplies (EX-IC, dispatches), their bases in lei, by the
+ * supply's date the entry records, else its tax point; a reversal's entries net them out.
+ */
+async function intrastatFlowsOf(tx: Transaction, companyId: string, year: number) {
+  const day = sql<string>`coalesce(json_extract(${taxEntries.attributes}, '$.supplied'), ${taxEntries.taxPoint})`;
+  const rows = await tx
+    .select({
+      month: sql<string>`substr(${day}, 1, 7)`,
+      code: taxEntries.code,
+      base: sql<bigint>`sum(${taxEntries.baseBani})`.mapWith(BigInt),
+    })
+    .from(taxEntries)
+    .where(
+      and(
+        eq(taxEntries.companyId, companyId),
+        eq(taxEntries.tax, 'VAT'),
+        eq(taxEntries.direction, 'output'),
+        or(
+          eq(taxEntries.code, exemptCodes.intraCommunity),
+          sql`${taxEntries.code} GLOB 'AIC-[0-9]*'`,
+        ),
+        sql`${day} >= ${`${year}-01-01`}`,
+        sql`${day} <= ${`${year}-12-31`}`,
+      ),
+    )
+    .groupBy(sql`substr(${day}, 1, 7)`, taxEntries.code);
+  const months = new Map<string, { month: string; arrivals: bigint; dispatches: bigint }>();
+  for (const row of rows) {
+    const item = months.get(row.month) ?? { month: row.month, arrivals: 0n, dispatches: 0n };
+    if (row.code === exemptCodes.intraCommunity) item.dispatches += row.base;
+    else item.arrivals += row.base;
+    months.set(row.month, item);
+  }
+  return [...months.values()].sort((a, b) => a.month.localeCompare(b.month));
+}
+
+/**
+ * The previous year's intra-Union goods for the Intrastat thresholds, read only when this year has
+ * some: from the books when the engine keeps that year, else from a person's answer to
+ * `year.figures`, asked together with the year's other figures.
+ */
+async function intrastatPreviousOf(
+  tx: Transaction,
+  companyId: string,
+  previous: YearFigures,
+): Promise<Pick<YearFigures, 'intrastatArrivals' | 'intrastatDispatches'>> {
+  const year = previous.year;
+  if (previous.kept) {
+    const flows = await intrastatFlowsOf(tx, companyId, year);
+    return {
+      intrastatArrivals: known(
+        flows.reduce((sum, row) => sum + row.arrivals, 0n),
+        'books',
+      ),
+      intrastatDispatches: known(
+        flows.reduce((sum, row) => sum + row.dispatches, 0n),
+        'books',
+      ),
+    };
+  }
+  const answered: Partial<
+    Record<'intrastatArrivals' | 'intrastatDispatches', YearFigures['intrastatArrivals']>
+  > = {};
+  for (const row of await latestAnswers(tx, companyId, 'year.figures', String(year))) {
+    const values = (JSON.parse(row.value) as { values: Record<string, string> }).values;
+    for (const name of ['intrastatArrivals', 'intrastatDispatches'] as const)
+      if (values[name] !== undefined)
+        answered[name] = known(
+          BigInt(Math.round(Number(values[name]) * 100)),
+          'answer',
+          row.evidenceId,
+        );
+  }
+  const asked = Object.values(previous).flatMap((figure) =>
+    figure && typeof figure === 'object' && 'known' in figure && !figure.known && figure.question
+      ? [figure]
+      : [],
+  );
+  const names = [
+    ...new Set([
+      ...asked.flatMap((figure) =>
+        figure.question!.kind === 'year.figures'
+          ? ((figure.question!.params as { figures: string[] }).figures ?? [])
+          : [],
+      ),
+      ...(['intrastatArrivals', 'intrastatDispatches'] as const).filter((name) => !answered[name]),
+    ]),
+  ];
+  const question = figuresQuestion(year, names);
+  for (const figure of asked)
+    if (figure.question!.kind === 'year.figures') figure.question = question;
+  const missing = unknown<bigint>(
+    `Anul ${year} nu este în registre: achizițiile și livrările intracomunitare de bunuri se iau din declarațiile D390 (sau Intrastat) depuse pentru ${year}.`,
+    question,
+  );
+  return {
+    intrastatArrivals: answered.intrastatArrivals ?? missing,
+    intrastatDispatches: answered.intrastatDispatches ?? missing,
+  };
+}
+
+/**
+ * The previous year's distance sales and TBE services to EU consumers (art. 278^1 alin. (1) lit.
+ * c)), read only when the year has some: from the books when the engine keeps that year, else
+ * from a person's answer to `year.figures`, asked together with the year's other figures.
+ */
+async function distanceTurnoverOf(
+  tx: Transaction,
+  companyId: string,
+  previous: YearFigures,
+): Promise<YearFigures['distanceTurnover']> {
+  const year = previous.year;
+  if (previous.kept)
+    return known(
+      (await distanceSalesOf(tx, companyId, year)).reduce((sum, sale) => sum + sale.base, 0n),
+      'books',
+    );
+  for (const row of await latestAnswers(tx, companyId, 'year.figures', String(year))) {
+    const value = (JSON.parse(row.value) as { values: Record<string, string> }).values
+      .distanceTurnover;
+    if (value !== undefined)
+      return known(BigInt(Math.round(Number(value) * 100)), 'answer', row.evidenceId);
+  }
+  // One question per year: the figures already asked, and this one.
+  const asked = Object.values(previous).flatMap((figure) =>
+    figure && typeof figure === 'object' && 'known' in figure && !figure.known && figure.question
+      ? [figure]
+      : [],
+  );
+  const names = [
+    ...new Set([
+      ...asked.flatMap((figure) =>
+        figure.question!.kind === 'year.figures'
+          ? ((figure.question!.params as { figures: string[] }).figures ?? [])
+          : [],
+      ),
+      'distanceTurnover',
+    ]),
+  ];
+  const question = figuresQuestion(year, names);
+  for (const figure of asked)
+    if (figure.question!.kind === 'year.figures') figure.question = question;
+  return unknown(
+    `Anul ${year} nu este în registre: vânzările la distanță și serviciile electronice către consumatori din alte state membre se iau din ultimul decont de TVA depus pentru ${year} („Total an curent”).`,
+    question,
+  );
 }
 
 /** The year's invoices from suppliers established in another member state, and to customers
@@ -719,15 +880,23 @@ export function contextOf(
   return memo(tx, `context|${companyId}|${year}|${today}`, async () => {
     const rows = await factRows(tx, companyId);
     const contracts = await contractsOf(tx, companyId);
+    const previous = await figuresOf(tx, companyId, year - 1, contracts, today);
+    const activity = await activityOf(tx, companyId, year);
+    // Distance sales: the threshold of art. 278^1 reads the previous year too (core ro/oss).
+    if (activity.distance?.length && !activity.start)
+      previous.distanceTurnover = await distanceTurnoverOf(tx, companyId, previous);
+    // Intra-Union goods: the Intrastat thresholds read the previous year too (core ro/trade).
+    if (activity.intrastat?.length && !activity.start)
+      Object.assign(previous, await intrastatPreviousOf(tx, companyId, previous));
     return {
       rows,
       confirmed: await confirmations(tx, companyId, rows),
       context: {
         year,
         facts: asFacts(rows),
-        previous: await figuresOf(tx, companyId, year - 1, contracts, today),
+        previous,
         current: await figuresOf(tx, companyId, year, contracts, today),
-        activity: await activityOf(tx, companyId, year),
+        activity,
         contracts,
         micro: await microOf(tx, companyId, year),
         today,
@@ -838,8 +1007,14 @@ async function booksOf(
     months.push(label);
     if (++m === 13) [y, m] = [y + 1, 1];
   }
+  // Months with an employment contract or an administrator's mandate (W1): payroll taxes in
+  // them are the payroll's.
+  const mandates = await tx
+    .select({ start: employmentTerms.startDate, end: employmentTerms.endDate })
+    .from(employmentTerms)
+    .where(and(eq(employmentTerms.companyId, companyId), eq(employmentTerms.kind, 'mandate')));
   const employmentMonths = months.filter((month) =>
-    contracts.some(
+    [...contracts, ...mandates].some(
       (contract) =>
         contract.start <= lastDay(month) &&
         (contract.end === null || contract.end >= `${month}-01`),
@@ -900,7 +1075,11 @@ async function booksOf(
       and(
         eq(taxEntries.companyId, companyId),
         eq(taxEntries.tax, 'VAT'),
-        inArray(taxEntries.code, ['RC-EU-SERV', 'EXP-EU-SERV', exemptCodes.intraCommunity]),
+        or(
+          inArray(taxEntries.code, ['RC-EU-SERV', 'EXP-EU-SERV', exemptCodes.intraCommunity]),
+          // Intra-community acquisitions of goods (core ro/trade), D390 type A.
+          sql`${taxEntries.code} GLOB 'AIC-[0-9]*'`,
+        ),
         gte(taxEntries.taxPoint, from),
         lte(taxEntries.taxPoint, to),
       ),
@@ -1101,7 +1280,69 @@ async function booksOf(
       // A booking reversed in the same period leaves nothing to declare.
       .filter((row) => row.base !== 0n)
       .map((row) => ({ date: row.date, documentId: row.documentId ?? '', code: row.code })),
-    stockMonths: await monthsOfLines(['3']),
+    // Stock the register does not keep: a line on class 3 that no stock move explains (G1),
+    // other than a dealer's items under the margin scheme (371 tagged `margin:`, V4, each its
+    // purchase document), a stock account's balance the register took over (`stock.opening`'s
+    // credit, which a takeover's debit explains in the same entry), and the register's
+    // write-downs (39x, tagged by item).
+    stockMonths: (
+      await tx
+        .selectDistinct({ month: sql<string>`substr(${entries.date}, 1, 7)` })
+        .from(lines)
+        .innerJoin(entries, lineEntry)
+        .innerJoin(
+          proposals,
+          and(eq(proposals.companyId, entries.companyId), eq(proposals.id, entries.proposalId)),
+        )
+        .where(
+          and(
+            eq(lines.companyId, companyId),
+            gte(entries.date, from),
+            lte(entries.date, to),
+            sql`${lines.account} LIKE '3%'`,
+            sql`not (${lines.account} LIKE '371%' and coalesce(${lines.item}, '') LIKE 'margin:%')`,
+            sql`not (${lines.account} LIKE '39%' and coalesce(${lines.item}, '') LIKE 'impairment:stock:%')`,
+            sql`not exists (select 1 from ${stockMoves} m where m.company_id = ${lines.companyId}
+              and m.entry_id = ${lines.entryId} and m.line_no = ${lines.lineNo})`,
+            sql`${proposals.treatmentId} <> 'stock.opening'`,
+            // An opening balance (DESCHIDERE) the register takes over with `stock.opening`; one
+            // it does not take over is the month close's (STOCK_LEDGER_DIFFERS).
+            sql`${entries.journalCode} <> 'DESCHIDERE'`,
+          ),
+        )
+    )
+      .map((row) => row.month)
+      .sort(),
+    // The special VAT schemes (V4), by the month of their tax point, entries that stand.
+    schemes: (
+      await tx
+        .selectDistinct({
+          month: sql<string>`substr(${taxEntries.taxPoint}, 1, 7)`,
+          code: taxEntries.code,
+        })
+        .from(taxEntries)
+        .innerJoin(
+          entries,
+          and(eq(entries.companyId, taxEntries.companyId), eq(entries.id, taxEntries.entryId)),
+        )
+        .where(
+          and(
+            eq(taxEntries.companyId, companyId),
+            eq(taxEntries.tax, 'VAT'),
+            gte(taxEntries.taxPoint, from),
+            lte(taxEntries.taxPoint, to),
+            sql`(${taxEntries.code} LIKE 'MS-31%' or ${taxEntries.code} = 'FR-315')`,
+            entryStands('"acc_entries"'),
+          ),
+        )
+    ).map((row) => ({
+      month: row.month,
+      scheme: row.code.startsWith('MS-311')
+        ? ('travel' as const)
+        : row.code.startsWith('MS-312')
+          ? ('goods' as const)
+          : ('flat_rate' as const),
+    })),
     sponsorshipMonths: await monthsOfLines(['6582']),
     payrollWithoutContractMonths: payrollTax.filter((month) => !employmentMonths.includes(month)),
     incomeSources: years.map((year) => {

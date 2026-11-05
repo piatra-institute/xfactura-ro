@@ -1,4 +1,16 @@
-import { and, asc, desc, eq, gte, inArray, isNotNull, lte, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lte,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import { z } from 'zod';
 import { requireCondition } from 'xfactura-core/errors';
 import { parseBnrRates } from 'xfactura-core/fx/bnr';
@@ -97,21 +109,37 @@ export const fxChecks: CloseCheck[] = [
     id: 'fx.revaluation',
     async run(tx, companyId, month) {
       const end = monthEnd(month as Month);
-      const [foreign] = await tx
-        .select({ account: lines.account })
-        .from(lines)
-        .innerJoin(
-          entries,
-          and(eq(entries.companyId, lines.companyId), eq(entries.id, lines.entryId)),
-        )
-        .where(
-          and(
-            eq(lines.companyId, companyId),
-            isNotNull(lines.currency),
-            lte(entries.date, end),
-            // Monetary balances only: partner items and bank or cash accounts, not revenue lines.
-            or(
-              isNotNull(lines.openItemId),
+      // Monetary balances only: partner items and bank or cash accounts, not revenue lines. The
+      // items' lines and the treasury accounts' other lines are read apart, each along its own
+      // index (`+` keeps the grouping from choosing the account index for its order); a balance is
+      // of one or the other, as it is per item.
+      const unrevalued = (monetary: SQL) =>
+        tx
+          .select({ account: lines.account })
+          .from(lines)
+          .innerJoin(
+            entries,
+            and(eq(entries.companyId, lines.companyId), eq(entries.id, lines.entryId)),
+          )
+          .where(
+            and(
+              eq(lines.companyId, companyId),
+              isNotNull(lines.currency),
+              lte(entries.date, end),
+              monetary,
+            ),
+          )
+          .groupBy(sql`+${lines.account}`, lines.currency, lines.openItemId)
+          .having(
+            sql`sum(case ${lines.side} when 'D' then ${lines.currencyMinor} else -${lines.currencyMinor} end) <> 0`,
+          )
+          .limit(1);
+      const foreign =
+        (await unrevalued(isNotNull(lines.openItemId)))[0] ??
+        (
+          await unrevalued(
+            and(
+              isNull(lines.openItemId),
               inArray(
                 lines.account,
                 tx
@@ -119,14 +147,9 @@ export const fxChecks: CloseCheck[] = [
                   .from(treasuryAccounts)
                   .where(eq(treasuryAccounts.companyId, companyId)),
               ),
-            ),
-          ),
-        )
-        .groupBy(lines.account, lines.currency, lines.openItemId)
-        .having(
-          sql`sum(case ${lines.side} when 'D' then ${lines.currencyMinor} else -${lines.currencyMinor} end) <> 0`,
-        )
-        .limit(1);
+            )!,
+          )
+        )[0];
       if (!foreign) return [];
       const [revalued] = await tx
         .select({ id: entries.id })

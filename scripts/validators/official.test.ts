@@ -548,6 +548,64 @@ const statements: Record<string, D394> = {
       },
     ],
   }),
+  // The special schemes (V4): a travel agency's and a dealer's supplies under the margin schemes
+  // (LS, rate 0, no VAT) to a registered customer and to an individual, an item bought from a
+  // dealer under the scheme (AS) and one from an individual (N), with the margins' fields.
+  special: statement({
+    ...invoiced,
+    operations: [
+      sale(registered('14399840', 'Client Unu SRL'), '0', 2, 11500, 0, 'LS'),
+      sale(
+        { kind: 'unregistered', code: '1900101400012', name: 'Ionescu Mihai' },
+        '0',
+        1,
+        1800,
+        0,
+        'LS',
+      ),
+      sale(registered('13548146', 'Anticariat Exemplu SRL'), '0', 1, 2000, 0, 'AS'),
+      {
+        type: 'N',
+        rate: '0',
+        partner: { kind: 'unregistered', code: '2900101400022', name: 'Ionescu Maria' },
+        invoices: 1,
+        base: 1000,
+        vat: 0,
+        document: 'invoice',
+        products: [{ code: '34', invoices: 1, base: 1000, vat: 0 }],
+      },
+    ],
+    margins: {
+      travel: { receipts: 10000, costs: 7580, margin: 2000, vat: 420 },
+      goods: { sales: 3300, purchases: 3000, margin: 300, vat: 87 },
+    },
+  }),
+  // Partners established abroad (OPANAF nr. 3.769/2015 anexa nr. 2 secțiunea 1 lit. E–F): a
+  // supply with Romanian VAT to a company of another Member State (type 3) and services bought
+  // outside the Union, their VAT self-assessed (C, type 4); an invoice at two rates counted once,
+  // for the larger VAT (secțiunea a 2-a pct. 5).
+  abroad: statement({
+    ...invoiced,
+    operations: [
+      sale(registered('14399840', 'Client Unu SRL'), '21', 1, 100, 21),
+      sale(registered('14399840', 'Client Unu SRL'), '11', 0, 50, 6),
+      sale(
+        { kind: 'nonEstablished', region: 'eu', code: 'DE123456789', name: 'Beispiel GmbH' },
+        '21',
+        1,
+        400,
+        84,
+      ),
+      sale(
+        { kind: 'nonEstablished', region: 'nonEu', code: '94-1234567', name: 'Example Inc.' },
+        '21',
+        2,
+        500,
+        105,
+        'C',
+      ),
+    ],
+  }),
   // The first v5 period, with every other covered section.
   'all-sections': statement({
     period: { year: 2025, month: 8 },
@@ -689,6 +747,7 @@ describe('official D394 validation', () => {
           'baza="300"><op11 nrFactPR="1" codPR="35" bazaPR="300"/></op1>',
         ),
         'nature-missing': edit('<op11 nrFactPR="1" codPR="35" bazaPR="2500"/>', ''),
+        'partner-count-abroad': writeD394(statements.abroad!).replace('nrCui4="1"', 'nrCui4="0"'),
       });
       expect(results['control-sum']).toStartWith('E:');
       expect(results['control-sum']).toContain('R17');
@@ -699,6 +758,7 @@ describe('official D394 validation', () => {
       expect(results.unallocated).toContain('R112.2');
       expect(results['nature-company']).toContain('R233.4');
       expect(results['nature-missing']).toContain('R233.6');
+      expect(results['partner-count-abroad']).toStartWith('E:');
     },
     120_000,
   );

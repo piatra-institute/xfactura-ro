@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import { canonical, derivedId } from 'xfactura-core/hash';
-import type { Effect } from 'xfactura-core/kernel';
+import type { Effect, StockMoveSpec } from 'xfactura-core/kernel';
 import {
   answerMediaType,
   guardedTables,
@@ -26,6 +26,8 @@ import {
   bankMappings,
   bankMovements,
   bankStatements,
+  cashRegisterEvents,
+  cashRegisters,
   commands,
   dispositions,
   documentLinks,
@@ -33,6 +35,8 @@ import {
   employees,
   enterpriseMembers,
   employmentTerms,
+  garnishmentReleases,
+  garnishments,
   entries,
   evidence,
   fiscalYears,
@@ -50,6 +54,7 @@ import {
   payrollLines,
   payrollRunEvents,
   payrollRuns,
+  regesRecords,
   periodBalances,
   policyRevocations,
   postingPolicies,
@@ -61,6 +66,9 @@ import {
   series,
   spvMessages,
   spvSyncWindows,
+  stockItems,
+  stockLayers,
+  stockMoves,
   submissionEvents,
   submissions,
   taxPeriodEvents,
@@ -68,6 +76,7 @@ import {
   templateRevocations,
   templates,
   treasuryAccounts,
+  warehouses,
   withdrawals,
 } from '../../source/engine/db/schema';
 import { authorizedDeclaration, lockTaxPeriod } from './fixtures/locks';
@@ -752,7 +761,89 @@ async function payrollRecords(world: World) {
         ...extra,
       }),
     );
-  return { runId, terms, line };
+  const evidenceId = randomUUID();
+  const garnishmentId = randomUUID();
+  const run = (extra: Partial<typeof payrollRuns.$inferInsert> = {}) =>
+    world.db.write((tx) =>
+      tx.insert(payrollRuns).values({
+        id: randomUUID(),
+        companyId: world.company,
+        month: '2026-03',
+        round: 2,
+        workingDays: 22,
+        resultHash: 'h2',
+        issues: 0,
+        corrects: runId,
+        correctionReason: 'error',
+        createdBy: world.owner,
+        ...extra,
+      }),
+    );
+  let documented = false;
+  const documents = async () => {
+    if (documented) return;
+    documented = true;
+    await world.db.write((tx) =>
+      tx.insert(evidence).values({
+        id: evidenceId,
+        companyId: world.company,
+        hash: `${randomUUID()}${randomUUID()}`.replaceAll('-', ''),
+        filename: 'poprire.pdf',
+        mediaType: 'application/pdf',
+        size: 1,
+        createdBy: world.owner,
+      }),
+    );
+  };
+  const garnishment = async (extra: Partial<typeof garnishments.$inferInsert> = {}) => {
+    await documents();
+    return world.db.write((tx) =>
+      tx.insert(garnishments).values({
+        id: garnishmentId,
+        companyId: world.company,
+        contractId,
+        partyId,
+        kind: 'other',
+        reference: 'Dosar 1/2026',
+        receivedOn: '2026-03-01',
+        totalBani: 100000n,
+        shareNumerator: 1,
+        shareDenominator: 3,
+        evidenceId,
+        createdBy: world.owner,
+        ...extra,
+      }),
+    );
+  };
+  const release = async (extra: Partial<typeof garnishmentReleases.$inferInsert> = {}) => {
+    await garnishment();
+    return world.db.write((tx) =>
+      tx.insert(garnishmentReleases).values({
+        companyId: world.company,
+        garnishmentId,
+        releasedOn: '2026-04-01',
+        evidenceId,
+        createdBy: world.owner,
+        ...extra,
+      }),
+    );
+  };
+  const reges = async (extra: Partial<typeof regesRecords.$inferInsert> = {}) => {
+    await documents();
+    return world.db.write((tx) =>
+      tx.insert(regesRecords).values({
+        companyId: world.company,
+        contractId,
+        termsSeq: 1,
+        event: 'start',
+        transmittedOn: '2026-01-04',
+        evidenceId,
+        createdBy: world.owner,
+        ...extra,
+      }),
+    );
+  };
+  return { runId, terms, line, run, garnishment, release, reges };
 }
 
 /** A bank account in lei, with ways to record its statements and movements directly. */
@@ -1113,6 +1204,153 @@ async function autonomyRecords(world: World) {
     );
   };
   return { reviewed, batch, batchApproval, template, revoke, predict, automation, criteria };
+}
+
+/**
+ * The stock register's records: an item on 371 in two warehouses, written directly, and the
+ * effects that move it: `receipt` takes 10 pieces in at 100,00 into a new lot (against 5121),
+ * `exit` takes `quantity` pieces worth `bani` out of a lot (onto 607).
+ */
+/** A warehouse kept at retail price (G2): its goods' account at 21%, of the `retail` control. */
+async function retailRecords(world: World) {
+  const warehouseId = randomUUID();
+  await world.db.write(async (tx) => {
+    await tx.insert(warehouses).values({
+      id: warehouseId,
+      companyId: world.company,
+      code: 'M9',
+      name: 'Magazin',
+      keeper: 'Ionescu Maria',
+      createdBy: world.owner,
+    });
+    await tx.insert(ledgerAccounts).values({
+      companyId: world.company,
+      code: '371.M9-21',
+      parentCode: '371',
+      name: 'Mărfuri la preț cu amănuntul',
+      nature: 'debit',
+      book: 'general',
+      postable: true,
+      controlKind: 'retail',
+      validFrom: '2015-01-01',
+      chartVersion: 'company',
+      createdBy: world.owner,
+    });
+  });
+  return warehouseId;
+}
+
+/** A fiscal cash register (G2) with its fiscalization record; returns its id. */
+async function cashRegister(world: World, code = '4400012345') {
+  const id = randomUUID();
+  const evidenceId = randomUUID();
+  await world.db.write(async (tx) => {
+    await tx.insert(evidence).values({
+      id: evidenceId,
+      companyId: world.company,
+      hash: evidenceId.replaceAll('-', '').padEnd(64, '0'),
+      filename: 'fiscalizare.pdf',
+      mediaType: 'application/pdf',
+      size: 1,
+      createdBy: world.owner,
+    });
+    await tx.insert(cashRegisters).values({
+      id,
+      companyId: world.company,
+      code,
+      fiscalSeries: 'AB1234567',
+      location: 'Galați, Str. Lungă 10',
+      activeFrom: '2026-03-01',
+      evidenceId,
+      createdBy: world.owner,
+    });
+  });
+  return { id, evidenceId };
+}
+
+async function stockRecords(world: World, item: Partial<typeof stockItems.$inferInsert> = {}) {
+  const itemId = randomUUID();
+  const [first, second] = [randomUUID(), randomUUID()];
+  await world.db.write(async (tx) => {
+    await tx.insert(stockItems).values({
+      id: itemId,
+      companyId: world.company,
+      code: `ART-${itemId.slice(0, 6)}`,
+      name: 'Cafea',
+      unit: 'H87',
+      account: '371',
+      createdBy: world.owner,
+      ...item,
+    });
+    await tx.insert(warehouses).values([
+      {
+        id: first,
+        companyId: world.company,
+        code: 'M1',
+        name: 'Magazin',
+        keeper: 'Ionescu Maria',
+        createdBy: world.owner,
+      },
+      {
+        id: second,
+        companyId: world.company,
+        code: 'D1',
+        name: 'Depozit',
+        keeper: 'Popa Ion',
+        createdBy: world.owner,
+      },
+    ]);
+  });
+  const receipt = (layer = randomUUID(), extra: Partial<StockMoveSpec> = {}): Effect => ({
+    ...effect([
+      { account: '371', side: 'D', bani: 100000n },
+      { account: '5121', side: 'C', bani: 100000n },
+    ]),
+    schema: 'effect@2',
+    stockLayers: [
+      {
+        ref: layer,
+        item: itemId,
+        warehouse: first,
+        account: '371',
+        method: 'fifo',
+        date: day(),
+        mayGoNegative: false,
+      },
+    ],
+    stockMoves: [
+      {
+        item: itemId,
+        warehouse: first,
+        account: '371',
+        layer,
+        quantity: 10000n,
+        bani: 100000n,
+        line: 0,
+        ...extra,
+      },
+    ],
+  });
+  const exit = (layer: string, quantity: bigint, bani: bigint): Effect => ({
+    ...effect([
+      { account: '607', side: 'D', bani },
+      { account: '371', side: 'C', bani },
+    ]),
+    schema: 'effect@2',
+    stockLayers: [],
+    stockMoves: [
+      {
+        item: itemId,
+        warehouse: first,
+        account: '371',
+        layer,
+        quantity: -quantity,
+        bani: -bani,
+        line: 1,
+      },
+    ],
+  });
+  return { itemId, first, second, receipt, exit };
 }
 
 /** Locks the world's financial year as an executed reviewed year close does. */
@@ -1918,6 +2156,305 @@ const attacks: Attack[] = [
     },
   })),
   {
+    trigger: entry,
+    code: 'stock_layers_mismatch',
+    name: 'creating a stock lot other than the approved one',
+    run: async (world) => {
+      const { receipt } = await stockRecords(world);
+      const { proposed, approvalId } = await approved(world, receipt());
+      const rows = structuredClone(proposed.effect);
+      rows.stockLayers![0]!.method = 'average';
+      return post(world, proposed, { approvalId }, rows);
+    },
+  },
+  {
+    trigger: entry,
+    code: 'stock_moves_mismatch',
+    name: 'moving another quantity than the approved one',
+    run: async (world) => {
+      const { receipt } = await stockRecords(world);
+      const { proposed, approvalId } = await approved(world, receipt());
+      const rows = structuredClone(proposed.effect);
+      rows.stockMoves![0]!.quantity = 9000n;
+      return post(world, proposed, { approvalId }, rows);
+    },
+  },
+  {
+    trigger: entry,
+    code: 'stock_moves_mismatch',
+    name: 'writing stock moves for an effect@1',
+    run: async (world) => {
+      const { receipt, exit } = await stockRecords(world);
+      const lot = randomUUID();
+      await book(world, receipt(lot));
+      const moved = exit(lot, 1000n, 10000n);
+      const { stockLayers: _layers, stockMoves: _moves, ...plain } = moved;
+      const { proposed, approvalId } = await approved(world, { ...plain, schema: 'effect@1' });
+      return post(world, proposed, { approvalId }, moved);
+    },
+  },
+  {
+    trigger: entry,
+    code: 'stock_move_layer',
+    name: "moving goods into a lot of another warehouse than the move's",
+    run: async (world) => {
+      const { receipt, second } = await stockRecords(world);
+      const { proposed, approvalId } = await approved(
+        world,
+        receipt(randomUUID(), { warehouse: second }),
+      );
+      return post(world, proposed, { approvalId });
+    },
+  },
+  {
+    trigger: entry,
+    code: 'stock_move_line',
+    name: 'explaining a line on another account by a stock move',
+    run: async (world) => {
+      const { receipt } = await stockRecords(world);
+      const moved = receipt();
+      moved.stockMoves![0]!.line = 1;
+      const { proposed, approvalId } = await approved(world, moved);
+      return post(world, proposed, { approvalId });
+    },
+  },
+  {
+    trigger: entry,
+    code: 'stock_move_line',
+    name: 'stock moves worth less than the line they explain',
+    run: async (world) => {
+      const { receipt } = await stockRecords(world);
+      const { proposed, approvalId } = await approved(
+        world,
+        receipt(randomUUID(), { bani: 90000n }),
+      );
+      return post(world, proposed, { approvalId });
+    },
+  },
+  {
+    trigger: entry,
+    code: 'stock_transfer',
+    name: 'goods appearing in a warehouse without a line or a matching exit',
+    run: async (world) => {
+      const { receipt } = await stockRecords(world);
+      const moved = receipt();
+      const { line: _line, ...move } = moved.stockMoves![0]!;
+      const { proposed, approvalId } = await approved(world, {
+        ...moved,
+        journalClass: 'memo',
+        lines: [],
+        stockMoves: [move],
+      });
+      return post(world, proposed, { approvalId });
+    },
+  },
+  {
+    trigger: entry,
+    code: 'stock_layer_balance',
+    name: 'taking more out of a lot than it holds',
+    run: async (world) => {
+      const { receipt, exit } = await stockRecords(world);
+      const lot = randomUUID();
+      await book(world, receipt(lot));
+      const { proposed, approvalId } = await approved(world, exit(lot, 11000n, 110000n));
+      return post(world, proposed, { approvalId });
+    },
+  },
+  {
+    trigger: entry,
+    code: 'stock_layer_balance',
+    name: 'emptying a lot and leaving value in it',
+    run: async (world) => {
+      const { receipt, exit } = await stockRecords(world);
+      const lot = randomUUID();
+      await book(world, receipt(lot));
+      const { proposed, approvalId } = await approved(world, exit(lot, 10000n, 90000n));
+      return post(world, proposed, { approvalId });
+    },
+  },
+  {
+    trigger: entry,
+    code: 'stale_read',
+    name: 'posting an exit after another one moved the same position',
+    run: async (world) => {
+      const { receipt, exit, itemId, first } = await stockRecords(world);
+      const lot = randomUUID();
+      await book(world, receipt(lot));
+      const read = [{ kind: 'stock', id: `${itemId}|${first}`, version: '1' }];
+      const { proposed, approvalId } = await approved(world, exit(lot, 2000n, 20000n), {
+        readSet: read,
+      });
+      await book(world, exit(lot, 2000n, 20000n), { readSet: read });
+      return post(world, proposed, { approvalId });
+    },
+  },
+  {
+    trigger: 'inv_acc_stock_layers_sealed',
+    code: 'sealed_entry',
+    name: 'creating a stock lot for a posted entry',
+    run: async (world) => {
+      const { receipt, itemId, first } = await stockRecords(world);
+      const { entry: posted } = await book(world, receipt());
+      return world.db.write((tx) =>
+        tx.insert(stockLayers).values({
+          id: randomUUID(),
+          companyId: world.company,
+          itemId,
+          warehouseId: first,
+          account: '371',
+          method: 'fifo',
+          date: '2026-03-10',
+          mayGoNegative: false,
+          originEntryId: posted.id,
+        }),
+      );
+    },
+  },
+  {
+    trigger: 'inv_acc_stock_moves_sealed',
+    code: 'sealed_entry',
+    name: 'adding a stock move to a posted entry',
+    run: async (world) => {
+      const { receipt, itemId, first } = await stockRecords(world);
+      const lot = randomUUID();
+      const { entry: posted } = await book(world, receipt(lot));
+      return world.db.write((tx) =>
+        tx.insert(stockMoves).values({
+          companyId: world.company,
+          entryId: posted.id,
+          moveNo: 2,
+          itemId,
+          warehouseId: first,
+          account: '371',
+          layerId: lot,
+          quantity: 1000n,
+          bani: 10000n,
+          lineNo: null,
+        }),
+      );
+    },
+  },
+  {
+    trigger: 'inv_stock_item_guard',
+    code: 'stock_item_account',
+    name: 'an item of the stock catalogue kept on a revenue account',
+    run: (world) => stockRecords(world, { account: '704' }),
+  },
+  {
+    trigger: 'inv_stock_item_guard',
+    code: 'stock_item_codes',
+    name: 'an item whose unit of measure is not a UN/ECE code',
+    run: (world) => stockRecords(world, { unit: 'buc.' }),
+  },
+  {
+    trigger: 'inv_entry_guard',
+    code: 'retail_line',
+    name: 'goods at retail price without their warehouse’s tag',
+    run: async (world) => {
+      await retailRecords(world);
+      const { proposed, approvalId } = await approved(world, plain(100n, 100n, '371.M9-21'));
+      return post(world, proposed, { approvalId });
+    },
+  },
+  {
+    trigger: 'inv_entry_guard',
+    code: 'retail_line',
+    name: 'goods at retail price, tagged, booked by a treatment outside the method',
+    run: async (world) => {
+      const warehouse = await retailRecords(world);
+      const { proposed, approvalId } = await approved(
+        world,
+        effect([
+          {
+            account: '371.M9-21',
+            side: 'D',
+            bani: 100n,
+            analytics: { item: `retail:${warehouse}` },
+          },
+          { account: '704', side: 'C', bani: 100n },
+        ]),
+      );
+      return post(world, proposed, { approvalId });
+    },
+  },
+  {
+    trigger: 'inv_cash_register_guard',
+    code: 'cash_register_identity',
+    name: 'a cash register without its fiscal series',
+    run: async (world) => {
+      const { evidenceId } = await cashRegister(world);
+      return world.db.write((tx) =>
+        tx.insert(cashRegisters).values({
+          id: randomUUID(),
+          companyId: world.company,
+          code: '4400099999',
+          fiscalSeries: ' ',
+          location: 'Galați',
+          activeFrom: '2026-03-01',
+          evidenceId,
+          createdBy: world.owner,
+        }),
+      );
+    },
+  },
+  {
+    trigger: 'inv_cash_register_event_guard',
+    code: 'cash_register_event',
+    name: 'a cash register event numbered past a gap',
+    run: async (world) => {
+      const register = await cashRegister(world);
+      return world.db.write((tx) =>
+        tx.insert(cashRegisterEvents).values({
+          companyId: world.company,
+          registerId: register.id,
+          seq: 2,
+          kind: 'anaf_registered',
+          date: '2026-03-02',
+          evidenceId: register.evidenceId,
+          createdBy: world.owner,
+        }),
+      );
+    },
+  },
+  {
+    trigger: 'inv_cash_register_event_guard',
+    code: 'cash_register_event',
+    name: 'an event of a cash register taken out of use',
+    run: async (world) => {
+      const register = await cashRegister(world);
+      const event = (seq: number, kind: 'closed' | 'repaired') =>
+        world.db.write((tx) =>
+          tx.insert(cashRegisterEvents).values({
+            companyId: world.company,
+            registerId: register.id,
+            seq,
+            kind,
+            date: '2026-03-05',
+            evidenceId: register.evidenceId,
+            createdBy: world.owner,
+          }),
+        );
+      await event(1, 'closed');
+      return event(2, 'repaired');
+    },
+  },
+  {
+    trigger: 'inv_warehouse_guard',
+    code: 'warehouse_keeper',
+    name: 'a warehouse without the person responsible for it',
+    run: (world) =>
+      world.db.write((tx) =>
+        tx.insert(warehouses).values({
+          id: randomUUID(),
+          companyId: world.company,
+          code: 'X1',
+          name: 'Depozit',
+          keeper: ' ',
+          createdBy: world.owner,
+        }),
+      ),
+  },
+  {
     trigger: 'inv_acc_open_items_sealed',
     code: 'sealed_entry',
     name: 'creating an open item for a posted entry',
@@ -2555,6 +3092,63 @@ const attacks: Attack[] = [
     name: 'a contract of nine hours a day',
     run: async (world) =>
       (await payrollRecords(world)).terms(2, { effectiveFrom: '2026-02-01', dailyHours: 9 }),
+  },
+  {
+    trigger: 'inv_employment_terms_guard',
+    code: 'terms_kind',
+    name: 'turning an employment contract into a mandate in a later version',
+    run: async (world) =>
+      (await payrollRecords(world)).terms(2, { effectiveFrom: '2026-02-01', kind: 'mandate' }),
+  },
+  {
+    trigger: 'inv_payroll_run_guard',
+    code: 'payroll_run_correction',
+    name: 'a second round that corrects no earlier round of the month',
+    run: async (world) => (await payrollRecords(world)).run({ corrects: randomUUID() }),
+  },
+  {
+    trigger: 'inv_payroll_run_guard',
+    code: 'payroll_run_correction',
+    name: "a month's first round that claims to correct one",
+    run: async (world) => {
+      const records = await payrollRecords(world);
+      return records.run({ month: '2026-04', round: 1 });
+    },
+  },
+  {
+    trigger: 'inv_garnishment_guard',
+    code: 'garnishment_values',
+    name: 'a garnishment taking more than the whole net pay',
+    run: async (world) =>
+      (await payrollRecords(world)).garnishment({ shareNumerator: 3, shareDenominator: 2 }),
+  },
+  {
+    trigger: 'inv_garnishment_guard',
+    code: 'garnishment_values',
+    name: 'a garnishment stating both a monthly amount and a share',
+    run: async (world) => (await payrollRecords(world)).garnishment({ monthlyBani: 50000n }),
+  },
+  {
+    trigger: 'inv_garnishment_release_guard',
+    code: 'garnishment_release',
+    name: 'releasing a garnishment before it was received',
+    run: async (world) => (await payrollRecords(world)).release({ releasedOn: '2026-02-01' }),
+  },
+  {
+    trigger: 'inv_reges_record_guard',
+    code: 'reges_event',
+    name: "registering a contract's start on a later version of its terms",
+    run: async (world) => {
+      const records = await payrollRecords(world);
+      await records.terms(2, { effectiveFrom: '2026-02-01' });
+      return records.reges({ termsSeq: 2 });
+    },
+  },
+  {
+    trigger: 'inv_reges_record_guard',
+    code: 'reges_event',
+    name: 'registering the end of a contract that does not end',
+    run: async (world) => (await payrollRecords(world)).reges({ event: 'end' }),
   },
   {
     trigger: 'inv_payroll_run_event_guard',
@@ -3332,12 +3926,17 @@ describe('append-only records', () => {
     const item = receivable(world);
     await book(world, sale(world, item));
     await book(world, prepaid(world));
+    await book(world, (await stockRecords(world)).receipt());
     await periodEvent(world, '2026-03');
     await (await issuing(world)).issue(1, { date: '2026-04-02' });
     await lockTaxPeriod(world.db, world.company, world.owner, 'VAT', '2026-03');
     const spv = await submittable(world);
     await spv.step(await spv.submit(), 1, 'authorized');
-    await (await payrollRecords(world)).line();
+    const payroll = await payrollRecords(world);
+    await payroll.line();
+    await payroll.run();
+    await payroll.release();
+    await payroll.reges();
     const asset = await assetRecord(world);
     await asset.dispose(1, '2026-06-30');
     await asset.fiscal(1);
@@ -3570,6 +4169,18 @@ describe('append-only records', () => {
         requestId: actionId,
         result: '{}',
         executedBy: world.owner,
+      }),
+    );
+    const register = await cashRegister(world);
+    await world.db.write((tx) =>
+      tx.insert(cashRegisterEvents).values({
+        companyId: world.company,
+        registerId: register.id,
+        seq: 1,
+        kind: 'anaf_registered',
+        date: '2026-03-02',
+        evidenceId: register.evidenceId,
+        createdBy: world.owner,
       }),
     );
     const refused: Record<string, [string | undefined, string | undefined]> = {};

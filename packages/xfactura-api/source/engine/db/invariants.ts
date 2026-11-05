@@ -1,5 +1,6 @@
 import type { Client } from '@libsql/client';
 import { sha256Hex } from 'xfactura-core/hash';
+import { stockAccountSynthetics } from 'xfactura-core/kernel';
 
 /*
  * The database's own accounting invariants (ADR 0010).
@@ -63,6 +64,9 @@ const appendOnly = [
   'acc_payroll_runs',
   'acc_payroll_run_events',
   'acc_payroll_lines',
+  'acc_garnishments',
+  'acc_garnishment_releases',
+  'acc_reges_records',
   'acc_assets',
   'acc_asset_events',
   'acc_asset_fiscal',
@@ -80,6 +84,12 @@ const appendOnly = [
   'acc_template_predictions',
   'acc_automation_events',
   'acc_automation_criteria',
+  'acc_stock_items',
+  'acc_warehouses',
+  'acc_stock_layers',
+  'acc_stock_moves',
+  'acc_cash_registers',
+  'acc_cash_register_events',
   'ref_fx_rates',
 ];
 // Tables with narrowly guarded updates (below) that are never deleted from.
@@ -105,13 +115,14 @@ export const guardedTables = [...appendOnly, ...neverDeleted];
 
 const views: Record<string, string> = {
   // Each posted line with its account's control and the open item it names. `control_ok`: lines
-  // on open-item control accounts (4111, 401, 471, …) name a matching item; others name none.
+  // on open-item control accounts (4111, 401, 471, …) name a matching item; others (tax, retail
+  // price, uncontrolled) name none.
   inv_line_controls: `
     SELECT l.company_id, l.entry_id, l.line_no,
       a.code IS NOT NULL AND a.postable = 1 AS postable,
       a.valid_from, a.valid_to,
       COALESCE(a.control_kind, '') = 'tax' AS tax_account,
-      CASE WHEN COALESCE(a.control_kind, 'tax') = 'tax' THEN l.open_item_id IS NULL
+      CASE WHEN COALESCE(a.control_kind, 'tax') IN ('tax', 'retail') THEN l.open_item_id IS NULL
         ELSE o.kind IS a.control_kind
           AND o.control_account IS l.account
           AND o.currency IS COALESCE(l.currency, 'RON')
@@ -255,6 +266,28 @@ const automationState = (scope: string, id: string) => `COALESCE((
         WHERE a.company_id = NEW.company_id AND a.scope = '${scope}' AND a.scope_id IS ${id}
         ORDER BY a.seq DESC LIMIT 1), 'resume')`;
 const thisEntry = `company_id = NEW.company_id AND entry_id = NEW.id`;
+/**
+ * Whether `column` is an account the stock register explains by quantity: a synthetic of
+ * `stockAccountSynthetics` (xfactura-core/kernel), with at most one more digit and analytics,
+ * as `isStockAccount` reads it.
+ */
+const stockAccount = (column: string) => `(substr(${column}, 1, 3) IN (${stockAccountSynthetics
+  .map((code) => `'${code}'`)
+  .join(', ')})
+      AND (length(${column}) = 3 OR substr(${column}, 4, 1) = '.'
+        OR (substr(${column}, 4, 1) GLOB '[0-9]' AND (length(${column}) = 4 OR substr(${column}, 5, 1) = '.'))))`;
+/** A stock position's read version, as the state loader records it for `item|warehouse`, or for
+ * the whole register (`*`): the moves posted on it, excluding the entry being posted. A position
+ * is counted on its own index (`stock_move_position`), not by scanning the register. */
+const stockVersion = (id: string) => `CAST(CASE WHEN ${id} = '*' THEN (
+          SELECT count(*) FROM acc_stock_moves m
+          WHERE m.company_id = NEW.company_id AND m.entry_id <> NEW.id)
+        ELSE (
+          SELECT count(*) FROM acc_stock_moves m
+          WHERE m.company_id = NEW.company_id
+            AND m.item_id = substr(${id}, 1, instr(${id}, '|') - 1)
+            AND m.warehouse_id = substr(${id}, instr(${id}, '|') + 1)
+            AND m.entry_id <> NEW.id) END AS TEXT)`;
 
 /**
  * How a stored row mirrors one element of the approved effect JSON: its column, the JSON path,
@@ -343,6 +376,23 @@ const taxEntryFields: Field[] = [
   { column: 'fx_rate', path: '$.currency.rate' },
   { column: 'attributes_json', path: '$.attributes' },
 ];
+const stockLayerFields: Field[] = [
+  { column: 'item_id', path: '$.item' },
+  { column: 'warehouse_id', path: '$.warehouse' },
+  { column: 'account', path: '$.account' },
+  { column: 'method', path: '$.method' },
+  { column: 'date', path: '$.date' },
+  { column: 'may_go_negative', path: '$.mayGoNegative' },
+];
+const stockMoveFields: Field[] = [
+  { column: 'item_id', path: '$.item' },
+  { column: 'warehouse_id', path: '$.warehouse' },
+  { column: 'account', path: '$.account' },
+  { column: 'layer_id', path: '$.layer' },
+  { column: 'quantity', path: '$.quantity', type: 'integer' },
+  { column: 'bani', path: '$.bani', type: 'integer' },
+  { column: 'line_no', path: '$.line', type: 'lineIndex' },
+];
 const scheduleRowFields: Field[] = [
   { column: 'schedule_id', path: '$.ref', source: 's.value' },
   { column: 'version', path: '$.version', source: 's.value' },
@@ -411,6 +461,8 @@ const entryChecks: Check[] = [
   {
     code: 'binding',
     rule: "An entry is bound either to an approval of exactly this effect by a current reviewer, or to an active posting policy, approved by a current reviewer, that covers this treatment and rule set, acknowledges each of the version's warnings (an `acknowledges` condition names its code and no `noWarnings` condition refuses it), is not paused (nor the company, nor a template it is bound to) and posts an extracted document only when a `sourceAuthority` condition allows it.",
+    // The read set's documents are found by their key (CROSS JOIN keeps json_each outermost),
+    // not by scanning the company's documents for each of them.
     violation: `NOT (
       (NEW.approval_id IS NOT NULL AND NEW.policy_id IS NULL AND EXISTS (
         SELECT 1 FROM acc_approvals a
@@ -450,7 +502,7 @@ const entryChecks: Check[] = [
               AND ${automationState('template', "json_extract(c.value, '$.id')")} = 'pause')
           AND NOT EXISTS (
             SELECT 1 FROM json_each(${version('read_set_json')}) r
-            JOIN acc_documents d ON d.company_id = NEW.company_id AND d.id = json_extract(r.value, '$.id')
+            CROSS JOIN acc_documents d ON d.company_id = NEW.company_id AND d.id = json_extract(r.value, '$.id')
             WHERE json_extract(r.value, '$.kind') = 'document' AND d.authority = 'extracted'
               AND NOT EXISTS (
                 SELECT 1 FROM json_each(p.preconditions_json) c, json_each(c.value, '$.allow') k
@@ -526,6 +578,21 @@ const entryChecks: Check[] = [
     violation: `EXISTS (SELECT 1 FROM inv_line_controls WHERE ${thisEntry} AND NOT control_ok)`,
   },
   {
+    code: 'retail_line',
+    rule: 'A line on an account kept at retail price (control `retail`: a warehouse’s goods at sale price, their markup, the VAT their price includes) names a warehouse of the company (`retail:<id>`) and belongs to a retail treatment, a purchase received at retail price or a reversal.',
+    violation: `EXISTS (
+      SELECT 1 FROM acc_lines l
+      JOIN acc_accounts a ON a.company_id = l.company_id AND a.code = l.account
+      WHERE l.company_id = NEW.company_id AND l.entry_id = NEW.id AND a.control_kind = 'retail'
+        AND (l.item IS NULL OR substr(l.item, 1, 7) <> 'retail:'
+          OR NOT EXISTS (
+            SELECT 1 FROM acc_warehouses w WHERE w.company_id = l.company_id AND w.id = substr(l.item, 8))
+          OR NOT EXISTS (
+            SELECT 1 FROM acc_proposals p WHERE p.company_id = NEW.company_id AND p.id = NEW.proposal_id
+              AND p.treatment_id IN ('invoices.recognize', 'retail.zReport', 'retail.opening',
+                'retail.reprice', 'retail.discharge', 'retail.count', 'ledger.reverse'))))`,
+  },
+  {
     code: 'open_items_mismatch',
     rule: 'The open items this entry creates are exactly those of the approved effect.',
     violation: differsFromEffect({
@@ -541,7 +608,8 @@ const entryChecks: Check[] = [
   {
     code: 'open_item_balance',
     rule: 'After this entry, no open item it touches has crossed to the wrong side (unless allowed), and a foreign-currency item settled in full has no RON remainder.',
-    // Grouped per touched item, so the check reads only those items' lines.
+    // Grouped per touched item, so the check reads only those items' lines. The items are found
+    // among the entry's own lines (`+` keeps the planner off the index of every line with an item).
     violation: `EXISTS (
       SELECT 1 FROM (
         SELECT o.normal_side, o.may_reverse, o.currency,
@@ -550,7 +618,7 @@ const entryChecks: Check[] = [
         FROM acc_open_items o
         JOIN acc_lines l ON l.company_id = o.company_id AND l.open_item_id = o.id
         WHERE o.company_id = NEW.company_id
-          AND o.id IN (SELECT open_item_id FROM acc_lines WHERE ${thisEntry} AND open_item_id IS NOT NULL)
+          AND o.id IN (SELECT open_item_id FROM acc_lines WHERE ${thisEntry} AND +open_item_id IS NOT NULL)
         GROUP BY o.id)
       WHERE (may_reverse = 0 AND CASE normal_side WHEN 'D' THEN bani < 0 OR minor < 0 ELSE bani > 0 OR minor > 0 END)
         OR (currency <> 'RON' AND minor = 0 AND bani <> 0))`,
@@ -607,11 +675,92 @@ const entryChecks: Check[] = [
     }),
   },
   {
+    code: 'stock_layers_mismatch',
+    rule: 'The stock layers this entry creates are exactly those of the approved effect.',
+    violation: differsFromEffect({
+      table: 'acc_stock_layers',
+      alias: 'y',
+      rows: `y.company_id = NEW.company_id AND y.origin_entry_id = NEW.id`,
+      items: `json_each(${effect}, '$.stockLayers') j`,
+      expectedCount: `COALESCE(json_array_length(${effect}, '$.stockLayers'), 0)`,
+      key: `y.id = json_extract(j.value, '$.ref')`,
+      fields: stockLayerFields,
+    }),
+  },
+  {
+    code: 'stock_moves_mismatch',
+    rule: "The entry's stock moves are exactly the approved effect's (an effect@1 has none).",
+    violation: differsFromEffect({
+      table: 'acc_stock_moves',
+      alias: 'm',
+      rows: `m.company_id = NEW.company_id AND m.entry_id = NEW.id`,
+      items: `json_each(${effect}, '$.stockMoves') j`,
+      expectedCount: `COALESCE(json_array_length(${effect}, '$.stockMoves'), 0)`,
+      key: 'm.move_no = j.key + 1',
+      fields: stockMoveFields,
+    }),
+  },
+  {
+    code: 'stock_move_layer',
+    rule: "Each stock move is on its layer's item, warehouse and account, and the layer is on its item's stock account, one the register explains by quantity.",
+    violation: `EXISTS (
+      SELECT 1 FROM acc_stock_moves m
+      LEFT JOIN acc_stock_layers y ON y.company_id = m.company_id AND y.id = m.layer_id
+      LEFT JOIN acc_stock_items i ON i.company_id = y.company_id AND i.id = y.item_id
+      WHERE m.company_id = NEW.company_id AND m.entry_id = NEW.id
+        AND (y.id IS NULL OR y.item_id IS NOT m.item_id OR y.warehouse_id IS NOT m.warehouse_id
+          OR y.account IS NOT m.account OR i.account IS NOT y.account OR NOT ${stockAccount('y.account')}))`,
+  },
+  {
+    code: 'stock_move_line',
+    rule: "A stock move naming a line is on that line's account, and the moves naming a line add up to its signed amount (debit positive).",
+    violation: `EXISTS (
+      SELECT 1 FROM acc_stock_moves m
+      LEFT JOIN acc_lines l ON l.company_id = m.company_id AND l.entry_id = m.entry_id AND l.line_no = m.line_no
+      WHERE m.company_id = NEW.company_id AND m.entry_id = NEW.id AND m.line_no IS NOT NULL
+        AND (l.line_no IS NULL OR l.account IS NOT m.account))
+      OR EXISTS (
+        SELECT 1 FROM acc_lines l
+        JOIN acc_stock_moves m ON m.company_id = l.company_id AND m.entry_id = l.entry_id AND m.line_no = l.line_no
+        WHERE l.company_id = NEW.company_id AND l.entry_id = NEW.id
+        GROUP BY l.line_no
+        HAVING sum(m.bani) <> max(CASE l.side WHEN 'D' THEN l.bani ELSE -l.bani END))`,
+  },
+  {
+    code: 'stock_transfer',
+    rule: 'Stock moves naming no line move goods between warehouses: their values net to zero on each account, their quantities on each account and item.',
+    // Grouped by `+account` (the same value), so the entry's moves are read by its key rather than
+    // in the order of the index on the account, which would scan the whole register.
+    violation: `EXISTS (
+      SELECT 1 FROM acc_stock_moves
+      WHERE ${thisEntry} AND line_no IS NULL
+      GROUP BY +account HAVING sum(bani) <> 0)
+      OR EXISTS (
+        SELECT 1 FROM acc_stock_moves
+        WHERE ${thisEntry} AND line_no IS NULL
+        GROUP BY +account, +item_id HAVING sum(quantity) <> 0)`,
+  },
+  {
+    code: 'stock_layer_balance',
+    rule: 'After this entry, no stock layer it touches holds less than nothing, unless its policy lets its quantity go negative, nor a value without a quantity.',
+    violation: `EXISTS (
+      SELECT 1 FROM (
+        SELECT y.may_go_negative, sum(m.quantity) AS quantity, sum(m.bani) AS bani
+        FROM acc_stock_layers y
+        JOIN acc_stock_moves m ON m.company_id = y.company_id AND m.layer_id = y.id
+        WHERE y.company_id = NEW.company_id
+          AND y.id IN (SELECT layer_id FROM acc_stock_moves WHERE ${thisEntry})
+        GROUP BY y.id)
+      WHERE (may_go_negative = 0 AND (quantity < 0 OR bani < 0)) OR (quantity = 0 AND bani <> 0))`,
+  },
+  {
     code: 'stale_read',
-    rule: "The open items, schedules, tax periods, payroll runs, party statuses and answers the proposal read have not changed since: an open item's version is its number of lines, a schedule's its latest version, a tax period's its tax entries, settlement lines and last entry sequence, a payroll run's its result and state, a party's status for a date its latest snapshot for that date, a question's answer its latest answer.",
+    rule: "The open items, schedules, tax periods, payroll runs, party statuses, stock positions and answers the proposal read have not changed since: an open item's version is its number of lines, a schedule's its latest version, a tax period's its tax entries, settlement lines and last entry sequence, a payroll run's its result and state, a party's status for a date its latest snapshot for that date, a stock position's (or the whole register's) its moves, a question's answer its latest answer.",
     violation: `EXISTS (
       SELECT 1 FROM json_each(${version('read_set_json')}) r
-      WHERE (json_extract(r.value, '$.kind') = 'answer'
+      WHERE (json_extract(r.value, '$.kind') = 'stock'
+          AND json_extract(r.value, '$.version') <> ${stockVersion("json_extract(r.value, '$.id')")})
+        OR (json_extract(r.value, '$.kind') = 'answer'
           AND json_extract(r.value, '$.version') IS NOT ${latestAnswer("json_extract(r.value, '$.id')")})
         OR (json_extract(r.value, '$.kind') = 'taxPeriod'
           AND json_extract(r.value, '$.version') <> ${taxPeriodVersion("json_extract(r.value, '$.id')")})
@@ -1003,6 +1152,64 @@ const payrollChecks = {
         OR NEW.dependents < 0 OR NEW.children_in_school < 0
         OR (NEW.end_date IS NOT NULL AND NEW.end_date < NEW.start_date)`,
     },
+    {
+      code: 'terms_kind',
+      rule: "A contract is an employment contract or an administrator's mandate, the same in every version; a mandate has no exemption from the employment contract's minimum contribution.",
+      violation: `NEW.kind NOT IN ('employment', 'mandate')
+        OR (NEW.kind = 'mandate' AND NEW.minimum_exemption IS NOT NULL)
+        OR EXISTS (
+          SELECT 1 FROM acc_employment_terms t
+          WHERE t.company_id = NEW.company_id AND t.contract_id = NEW.contract_id AND t.kind <> NEW.kind)`,
+    },
+  ] satisfies Check[],
+  runs: [
+    {
+      code: 'payroll_run_correction',
+      rule: "A month's first round corrects nothing; a later round corrects an earlier round of the same month, for a stated reason.",
+      violation: `CASE WHEN NEW.round = 1
+          THEN NEW.corrects_run_id IS NOT NULL OR NEW.correction_reason IS NOT NULL
+          ELSE NEW.correction_reason IS NULL OR NOT EXISTS (
+            SELECT 1 FROM acc_payroll_runs r
+            WHERE r.company_id = NEW.company_id AND r.id = NEW.corrects_run_id
+              AND r.month = NEW.month AND r.round < NEW.round) END`,
+    },
+  ] satisfies Check[],
+  garnishments: [
+    {
+      code: 'garnishment_values',
+      rule: 'A garnishment order is on a contract of the company, for a positive debt, and states one of a monthly amount or a share of the net pay (of at most the whole).',
+      violation: `NEW.kind NOT IN ('maintenance', 'state', 'public_damage', 'other') OR NEW.total_bani <= 0
+        OR NOT EXISTS (
+          SELECT 1 FROM acc_employment_terms t
+          WHERE t.company_id = NEW.company_id AND t.contract_id = NEW.contract_id)
+        OR (NEW.monthly_bani IS NULL) = (NEW.share_numerator IS NULL)
+        OR (NEW.share_numerator IS NULL) <> (NEW.share_denominator IS NULL)
+        OR NEW.monthly_bani <= 0
+        OR (NEW.share_numerator IS NOT NULL AND (NEW.share_numerator < 1
+          OR NEW.share_numerator > NEW.share_denominator))`,
+    },
+  ] satisfies Check[],
+  releases: [
+    {
+      code: 'garnishment_release',
+      rule: 'A garnishment is released no earlier than it was received.',
+      violation: `NEW.released_on < (
+          SELECT received_on FROM acc_garnishments
+          WHERE company_id = NEW.company_id AND id = NEW.garnishment_id)`,
+    },
+  ] satisfies Check[],
+  reges: [
+    {
+      code: 'reges_event',
+      rule: "A contract's start is registered on its first terms, a change on a later version, its end on a version that ends it.",
+      violation: `CASE NEW.event
+          WHEN 'start' THEN NEW.terms_seq <> 1
+          WHEN 'change' THEN NEW.terms_seq < 2
+          ELSE NOT EXISTS (
+            SELECT 1 FROM acc_employment_terms t
+            WHERE t.company_id = NEW.company_id AND t.contract_id = NEW.contract_id
+              AND t.seq = NEW.terms_seq AND t.end_date IS NOT NULL) END`,
+    },
   ] satisfies Check[],
   events: [
     {
@@ -1083,7 +1290,7 @@ const documentChecks: Check[] = [
     code: 'document_authority',
     rule: 'A document records where its content comes from: e-Factura, the engine issuing it, an uploaded UBL file, the invoicer or an agent extracting it.',
     violation: `NEW.authority IS NULL
-        OR NEW.authority NOT IN ('efactura', 'issued', 'ubl_upload', 'invoicer', 'extracted')`,
+        OR NEW.authority NOT IN ('efactura', 'issued', 'ubl_upload', 'invoicer', 'amef', 'extracted')`,
   },
   {
     code: 'extracted_source',
@@ -1159,6 +1366,8 @@ const triggers: Trigger[] = [
       ['acc_open_items', 'origin_entry_id'],
       ['acc_tax_entries', 'entry_id'],
       ['acc_schedule_rows', 'entry_id'],
+      ['acc_stock_layers', 'origin_entry_id'],
+      ['acc_stock_moves', 'entry_id'],
     ] as const
   ).map(([table, entry]): Trigger => ({
     name: `inv_${table}_sealed`,
@@ -1622,6 +1831,26 @@ const triggers: Trigger[] = [
     checks: payrollChecks.events,
   },
   {
+    name: 'inv_payroll_run_guard',
+    on: 'BEFORE INSERT ON acc_payroll_runs',
+    checks: payrollChecks.runs,
+  },
+  {
+    name: 'inv_garnishment_guard',
+    on: 'BEFORE INSERT ON acc_garnishments',
+    checks: payrollChecks.garnishments,
+  },
+  {
+    name: 'inv_garnishment_release_guard',
+    on: 'BEFORE INSERT ON acc_garnishment_releases',
+    checks: payrollChecks.releases,
+  },
+  {
+    name: 'inv_reges_record_guard',
+    on: 'BEFORE INSERT ON acc_reges_records',
+    checks: payrollChecks.reges,
+  },
+  {
     name: 'inv_asset_guard',
     on: 'BEFORE INSERT ON acc_assets',
     checks: assetChecks.cards,
@@ -1635,6 +1864,68 @@ const triggers: Trigger[] = [
     name: 'inv_asset_fiscal_guard',
     on: 'BEFORE INSERT ON acc_asset_fiscal',
     checks: assetChecks.fiscal,
+  },
+  {
+    name: 'inv_stock_item_guard',
+    on: 'BEFORE INSERT ON acc_stock_items',
+    checks: [
+      {
+        code: 'stock_item_account',
+        rule: 'An item of the stock catalogue is kept on a postable account the register explains by quantity (30x–38x, without the price differences, stock in transit and adjustments).',
+        violation: `NOT ${stockAccount('NEW.account')} OR NOT EXISTS (
+          SELECT 1 FROM acc_accounts a
+          WHERE a.company_id = NEW.company_id AND a.code = NEW.account AND a.postable = 1)`,
+      },
+      {
+        code: 'stock_item_codes',
+        rule: "An item's unit of measure is a UN/ECE Recommendation 20 code (two or three letters and digits) and its NC8 code, when given, eight digits.",
+        violation: `NEW.unit NOT GLOB '[A-Z0-9][A-Z0-9]' AND NEW.unit NOT GLOB '[A-Z0-9][A-Z0-9][A-Z0-9]'
+          OR (NEW.nc8 IS NOT NULL AND NEW.nc8 NOT GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]')`,
+      },
+    ],
+  },
+  {
+    name: 'inv_warehouse_guard',
+    on: 'BEFORE INSERT ON acc_warehouses',
+    checks: [
+      {
+        code: 'warehouse_keeper',
+        rule: 'A warehouse (gestiune) names the person responsible for it (the keeper).',
+        violation: `trim(NEW.keeper) = ''`,
+      },
+    ],
+  },
+  // A fiscal cash register (G2): its identity and the events of its life, each documented.
+  {
+    name: 'inv_cash_register_guard',
+    on: 'BEFORE INSERT ON acc_cash_registers',
+    checks: [
+      {
+        code: 'cash_register_identity',
+        rule: 'A fiscal cash register has its unique number, its fiscal series and its location.',
+        violation: `trim(NEW.code) = '' OR trim(NEW.fiscal_series) = '' OR trim(NEW.location) = ''`,
+      },
+    ],
+  },
+  {
+    name: 'inv_cash_register_event_guard',
+    on: 'BEFORE INSERT ON acc_cash_register_events',
+    checks: [
+      {
+        code: 'cash_register_event',
+        rule: 'A register’s events are of a known kind, numbered from 1 without gaps, dated from its putting into use, and none follows its being taken out of use.',
+        violation: `NEW.kind NOT IN ('anaf_registered', 'service_contract', 'memory_replaced',
+            'journal_replaced', 'failure', 'repaired', 'closed')
+          OR NEW.seq <> 1 + COALESCE((
+            SELECT max(e.seq) FROM acc_cash_register_events e
+            WHERE e.company_id = NEW.company_id AND e.register_id = NEW.register_id), 0)
+          OR NEW.date < (SELECT r.active_from FROM acc_cash_registers r
+            WHERE r.company_id = NEW.company_id AND r.id = NEW.register_id)
+          OR EXISTS (
+            SELECT 1 FROM acc_cash_register_events e
+            WHERE e.company_id = NEW.company_id AND e.register_id = NEW.register_id AND e.kind = 'closed')`,
+      },
+    ],
   },
   {
     name: 'inv_payroll_line_guard',
@@ -1849,8 +2140,21 @@ export async function ensureInvariants(client: Client) {
           args: [row.name],
         });
       }
+    const tables = new Set(
+      (await transaction.execute("SELECT name FROM sqlite_master WHERE type = 'table'")).rows.map(
+        (row) => String(row.name),
+      ),
+    );
     for (const item of wanted) {
       if (current(item)) continue;
+      // A table a later migration creates (a database migrated part way, as an upgrade test
+      // does) gets its triggers once it exists: the installation after that migration adds them.
+      const target = /^CREATE TRIGGER \w+ [^\n]*?\bON (\w+)/.exec(item.sql)?.[1];
+      if (target && !tables.has(target)) continue;
+      // So does a trigger whose checks read a table a later migration creates (the entry guard
+      // reads the stock register's, 0027).
+      const read = [...item.sql.matchAll(/\b((?:acc|ref)_[a-z_]+)\b/g)].map((match) => match[1]!);
+      if (item.type === 'trigger' && read.some((table) => !tables.has(table))) continue;
       await transaction.execute(item.sql);
       await transaction.execute({
         sql: `INSERT INTO acc_invariants (name, checksum) VALUES (?, ?)

@@ -32,6 +32,7 @@ export const refKinds = [
   'employee',
   'contract',
   'payrollRun',
+  'garnishment',
   'incomeSource',
   'series',
   'year',
@@ -44,6 +45,9 @@ export const refKinds = [
   'question',
   'disposition',
   'template',
+  'stockItem',
+  'warehouse',
+  'cashRegister',
 ] as const;
 export type RefKind = (typeof refKinds)[number];
 export type Ref = { kind: RefKind; id: string };
@@ -87,8 +91,12 @@ const resultIds: Partial<Record<string, RefKind>> = {
   'declarations.validate': 'declaration',
   'declarations.pdf': 'declaration',
   'assets.register': 'asset',
+  'stock.items.create': 'stockItem',
+  'stock.warehouses.create': 'warehouse',
+  'retail.registers.record': 'cashRegister',
   'payroll.employees.record': 'employee',
   'payroll.runs.prepare': 'payrollRun',
+  'payroll.garnishments.record': 'garnishment',
   'spv.submit': 'submission',
   'spv.refresh': 'submission',
   'sales.series.create': 'series',

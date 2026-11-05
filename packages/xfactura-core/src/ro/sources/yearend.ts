@@ -31,6 +31,26 @@ export const yearEndSources: readonly LegalSource[] = [
         mediaType: 'application/pdf',
       },
     ],
+  }, // The norms as the legislative portal publishes them, downloaded by the owner: the portal shows
+  // no amendment since 2009, so the original above is the text in force. This copy keeps the
+  // Romanian diacritics the ANAF scan's text layer lacks.
+  {
+    id: 'OMF2861/2009-A',
+    kind: 'act',
+    title:
+      'Normele privind organizarea și efectuarea inventarierii elementelor de natura activelor, datoriilor și capitalurilor proprii, aprobate prin OMFP nr. 2.861/2009 (portalul legislativ, fără modificări de la publicare)',
+    issuer: 'Ministerul Finanțelor Publice',
+    publication: 'Monitorul Oficial nr. 704 din 20 octombrie 2009',
+    urls: [],
+    fetch: false,
+    snapshots: [
+      {
+        url: 'https://xfactura.invalid/owner-download/NORMA_09_10_2009.pdf',
+        sha256: 'e2685102d4a20cae415a9d17de981ffec55bfe4479ad1aa6f332cd721fba7670',
+        retrievedOn: '2026-11-06',
+        mediaType: 'application/pdf',
+      },
+    ],
   },
 ];
 

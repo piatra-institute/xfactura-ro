@@ -12,6 +12,7 @@ import {
 import { counties, euVatPrefixes } from 'xfactura-core/ro/geo';
 import { crossBorderCodes } from 'xfactura-core/ro/treatments/cross-border';
 import { exemptCodes } from 'xfactura-core/ro/exempt';
+import { tradeCodes } from 'xfactura-core/ro/trade';
 import type { RuleContext } from 'xfactura-core/rules';
 import { monthEnd, type LocalDate, type Month } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
@@ -35,11 +36,14 @@ export const d390Options = z
   .strict();
 
 /** The books' intra-Community operations and their D390 types: P services supplied, S
- * acquired, L goods supplied exempt (art. 294 alin. (2) lit. a), art. 325 alin. (1) lit. a)). */
+ * acquired, L goods supplied exempt (art. 294 alin. (2) lit. a), art. 325 alin. (1) lit. a)), A
+ * goods acquired, taxable (lit. d); core ro/trade). Triangular supplies (T) and the farmers' (R)
+ * are not booked. */
 const typeByCode: Record<string, D390Operation['type']> = {
   [crossBorderCodes.sale.eu]: 'P',
   [crossBorderCodes.purchase.eu]: 'S',
   [exemptCodes.intraCommunity]: 'L',
+  ...Object.fromEntries(['21', '11', '19'].map((rate) => [tradeCodes.acquisition(rate), 'A'])),
 };
 
 /** The month's entries: D390 is monthly even when the VAT period is a quarter. */

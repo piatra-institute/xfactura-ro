@@ -27,6 +27,13 @@ import {
 } from 'xfactura-core/documents/schemas';
 import type { TaxDecisionDocument, TaxStatementDocument } from 'xfactura-core/ro/taxaccount';
 import { isInventoryKind, type InventoryList } from 'xfactura-core/ro/yearend';
+import { isZReportKind } from 'xfactura-core/ro/retail';
+import {
+  isCustomsKind,
+  isViesKind,
+  type CustomsDeclaration,
+  type ViesCheck,
+} from 'xfactura-core/ro/trade';
 import { isValidCnp } from 'xfactura-core/ro/identifiers';
 import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
 import { bucharestDate, daysBetween, type LocalDate } from 'xfactura-core/time';
@@ -106,7 +113,9 @@ export const documentDetail = documentView.extend({
 export const listInput = z
   .object({
     kinds: z.array(z.string()).max(20).optional(),
-    authority: z.enum(['efactura', 'issued', 'ubl_upload', 'invoicer', 'extracted']).optional(),
+    authority: z
+      .enum(['efactura', 'issued', 'ubl_upload', 'invoicer', 'amef', 'extracted'])
+      .optional(),
   })
   .strict();
 const part = z.number().int().min(1).max(1000);
@@ -259,8 +268,16 @@ async function counterpartyOf(
 ) {
   let party: { name: string; taxId: string; country: string } | undefined;
   // ANAF's documents are the authority's, whose party the booking names (`authorityId`); the
-  // inventory's lists are the company's own.
-  if (isTaxKind(kind) || isInventoryKind(kind)) return null;
+  // inventory's lists are the company's own; a customs declaration and a VIES answer are read by
+  // the booking of their invoice, which names the partner (core ro/trade).
+  if (
+    isTaxKind(kind) ||
+    isInventoryKind(kind) ||
+    isCustomsKind(kind) ||
+    isViesKind(kind) ||
+    isZReportKind(kind)
+  )
+    return null;
   if (isInvoiceKind(kind)) {
     const invoice = body as InvoiceDocument;
     party = isIssuedKind(kind) ? invoice.customer : invoice.supplier;
@@ -282,7 +299,11 @@ const docDateOf = (kind: string, body: ExtractedBody) =>
       ? (body as TaxStatementDocument).asOf
       : isInventoryKind(kind)
         ? (body as InventoryList).date
-        : (body as InvoiceDocument | ReceiptDocument | TaxDecisionDocument).issueDate;
+        : isCustomsKind(kind)
+          ? (body as CustomsDeclaration).acceptedOn
+          : isViesKind(kind)
+            ? (body as ViesCheck).requestDate
+            : (body as InvoiceDocument | ReceiptDocument | TaxDecisionDocument).issueDate;
 
 /** Documents of every source, and the extractions agents record. */
 export class Documents {
@@ -321,6 +342,27 @@ export class Documents {
       });
       return this.detail(tx, recorded.row);
     });
+  }
+
+  /**
+   * A document the engine itself read from a file it keeps (VIES's answer to `parties.checkVies`,
+   * core ro/trade): recorded and checked like an extraction, inside the caller's command.
+   */
+  async recordDerived(
+    tx: Transaction,
+    actor: Actor,
+    input: { kind: ExtractedKind; body: unknown; source: EvidenceRow },
+  ) {
+    const layer = await this.evidence.textLayer(actor.companyId, input.source);
+    const recorded = await this.extracted(tx, actor, {
+      kind: input.kind,
+      body: input.body,
+      citations: {},
+      source: input.source,
+      part: 1,
+      layer,
+    });
+    return this.detail(tx, recorded.row);
   }
 
   /**
@@ -477,7 +519,14 @@ export class Documents {
         docDate: docDateOf(input.kind, body),
         partyId: await counterpartyOf(tx, actor, input.kind, body, company!.cui, this.commands.ids),
         currency: 'currency' in body ? body.currency : 'RON',
-        number: 'number' in body ? body.number : null,
+        number:
+          'number' in body
+            ? body.number
+            : 'mrn' in body
+              ? body.mrn
+              : 'vatNumber' in body
+                ? `${body.countryCode}${body.vatNumber}`
+                : null,
         identityKey: documentIdentity(input.kind, body, company!.cui),
         authority: 'extracted',
         checks: canonical(checks),
