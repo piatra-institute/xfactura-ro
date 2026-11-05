@@ -220,6 +220,44 @@ export const keyAnnotations: Readonly<Record<string, KeyAnnotation>> = {
     },
     obligations: ['S1003', 'S1005'],
   },
+  'ro.inventory.accounts': {
+    reach: {
+      estimate: 2,
+      profiles: ['RO-SRV-01', 'RO-SRV-02', 'RO-SRV-06'],
+      basis: 'Every company whose annual inventory finds a cash difference or a missing asset.',
+    },
+    risk: {
+      kind: 'presentation',
+      basis: "The account decides the statements' row; the imputed amount is taxable either way.",
+    },
+    obligations: ['S1005', 'S1003'],
+  },
+  'ro.impairment.accounts': {
+    reach: {
+      estimate: 2,
+      profiles: ['RO-SRV-01', 'RO-SRV-02', 'RO-SRV-06'],
+      basis: 'Every company with customers overdue, in litigation or insolvent at the year end.',
+    },
+    risk: {
+      kind: 'tax_amount',
+      basis:
+        'The base of the impairment sets the expense and its deductible 30% or 100% (art. 26).',
+    },
+    obligations: ['D101', 'S1005', 'S1003'],
+  },
+  'ro.provisions.accounts': {
+    reach: {
+      estimate: 2,
+      profiles: ['RO-PAY', 'RO-SRV-06'],
+      basis: 'Every employer with untaken leave at the year end, and companies with lawsuits.',
+    },
+    risk: {
+      kind: 'tax_amount',
+      basis:
+        'A provision is added back (art. 26); a debt to the staff is deductible when its expense is incurred.',
+    },
+    obligations: ['D101', 'S1005', 'S1003'],
+  },
   'ro.halfyear.report': {
     reach: {
       estimate: 1,

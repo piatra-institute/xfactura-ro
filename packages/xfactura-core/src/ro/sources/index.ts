@@ -7,6 +7,7 @@ import { profitClauses, profitSources } from './profit';
 import { saftClauses, saftSources } from './saft';
 import { withholdingClauses, withholdingSources } from './withholding';
 import { receiptClauses, receiptSources } from './receipts';
+import { yearEndClauses, yearEndSources } from './yearend';
 
 /**
  * Where the engine's Romanian rules come from. A source is a legal act or an official
@@ -902,6 +903,7 @@ export const legalSources: readonly LegalSource[] = [
   ...saftSources,
   ...withholdingSources,
   ...receiptSources,
+  ...yearEndSources,
 ];
 
 export const clauses: readonly Clause[] = [
@@ -2482,6 +2484,7 @@ export const clauses: readonly Clause[] = [
   ...saftClauses,
   ...withholdingClauses,
   ...receiptClauses,
+  ...yearEndClauses,
 ];
 
 const sourceById = new Map(legalSources.map((source) => [source.id, source]));

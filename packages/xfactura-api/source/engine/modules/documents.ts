@@ -26,6 +26,7 @@ import {
   isTaxKind,
 } from 'xfactura-core/documents/schemas';
 import type { TaxDecisionDocument, TaxStatementDocument } from 'xfactura-core/ro/taxaccount';
+import { isInventoryKind, type InventoryList } from 'xfactura-core/ro/yearend';
 import { isValidCnp } from 'xfactura-core/ro/identifiers';
 import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
 import { bucharestDate, daysBetween, type LocalDate } from 'xfactura-core/time';
@@ -257,8 +258,9 @@ async function counterpartyOf(
   ids: Ids,
 ) {
   let party: { name: string; taxId: string; country: string } | undefined;
-  // ANAF's documents are the authority's, whose party the booking names (`authorityId`).
-  if (isTaxKind(kind)) return null;
+  // ANAF's documents are the authority's, whose party the booking names (`authorityId`); the
+  // inventory's lists are the company's own.
+  if (isTaxKind(kind) || isInventoryKind(kind)) return null;
   if (isInvoiceKind(kind)) {
     const invoice = body as InvoiceDocument;
     party = isIssuedKind(kind) ? invoice.customer : invoice.supplier;
@@ -278,7 +280,9 @@ const docDateOf = (kind: string, body: ExtractedBody) =>
     ? (body as ContractDocument).date
     : kind === documentKinds.taxStatement
       ? (body as TaxStatementDocument).asOf
-      : (body as InvoiceDocument | ReceiptDocument | TaxDecisionDocument).issueDate;
+      : isInventoryKind(kind)
+        ? (body as InventoryList).date
+        : (body as InvoiceDocument | ReceiptDocument | TaxDecisionDocument).issueDate;
 
 /** Documents of every source, and the extractions agents record. */
 export class Documents {

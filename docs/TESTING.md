@@ -70,7 +70,7 @@ DUKIntegrator is a Java CLI, and its shutdown hook halts the JVM only after `max
 
 DUKIntegrator keeps each declaration's validator loaded between files. Only declarations shown to give the CLI's verdicts there use the shared JVM (`reusable` in `anaf.ts`: D100, D101, D112, D204, D205, D212, D300, D301, D394, D406, S1003, S1005 and S1046). For each of them, every official test's documents gave the same verdicts as a fresh JVM per document, sent in order, reversed, shuffled and three times each. Any other declaration runs in a fresh JVM per document. So does any command the shared JVM fails: a crash, an out-of-memory error, or no answer within 120 s. `ANAF_DUK=fresh` runs every document in its own JVM. `ANAF_DUK=compare` runs each document both ways and fails on any difference; run it before adding a declaration to `reusable`.
 
-The engine's `DukIntegrator` adapter (`declarations.validate` and the integration tests that reach `validated_official`) still starts a JVM per call.
+The engine's `DukIntegrator` adapter (`declarations.validate` and the integration tests that reach `validated_official`) still starts a JVM per call, but without the wait: it passes DUKIntegrator a config folder (`-c`) holding the kit's config.properties with `maxWaitBeforeExitMillis=0`, made in the temporary directory (`dukConfigFolder`). A call takes about 0.47 s instead of 1.47 s, with the same verdicts and PDFs (the PDFs differ only in iText's creation date and document ID). The official tests' own fresh JVMs (`anaf.ts`) still run the CLI as published.
 
 ## Agent evaluation
 

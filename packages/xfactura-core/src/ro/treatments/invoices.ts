@@ -1065,9 +1065,13 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
       );
     });
     categories.forEach((category, c) => {
-      // An exempt category is declared by its base (D300 rd. 1, 14, 15, 29), without VAT.
+      // An exempt category is declared by its base (D300 rd. 1, 14, 15, 29), without VAT; so is a
+      // purchase outside the scope of VAT (O: from a supplier not registered for VAT, D300 rd.
+      // 29's "neimpozabilă sau supusă unui regim special de taxă", OPANAF nr. 174/2026), which
+      // D394 lists as an acquisition N and D406 reports with the exempt purchases' code.
       const exempt = isExemptCategory(category.category);
-      if (categoryTax[c] === 0n && !exempt) return;
+      const outside = direction === 'purchase' && category.category === 'O';
+      if (categoryTax[c] === 0n && !exempt && !outside) return;
       const members = parts.flatMap((part, p) => (part.vat === category.key ? [p] : []));
       const deductedTax = members.reduce((sum, p) => sum + deducted[p]!, 0n);
       const deductedTaxMinor = members.reduce((sum, p) => sum + deductedMinor[p]!, 0n);
@@ -1126,7 +1130,7 @@ export const invoiceRecognition: Treatment<RecognitionInput> = {
         key: categories.length === 1 ? 'vat' : `vat:${category.key}`,
         attributes: {
           ...entry.attributes,
-          ...(exempt
+          ...(exempt || outside
             ? {
                 category: category.category,
                 ...(direction === 'sale' ? { exemption: input.exemption! } : {}),
@@ -1975,12 +1979,15 @@ export const creditRecognition: Treatment<CreditInput> = {
     const cashVat: { code: string; deferred: string; chargeable: string }[] = [];
     for (const category of categories) {
       const exempt = isExemptCategory(category.category);
-      if (category.tax === 0n && !exempt) continue;
+      const outside = purchase && category.category === 'O';
+      if (category.tax === 0n && !exempt && !outside) continue;
       const members = parts.flatMap((part, p) => (part.vat === category.key ? [p] : []));
       const deductedTax = members.reduce((sum, p) => sum + deducted[p]!, 0n);
       const ledger = purchase ? deductedTax : category.tax;
       const originKey = originalKeys.length === 1 ? 'vat' : `vat:${category.key}`;
       const originCode = originalEntries.get(originKey)?.code;
+      // A purchase outside the scope of VAT reduces its base where the original recorded one.
+      if (outside && originCode !== 'O') continue;
       if (exempt && !originCode)
         return {
           effect: null,
@@ -2033,7 +2040,7 @@ export const creditRecognition: Treatment<CreditInput> = {
           attributes: {
             ...entry.attributes,
             ...mixedAttributes,
-            ...(exempt ? { category: category.category } : {}),
+            ...(exempt || outside ? { category: category.category } : {}),
           },
         };
       };

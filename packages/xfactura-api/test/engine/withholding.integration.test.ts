@@ -1,9 +1,15 @@
 import { afterAll, describe, expect, test } from 'bun:test';
+import { randomUUID } from 'node:crypto';
+import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { migrate } from 'drizzle-orm/libsql/migrator';
 import * as withholdingAgent from 'xfactura-core/ro/withholding/agent';
 import { questionKindIds } from 'xfactura-core/questions/kinds';
 import { sourceXml, type XmlElement } from 'xfactura-core/xml';
 import { DukIntegrator } from '../../source/engine/adapters/declaration-validator';
+import type { Database } from '../../source/engine/db/database';
+import { ensureInvariants } from '../../source/engine/db/invariants';
 import { workKinds } from '../../source/engine/kernel/work';
 import type { ProposalView } from '../../source/engine/kernel/views';
 import { journal, scenario, type Scenario } from './scenario';
@@ -46,8 +52,12 @@ const withheldOf = (proposal: ProposalView) =>
 
 /** A company outside VAT with 100,000 lei of retained profit, its details, a bank account, the
  * tax authority, an individual (landlord, author and shareholder) and a Romanian company. */
-async function company(validator?: DukIntegrator) {
-  const s = await scenario({ cui, ...(validator ? { declarationValidator: validator } : {}) });
+async function company(validator?: DukIntegrator, migrate?: (db: Database) => Promise<void>) {
+  const s = await scenario({
+    cui,
+    ...(validator ? { declarationValidator: validator } : {}),
+    ...(migrate ? { migrate } : {}),
+  });
   open.push(s);
   await s.invoke(s.owner, 'sales.seller.record', {
     details: {
@@ -285,6 +295,30 @@ describe('intellectual property paid to an individual', () => {
   });
 });
 
+const migrations = path.join(import.meta.dir, '../../source/engine/db/migrations');
+
+/** Gives a new database the migrations up to `last` and the invariants: books created before the
+ * migrations after it. */
+const migratedTo = (last: string) => async (db: Database) => {
+  const folder = await mkdtemp(path.join(tmpdir(), 'xfactura-migrations-'));
+  try {
+    await cp(migrations, folder, { recursive: true });
+    const file = path.join(folder, 'meta/_journal.json');
+    const journal = JSON.parse(await readFile(file, 'utf8')) as { entries: { tag: string }[] };
+    const end = journal.entries.findIndex((entry) => entry.tag === last);
+    expect(end).toBeGreaterThan(0);
+    await writeFile(
+      file,
+      JSON.stringify({ ...journal, entries: journal.entries.slice(0, end + 1) }),
+    );
+    await db.initialize();
+    await migrate(db.orm, { migrationsFolder: folder });
+    await ensureInvariants(db.client);
+  } finally {
+    await rm(folder, { recursive: true, force: true });
+  }
+};
+
 describe('interim dividends', () => {
   test('463 = 456 within the distributable profit, taxed when paid, regularized 457 = 463 against the annual dividends', async () => {
     const { s, anaf, person, holding, book } = await company();
@@ -384,6 +418,109 @@ describe('interim dividends', () => {
     await s.post(await s.approve(regularized));
     // 463 is settled by the interim dividends; what the annual dividends add (5,000 lei to the
     // individual) is paid from 457 with its tax, the interim ones still owed from 456.
+  });
+
+  test('books created before 463: migration 0025 adds it, with the controls of 456 and 463 where nothing was posted', async () => {
+    const { s, person, holding, book } = await company(undefined, migratedTo('0024_tax_account'));
+    // A second company of the same books, which booked its subscribed capital on 456.
+    const other = await s.engine.companies.create(s.owner.actorId, randomUUID(), {
+      name: 'Alta SRL',
+      cui: '14399840',
+      year: 2026,
+    });
+    const otherOwner = { actorId: s.owner.actorId, companyId: other.id };
+    // The charts as company creation seeded them before: without 463, 456 without a control.
+    for (const statement of [
+      'DROP TRIGGER inv_account_update',
+      'DROP TRIGGER inv_acc_accounts_no_delete',
+      "DELETE FROM acc_accounts WHERE code = '463'",
+      "UPDATE acc_accounts SET control_kind = NULL WHERE code = '456'",
+    ])
+      await s.db.client.execute(statement);
+    await ensureInvariants(s.db.client);
+    const before = await s.propose('dividends.interim', {
+      date: '2026-08-10',
+      evidenceId: (await s.evidence('hotarare-aga-interimar.pdf')).id,
+      statementsEvidenceId: (await s.evidence('situatii-interimare.pdf')).id,
+      quarterEnd: '2026-06-30',
+      reserves: '0.00',
+      fromReserves: '0.00',
+      shareholders: [{ partyId: person.id, amount: '1000.00' }],
+    });
+    expect(codes(before)).toContain('ACCOUNT_UNKNOWN');
+    const capital = await s.invoke<ProposalView>(otherOwner, 'ledger.general.propose', {
+      ...journal(
+        (
+          await s.invoke<{ id: string }>(otherOwner, 'evidence.record', {
+            filename: 'act-constitutiv.pdf',
+            mediaType: 'application/pdf',
+            base64: Buffer.from('capital subscris').toString('base64'),
+          })
+        ).id,
+        [
+          { account: '456', side: 'D', amount: '200.00' },
+          { account: '1011', side: 'C', amount: '200.00' },
+        ],
+        { date: '2026-01-05' },
+      ),
+    });
+    await s.post(await s.approve(capital, otherOwner), otherOwner);
+
+    await s.db.migrate();
+    const chart = async (companyId: string) =>
+      (
+        await s.db.client.execute({
+          sql: `SELECT code, parent_code, name, nature, postable, control_kind, valid_from, chart_version
+                FROM acc_accounts WHERE company_id = ? AND code IN ('456', '463') ORDER BY code`,
+          args: [companyId],
+        })
+      ).rows.map((row) => ({ ...row }));
+    const added = {
+      code: '463',
+      parent_code: '46',
+      name: 'Creanțe reprezentând dividende repartizate în cursul exercițiului financiar',
+      nature: 'debit',
+      postable: 1n,
+      control_kind: 'receivable',
+      valid_from: '2018-09-17',
+      chart_version: 'OMFP3067/2018:pct.423^1-423^2',
+    };
+    expect(await chart(s.company.id)).toEqual([
+      expect.objectContaining({ code: '456', control_kind: 'payable' }),
+      added,
+    ]);
+    // 456 holds a posted line in the other company: it keeps no control, so no line loses its
+    // match; an interim distribution there is refused by the kernel (OPEN_ITEM_NOT_CONTROL).
+    expect(await chart(other.id)).toEqual([
+      expect.objectContaining({ code: '456', control_kind: null }),
+      added,
+    ]);
+    // The update guard is back, and the interim dividends book on the migrated chart.
+    await expect(
+      s.db.client.execute("UPDATE acc_accounts SET control_kind = NULL WHERE code = '463'"),
+    ).rejects.toThrow('inv:immutable_record');
+    const distributed = await book(
+      'dividends.interim',
+      {
+        date: '2026-08-10',
+        evidenceId: (await s.evidence('hotarare-aga-interimar-2.pdf')).id,
+        statementsEvidenceId: (await s.evidence('situatii-interimare-2.pdf')).id,
+        quarterEnd: '2026-06-30',
+        reserves: '0.00',
+        fromReserves: '0.00',
+        shareholders: [
+          { partyId: person.id, amount: '20000.00' },
+          { partyId: holding.id, amount: '10000.00' },
+        ],
+      },
+      ['INTERIM_STATEMENTS'],
+    );
+    expect(lines(distributed)).toEqual([
+      'D 463 20000.00',
+      'C 456 20000.00',
+      'D 463 10000.00',
+      'C 456 10000.00',
+    ]);
   });
 });
 

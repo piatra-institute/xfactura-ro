@@ -1115,6 +1115,37 @@ async function autonomyRecords(world: World) {
   return { reviewed, batch, batchApproval, template, revoke, predict, automation, criteria };
 }
 
+/** Locks the world's financial year as an executed reviewed year close does. */
+async function lockYear(world: World) {
+  const id = randomUUID();
+  const decidedEpoch = await epoch(world, world.reviewer);
+  await world.db.write(async (tx) => {
+    await tx.insert(actionRequests).values({
+      id,
+      companyId: world.company,
+      operation: 'years.close',
+      input: JSON.stringify({ financialYearId: world.year }),
+      preview: '{}',
+      previewHash: 'preview',
+      createdBy: world.owner,
+    });
+    await tx.insert(actionDecisions).values({
+      companyId: world.company,
+      requestId: id,
+      decision: 'approve',
+      previewHash: 'preview',
+      decidedBy: world.reviewer,
+      decidedEpoch,
+    });
+    await tx.insert(actionExecutions).values({
+      companyId: world.company,
+      requestId: id,
+      result: '{}',
+      executedBy: world.owner,
+    });
+  });
+}
+
 const attacks: Attack[] = [
   {
     trigger: 'inv_question_guard',
@@ -1633,6 +1664,16 @@ const attacks: Attack[] = [
     run: async (world) => {
       const { proposed, approvalId } = await approved(world, sale(world));
       await periodEvent(world, '2026-03');
+      return post(world, proposed, { approvalId });
+    },
+  },
+  {
+    trigger: entry,
+    code: 'closed_year',
+    name: 'posting into a financial year a reviewed year close locked',
+    run: async (world) => {
+      const { proposed, approvalId } = await approved(world, sale(world));
+      await lockYear(world);
       return post(world, proposed, { approvalId });
     },
   },
@@ -2315,6 +2356,16 @@ const attacks: Attack[] = [
     code: 'period_sequence',
     name: 'reopening a month that was never closed',
     run: async (world) => periodEvent(world, '2026-03', 'reopen'),
+  },
+  {
+    trigger: 'inv_period_event_guard',
+    code: 'closed_year_month',
+    name: 'reopening a month of a locked financial year',
+    run: async (world) => {
+      await periodEvent(world, '2026-03');
+      await lockYear(world);
+      return periodEvent(world, '2026-03', 'reopen');
+    },
   },
   {
     trigger: 'inv_period_event_guard',

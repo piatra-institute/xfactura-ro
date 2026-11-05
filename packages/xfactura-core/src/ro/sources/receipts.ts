@@ -35,17 +35,24 @@ export const receiptSources: readonly LegalSource[] = [
   },
   {
     // The law on fiscal cash registers, which the Fiscal Code and its norms cite for receipts.
-    // Neither ANAF's site nor a fetchable official copy holds its republished text: the owner
-    // downloads it from legislatie.just.ro by hand (the portal refuses automated requests).
+    // The owner's copy is a LEX EXPERT consolidation current to 10 September 2018: amendments
+    // after that date are not verified. Kept in .sources/OUG28_1999/.
     id: 'OUG28/1999',
     kind: 'act',
     title:
-      'Ordonanța de urgență a Guvernului nr. 28/1999 privind obligația operatorilor economici de a utiliza aparate de marcat electronice fiscale, republicată',
+      'Ordonanța de urgență a Guvernului nr. 28/1999 privind obligația operatorilor economici de a utiliza aparate de marcat electronice fiscale, republicată (text consolidat LEX EXPERT, în vigoare de la 10 septembrie 2018)',
     issuer: 'Guvernul României',
-    publication: null,
+    publication: 'Monitorul Oficial nr. 75 din 21 ianuarie 2005 (republicare)',
     urls: [],
     fetch: false,
-    snapshots: [],
+    snapshots: [
+      {
+        url: 'https://xfactura.invalid/owner-download/oug_28_1999.pdf',
+        sha256: '804efcb004c9ac9f4a84113c00fd4da3f4e47cd1f856fbf47debd0707fad06e8',
+        retrievedOn: '2026-11-06',
+        mediaType: 'application/pdf',
+      },
+    ],
   },
 ];
 
@@ -142,10 +149,10 @@ export const receiptClauses: readonly Clause[] = [
   {
     id: 'OUG28/1999:art.1',
     source: 'OUG28/1999',
-    locator: 'art. 1 (bonul fiscal și codul de identificare fiscală al cumpărătorului)',
-    status: 'pending',
+    locator: 'art. 1 alin. (1)–(2)',
+    status: 'located',
     summary:
-      'Bonul fiscal emis de aparatul de marcat electronic fiscal, cu codul de identificare fiscală al cumpărătorului; textul republicat nu este în .sources/.',
+      'Cine încasează de la populație folosește aparate de marcat electronice fiscale, emite bonuri fiscale și le înmânează clienților; la cerere eliberează și factura. Codul cumpărătorului pe bon nu vine din acest text (până la 10.09.2018), ci din Codul fiscal art. 319 alin. (21) și normele pct. 69.',
   },
   {
     id: 'ANAF/D300-12.0.0:rd.12-13',

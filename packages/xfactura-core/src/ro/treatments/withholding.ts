@@ -90,6 +90,10 @@ export const payeeKinds = ['rent', 'royalties'] as const;
 export type PayeeKind = (typeof payeeKinds)[number];
 /** The tag of a payee's payable line: what it is owed for. */
 export const payeeTag = (kind: PayeeKind) => `payee:${kind}`;
+/** The tag of the 446 line of a tax withheld at source: its D100 obligation (611 for
+ * intellectual property, declared in D112), by which the tax account types the item
+ * (`ro.taxaccount.obligations`). */
+export const withheldTag = (type: string) => `wht:${type}`;
 
 export const payeeInput = z
   .object({
@@ -395,7 +399,14 @@ export const payeeWithholding: Treatment<PayeeWithholdingInput> = {
           openItem: item.id,
           partyId: item.partyId,
         },
-        { account: '446', side: 'C', bani: tax, openItem: 'tax', partyId: input.authorityId },
+        {
+          account: '446',
+          side: 'C',
+          bani: tax,
+          openItem: 'tax',
+          partyId: input.authorityId,
+          analytics: { item: withheldTag(withheld.type) },
+        },
       ],
       openItems: [
         {
@@ -859,7 +870,14 @@ export const nonresidentWithholding: Treatment<NonresidentWithholdingInput> = {
                 openItem: item.id,
                 partyId: item.partyId,
               },
-              { account: '446', side: 'C', bani: tax, openItem: 'tax', partyId: input.authorityId },
+              {
+                account: '446',
+                side: 'C',
+                bani: tax,
+                openItem: 'tax',
+                partyId: input.authorityId,
+                analytics: { item: withheldTag(type) },
+              },
             ],
             openItems: [
               {

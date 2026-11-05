@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, lte } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, lte } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Party } from 'xfactura-core/einvoice';
 import { profileAt, vatPeriodOf, type ReadSetEntry } from 'xfactura-core/kernel';
@@ -7,36 +7,48 @@ import {
   d394Namespace,
   d394Rates,
   d394RefundFlags,
+  d394UnregisteredProductCodes,
   writeD394,
   type D394,
+  type D394DocumentType,
   type D394Invoice,
   type D394InvoiceSeries,
   type D394Operation,
   type D394Partner,
+  type D394Product,
   type D394Rate,
 } from 'xfactura-core/ro/declarations/d394';
+import { parseMoney } from 'xfactura-core/money';
 import { supplierAppliesCashVat } from 'xfactura-core/ro/cash-vat';
 import { counties } from 'xfactura-core/ro/geo';
 import { isValidCnp, isValidCui } from 'xfactura-core/ro/identifiers';
 import { invoiceKinds } from 'xfactura-core/ro/treatments/invoices';
 import { regimeCodes } from 'xfactura-core/ro/treatments/vat-registration';
 import { adjustmentCodes, allExemptCodes, exemptCodes } from 'xfactura-core/ro/exempt';
+import { payeeKinds } from 'xfactura-core/ro/treatments/withholding';
 import { vatPeriodEnd } from 'xfactura-core/ro/treatments/vat-settlement';
 import type { RuleContext } from 'xfactura-core/rules';
+import type { LocalDate } from 'xfactura-core/time';
 import { invoiceDocumentSchema } from 'xfactura-core/ubl/invoice-document';
 import type { Transaction } from '../db/database';
 import {
   artifactEvents,
   artifacts,
   companies,
+  entries as ledgerEntries,
   issuedNumbers,
+  partyCnps,
   partyVersions,
+  proposals,
+  proposalVersions,
   series,
 } from '../db/schema';
+import { entryStands } from '../kernel/ledger';
 import { loadState } from '../kernel/state';
 import { periodStart, rounding, sellerDetails } from './d300';
 import { receiptEntries, receiptSections, reverseChargeOperations } from './receipts';
 import type { DeclarationKind, DeclarationProblem } from './declarations';
+import { Sealer } from './payroll';
 
 const text = (max: number) => z.string().trim().min(1).max(max);
 const range = z
@@ -94,6 +106,12 @@ export const d394Options = z
       })
       .strict()
       .optional(),
+    /** The nature of what was bought (op11) from an individual or a partner without a code, not
+     * registered for VAT, by the purchase document's id: its code in ANAF's nomenclature for
+     * those partners (cereals by NC code, 22 waste, 23 timber, 32 land, 33 buildings, 34 other
+     * goods, 35 services). Rent and intellectual property owed under a contract need none: they
+     * are services (Codul fiscal art. 271 alin. (3) lit. a), b)). */
+    natures: z.record(z.string(), z.enum(d394UnregisteredProductCodes)).optional(),
     /** The nature of the period's operations, required when its VAT return requests a refund. */
     refund: z
       .object(Object.fromEntries(d394RefundFlags.map(([flag]) => [flag, z.boolean()])))
@@ -121,6 +139,66 @@ function statementPeriod(period: string): D394['period'] {
   const quarter = /^(\d{4})-Q([1-4])$/.exec(period);
   if (quarter) return { year: Number(quarter[1]), month: Number(quarter[2]) * 3 };
   return { year: Number(period.slice(0, 4)), month: Number(period.slice(5, 7)) };
+}
+
+/** Purchases that may be acquisitions from persons not registered for VAT (N): exempt ones and
+ * those outside the scope of VAT (category O). */
+const unregisteredCodes: readonly string[] = [exemptCodes.purchase, 'O'];
+
+/** The rent and intellectual property owed to individuals under a contract (`payees.recognize`)
+ * and posted in the period, as they stand. */
+async function payeesOwed(tx: Transaction, companyId: string, from: string, to: string) {
+  const rows = await tx
+    .select({
+      entryId: ledgerEntries.id,
+      date: ledgerEntries.date,
+      input: proposalVersions.input,
+    })
+    .from(ledgerEntries)
+    .innerJoin(
+      proposals,
+      and(
+        eq(proposals.companyId, ledgerEntries.companyId),
+        eq(proposals.id, ledgerEntries.proposalId),
+      ),
+    )
+    .innerJoin(
+      proposalVersions,
+      and(
+        eq(proposalVersions.companyId, ledgerEntries.companyId),
+        eq(proposalVersions.proposalId, ledgerEntries.proposalId),
+        eq(proposalVersions.version, ledgerEntries.version),
+      ),
+    )
+    .where(
+      and(
+        eq(ledgerEntries.companyId, companyId),
+        eq(proposals.treatmentId, 'payees.recognize'),
+        gte(ledgerEntries.date, from),
+        lte(ledgerEntries.date, to),
+        // A reversed posting no longer counts; the subject's new booking does.
+        entryStands('"acc_entries"'),
+      ),
+    );
+  return rows.flatMap((row) => {
+    const input = JSON.parse(row.input) as {
+      kind: (typeof payeeKinds)[number];
+      partyId: string;
+      evidenceId: string;
+      amount: string;
+    };
+    return payeeKinds.includes(input.kind)
+      ? [
+          {
+            entryId: row.entryId,
+            date: row.date,
+            partyId: input.partyId,
+            evidenceId: input.evidenceId,
+            bani: parseMoney(input.amount, 'RON'),
+          },
+        ]
+      : [];
+  });
 }
 
 /** The latest invoicing details of each party, for individuals identified by their address. */
@@ -168,12 +246,19 @@ async function inputsOf(tx: Transaction, companyId: string, period: string) {
   });
   // A change of regime (V1): only the days of the normal regime, and not the regularizations of a
   // late registration or of the capital goods, which are no invoices.
-  const all = (ledger.loaded.taxLedger.get(`VAT|${period}`)?.entries ?? []).filter(
+  const normal = (ledger.loaded.taxLedger.get(`VAT|${period}`)?.entries ?? []).filter(
     (entry) =>
       !crossBorder.test(entry.code) &&
       !(Object.values(regimeCodes) as string[]).includes(entry.code) &&
-      !notListed.includes(entry.code) &&
       profileAt(ledger.loaded, 'vat.status', entry.taxPoint) === 'normal_vat',
+  );
+  // Exempt purchases and purchases outside the scope of VAT: acquisitions N from a supplier not
+  // registered for VAT, not listed from one registered.
+  const unregistered = normal.filter(
+    (entry) => entry.direction === 'input' && unregisteredCodes.includes(entry.code),
+  );
+  const all = normal.filter(
+    (entry) => !notListed.includes(entry.code) && !unregistered.includes(entry),
   );
   // Under VAT on collection, a collection or payment releases an invoice's VAT: the period's
   // releases are the VAT collected and deducted on payment, not operations of their own.
@@ -196,14 +281,39 @@ async function inputsOf(tx: Transaction, companyId: string, period: string) {
       ),
     )
     .orderBy(asc(series.code), asc(issuedNumbers.number));
+  // Rent and intellectual property owed to individuals in the period's days of the normal regime.
+  const payees = (await payeesOwed(tx, companyId, start, end)).filter(
+    (payee) => profileAt(ledger.loaded, 'vat.status', payee.date as LocalDate) === 'normal_vat',
+  );
   const documentIds = [
     ...new Set([
-      ...entries.flatMap((entry) => (entry.documentId ? [entry.documentId] : [])),
+      ...[...entries, ...unregistered].flatMap((entry) =>
+        entry.documentId ? [entry.documentId] : [],
+      ),
       ...issued.map((row) => row.number.documentId),
     ]),
   ];
-  const partyIds = [...new Set(entries.flatMap((entry) => (entry.partyId ? [entry.partyId] : [])))];
-  const read = await loadState(tx, companyId, { documents: documentIds, parties: partyIds });
+  const partyIds = [
+    ...new Set(
+      [...entries, ...unregistered].flatMap((entry) => (entry.partyId ? [entry.partyId] : [])),
+    ),
+  ];
+  const read = await loadState(tx, companyId, {
+    documents: documentIds,
+    parties: [...new Set([...partyIds, ...payees.map((payee) => payee.partyId)])],
+    entries: payees.map((payee) => payee.entryId),
+  });
+  const payeeIds = [...new Set(payees.map((payee) => payee.partyId))];
+  const cnps = new Map(
+    payeeIds.length
+      ? (
+          await tx
+            .select({ partyId: partyCnps.partyId, sealed: partyCnps.cnpSealed })
+            .from(partyCnps)
+            .where(and(eq(partyCnps.companyId, companyId), inArray(partyCnps.partyId, payeeIds)))
+        ).map((row) => [row.partyId, row.sealed])
+      : [],
+  );
   const seller = await sellerDetails(tx, companyId);
   const details = new Map<string, Awaited<ReturnType<typeof latestDetails>>>();
   for (const partyId of partyIds) details.set(partyId, await latestDetails(tx, companyId, partyId));
@@ -219,6 +329,10 @@ async function inputsOf(tx: Transaction, companyId: string, period: string) {
     loaded: ledger.loaded,
     entries,
     releases,
+    unregistered,
+    payees,
+    cnps,
+    parties: read.loaded.parties,
     documents: read.loaded.documents,
     details,
     issued,
@@ -236,7 +350,9 @@ async function inputsOf(tx: Transaction, companyId: string, period: string) {
  */
 export function d394Declaration(
   rules: (tx: Transaction, companyId: string) => Promise<RuleContext>,
+  secret: string,
 ): DeclarationKind {
+  const sealer = new Sealer(secret);
   return {
     kind: 'D394',
     description:
@@ -255,26 +371,20 @@ export function d394Declaration(
     async prepare(tx, companyId, period, raw) {
       const options = d394Options.parse(raw);
       const problems: DeclarationProblem[] = [];
-      const { loaded, entries, releases, documents, details, issued, seller, inputs } =
-        await inputsOf(tx, companyId, period);
-      // An exempt purchase from a supplier not registered for VAT is an acquisition of type N
-      // (OPANAF nr. 3.769/2015, anexa nr. 2, secțiunea a 2-a pct. 2), which is not produced yet;
-      // from a registered supplier it is not listed.
-      const unlisted = (loaded.taxLedger.get(`VAT|${period}`)?.entries ?? []).filter(
-        (entry) =>
-          entry.code === exemptCodes.purchase &&
-          profileAt(loaded, 'vat.status', entry.taxPoint) === 'normal_vat' &&
-          !(
-            entry.attributes.counterpartyCountry === 'RO' &&
-            /^RO\d+$/i.test((entry.attributes.counterpartyTaxId ?? '').replace(/\s+/g, '')) &&
-            isValidCui((entry.attributes.counterpartyTaxId ?? '').replace(/\s+/g, '').toUpperCase())
-          ),
-      );
-      if (unlisted.length)
-        problems.push({
-          code: 'D394_ACQUISITION_N',
-          message: `Achizițiile ${[...new Set(unlisted.map((entry) => entry.attributes.number ?? entry.documentId))].join(', ')} sunt de la furnizori neînregistrați în scopuri de TVA: se declară cu tipul N (achiziții de la persoane neînregistrate), care nu este încă produs.`,
-        });
+      const {
+        loaded,
+        entries,
+        releases,
+        unregistered,
+        payees,
+        cnps,
+        parties,
+        documents,
+        details,
+        issued,
+        seller,
+        inputs,
+      } = await inputsOf(tx, companyId, period);
       const end = vatPeriodEnd(period);
       if (vatPeriodOf(loaded, end) !== period)
         problems.push({
@@ -401,6 +511,171 @@ export function d394Declaration(
         group.vat += entry.taxBani;
         groups.set(groupKey, group);
       }
+
+      // Acquisitions from persons not registered for VAT (N; OPANAF nr. 3.769/2015 art. 1 and
+      // anexa nr. 2 secțiunea a 2-a pct. 2, ANAF's structure of 15.09.2025): per partner and
+      // document type, without VAT; an individual's (or a partner's without a code) with the
+      // nature of what was bought (op11), which no other partner's carries (R233.4, R233.6).
+      const acquisitions = new Map<
+        string,
+        {
+          partner: D394Partner;
+          document: D394DocumentType;
+          documents: Set<string>;
+          bani: bigint;
+          /** By product code, for individuals and partners without a code. */
+          natures: Map<D394Product['code'], { documents: Set<string>; bani: bigint }> | null;
+        }
+      >();
+      const acquire = (
+        key: string,
+        partner: D394Partner,
+        document: D394DocumentType,
+        documentId: string,
+        bani: bigint,
+        nature: D394Product['code'] | null,
+      ) => {
+        const groupKey = `N|${document}|${key}`;
+        const group = acquisitions.get(groupKey) ?? {
+          partner,
+          document,
+          documents: new Set<string>(),
+          bani: 0n,
+          natures: nature ? new Map() : null,
+        };
+        group.documents.add(documentId);
+        group.bani += bani;
+        if (nature && group.natures) {
+          const part = group.natures.get(nature) ?? { documents: new Set<string>(), bani: 0n };
+          part.documents.add(documentId);
+          part.bani += bani;
+          group.natures.set(nature, part);
+        }
+        acquisitions.set(groupKey, group);
+      };
+      // Exempt purchases and those outside the scope of VAT (O), by invoice: from a supplier with
+      // a valid RO VAT code they are not listed (the lists are of taxable operations).
+      for (const entry of unregistered) {
+        const document = entry.documentId ? documents.get(entry.documentId) : undefined;
+        const body = invoiceDocumentSchema.safeParse(document?.body);
+        if (!body.success || !entry.partyId) {
+          problems.push({
+            code: 'D394_OPERATION',
+            message: `Achiziția cu codul ${entry.code} nu are factură și furnizor.`,
+          });
+          continue;
+        }
+        const supplier = body.data.supplier;
+        const taxId = supplier.taxId.toUpperCase().replace(/\s+/g, '');
+        const number = entry.attributes.number ?? body.data.number;
+        if (supplier.country !== 'RO') {
+          problems.push({
+            code: 'D394_ACQUISITION_N',
+            message: `Achiziția ${number} este de la ${supplier.name}, nestabilit în România: achizițiile de la persoane nestabilite, neînregistrate în scopuri de TVA, nu sunt acoperite.`,
+          });
+          continue;
+        }
+        if (/^RO/.test(taxId)) {
+          if (!isValidCui(taxId))
+            problems.push({
+              code: 'D394_SUPPLIER',
+              message: `Codul de TVA ${taxId} al furnizorului ${supplier.name} nu este valid.`,
+            });
+          continue;
+        }
+        const nature = options.natures?.[entry.documentId!] ?? null;
+        let partner: D394Partner;
+        let key: string;
+        if (isValidCui(taxId) && !isValidCnp(taxId)) {
+          partner = { kind: 'unregistered', code: taxId, name: supplier.name };
+          key = taxId;
+        } else {
+          if (!nature) {
+            problems.push({
+              code: 'D394_NATURE',
+              message: `Declarați natura achiziției ${number} de la ${supplier.name}, persoană fizică sau fără cod fiscal (opțiunea natures, după documentul ${entry.documentId}): cereale, deșeuri, masă lemnoasă, terenuri, construcții, alte bunuri sau servicii.`,
+            });
+            continue;
+          }
+          if (isValidCnp(taxId)) {
+            partner = { kind: 'unregistered', code: taxId, name: supplier.name };
+            key = taxId;
+          } else {
+            const row = details.get(entry.partyId);
+            const address = row ? (JSON.parse(row.details) as Party).address : undefined;
+            if (!address || (address.country === 'RO' && !address.subdivision)) {
+              problems.push({
+                code: 'D394_ADDRESS',
+                message: `Furnizorul ${supplier.name} nu are cod de identificare sau adresă cu județ.`,
+              });
+              continue;
+            }
+            partner = {
+              kind: 'unregistered',
+              name: supplier.name,
+              address: {
+                country: address.country,
+                ...(address.country === 'RO' && address.subdivision
+                  ? { county: address.subdivision }
+                  : {}),
+                locality: address.city,
+                street: address.lines.join(', '),
+              },
+            };
+            key = `party:${entry.partyId}`;
+          }
+        }
+        acquire(key, partner, 'invoice', entry.documentId!, entry.baseBani, nature);
+      }
+      // Rent and intellectual property owed to an individual under a contract: services (Codul
+      // fiscal art. 271 alin. (3) lit. a), b)), the contract the document; the individual is
+      // identified by the CNP, recorded once and opened for the declaration only.
+      for (const payee of payees) {
+        const party = parties.get(payee.partyId);
+        const sealed = cnps.get(payee.partyId);
+        if (!party || !sealed) {
+          problems.push({
+            code: 'D394_CNP',
+            message: `Înregistrați CNP-ul persoanei ${party?.name ?? payee.partyId} (parties.recordCnp): chiria sau drepturile datorate ei se declară cu tipul N.`,
+          });
+          continue;
+        }
+        const cnp = sealer.open(companyId, sealed);
+        acquire(
+          cnp,
+          { kind: 'unregistered', code: cnp, name: party.name },
+          'contract',
+          payee.evidenceId,
+          payee.bani,
+          '35',
+        );
+      }
+      const unregisteredOperations: D394Operation[] = roundToLeu
+        ? [...acquisitions.values()].map(({ partner, document, documents: ids, bani, natures }) => {
+            // An individual's nature by product: each document counted once, the value rounded
+            // per product so that the products add up to the operation.
+            const products = natures
+              ? [...natures].map(([code, part]) => ({
+                  code,
+                  invoices: part.documents.size,
+                  base: Number(roundToLeu(part.bani)),
+                  vat: 0,
+                }))
+              : undefined;
+            return {
+              type: 'N' as const,
+              rate: '0' as const,
+              partner,
+              invoices: ids.size,
+              base: products
+                ? products.reduce((sum, product) => sum + product.base, 0)
+                : Number(roundToLeu(bani)),
+              vat: 0,
+              document,
+              ...(products ? { products } : {}),
+            };
+          })
+        : [];
 
       // Series and storno invoices: those the engine issued, plus those declared outside it.
       // An exempt invoice is in the VAT ledger too, though not listed (OPANAF nr. 3.769/2015).
@@ -547,6 +822,7 @@ export function d394Declaration(
             vat: Number(roundToLeu(vat)),
           })),
           ...reverseChargeOperations(special.reverse, documents, roundToLeu, problems),
+          ...unregisteredOperations,
         ],
         simplified: receiptSections(special.receipts, roundToLeu, problems),
         series: seriesList,

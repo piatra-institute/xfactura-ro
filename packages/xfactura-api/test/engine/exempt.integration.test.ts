@@ -218,15 +218,53 @@ describe('exempt purchases', () => {
     expect(informative.state).not.toBe('blocked');
     validated(informative);
 
-    // From a supplier not registered for VAT: type N, not produced yet, so D394 fails closed.
+    // From a supplier not registered for VAT (its CUI without RO): an acquisition of type N
+    // (OPANAF nr. 3.769/2015 anexa nr. 2 secțiunea a 2-a pct. 2), by invoice, without VAT.
     const unregistered = await c.exempt({
       number: 'MED-1',
       date: '2026-11-03',
       net: '300.00',
-      counterparty: '87654321',
+      counterparty: '10376500',
       reason: 'Scutit conform art. 292 alin. (1) lit. a) din Codul fiscal',
     });
     await c.book('invoices.recognize', { documentId: unregistered.id, account: '628' });
+    // Outside the scope of VAT (O), from a company outside VAT: D300 rd. 29 and N as well.
+    const small = await c.document({
+      number: 'MIC-1',
+      date: '2026-11-06',
+      category: 'O',
+      rate: '0',
+      net: '450.00',
+      tax: '0.00',
+      gross: '450.00',
+      counterparty: '6859662',
+    });
+    const outside = await c.book('invoices.recognize', { documentId: small.id, account: '628' });
+    expect(taxes(outside)).toEqual(['input O 450.00 0.00']);
+    // An individual's invoice (a CNP): N with the nature of what was bought, which is asked.
+    const individual = await c.exempt({
+      number: 'IND-1',
+      date: '2026-11-07',
+      net: '150.40',
+      counterparty: '1900101400012',
+      reason: 'Scutit conform art. 292 alin. (2) lit. e) din Codul fiscal',
+    });
+    await c.book('invoices.recognize', { documentId: individual.id, account: '612' });
+    // Rent owed to an individual under a contract (no invoice): N, a contract, services.
+    const landlord = await c.s.invoke<{ id: string }>(c.s.owner, 'parties.create', {
+      kind: 'ro_individual',
+      country: 'RO',
+      name: 'Popescu Ana',
+    });
+    await c.book('payees.recognize', {
+      kind: 'rent',
+      partyId: landlord.id,
+      evidenceId: (await c.s.evidence('contract-inchiriere.pdf')).id,
+      date: '2026-11-30',
+      period: '2026-11',
+      amount: '2500.00',
+      account: '612',
+    });
 
     // A credit note on the insurance keeps its exempt code: rd. 29 goes down by its base.
     const refund = await c.exempt({
@@ -244,8 +282,29 @@ describe('exempt purchases', () => {
       account: '613',
     });
     expect(taxes(credited)).toEqual(['input EX-IN -200.00 0.00']);
+    const november = await c.prepare('D300', '2026-11', { declarant, ...d300 });
+    // 300 + 450 + 150,40: exempt and outside the scope of VAT, base only.
+    expect(summary(november).rows).toMatchObject({ R26_1: 900 });
+    validated(november);
+    // Without the individual's nature and the landlord's CNP, D394 asks for them.
     const refused = await c.s.refused(c.prepare('D394', '2026-11', d394));
-    expect(JSON.stringify(refused)).toContain('D394_ACQUISITION_N');
+    expect(JSON.stringify(refused)).toContain('D394_NATURE');
+    expect(JSON.stringify(refused)).toContain('D394_CNP');
+    await c.s.invoke(c.s.owner, 'parties.recordCnp', {
+      partyId: landlord.id,
+      cnp: '2900101400022',
+    });
+    const statement = await c.prepare('D394', '2026-11', {
+      ...d394,
+      natures: { [individual.id]: '35' },
+    });
+    expect(summary(statement).operations).toEqual([
+      { type: 'N', rate: '0', partner: 'Companie 10376500', invoices: 1, base: 300, vat: 0 },
+      { type: 'N', rate: '0', partner: 'Companie 6859662', invoices: 1, base: 450, vat: 0 },
+      { type: 'N', rate: '0', partner: 'Companie 1900101400012', invoices: 1, base: 150, vat: 0 },
+      { type: 'N', rate: '0', partner: 'Popescu Ana', invoices: 1, base: 2500, vat: 0 },
+    ]);
+    validated(statement);
   });
 
   test('a K invoice received is an intra-community acquisition of goods: refused', async () => {
@@ -656,11 +715,15 @@ describe('exempt sales with the right of deduction', () => {
 
 describe('SAF-T', () => {
   saft(
-    'an exempt purchase, an exempt rent issued by the engine and a taxable sale pass D406',
+    'an exempt purchase, an exempt rent issued by the engine, a taxable sale, a purchase under the pro-rata and one outside the scope of VAT pass D406',
     async () => {
       const c = await company({
         today: '2026-11-20',
-        facts: { ...scope, 'vat.period': ['monthly', '2026-01-01'] },
+        facts: {
+          ...scope,
+          'vat.period': ['monthly', '2026-01-01'],
+          'vat.prorata': ['60', '2026-01-01'],
+        },
         saft: true,
       });
       const s = c.s;
@@ -761,10 +824,72 @@ describe('SAF-T', () => {
         },
       });
       await c.book('invoices.recognize', { documentId: policy.id, account: '613' });
+      const details = async (documentId: string, name: string, id: string) => {
+        const { partyId } = await s.invoke<{ partyId: string }>(s.owner, 'documents.get', {
+          id: documentId,
+        });
+        await s.invoke(s.owner, 'parties.recordDetails', {
+          partyId,
+          details: {
+            name,
+            ...(id.startsWith('RO') ? { vatId: id } : { legalId: id }),
+            address: {
+              lines: ['Str. Mică 2'],
+              city: 'Galați',
+              subdivision: 'RO-GL',
+              country: 'RO',
+            },
+          },
+        });
+      };
+      // For both kinds of operations, at the provisional pro-rata of 60%: Achizitii baserate.
+      const overhead = await c.document({
+        number: 'F-9',
+        date: '2026-10-15',
+        net: '1000.00',
+        tax: '210.00',
+        gross: '1210.00',
+        counterparty: 'RO13548146',
+      });
+      await details(overhead.id, 'Servicii Comune SRL', 'RO13548146');
+      const mixed = await c.book('invoices.recognize', {
+        documentId: overhead.id,
+        account: '628',
+        deduction: 'prorata',
+      });
+      expect(lines(mixed)).toEqual(['D 628 1084.00', 'D 4426 126.00', 'C 401 1210.00']);
+      // Outside the scope of VAT (O), from a company outside VAT: rd. 29's code, 308302.
+      const small = await c.document({
+        number: 'MIC-9',
+        date: '2026-10-16',
+        category: 'O',
+        rate: '0',
+        net: '450.00',
+        tax: '0.00',
+        gross: '450.00',
+        counterparty: '6859662',
+      });
+      await details(small.id, 'Mică Întreprindere SRL', '6859662');
+      await c.book('invoices.recognize', { documentId: small.id, account: '628' });
       const file = await c.prepare('D406', '2026-10', {
         contact: { firstName: 'Ana', lastName: 'Popescu', phone: '0236000000' },
       });
       expect([file.state, file.steps.at(-1)?.detail ?? null]).toEqual(['validated_official', null]);
+      const { base64 } = await s.invoke<{ base64: string }>(s.owner, 'evidence.get', {
+        id: (file as Artifact & { evidenceId: string }).evidenceId,
+      });
+      const xml = Buffer.from(base64, 'base64').toString();
+      const details406 = [
+        ...xml.matchAll(/<nsSAFT:TaxCodeDetails>(.*?)<\/nsSAFT:TaxCodeDetails>/gs),
+      ]
+        .map((match) => match[1]!.replace(/\s+/g, ''))
+        .map((text) => [
+          /<nsSAFT:TaxCode>(\d+)</.exec(text)![1],
+          [...text.matchAll(/<nsSAFT:BaseRate>([^<]+)</g)].map((rate) => rate[1]).join(','),
+        ]);
+      expect(details406).toContainEqual(['361104', '0.6000']);
+      expect(details406).toContainEqual(['308302', '1']);
+      expect(details406.filter(([, rate]) => rate !== '1')).toEqual([['361104', '0.6000']]);
     },
   );
 });

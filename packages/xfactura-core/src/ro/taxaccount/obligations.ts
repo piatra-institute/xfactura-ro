@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { OpenItemState } from '../../kernel';
 import { RuleGapError, type RuleContext } from '../../rules';
 import { monthEnd, monthStart, type LocalDate, type Month } from '../../time';
-import { obligationDue, type ObligationKind } from '../obligations';
+import { obligationDue, obligationKinds, type ObligationKind } from '../obligations';
 
 /*
  * The obligations to the state the tax account holds (Codul de procedură fiscală art. 163): each
@@ -38,6 +38,13 @@ export const taxTypes = [
   'cas',
   'cass',
   'cam',
+  'rent_tax',
+  'ip_tax',
+  'nonresident_dividend_tax',
+  'nonresident_interest_tax',
+  'nonresident_royalty_tax',
+  'nonresident_commission_tax',
+  'nonresident_services_tax',
 ] as const;
 export type TaxType = (typeof taxTypes)[number];
 export const taxTypeLabels: Record<TaxType, string> = {
@@ -50,6 +57,13 @@ export const taxTypeLabels: Record<TaxType, string> = {
   cas: 'Contribuția de asigurări sociale',
   cass: 'Contribuția de asigurări sociale de sănătate',
   cam: 'Contribuția asiguratorie pentru muncă',
+  rent_tax: 'Impozit pe veniturile din cedarea folosinței bunurilor, reținut la sursă',
+  ip_tax: 'Impozit pe veniturile din drepturi de proprietate intelectuală',
+  nonresident_dividend_tax: 'Impozit pe dividendele obținute din România de nerezidenți',
+  nonresident_interest_tax: 'Impozit pe dobânzile obținute din România de nerezidenți',
+  nonresident_royalty_tax: 'Impozit pe redevențele obținute din România de nerezidenți',
+  nonresident_commission_tax: 'Impozit pe comisioanele obținute din România de nerezidenți',
+  nonresident_services_tax: 'Impozit pe veniturile din servicii prestate de nerezidenți',
 };
 
 const type = z.enum(taxTypes);
@@ -66,6 +80,9 @@ const entrySchema = z
     single: z.boolean(),
     /** Due on the day it was withheld, rather than by the return's deadline. */
     due: z.literal('withholding_date').optional(),
+    /** Due by this return's deadline for the month it was withheld (the day the posting's
+     * subject ends with), for a treatment `declared` does not date by its own return. */
+    deadline: z.enum(obligationKinds).optional(),
   })
   .strict();
 
@@ -73,7 +90,9 @@ const entrySchema = z
  * `ro.taxaccount.obligations`: what each account holding obligations to the state stands for:
  * the obligation type, its budget, its category in the distribution, and whether it is paid into
  * the single account. `byTreatment` splits an account several types share (446: dividends,
- * interest) by the treatment that booked the item.
+ * interest, rent, intellectual property, non-residents' income) by the treatment that booked the
+ * item, or by the treatment and the tag of the line that opened it (`<treatment>#<tag>`), where
+ * one treatment books several types.
  */
 export const obligationCatalogue = z
   .object({
@@ -146,12 +165,21 @@ const quarterMonths = (quarter: string) => {
   };
 };
 
-/** The return a period's obligation is declared in, and the period's first and last months. */
+/** The return a period's obligation is declared in, and the period's first and last months:
+ * the catalogue's `deadline`, for the month of the day the subject ends with, or the return of
+ * the treatment that booked it. */
 function declared(
   treatmentId: string,
   subject: string,
+  deadline?: ObligationKind,
 ): { kind: ObligationKind; period: string; first: Month; last: Month } | null {
   const parts = subject.split(':');
+  if (deadline) {
+    const day = parts.at(-1) ?? '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+    const month = day.slice(0, 7) as Month;
+    return { kind: deadline, period: month, first: month, last: month };
+  }
   if (treatmentId === 'vat.settle') {
     const period = parts[1] ?? '';
     if (/^\d{4}-Q[1-4]$/.test(period)) return { kind: 'D300', period, ...quarterMonths(period) };
@@ -237,8 +265,10 @@ export function obligationOf(
   }
   const shared = catalogue.byTreatment[base.account];
   const entry =
-    (shared && origin ? shared[origin.treatmentId] : undefined) ??
-    catalogue.principal[base.account];
+    (shared && origin
+      ? ((origin.tag ? shared[`${origin.treatmentId}#${origin.tag}`] : undefined) ??
+        shared[origin.treatmentId])
+      : undefined) ?? catalogue.principal[base.account];
   if (!entry)
     return {
       ...base,
@@ -266,9 +296,9 @@ export function obligationOf(
       separate: !entry.single,
       source: `${origin!.treatmentId} ${origin!.subject}`,
     };
-  const known = origin ? declared(origin.treatmentId, origin.subject) : null;
+  const known = origin ? declared(origin.treatmentId, origin.subject, entry.deadline) : null;
   let due = item.dueDate;
-  const { due: rule, single, ...kind } = entry;
+  const { due: rule, single, deadline: _deadline, ...kind } = entry;
   if (!due && rule === 'withholding_date' && origin)
     due = (origin.subject.split(':').at(-1) ?? null) as LocalDate | null;
   if (!due && known)

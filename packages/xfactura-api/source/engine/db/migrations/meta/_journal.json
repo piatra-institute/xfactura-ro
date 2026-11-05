@@ -176,6 +176,13 @@
       "when": 1793852571821,
       "tag": "0024_tax_account",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1793874563928,
+      "tag": "0025_interim_dividends",
+      "breakpoints": true
     }
   ]
 }

@@ -211,6 +211,48 @@ export const exemptClauses: readonly Clause[] = [
       'Listele declarației informative cuprind operațiunile taxabile pe teritoriul național, pe tipuri: L, A, AI, V, C și N, achizițiile de la persoane neînregistrate în scopuri de TVA.',
   },
   {
+    id: 'OPANAF3769/2015:art.1',
+    source: 'OPANAF3769/2015',
+    locator: 'art. 1',
+    status: 'located',
+    summary:
+      'Persoanele înregistrate în scopuri de TVA declară livrările, prestările și achizițiile realizate pe teritoriul României către sau de la orice persoană în sensul art. 266 alin. (1) pct. 24 din Codul fiscal: persoane impozabile, persoane juridice neimpozabile și persoane neimpozabile.',
+  },
+  {
+    id: 'OPANAF3769/2015:anexa2.sect1.litD',
+    source: 'OPANAF3769/2015',
+    locator:
+      'anexa nr. 1 lit. D și anexa nr. 2 secțiunea 1 lit. D pct. 6–8, secțiunea a 2-a pct. 3, 10 și 11',
+    status: 'located',
+    summary:
+      'Pentru achizițiile de la persoane neînregistrate în scopuri de TVA se declară natura bunurilor și serviciilor cumpărate de la persoane fizice (cereale și plante tehnice, deșeuri, masă lemnoasă, terenuri, clădiri, alte bunuri, servicii), tipul și numărul documentelor și valoarea totală; partenerul persoană fizică se identifică prin CNP sau NIF.',
+  },
+  {
+    id: 'ANAF/D394:op1.N',
+    source: 'ANAF/D394',
+    locator:
+      'secțiunile op1 (tip N, tip_document, regulile 215, 217, 218, 228 și 232), op11 (regulile 233.4 și 233.6, nomenclatorul de produse pentru tip_partener 2) și rezumat1 (facturiN, document_N, bazaN, detaliu nrN și valN)',
+    status: 'located',
+    summary:
+      'Achizițiile de la persoane neînregistrate (N) se declară cu tip_partener 2, cota 0, fără TVA, cu tipul documentului (1 facturi, 2 borderouri, 3 file din carnet, 4 contracte, 5 alte documente); natura lor (op11) se declară doar și obligatoriu pentru persoanele fizice și partenerii fără cod; rezumatul se face pe fiecare tip de document.',
+  },
+  {
+    id: 'ANAF/Cod-fiscal-consolidat:art.271(3)',
+    source: 'ANAF/Cod-fiscal-consolidat',
+    locator: 'art. 271 alin. (3) lit. a) și b)',
+    status: 'located',
+    summary:
+      'Închirierea de bunuri și cesiunea drepturilor de autor, a licențelor și a altor drepturi similare sunt prestări de servicii.',
+  },
+  {
+    id: 'OPANAF174/2026:rd.29.neimpozabile',
+    source: 'OPANAF174/2026',
+    locator: 'anexa nr. 2, instrucțiunile rândului 29, prima liniuță',
+    status: 'located',
+    summary:
+      'La rândul 29 se înscrie contravaloarea achizițiilor a căror livrare sau prestare a fost scutită de taxă, neimpozabilă sau supusă unui regim special de taxă: și achizițiile de la furnizori neînregistrați în scopuri de TVA (categoria O).',
+  },
+  {
     id: 'CEN/EN16931-UBL-1.3.17:VATEX',
     source: 'CEN/EN16931-UBL-1.3.17',
     locator: 'schematron/codelist/EN16931-UBL-codes.sch, lista codurilor VATEX (BR-CL-22)',

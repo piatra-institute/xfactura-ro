@@ -64,6 +64,19 @@ export const taxAccountAnchors: Readonly<Record<string, readonly Anchor[]>> = {
       to: '| 8 | impozit pe veniturile |',
     },
   ],
+  'OPANAF551/2021:anexa.poz.11': [
+    { from: '| 11 | impozit pe veniturile din', to: '| 12 | impozit pe veniturile din' },
+  ],
+  'OPANAF551/2021:anexa.poz.18-24': [
+    { from: '| 18 | impozit pe veniturile din', to: '| 22 | impozit pe veniturile obţinute|' },
+    { from: '| 24 | impozit pe veniturile din', to: '| 25 | impozit pe veniturile obţinute|' },
+  ],
+  'OPANAF874/2024:art.I.pct.2': [
+    {
+      from: '2. După poziţia 33 se introduc cinci noi poziţii',
+      to: 'alte entităţi care au obligaţia de a conduce evidenţă contabilă',
+    },
+  ],
   'OMFP1802/2014:conturi.448': [
     {
       from: 'Contul 448 "Alte datorii şi creanțe cu bugetul statului" Cu ajutorul acestui cont',

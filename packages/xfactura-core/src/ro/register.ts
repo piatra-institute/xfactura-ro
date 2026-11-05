@@ -20,6 +20,7 @@ import { saftDefinitions, saftVersions } from './saft/parameters';
 import { taxAccountDefinitions, taxAccountVersions } from './taxaccount/parameters';
 import { vatDefinitions, vatVersions } from './vat';
 import { withholdingDefinitions, withholdingVersions } from './withholding/parameters';
+import { yearEndDefinitions, yearEndVersions } from './yearend/parameters';
 
 /**
  * Every Romanian parameter family, in the order the engine's `defaultRegister()` assembles them
@@ -48,6 +49,7 @@ export const roDefinitions: readonly ParameterDefinition[] = [
   ...nonpayerDefinitions,
   ...exemptDefinitions,
   ...receiptDefinitions,
+  ...yearEndDefinitions,
 ];
 
 export const roVersions: readonly ParameterVersion[] = [
@@ -73,6 +75,7 @@ export const roVersions: readonly ParameterVersion[] = [
   ...nonpayerVersions,
   ...exemptVersions,
   ...receiptVersions,
+  ...yearEndVersions,
 ];
 
 export const roRegister = () => new ParameterRegister(roDefinitions, roVersions);

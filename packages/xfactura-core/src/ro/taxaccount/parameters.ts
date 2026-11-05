@@ -102,13 +102,14 @@ const version = (
   value: ParameterVersion['value'],
   clauses: string[],
   from: string,
+  to: string | null = null,
 ): ParameterVersion => ({
   id: `${key}/${from}`,
   key,
   scope: {},
   value,
   from: date(from),
-  to: null,
+  to: to === null ? null : date(to),
   reviewedThrough: date('2026-12-31'),
   knowledgeDate: null,
   status: 'extracted',
@@ -122,38 +123,79 @@ const withheld = (type: string, budget: string) => ({
   single: true,
 });
 
+/** The taxes withheld at source on 446, by the treatment and the tag of the line (`wht:` and the
+ * D100 obligation, `withheldTag`): each due by the 25th of the month after it was withheld, the
+ * deadline of the return that declares it. */
+const withheldAt = (type: string, deadline: 'D100.withholding' | 'D112') => ({
+  ...withheld(type, 'state'),
+  deadline,
+});
+const principal = {
+  '444': withheld('salary_tax', 'state'),
+  '4315': withheld('cas', 'social_insurance'),
+  '4316': withheld('cass', 'health_insurance'),
+  '4411': { type: 'profit', budget: 'state', category: 'principal', single: true },
+  '4418': { type: 'micro', budget: 'state', category: 'principal', single: true },
+  '4423': { type: 'vat', budget: 'state', category: 'principal', single: false },
+  '436': { type: 'cam', budget: 'state', category: 'principal', single: false },
+};
+const withheld551 = {
+  'dividends.withhold': withheld('dividend_tax', 'state'),
+  'loans.withhold': { ...withheld('interest_tax', 'state'), due: 'withholding_date' },
+  // Poz. 11: intellectual property paid to individuals, due by the 25th of the month after it
+  // was withheld (art. 72 alin. (5)), the deadline of D112, which declares it (art. 132 alin.
+  // (2), art. 147 alin. (1)).
+  'payees.withhold#wht:611': withheldAt('ip_tax', 'D112'),
+  // Poz. 18–21 and 24: non-residents' dividends, interest, royalties, commissions and services
+  // (art. 223 alin. (1) lit. a)–g), i), k), l)), due by the 25th of the next month (art. 224
+  // alin. (5)).
+  'nonresidents.withhold#wht:631': withheldAt('nonresident_dividend_tax', 'D100.withholding'),
+  'nonresidents.withhold#wht:632': withheldAt('nonresident_interest_tax', 'D100.withholding'),
+  'nonresidents.withhold#wht:633': withheldAt('nonresident_royalty_tax', 'D100.withholding'),
+  'nonresidents.withhold#wht:634': withheldAt('nonresident_commission_tax', 'D100.withholding'),
+  'nonresidents.withhold#wht:636': withheldAt('nonresident_services_tax', 'D100.withholding'),
+};
+const clauses551 = [
+  'OPANAF551/2021:anexa',
+  'OPANAF551/2021:anexa.poz.11',
+  'OPANAF551/2021:anexa.poz.18-24',
+  `${CPF}:art.163(2)`,
+  `${CPF}:art.163(7)`,
+  'ANAF/Cod-fiscal-consolidat:art.2(2)',
+  'ANAF/Cod-fiscal-consolidat:art.220^6(1)',
+  'ANAF/Cod-fiscal-consolidat:art.97(2)',
+  'ANAF/Cod-fiscal-consolidat:art.72(2)-(6)',
+  'ANAF/Cod-fiscal-consolidat:art.224(5)',
+];
+
 export const taxAccountVersions: ParameterVersion[] = [
-  // The nomenclator as OPANAF nr. 551/2021 replaced its annex (MO nr. 377 of 12.04.2021); its
-  // later amendments (OPANAF nr. 1.985/2022, 170/2023, 874/2024) change none of these types.
-  // VAT and the work insurance contribution are not in it: each is paid into its own account.
+  // The nomenclator as OPANAF nr. 551/2021 replaced its annex (MO nr. 377 of 12.04.2021); OPANAF
+  // nr. 1.985/2022 and 170/2023 add none of the types the engine books. VAT and the work
+  // insurance contribution are not in it: each is paid into its own account.
+  version(
+    'ro.taxaccount.obligations',
+    { principal, byTreatment: { '446': withheld551 } },
+    clauses551,
+    '2021-04-12',
+    '2024-05-08',
+  ),
+  // OPANAF nr. 874/2024 (MO nr. 422 of 09.05.2024) adds poz. 33^3: the tax on rent paid to
+  // individuals, withheld by entities keeping accounts (art. 84^1), due by the 25th of the month
+  // after it was withheld (alin. (6)). Before it, the nomenclator does not name it: its own account
+  // (Codul de procedură fiscală art. 163 alin. (7)).
   version(
     'ro.taxaccount.obligations',
     {
-      principal: {
-        '444': withheld('salary_tax', 'state'),
-        '4315': withheld('cas', 'social_insurance'),
-        '4316': withheld('cass', 'health_insurance'),
-        '4411': { type: 'profit', budget: 'state', category: 'principal', single: true },
-        '4418': { type: 'micro', budget: 'state', category: 'principal', single: true },
-        '4423': { type: 'vat', budget: 'state', category: 'principal', single: false },
-        '436': { type: 'cam', budget: 'state', category: 'principal', single: false },
-      },
+      principal,
       byTreatment: {
         '446': {
-          'dividends.withhold': withheld('dividend_tax', 'state'),
-          'loans.withhold': { ...withheld('interest_tax', 'state'), due: 'withholding_date' },
+          ...withheld551,
+          'payees.withhold#wht:628': withheldAt('rent_tax', 'D100.withholding'),
         },
       },
     },
-    [
-      'OPANAF551/2021:anexa',
-      `${CPF}:art.163(2)`,
-      `${CPF}:art.163(7)`,
-      'ANAF/Cod-fiscal-consolidat:art.2(2)',
-      'ANAF/Cod-fiscal-consolidat:art.220^6(1)',
-      'ANAF/Cod-fiscal-consolidat:art.97(2)',
-    ],
-    '2021-04-12',
+    [...clauses551, 'OPANAF874/2024:art.I.pct.2', 'ANAF/Cod-fiscal-consolidat:art.84^1(3)-(6)'],
+    '2024-05-09',
   ),
   version(
     'ro.taxaccount.distribution',

@@ -23,7 +23,13 @@ import {
   type D406Line,
   type D406Transaction,
 } from '../src/ro/saft/d406';
-import { d406CashVatReleaseCode, d406VatCodes, d406VatTaxCode } from '../src/ro/saft/tax-codes';
+import {
+  d406BaseRateCode,
+  d406CashVatReleaseCode,
+  d406DomesticReverseChargeCodes,
+  d406VatCodes,
+  d406VatTaxCode,
+} from '../src/ro/saft/tax-codes';
 
 const customer = d406PartyId({ kind: 'ro', cui: '14399840' });
 const supplier = d406PartyId({ kind: 'ro', cui: '31552803' });
@@ -898,19 +904,80 @@ describe('D406 VAT codes of the engine', () => {
             ? 'nondeductible'
             : row.deduction === 'half'
               ? 'purchases50'
-              : 'purchases',
+              : row.deduction === 'prorata'
+                ? 'baserate'
+                : 'purchases',
       );
       expect(code.percentage).toBe(
-        row.code.startsWith('EXP-') ? '0' : (row.rate ?? row.code.slice(2)),
+        row.code.startsWith('EXP-') || row.code === 'TI-L'
+          ? '0'
+          : (row.rate ?? row.code.replace(/^(S|TI-A)-/, '')),
       );
     }
+    const rows = [...d406VatCodes, ...d406DomesticReverseChargeCodes];
     expect(
       new Set(
-        d406VatCodes.map(
+        rows.map(
           (row) => `${row.direction}|${row.code}|${row.rate}|${row.deduction}|${row.cashVat}`,
         ),
       ).size,
-    ).toBe(d406VatCodes.length);
+    ).toBe(rows.length);
+  });
+
+  test('map the domestic reverse charge once, with its acquisition, and a sale without VAT', () => {
+    for (const row of d406DomesticReverseChargeCodes) {
+      const code = vatTaxCodes[row.taxCode]!;
+      expect(code.description).toBe(row.description);
+      expect(code.kind).toBe(
+        row.direction === 'output'
+          ? 'sales'
+          : row.deduction === 'none'
+            ? 'nondeductible'
+            : 'purchases',
+      );
+      expect(code.percentage).toBe(row.code === 'TI-L' ? '0' : row.code.slice(5));
+    }
+    expect(d406VatTaxCode({ direction: 'output', code: 'TI-L' })).toBe('310312');
+    expect(d406VatTaxCode({ direction: 'input', code: 'TI-A-21', deduction: 'full' })).toBe(
+      '300906',
+    );
+    expect(d406VatTaxCode({ direction: 'input', code: 'TI-A-11', deduction: 'none' })).toBe(
+      '350907',
+    );
+    // The collected side is the acquisition's operation: no code of its own.
+    expect(d406VatTaxCode({ direction: 'output', code: 'TI-A-21' })).toBeNull();
+    // Half a deduction has no row: the reverse charge deducts in full or not at all.
+    expect(
+      d406VatTaxCode({ direction: 'input', code: 'TI-A-21', deduction: 'half' }),
+    ).toBeUndefined();
+  });
+
+  test('map a purchase deducted under a pro-rata to Achizitii baserate, whole entries only', () => {
+    expect(d406VatTaxCode({ direction: 'input', code: 'S-21', deduction: 'prorata' })).toBe(
+      '361104',
+    );
+    expect(d406VatTaxCode({ direction: 'input', code: 'S-11', deduction: 'prorata' })).toBe(
+      '361105',
+    );
+    expect(
+      d406VatTaxCode({ direction: 'input', code: 'S-21', deduction: 'prorata', cashVat: true }),
+    ).toBe('361305');
+    expect(d406BaseRateCode('361104')).toBe(true);
+    expect(d406BaseRateCode('301104')).toBe(false);
+    // The sheet's active codes, its inactive ones left out (361304, the 3663xx acquisitions of
+    // goods and 368xxx).
+    const baserate = Object.entries(vatTaxCodes).filter(([, code]) => code.kind === 'baserate');
+    expect(baserate).toHaveLength(93);
+    expect(vatTaxCodes['361304']).toBeUndefined();
+    expect(vatTaxCodes['367315']).toEqual({
+      kind: 'baserate',
+      description: 'Ajustări conform pro-rata',
+      percentage: '21',
+    });
+    // A purchase only partly under the pro-rata has no single code.
+    expect(
+      d406VatTaxCode({ direction: 'input', code: 'S-21', deduction: 'partial' }),
+    ).toBeUndefined();
   });
 
   test('map VAT on collection: the supplier applying it, and the release of 4428', () => {
@@ -953,9 +1020,11 @@ describe('D406 VAT codes of the engine', () => {
     expect(
       d406VatTaxCode({ direction: 'input', code: 'RC-NONEU-SERV', rate: '21', deduction: 'none' }),
     ).toBe('350504');
+    // A purchase outside the scope of VAT (O) is reported as D300 rd. 29's; a sale in O (a
+    // non-payer's) has no certain code.
+    expect(d406VatTaxCode({ direction: 'input', code: 'O', deduction: 'full' })).toBe('308302');
     for (const entry of [
       { direction: 'output', code: 'O' },
-      { direction: 'input', code: 'O', deduction: 'full' },
       { direction: 'output', code: 'S-9' },
       { direction: 'input', code: 'S-21', deduction: 'partial' },
       { direction: 'input', code: 'RC-EU-SERV', rate: '11', deduction: 'full' },

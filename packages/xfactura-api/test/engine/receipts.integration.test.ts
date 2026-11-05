@@ -1,7 +1,12 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import path from 'node:path';
 import * as receiptsAgent from 'xfactura-core/ro/receipts/agent';
-import { DukIntegrator } from '../../source/engine/adapters/declaration-validator';
+import {
+  AnafKits,
+  DukIntegrator,
+  saftKitId,
+  type DeclarationValidator,
+} from '../../source/engine/adapters/declaration-validator';
 import type { ProposalView } from '../../source/engine/kernel/views';
 import { camt, camtEntry, iban } from './fixtures/bank';
 import { invoiceXml } from './fixtures/invoice';
@@ -20,6 +25,13 @@ afterAll(async () => {
 });
 const dist = path.join(import.meta.dir, '../../../..', '.validators/anaf/dist');
 const official = DukIntegrator.available(dist) && Bun.which('java') ? test : test.skip;
+// D406 runs on ANAF's SAF-T kit only; without it the D406 part is skipped, never passed.
+const saftDist = path.join(
+  import.meta.dir,
+  '../../../..',
+  '.validators/anaf-saft/duk_SAFT_an_luna/dist',
+);
+const saftInstalled = DukIntegrator.available(saftDist) && Bun.which('java') !== null;
 const cui = '18547290';
 const plate = 'B-123-XFA';
 const bnr = (days: string[]) => `<?xml version="1.0" encoding="utf-8"?>
@@ -46,7 +58,12 @@ const d394Options = {
   consultation: true,
   affiliates: false,
 };
-type Artifact = { id: string; state: string; steps: { state: string; detail: string | null }[] };
+type Artifact = {
+  id: string;
+  state: string;
+  evidenceId: string;
+  steps: { state: string; detail: string | null }[];
+};
 type Item = {
   id: string;
   partyId: string;
@@ -62,7 +79,7 @@ type WorkItem = {
 const lines = (proposal: ProposalView) =>
   proposal.effect?.lines.map((line) => `${line.side} ${line.account} ${line.amount}`);
 
-async function company(validator?: DukIntegrator) {
+async function company(validator?: DeclarationValidator) {
   const s = await scenario({ cui, ...(validator ? { declarationValidator: validator } : {}) });
   open.push(s);
   const file = async (filename: string, mediaType: string, bytes: string) =>
@@ -408,7 +425,10 @@ describe('invoices.reverseCharge and the returns', () => {
     "a domestic reverse-charge purchase and sale, with a receipt: D300 and D394 pass ANAF's validator",
     async () => {
       const { s, file, receipt, post, book, prepare, work } = await company(
-        new DukIntegrator(dist),
+        new AnafKits({
+          general: new DukIntegrator(dist),
+          ...(saftInstalled ? { saft: new DukIntegrator(saftDist, saftKitId) } : {}),
+        }),
       );
       // Bought: ferrous waste on an invoice in category AE, without VAT.
       const imported = await s.invoke<{ id: string }>(s.owner, 'invoices.import', {
@@ -454,7 +474,8 @@ describe('invoices.reverseCharge and the returns', () => {
         code: 'XF',
         prefix: 'XF',
         width: 4,
-        revenueAccount: '708',
+        // Waste is a residual product (703, OMFP nr. 1.802/2014): goods for D406.
+        revenueAccount: '703',
       });
       const line = (vat: Record<string, string>) => ({
         name: 'Deșeuri feroase',
@@ -491,7 +512,7 @@ describe('invoices.reverseCharge and the returns', () => {
         id: issued.recognition.proposalId,
       });
       expect(recognized.treatment).toBe('invoices.reverseCharge');
-      expect(lines(await post(recognized))).toEqual(['D 4111 5000.00', 'C 708 5000.00']);
+      expect(lines(await post(recognized))).toEqual(['D 4111 5000.00', 'C 703 5000.00']);
       // And a fuel receipt with the CUI, deducted in full.
       const fuel = await receipt('0048');
       await book('receipts.recognize', {
@@ -519,6 +540,46 @@ describe('invoices.reverseCharge and the returns', () => {
         { type: 'V', rate: '0', partner: '14399840', invoices: 1, base: 5000, vat: 0 },
       ]);
       expect([d394.state, d394.steps.at(-1)?.detail ?? null]).toEqual(['validated_official', null]);
+
+      // D406: the acquisition reported once, with its deduction (Achizitii ded 100% 300906, the
+      // collected side without a code of its own), the sale without VAT (Livrari 310312).
+      if (!saftInstalled) return;
+      await s.invoke(s.owner, 'profile.record', {
+        axis: 'vat.period',
+        value: 'monthly',
+        effectiveFrom: '2026-01-01',
+        evidenceId: (await s.evidence('decont-lunar.pdf')).id,
+      });
+      const address = { lines: ['Str. Industriei 3'], city: 'Galați', subdivision: 'RO-GL' };
+      for (const [partyId, name, vatId] of [
+        [
+          (await s.invoke<{ partyId: string }>(s.owner, 'documents.get', { id: imported.id }))
+            .partyId,
+          'Metale Exemplu SRL',
+          'RO13548146',
+        ],
+        [fuel.partyId, 'Benzinăria Exemplu SRL', 'RO29031773'],
+      ] as const)
+        await s.invoke(s.owner, 'parties.recordDetails', {
+          partyId,
+          details: { name, vatId, address: { ...address, country: 'RO' } },
+        });
+      const saft = await s.invoke<Artifact>(s.owner, 'declarations.prepare', {
+        kind: 'D406',
+        period: '2026-10',
+        options: { contact: { firstName: 'Ana', lastName: 'Popescu', phone: '0236000000' } },
+      });
+
+      expect([saft.state, saft.steps.at(-1)?.detail ?? null]).toEqual(['validated_official', null]);
+      const { base64 } = await s.invoke<{ base64: string }>(s.owner, 'evidence.get', {
+        id: saft.evidenceId,
+      });
+      const codes = [
+        ...Buffer.from(base64, 'base64')
+          .toString()
+          .matchAll(/<nsSAFT:TaxCodeDetails>\s*<nsSAFT:TaxCode>(\d+)</g),
+      ].map((match) => match[1]);
+      expect(codes).toEqual(['300906', '301104', '310312']);
     },
     120_000,
   );

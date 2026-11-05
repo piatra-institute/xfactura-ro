@@ -8,11 +8,15 @@ import {
   decisionDueDate,
   distribute,
   distributeSeparate,
+  obligationOf,
   reconcileStatement,
   type Obligation,
   type ObligationCatalogue,
+  type TaxAccounts,
   type TaxStatementDocument,
 } from '../src/ro/taxaccount';
+import { withheldTag } from '../src/ro/treatments/withholding';
+import type { OpenItemState } from '../src/kernel';
 import { RuleContext } from '../src/rules';
 import type { LocalDate } from '../src/time';
 
@@ -146,6 +150,90 @@ describe('the distribution of a payment to the single account', () => {
       ['accessory', '200.00'],
     ]);
     expect(lei(result.undistributed)).toBe('300.00');
+  });
+});
+
+describe('the obligations the books hold (ro.taxaccount.obligations)', () => {
+  const accounts = rules.param<TaxAccounts>(
+    'ro.taxaccount.accounts',
+    'accounting_transaction_date',
+    '2026-11-25' as LocalDate,
+  );
+  const catalogueAt = (date: string) =>
+    rules.param<ObligationCatalogue>(
+      'ro.taxaccount.obligations',
+      'payment_date',
+      date as LocalDate,
+    );
+  /** A 446 item of `tax` lei withheld on `day` by `treatmentId`, its line tagged `tag`. */
+  const withheldItem = (treatmentId: string, day: string, tag: string | null): OpenItemState => ({
+    id: `i-${treatmentId}-${tag}`,
+    kind: 'tax.payable',
+    controlAccount: '446',
+    partyId: 'anaf',
+    currency: 'RON',
+    normalSide: 'C',
+    mayReverse: false,
+    balanceBani: -10_000n,
+    balanceMinor: -10_000n,
+    documentId: null,
+    dueDate: null,
+    originEntryId: 'e',
+    movements: 1,
+    origin: { treatmentId, subject: `x:item:${day}`, date: day as LocalDate, tag },
+  });
+  const typed = (item: OpenItemState, date = '2026-11-25') => {
+    const obligation = obligationOf(item, catalogueAt(date), accounts, rules);
+    return [
+      obligation.type,
+      obligation.budget,
+      obligation.category,
+      obligation.separate,
+      obligation.period,
+      obligation.due,
+    ];
+  };
+
+  test('taxes withheld at source on 446 by the treatment and the tag of their line, due by the 25th of the next month', () => {
+    // OPANAF nr. 874/2024 poz. 33^3 (art. 84^1 alin. (6)): rent, by D100's deadline.
+    expect(typed(withheldItem('payees.withhold', '2026-10-20', withheldTag('628')))).toEqual([
+      'rent_tax',
+      'state',
+      'withheld',
+      false,
+      '2026-10',
+      '2026-11-25',
+    ]);
+    // OPANAF nr. 551/2021 poz. 11 (art. 72 alin. (5)): intellectual property, by D112's.
+    expect(typed(withheldItem('payees.withhold', '2026-10-20', withheldTag('611')))).toEqual([
+      'ip_tax',
+      'state',
+      'withheld',
+      false,
+      '2026-10',
+      '2026-11-25',
+    ]);
+    // Poz. 18–21, 24 (art. 224 alin. (5)): non-residents' income; 25.10.2026 is a Sunday.
+    for (const [code, type] of [
+      ['631', 'nonresident_dividend_tax'],
+      ['632', 'nonresident_interest_tax'],
+      ['633', 'nonresident_royalty_tax'],
+      ['634', 'nonresident_commission_tax'],
+      ['636', 'nonresident_services_tax'],
+    ])
+      expect(typed(withheldItem('nonresidents.withhold', '2026-09-10', withheldTag(code)))).toEqual(
+        [type, 'state', 'withheld', false, '2026-09', '2026-10-26'],
+      );
+  });
+
+  test('an item the catalogue does not name is paid outside the single account, never guessed', () => {
+    // Untagged, or tagged with what no nomenclator line names.
+    expect(typed(withheldItem('payees.withhold', '2026-10-20', null))[0]).toBe('other');
+    expect(typed(withheldItem('nonresidents.withhold', '2026-10-20', 'wht:999'))[3]).toBe(true);
+    // Before OPANAF nr. 874/2024 (MO of 09.05.2024) rent tax is not in the nomenclator.
+    const rent = withheldItem('payees.withhold', '2024-04-10', withheldTag('628'));
+    expect(typed(rent, '2024-05-08').slice(0, 4)).toEqual(['other', null, null, true]);
+    expect(typed(rent, '2024-05-09').slice(0, 4)).toEqual(['rent_tax', 'state', 'withheld', false]);
   });
 });
 

@@ -349,6 +349,24 @@ export const taxAccountClauses: readonly Clause[] = [
     'Se plătesc în contul unic, între altele: impozitul pe salarii (poz. 1), impozitul pe profit (5–6), impozitul pe dividende (7, 13), impozitul pe veniturile microîntreprinderilor (8), impozitul pe dobânzi (14), CAS (34–39) și CASS (40–47). TVA și contribuția asiguratorie pentru muncă nu sunt în nomenclator: se plătesc distinct (art. 163 alin. (7)).',
   ),
   located(
+    'OPANAF551/2021:anexa.poz.11',
+    'OPANAF551/2021',
+    'anexa, poz. 11',
+    'Impozitul pe veniturile din drepturi de proprietate intelectuală (art. 2 alin. (1) și art. 72 din Codul fiscal) se plătește în contul unic.',
+  ),
+  located(
+    'OPANAF551/2021:anexa.poz.18-24',
+    'OPANAF551/2021',
+    'anexa, poz. 18–24',
+    'Se plătesc în contul unic impozitele pe veniturile obținute din România de nerezidenți: din dividende (poz. 18, art. 223 alin. (1) lit. a)), dobânzi (19, lit. b)–c)), redevențe (20, lit. d)–e)), comisioane (21, lit. f)–g)), activități sportive și de divertisment (22), remunerațiile administratorilor persoane juridice (23) și servicii prestate de nerezidenți (24, lit. i), k), l)).',
+  ),
+  located(
+    'OPANAF874/2024:art.I.pct.2',
+    'OPANAF874/2024',
+    'art. I pct. 2 (poz. 33^1–33^5 introduse în anexă)',
+    'Se introduce în nomenclator poz. 33^3: impozitul pe veniturile din cedarea folosinței bunurilor (altele decât arendarea bunurilor agricole și închirierea în scop turistic a camerelor din locuințe proprietate personală), reținut la sursă de persoanele juridice și celelalte entități care conduc evidență contabilă (art. 84^1 din Codul fiscal): se plătește în contul unic.',
+  ),
+  located(
     'OPANAF2937/2018:pct.2-4',
     'OPANAF2937/2018',
     'anexa, pct. 2–4',

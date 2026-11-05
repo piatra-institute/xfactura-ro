@@ -330,6 +330,22 @@ export const reopenHandler: ActionHandler<z.infer<typeof reopenInput>> = {
     const findings: Finding[] = [];
     if ((await latestEvent(tx, companyId, month))?.kind !== 'close')
       findings.push({ code: 'PERIOD_OPEN', severity: 'block', message: 'Luna nu este închisă.' });
+    // A month of a financial year a reviewed year close locked reopens only with its year
+    // (`years.reopen`; the database refuses it too, `inv:closed_year_month`).
+    const [locked] = await tx.all<{ id: string }>(sql`select y.id from acc_fiscal_years y
+      where y.company_id = ${companyId} and y.kind = 'financial'
+        and ${`${month}-01`} between y.date_from and y.date_to
+        and (select r.operation from acc_action_requests r
+          join acc_action_executions x on x.company_id = r.company_id and x.request_id = r.id
+          where r.company_id = y.company_id and r.operation in ('years.close', 'years.reopen')
+            and json_extract(r.input_json, '$.financialYearId') = y.id
+          order by x.rowid desc limit 1) = 'years.close'`);
+    if (locked)
+      findings.push({
+        code: 'YEAR_CLOSED',
+        severity: 'block',
+        message: 'Exercițiul lunii este închis: redeschideți întâi exercițiul (years.reopen).',
+      });
     const later = (await openMonths(tx, companyId, 'after', month)).filter((item) => item.closed);
     if (later.length)
       findings.push({

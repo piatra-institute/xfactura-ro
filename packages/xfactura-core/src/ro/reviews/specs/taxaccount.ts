@@ -46,8 +46,28 @@ const budgetOf: Record<TaxType, Budget> = {
   cas: 'social_insurance',
   cass: 'health_insurance',
   cam: 'state',
+  rent_tax: 'state',
+  ip_tax: 'state',
+  nonresident_dividend_tax: 'state',
+  nonresident_interest_tax: 'state',
+  nonresident_royalty_tax: 'state',
+  nonresident_commission_tax: 'state',
+  nonresident_services_tax: 'state',
 };
-const withheld = new Set<TaxType>(['salary_tax', 'cas', 'cass', 'dividend_tax', 'interest_tax']);
+const withheld = new Set<TaxType>([
+  'salary_tax',
+  'cas',
+  'cass',
+  'dividend_tax',
+  'interest_tax',
+  'rent_tax',
+  'ip_tax',
+  'nonresident_dividend_tax',
+  'nonresident_interest_tax',
+  'nonresident_royalty_tax',
+  'nonresident_commission_tax',
+  'nonresident_services_tax',
+]);
 const obligation = (item: Owed, index: number): Obligation => ({
   id: `o${index + 1}`,
   account: '',

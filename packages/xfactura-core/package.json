@@ -110,6 +110,8 @@
     "./ro/taxaccount/agent": "./src/ro/taxaccount/agent.ts",
     "./ro/receipts": "./src/ro/receipts/index.ts",
     "./ro/receipts/agent": "./src/ro/receipts/agent.ts",
+    "./ro/yearend": "./src/ro/yearend/index.ts",
+    "./ro/yearend/agent": "./src/ro/yearend/agent.ts",
     "./templates": "./src/templates/index.ts"
   },
   "dependencies": {

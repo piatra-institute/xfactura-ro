@@ -367,15 +367,18 @@ describe('review queue', () => {
       ['interpretation', ['ro.vat.late_registration']],
       ['interpretation', ['ro.d406.start']],
       ['interpretation', ['ro.deadline.S1003']],
+      ['interpretation', ['ro.impairment.accounts']],
       ['interpretation', ['ro.profit.sponsorship']],
       ['interpretation', ['ro.micro.linked']],
       ['interpretation', ['ro.profit.loss_carryforward']],
+      ['interpretation', ['ro.provisions.accounts']],
       ['interpretation', ['ro.deadline.D406.assets']],
       ['interpretation', ['ro.profit.social_limit']],
       ['interpretation', ['ro.size.thresholds']],
       ['interpretation', ['ro.taxaccount.accounts']],
       ['interpretation', ['ro.pit.norma']],
       ['interpretation', ['ro.pit.sources']],
+      ['interpretation', ['ro.inventory.accounts']],
       ['interpretation', ['ro.d406.assets.presentation']],
     ]);
     const vat = rows.find((row) => row.key === 'ro.vat.rate')!;

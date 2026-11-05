@@ -1,6 +1,7 @@
 import { z, type ZodType } from 'zod';
 import type { Issue, JsonValue } from '../kernel';
 import { annualDisclosures, annualDocument, annualInformative } from '../ro/annual/questions';
+import { provisionsReview, receivableCollectibility, untakenLeave } from '../ro/yearend/questions';
 import { isLocalDate } from '../time';
 
 /*
@@ -843,6 +844,9 @@ export const questionKinds = {
   'annual.informative': annualInformative,
   'annual.disclosures': annualDisclosures,
   'annual.document': annualDocument,
+  'receivable.collectibility': receivableCollectibility,
+  'leave.untaken': untakenLeave,
+  'provisions.review': provisionsReview,
 } as const;
 export type QuestionKindId = keyof typeof questionKinds;
 export const questionKindIds = Object.keys(questionKinds) as [QuestionKindId, ...QuestionKindId[]];

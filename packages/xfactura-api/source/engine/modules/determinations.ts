@@ -61,6 +61,7 @@ import {
   taxEntries,
 } from '../db/schema';
 import type { Actor, Commands } from '../kernel/commands';
+import { halfYearOf } from './annual';
 import { standing } from './questions';
 
 /*
@@ -1157,12 +1158,38 @@ export function closureOf(
     const months: string[] = [];
     for (let year = Number(range.from.slice(0, 4)); year <= Number(range.to.slice(0, 4)); year++)
       for (let month = 1; month <= 12; month++) months.push(`${year}-${pad(month)}`);
+    // The half-year report of each year whose June the range covers (`ro.halfyear.report`).
+    const halfYear = [];
+    for (const year of years) {
+      if (`${year}-06` < range.from || `${year}-06` > range.to) continue;
+      const decision = await halfYearOf(tx, companyId, year, rules);
+      halfYear.push(
+        decision.status === 'gap'
+          ? {
+              year: String(year),
+              status: 'gap' as const,
+              due: null,
+              message: decision.message,
+              missing: [],
+            }
+          : {
+              year: String(year),
+              status: decision.status,
+              due: decision.due,
+              message:
+                decision.status === 'unknown'
+                  ? `Nu se știe dacă raportarea la 30 iunie ${year} se datorează: lipsesc ${decision.missing.join(', ')}.`
+                  : `Raportarea contabilă la 30 iunie ${year} se datorează (${decision.lines.join(' ')}): aplicația nu o întocmește.`,
+              missing: decision.missing,
+            },
+      );
+    }
     return evaluateClosure({
       interval: range,
       facts,
       determinations,
       confirmed,
-      books: await booksOf(tx, companyId, range, contracts, firstDay),
+      books: { ...(await booksOf(tx, companyId, range, contracts, firstDay)), halfYear },
       d406Start: d406StartOf(rules, months),
     });
   });

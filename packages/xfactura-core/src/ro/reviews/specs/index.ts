@@ -20,6 +20,7 @@ import { d406AssetsDeadlineSpec, d406PresentationSpec, d406StartSpec } from './s
 import { reverseChargeSpec, simplifiedInvoiceSpec } from './receipts';
 import { accountsSpec, advanceSpec, distributionSpec } from './taxaccount';
 import { vatDeductionLimitedSpec, vatRateSpec, vatReducedRateSpec } from './vat';
+import { impairmentAccountsSpec, inventoryAccountsSpec, provisionAccountsSpec } from './yearend';
 import {
   certificateDaysSpec,
   dividendRateSpec,
@@ -68,4 +69,7 @@ export const reviewSpecs: readonly ReviewSpec[] = [
   nonresidentRateSpec,
   certificateDaysSpec,
   dividendRateSpec,
+  inventoryAccountsSpec,
+  impairmentAccountsSpec,
+  provisionAccountsSpec,
 ];

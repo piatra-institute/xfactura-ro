@@ -71,4 +71,11 @@ export const singleEntryExcluded: Readonly<Record<string, string>> = {
   // Not built for single entry yet: what a receipt is for the income tax of a PFA, II or IF.
   'receipts.recognize':
     'bonurile fiscale nu sunt încă acoperite în registrul-jurnal de încasări și plăți',
+  // The year-end of double entry (Y1): single-entry books inventory their assets in the
+  // Registrul-inventar, but hold no allowances, provisions or inventory differences to book.
+  'inventory.differences':
+    'diferențele de inventar nu sunt încă acoperite în registrul-jurnal de încasări și plăți',
+  'impairment.receivables': 'nu există ajustări pentru depreciere în partidă simplă',
+  'impairment.assets': 'nu există ajustări pentru depreciere în partidă simplă',
+  'provisions.record': 'nu există provizioane în partidă simplă',
 };

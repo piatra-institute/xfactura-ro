@@ -4,6 +4,7 @@ import { saftAnchors } from './anchors-saft';
 import { receiptAnchors } from './anchors-receipts';
 import { taxAccountAnchors } from './anchors-taxaccount';
 import { withholdingAnchors } from './anchors-withholding';
+import { yearEndAnchors } from './anchors-yearend';
 import type { Anchor } from './types';
 
 /**
@@ -389,4 +390,5 @@ export const clauseAnchors: Readonly<Record<string, readonly Anchor[]>> = {
   ...saftAnchors,
   ...receiptAnchors,
   ...withholdingAnchors,
+  ...yearEndAnchors,
 };

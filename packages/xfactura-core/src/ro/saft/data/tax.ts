@@ -2,6 +2,7 @@
 // Extracted from ANAF RO_SAFT_SchemaDefCod_05.02.2026.xlsx (sha256 d0981202182438e4597ff3bc27d2c41dec06c60bc32b86620c1de29a9cb8436d),
 // sheets TAX-IMP - Impozite, Livrari, Achizitii ded 100%, Achizitii ded 50%, Achizitii neded and TVA_NoteContabile (active codes only).
 // The pinned RO_SAFT_SchemaDefCod_16.02.2026.xlsx (sha256 050508bf6eadbd6bb4684a0016296253c629d4e9b54a1118dd9b9bfd0c1d0f2d) has the same sheets; it adds only the WHT code 604040.
+// Its sheet Achizitii baserate (purchases deducted under a pro-rata, 36xxxx; the same in both workbooks) is extracted from it (active codes only).
 
 /** TaxType: the tax and duty codes of the state budget nomenclature (TAX-IMP). */
 export const taxTypes: Readonly<Record<string, string>> = {
@@ -508,8 +509,10 @@ export const taxTypes: Readonly<Record<string, string>> = {
 };
 
 /** Which sheet a VAT tax code comes from: supplies, purchases with VAT deductible 100% or 50%,
- * purchases with nondeductible VAT, or ledger entries without a source document. */
-export type VatCodeKind = 'sales' | 'purchases' | 'purchases50' | 'nondeductible' | 'ledger';
+ * purchases with nondeductible VAT, purchases deducted under a pro-rata (base rate), or ledger
+ * entries without a source document. */
+export type VatCodeKind =
+  'sales' | 'purchases' | 'purchases50' | 'nondeductible' | 'baserate' | 'ledger';
 
 /** TaxCode of TaxType 300 (VAT): its sheet, description and VAT rate; a null rate is a code
  * whose amounts aggregate several rates or follow another Member State. */
@@ -2357,6 +2360,410 @@ export const vatTaxCodes: Readonly<
     description: 'Regularizări taxă dedusă 11%',
     percentage: '11',
   },
+  // Achizitii baserate (purchases deducted under a pro-rata), from the 16.02.2026 workbook.
+  '360101': {
+    kind: 'baserate',
+    description:
+      'Achiziţii intracomunitare de bunuri pentru care cumpărătorul este obligat la plata TVA (taxare inversă) 19% altele decat achiziţiile intracomunitare pentru care cumpărătorul este obligat la plata TVA (taxare inversă), iar furnizorul este înregistrat în scopuri de TVA în statul membru din care a avut loc livrarea intracomunitară',
+    percentage: '19',
+  },
+  '360102': {
+    kind: 'baserate',
+    description:
+      'Achiziţii intracomunitare de bunuri pentru care cumpărătorul este obligat la plata TVA (taxare inversă) 9% altele decat achiziţiile intracomunitare pentru care cumpărătorul este obligat la plata TVA (taxare inversă), iar furnizorul este înregistrat în scopuri de TVA în statul membru din care a avut loc livrarea intracomunitară',
+    percentage: '9',
+  },
+  '360103': {
+    kind: 'baserate',
+    description:
+      'Achiziţii intracomunitare de bunuri pentru care cumpărătorul este obligat la plata TVA (taxare inversă) 5% altele decat achiziţiile intracomunitare pentru care cumpărătorul este obligat la plata TVA (taxare inversă), iar furnizorul este înregistrat în scopuri de TVA în statul membru din care a avut loc livrarea intracomunitară',
+    percentage: '5',
+  },
+  '360104': {
+    kind: 'baserate',
+    description:
+      'Achiziţii intracomunitare de bunuri pentru care cumpărătorul este obligat la plata TVA (taxare inversă) 21% altele decat achiziţiile intracomunitare pentru care cumpărătorul este obligat la plata TVA (taxare inversă), iar furnizorul este înregistrat în scopuri de TVA în statul membru din care a avut loc livrarea intracomunitară',
+    percentage: '21',
+  },
+  '360105': {
+    kind: 'baserate',
+    description:
+      'Achiziţii intracomunitare de bunuri pentru care cumpărătorul este obligat la plata TVA (taxare inversă) 11% altele decat achiziţiile intracomunitare pentru care cumpărătorul este obligat la plata TVA (taxare inversă), iar furnizorul este înregistrat în scopuri de TVA în statul membru din care a avut loc livrarea intracomunitară',
+    percentage: '11',
+  },
+  '360201': {
+    kind: 'baserate',
+    description:
+      'Achiziţii intracomunitara de bunuri de la un furnizor înregistrat în scopuri de TVA în statul membru din care a avut loc livrarea intracomunitară 19%',
+    percentage: '19',
+  },
+  '360202': {
+    kind: 'baserate',
+    description:
+      'Achiziţii intracomunitara de bunuri de la un furnizor înregistrat în scopuri de TVA în statul membru din care a avut loc livrarea intracomunitară 9%',
+    percentage: '9',
+  },
+  '360203': {
+    kind: 'baserate',
+    description:
+      'Achiziţii intracomunitara de bunuri de la un furnizor înregistrat în scopuri de TVA în statul membru din care a avut loc livrarea intracomunitară 5%',
+    percentage: '5',
+  },
+  '360204': {
+    kind: 'baserate',
+    description:
+      'Achiziţii intracomunitara de bunuri de la un furnizor înregistrat în scopuri de TVA în statul membru din care a avut loc livrarea intracomunitară 21%',
+    percentage: '21',
+  },
+  '360205': {
+    kind: 'baserate',
+    description:
+      'Achiziţii intracomunitara de bunuri de la un furnizor înregistrat în scopuri de TVA în statul membru din care a avut loc livrarea intracomunitară 11%',
+    percentage: '11',
+  },
+  '360401': {
+    kind: 'baserate',
+    description: 'Regularizări privind achiziţiile intracomunitare de bunuri 19%',
+    percentage: '19',
+  },
+  '360402': {
+    kind: 'baserate',
+    description: 'Regularizări privind achiziţiile intracomunitare de bunuri 9%',
+    percentage: '9',
+  },
+  '360403': {
+    kind: 'baserate',
+    description: 'Regularizări privind achiziţiile intracomunitare de bunuri 5%',
+    percentage: '5',
+  },
+  '360404': {
+    kind: 'baserate',
+    description: 'Regularizări privind achiziţiile intracomunitare de bunuri 21%',
+    percentage: '21',
+  },
+  '360405': {
+    kind: 'baserate',
+    description: 'Regularizări privind achiziţiile intracomunitare de bunuri 11%',
+    percentage: '11',
+  },
+  '360501': {
+    kind: 'baserate',
+    description:
+      'Achizitii de bunuri (altele decat AIC de bunuri si importuri cu masuri de simplificare ) si achizitii de servicii (altele decat AIC de servicii cf reg B2B), pentru care care beneficiarul din Romania este obligat la plata TVA 19%',
+    percentage: '19',
+  },
+  '360502': {
+    kind: 'baserate',
+    description:
+      'Achizitii de bunuri (altele decat AIC de bunuri si importuri cu masuri de simplificare ) si achizitii de servicii (altele decat AIC de servicii cf reg B2B), pentru care care beneficiarul din Romania este obligat la plata TVA 9%',
+    percentage: '9',
+  },
+  '360503': {
+    kind: 'baserate',
+    description:
+      'Achizitii de bunuri (altele decat AIC de bunuri si importuri cu masuri de simplificare) si achizitii de servicii (altele decat AIC de servicii cf reg B2B), pentru care care beneficiarul din Romania este obligat la plata TVA 5%',
+    percentage: '5',
+  },
+  '360504': {
+    kind: 'baserate',
+    description:
+      'Achizitii de bunuri (altele decat AIC de bunuri si importuri cu masuri de simplificare ) si achizitii de servicii (altele decat AIC de servicii cf reg B2B), pentru care care beneficiarul din Romania este obligat la plata TVA 21%',
+    percentage: '21',
+  },
+  '360505': {
+    kind: 'baserate',
+    description:
+      'Achizitii de bunuri (altele decat AIC de bunuri si importuri cu masuri de simplificare ) si achizitii de servicii (altele decat AIC de servicii cf reg B2B), pentru care care beneficiarul din Romania este obligat la plata TVA 11%',
+    percentage: '11',
+  },
+  '360601': {
+    kind: 'baserate',
+    description: 'Import de bunuri 19% (TVA supusa masurilor de simplificare)',
+    percentage: '19',
+  },
+  '360602': {
+    kind: 'baserate',
+    description: 'Import de bunuri 9% (TVA supusa masurilor de simplificare)',
+    percentage: '9',
+  },
+  '360603': {
+    kind: 'baserate',
+    description: 'Import de bunuri 5% (TVA supusa masurilor de simplificare)',
+    percentage: '5',
+  },
+  '360604': {
+    kind: 'baserate',
+    description: 'Import de bunuri 21% (TVA supusa masurilor de simplificare)',
+    percentage: '21',
+  },
+  '360605': {
+    kind: 'baserate',
+    description: 'Import de bunuri 11% (TVA supusa masurilor de simplificare)',
+    percentage: '11',
+  },
+  '360701': {
+    kind: 'baserate',
+    description: 'Achiziţii de servicii intracomunitare (AIC de servicii cf reg B2B) 19%',
+    percentage: '19',
+  },
+  '360702': {
+    kind: 'baserate',
+    description: 'Achiziţii de servicii intracomunitare (AIC de servicii cf reg B2B) 9%',
+    percentage: '9',
+  },
+  '360703': {
+    kind: 'baserate',
+    description: 'Achiziţii de servicii intracomunitare (AIC de servicii cf reg B2B) 5%',
+    percentage: '5',
+  },
+  '360704': {
+    kind: 'baserate',
+    description: 'Achiziţii de servicii intracomunitare (AIC de servicii cf reg B2B) 21%',
+    percentage: '21',
+  },
+  '360705': {
+    kind: 'baserate',
+    description: 'Achiziţii de servicii intracomunitare (AIC de servicii cf reg B2B) 11%',
+    percentage: '11',
+  },
+  '360801': {
+    kind: 'baserate',
+    description:
+      'Regularizări privind achiziţii de servicii intracomunitare (AIC de servicii cf reg B2B) 19%',
+    percentage: '19',
+  },
+  '360802': {
+    kind: 'baserate',
+    description:
+      'Regularizări privind achiziţii de servicii intracomunitare (AIC de servicii cf reg B2B) 9%',
+    percentage: '9',
+  },
+  '360803': {
+    kind: 'baserate',
+    description:
+      'Regularizări privind achiziţii de servicii intracomunitare (AIC de servicii cf reg B2B) 5%',
+    percentage: '5',
+  },
+  '360804': {
+    kind: 'baserate',
+    description:
+      'Regularizări privind achiziţii de servicii intracomunitare (AIC de servicii cf reg B2B) 21%',
+    percentage: '21',
+  },
+  '360805': {
+    kind: 'baserate',
+    description:
+      'Regularizări privind achiziţii de servicii intracomunitare (AIC de servicii cf reg B2B) 11%',
+    percentage: '11',
+  },
+  '360901': {
+    kind: 'baserate',
+    description:
+      'Achiziţii de bunuri şi servicii supuse măsurilor de simplificare taxabile cu cota de 19 %',
+    percentage: '19',
+  },
+  '360902': {
+    kind: 'baserate',
+    description:
+      'Achiziţii de bunuri şi servicii supuse măsurilor de simplificare taxabile cu cota de 9 %',
+    percentage: '9',
+  },
+  '360903': {
+    kind: 'baserate',
+    description:
+      'Achiziţii de bunuri şi servicii supuse măsurilor de simplificare taxabile cu cota de 5 %',
+    percentage: '5',
+  },
+  '360904': {
+    kind: 'baserate',
+    description:
+      'Achiziţii de bunuri şi servicii supuse măsurilor de simplificare taxabile cu cota de 20 %',
+    percentage: '20',
+  },
+  '360905': {
+    kind: 'baserate',
+    description:
+      'Achiziţii de bunuri şi servicii supuse măsurilor de simplificare taxabile cu cota de 24 %',
+    percentage: '24',
+  },
+  '360906': {
+    kind: 'baserate',
+    description:
+      'Achiziţii de bunuri şi servicii supuse măsurilor de simplificare taxabile cu cota de 21 %',
+    percentage: '21',
+  },
+  '360907': {
+    kind: 'baserate',
+    description:
+      'Achiziţii de bunuri şi servicii supuse măsurilor de simplificare taxabile cu cota de 11 %',
+    percentage: '11',
+  },
+  '361101': {
+    kind: 'baserate',
+    description:
+      'Achiziţii de bunuri şi servicii taxabile cu cota de 19%, altele decât importurile si cele supuse masurilor de simplificare',
+    percentage: '19',
+  },
+  '361102': {
+    kind: 'baserate',
+    description:
+      'Achiziţii de bunuri şi servicii taxabile cu cota de 9% altele decât importurile si cele supuse masurilor de simplificare',
+    percentage: '9',
+  },
+  '361103': {
+    kind: 'baserate',
+    description:
+      'Achiziţii de bunuri și servicii, taxabile cu cota de 5% altele decât importurile si cele supuse masurilor de simplificare',
+    percentage: '5',
+  },
+  '361104': {
+    kind: 'baserate',
+    description:
+      'Achiziţii de bunuri şi servicii taxabile cu cota de 21%, altele decât importurile si cele supuse masurilor de simplificare',
+    percentage: '21',
+  },
+  '361105': {
+    kind: 'baserate',
+    description:
+      'Achiziţii de bunuri şi servicii taxabile cu cota de 11% altele decât importurile si cele supuse masurilor de simplificare',
+    percentage: '11',
+  },
+  '361201': { kind: 'baserate', description: 'Import de bunuri cota 19%', percentage: '19' },
+  '361202': { kind: 'baserate', description: 'Import de bunuri cota 9%', percentage: '9' },
+  '361203': { kind: 'baserate', description: 'Import de bunuri cota 5%', percentage: '5' },
+  '361204': { kind: 'baserate', description: 'Import de bunuri cota 21%', percentage: '21' },
+  '361205': { kind: 'baserate', description: 'Import de bunuri cota 11%', percentage: '11' },
+  '361301': {
+    kind: 'baserate',
+    description: 'Achizitii pentru care se aplica TVA la incasare 19%',
+    percentage: '19',
+  },
+  '361302': {
+    kind: 'baserate',
+    description: 'Achizitii pentru care se aplica TVA la incasare 9%',
+    percentage: '9',
+  },
+  '361303': {
+    kind: 'baserate',
+    description: 'Achizitii pentru care se aplica TVA la incasare 5%',
+    percentage: '5',
+  },
+  '361305': {
+    kind: 'baserate',
+    description: 'Achizitii pentru care se aplica TVA la incasare 21%',
+    percentage: '21',
+  },
+  '361306': {
+    kind: 'baserate',
+    description: 'Achizitii pentru care se aplica TVA la incasare 11%',
+    percentage: '11',
+  },
+  '366304': {
+    kind: 'baserate',
+    description:
+      'Operaţiuni prevăzute la art.307 alin. (3), (5) si (6) din Codul fiscal precum și operațiuni prevăzute la art 307, alin (2) din Codul fiscal altele decât achiziţii de servicii intracomunitare pentru care beneficiarul este obligat la plata TVA cf.art. 307 alin.(2) din Codul fiscal',
+    percentage: '19',
+  },
+  '366306': {
+    kind: 'baserate',
+    description:
+      'Achiziţii de servicii intracomunitare pentru care beneficiarul este obligat la plata TVA cf.art. 307 alin.(2) din Codul fiscal',
+    percentage: '19',
+  },
+  '366307': {
+    kind: 'baserate',
+    description:
+      'Achiziţii de servicii intracomunitare pentru care beneficiarul este obligat la plata TVA cf.art. 307 alin.(2) din Codul fiscal',
+    percentage: '9',
+  },
+  '366308': {
+    kind: 'baserate',
+    description:
+      'Achiziţii de servicii intracomunitare pentru care beneficiarul este obligat la plata TVA cf.art. 307 alin.(2) din Codul fiscal',
+    percentage: '5',
+  },
+  '366309': {
+    kind: 'baserate',
+    description:
+      'Operaţiuni prevăzute la art.307 alin. (3), (5) si (6) din Codul fiscal precum și operațiuni prevăzute la art 307, alin (2) din Codul fiscal altele decât achiziţii de servicii intracomunitare pentru care beneficiarul este obligat la plata TVA cf.art. 307 alin.(2) din Codul fiscal',
+    percentage: '9',
+  },
+  '366310': {
+    kind: 'baserate',
+    description:
+      'Operaţiuni prevăzute la art.307 alin. (3), (5) si (6) din Codul fiscal precum și operațiuni prevăzute la art 307, alin (2) din Codul fiscal altele decât achiziţii de servicii intracomunitare pentru care beneficiarul este obligat la plata TVA cf.art. 307 alin.(2) din Codul fiscal',
+    percentage: '5',
+  },
+  '366317': {
+    kind: 'baserate',
+    description:
+      'Operaţiuni prevăzute la art.307 alin. (3), (5) si (6) din Codul fiscal precum și operațiuni prevăzute la art 307, alin (2) din Codul fiscal altele decât achiziţii de servicii intracomunitare pentru care beneficiarul este obligat la plata TVA cf.art. 307 alin.(2) din Codul fiscal',
+    percentage: '21',
+  },
+  '366318': {
+    kind: 'baserate',
+    description:
+      'Operaţiuni prevăzute la art.307 alin. (3), (5) si (6) din Codul fiscal precum și operațiuni prevăzute la art 307, alin (2) din Codul fiscal altele decât achiziţii de servicii intracomunitare pentru care beneficiarul este obligat la plata TVA cf.art. 307 alin.(2) din Codul fiscal',
+    percentage: '11',
+  },
+  '366319': {
+    kind: 'baserate',
+    description:
+      'Achiziţii de servicii intracomunitare pentru care beneficiarul este obligat la plata TVA cf.art. 307 alin.(2) din Codul fiscal',
+    percentage: '21',
+  },
+  '366320': {
+    kind: 'baserate',
+    description:
+      'Achiziţii de servicii intracomunitare pentru care beneficiarul este obligat la plata TVA cf.art. 307 alin.(2) din Codul fiscal',
+    percentage: '11',
+  },
+  '367301': { kind: 'baserate', description: 'Ajustări conform pro-rata', percentage: '24' },
+  '367302': { kind: 'baserate', description: 'Ajustări de taxă', percentage: '24' },
+  '367303': {
+    kind: 'baserate',
+    description: 'Facturi primite dupa inspectia fiscala 19%',
+    percentage: '19',
+  },
+  '367304': {
+    kind: 'baserate',
+    description: 'Facturi primite dupa inspectia fiscala 9%',
+    percentage: '9',
+  },
+  '367305': {
+    kind: 'baserate',
+    description: 'Facturi primite dupa inspectia fiscala 5%',
+    percentage: '5',
+  },
+  '367306': {
+    kind: 'baserate',
+    description: 'Facturi primite dupa inspectia fiscala 21%',
+    percentage: '21',
+  },
+  '367307': {
+    kind: 'baserate',
+    description: 'Facturi primite dupa inspectia fiscala 11%',
+    percentage: '11',
+  },
+  '367311': { kind: 'baserate', description: 'Ajustări conform pro-rata', percentage: '19' },
+  '367312': { kind: 'baserate', description: 'Ajustări conform pro-rata', percentage: '9' },
+  '367313': { kind: 'baserate', description: 'Ajustări conform pro-rata', percentage: '5' },
+  '367314': { kind: 'baserate', description: 'Ajustări conform pro-rata', percentage: '20' },
+  '367315': { kind: 'baserate', description: 'Ajustări conform pro-rata', percentage: '21' },
+  '367316': { kind: 'baserate', description: 'Ajustări conform pro-rata', percentage: '11' },
+  '367321': { kind: 'baserate', description: 'Ajustări de taxă', percentage: '19' },
+  '367322': { kind: 'baserate', description: 'Ajustări de taxă', percentage: '9' },
+  '367323': { kind: 'baserate', description: 'Ajustări de taxă', percentage: '5' },
+  '367324': { kind: 'baserate', description: 'Ajustări de taxă', percentage: '20' },
+  '367325': { kind: 'baserate', description: 'Ajustări de taxă', percentage: '21' },
+  '367326': { kind: 'baserate', description: 'Ajustări de taxă', percentage: '11' },
+  '369101': { kind: 'baserate', description: 'Regularizări taxă dedusă 19%', percentage: '19' },
+  '369102': { kind: 'baserate', description: 'Regularizări taxă dedusă 9%', percentage: '9' },
+  '369103': { kind: 'baserate', description: 'Regularizări taxă dedusă 5%', percentage: '5' },
+  '369104': { kind: 'baserate', description: 'Regularizări taxă dedusă 20%', percentage: '20' },
+  '369105': { kind: 'baserate', description: 'Regularizări taxă dedusă 24%', percentage: '24' },
+  '369106': { kind: 'baserate', description: 'Regularizări taxă dedusă 21%', percentage: '21' },
+  '369107': { kind: 'baserate', description: 'Regularizări taxă dedusă 11%', percentage: '11' },
   '380001': { kind: 'ledger', description: 'Autocolectare TVA 19%', percentage: '19' },
   '380002': { kind: 'ledger', description: 'Autocolectare TVA 9%', percentage: '9' },
   '380003': { kind: 'ledger', description: 'Autocolectare TVA 5%', percentage: '5' },

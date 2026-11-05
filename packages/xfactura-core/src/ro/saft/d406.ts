@@ -302,6 +302,11 @@ export type D406 = {
   salesInvoices: D406Invoice[];
   purchaseInvoices: D406Invoice[];
   payments: D406Payment[];
+  /** BaseRate of the TaxCodes of sheet Achizitii baserate (purchases deducted under a pro-rata):
+   * the pro-rata percentages (whole numbers, 0–100) applied to the code's purchases, each
+   * written as a fraction of 1 (ANAF's answers v1.2, MF.TT.11: 90% is 0,9000). Every other VAT
+   * code has BaseRate 1. */
+  baseRates?: Record<string, number[]>;
 };
 
 export const d406Namespace = 'mfp:anaf:dgti:d406:declaratie:v1';
@@ -1122,8 +1127,13 @@ export function writeD406(model: D406): string {
             leaf('TaxCode', code),
             leaf('Description', vatTaxCodes[code]!.description.slice(0, 256)),
             leaf('TaxPercentage', vatTaxCodes[code]!.percentage!),
-            // Full right of deduction; the validator reads BaseRate as a fraction of 1.
-            leaf('BaseRate', '1'),
+            // Full right of deduction, or a pro-rata's code with each pro-rata applied to it; the
+            // validator reads BaseRate as a fraction of 1.
+            ...(vatTaxCodes[code]!.kind === 'baserate'
+              ? (model.baseRates?.[code] ?? []).map((percent) =>
+                  leaf('BaseRate', (percent / 100).toFixed(4)),
+                )
+              : [leaf('BaseRate', '1')]),
             leaf('Country', 'RO'),
           ),
         ),
@@ -1811,5 +1821,27 @@ export function checkD406(model: D406): D406Check[] {
       'journals',
       'Fișierul periodic cuprinde cel puțin un cod de taxă TVA (TaxTable).',
     );
+  // A pro-rata's code gives the pro-rata applied (BaseRate); no other code has one.
+  for (const code of calculation.vatCodes) {
+    const rates = model.baseRates?.[code] ?? [];
+    if (vatTaxCodes[code]?.kind === 'baserate' && !rates.length)
+      error(
+        'D406_BASE_RATE',
+        'baseRates',
+        `Codul de taxă ${code} (achiziții cu pro-rata) cere pro-rata aplicată (BaseRate).`,
+      );
+    for (const percent of rates)
+      if (!Number.isInteger(percent) || percent < 0 || percent > 100)
+        error('D406_BASE_RATE', `baseRates.${code}`, 'Pro-rata este un procent întreg, 0–100.');
+    if (new Set(rates).size !== rates.length)
+      error('D406_BASE_RATE', `baseRates.${code}`, `Pro-rata codului ${code} se repetă.`);
+  }
+  for (const code of Object.keys(model.baseRates ?? {}))
+    if (vatTaxCodes[code]?.kind !== 'baserate' || !calculation.vatCodes.includes(code))
+      error(
+        'D406_BASE_RATE',
+        `baseRates.${code}`,
+        `Codul de taxă ${code} nu este un cod de achiziții cu pro-rata folosit în fișier.`,
+      );
   return checks;
 }

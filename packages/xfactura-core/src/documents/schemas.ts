@@ -12,6 +12,12 @@ import {
   type TaxStatementDocument,
 } from '../ro/taxaccount/documents';
 import {
+  inventoryDocumentKind,
+  inventoryListInput,
+  inventoryListSchema,
+  type InventoryList,
+} from '../ro/yearend/documents';
+import {
   extractedInvoiceVersion,
   invoiceDocumentSchema,
   type InvoiceDocument,
@@ -37,6 +43,8 @@ export const documentKinds = {
   /** ANAF's decisions and the taxpayer's account statement (ro/taxaccount/documents.ts). */
   taxDecision: taxDocumentKinds.decision,
   taxStatement: taxDocumentKinds.statement,
+  /** The annual inventory's lists (ro/yearend/documents.ts). */
+  inventoryList: inventoryDocumentKind,
 } as const;
 export type DocumentKind = (typeof documentKinds)[keyof typeof documentKinds];
 /** The kinds `documents.record` accepts. */
@@ -49,6 +57,7 @@ export const extractedKinds = [
   documentKinds.contract,
   documentKinds.taxDecision,
   documentKinds.taxStatement,
+  documentKinds.inventoryList,
 ] as const;
 export type ExtractedKind = (typeof extractedKinds)[number];
 export const isInvoiceKind = (kind: string) =>
@@ -316,7 +325,12 @@ export const contractInput = contractDocumentSchema.extend({
 });
 
 export type ExtractedBody =
-  InvoiceDocument | ReceiptDocument | ContractDocument | TaxDecisionDocument | TaxStatementDocument;
+  | InvoiceDocument
+  | ReceiptDocument
+  | ContractDocument
+  | TaxDecisionDocument
+  | TaxStatementDocument
+  | InventoryList;
 
 /** The body an extracted document of `kind` is stored with, from what the agent read. */
 export function extractedBody(kind: ExtractedKind, body: unknown): ExtractedBody {
@@ -327,6 +341,8 @@ export function extractedBody(kind: ExtractedKind, body: unknown): ExtractedBody
     return taxDecisionDocumentSchema.parse(taxDecisionDocumentInput.parse(body));
   if (kind === documentKinds.taxStatement)
     return taxStatementDocumentSchema.parse(taxStatementDocumentInput.parse(body));
+  if (kind === documentKinds.inventoryList)
+    return inventoryListSchema.parse(inventoryListInput.parse(body));
   if (typeof body !== 'object' || body === null || !('parserVersion' in body))
     return extractedInvoiceBody(kind, extractedInvoiceInput.parse(body));
   // The UBL parser's full shape, as `documents.get` returns it, is accepted too.
@@ -411,6 +427,17 @@ export function documentIdentity(kind: string, body: unknown, companyTaxId: stri
     const parsed = taxStatementDocumentSchema.safeParse(body);
     if (!parsed.success) return null;
     return hashOf(['tax.statement', companyTaxId, parsed.data.source, parsed.data.asOf]);
+  }
+  // An inventory list by its date and title: the same list recorded twice is one group.
+  if (kind === documentKinds.inventoryList) {
+    const parsed = inventoryListSchema.safeParse(body);
+    if (!parsed.success) return null;
+    return hashOf([
+      'inventory.list',
+      companyTaxId,
+      parsed.data.date,
+      normalizedNumber(parsed.data.title),
+    ]);
   }
   return null;
 }

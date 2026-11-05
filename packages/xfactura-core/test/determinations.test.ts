@@ -1112,3 +1112,28 @@ describe('D406 by taxpayer category and the annual assets file', () => {
     expect(lines(pfa).filter((line) => line.startsWith('D406'))).toEqual([]);
   });
 });
+
+describe('the half-year report in the closure', () => {
+  const half = (status: 'required' | 'none' | 'unknown' | 'gap', missing: string[] = []) =>
+    closure({
+      interval: { from: '2026-06', to: '2026-06' },
+      books: {
+        ...noBooks,
+        halfYear: [
+          { year: '2026', status, due: '2026-08-18', message: 'Raportarea la 30 iunie.', missing },
+        ],
+      },
+    });
+  test('owed, it is UNSUPPORTED and kept outside; unknown, it names its question; a rule gap is one', () => {
+    const owed = half('required');
+    expect(owed.status).toBe('UNSUPPORTED');
+    expect(owed.obligations).toContainEqual(
+      expect.objectContaining({ kind: 'SF.halfyear', period: '2026-06', state: 'unsupported' }),
+    );
+    expect(owed.unsupported.map((item) => item.trigger)).toEqual(['HALFYEAR_REPORT']);
+    const unknown = half('unknown', ['cifra de afaceri netă 2025']);
+    expect(unknown.needs.map((need) => need.question.kind)).toEqual(['year.figures']);
+    expect(half('gap').unsupported.map((item) => item.trigger)).toEqual(['RULE_GAP']);
+    expect(half('none').obligations.map((item) => item.kind)).not.toContain('SF.halfyear');
+  });
+});

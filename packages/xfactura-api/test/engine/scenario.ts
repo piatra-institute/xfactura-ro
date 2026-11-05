@@ -61,6 +61,9 @@ export async function scenario(
     register?: ParameterRegister;
     /** Treatments beyond the engine's, for kernel behaviour no real treatment exercises. */
     treatments?: Treatment[];
+    /** How the new database gets its schema: every migration, unless a test of a migration starts
+     * the books from an earlier one. */
+    migrate?: (db: Database) => Promise<void>;
     anaf?: ConstructorParameters<typeof Engine>[3] extends infer O
       ? O extends { anaf?: infer A }
         ? A
@@ -70,7 +73,7 @@ export async function scenario(
 ) {
   const directory = await mkdtemp(join(tmpdir(), 'xfactura-scenario-'));
   const db = new Database(`file:${directory}/books.db`);
-  await db.migrate();
+  await (options.migrate ? options.migrate(db) : db.migrate());
   const objects = new LocalObjectStore(join(directory, 'objects'));
   const engine = new Engine(db, objects, secret, {
     ...(options.efactura ? { efactura: options.efactura } : {}),

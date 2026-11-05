@@ -8,7 +8,7 @@ import { selectRate } from '../fx';
 /** Monetary items are settled in a fixed amount of currency and are revalued; advances and
  * deferrals are not. Loans and their interest are (OMFP 1802/2014, the functions of accounts 162,
  * 167, 168 and 519). */
-const monetary = new Set<OpenItemKind>([
+export const monetaryKinds: ReadonlySet<OpenItemKind> = new Set<OpenItemKind>([
   'receivable',
   'payable',
   'accrual.payable',
@@ -40,7 +40,7 @@ export type RevaluationInput = z.infer<typeof revaluationInput>;
  */
 export const revaluation: Treatment<RevaluationInput> = {
   id: 'fx.revalue',
-  version: 1,
+  version: 2,
   description:
     'Reevaluarea la sfârșit de lună a creanțelor, datoriilor și disponibilităților în valută.',
   input: revaluationInput,
@@ -48,8 +48,9 @@ export const revaluation: Treatment<RevaluationInput> = {
   summary: 'Month-end revaluation of foreign-currency receivables, payables and cash.',
   toolset: 'close',
   subject: (input) => `fx.revalue:${input.date}:${input.round}`,
+  // Every foreign item with its history: one settled after the date was still open on it.
   plan: (input) => ({
-    openItems: [{ foreign: true, openOnly: true, schedules: true }],
+    openItems: [{ foreign: true, schedules: true, history: true }],
     foreignBalances: { at: input.date },
     profile: true,
   }),
@@ -58,8 +59,14 @@ export const revaluation: Treatment<RevaluationInput> = {
       ...[...loaded.openItems.values()].map((item) => item.currency),
       ...loaded.balances.map((balance) => balance.currency),
     ]);
-    return currencies.size
-      ? { fx: [...currencies].sort().map((currency) => ({ currency, until: input.date })) }
+    const entries = [
+      ...new Set([...loaded.openItems.values()].flatMap((item) => item.history ?? [])),
+    ].sort();
+    return currencies.size || entries.length
+      ? {
+          fx: [...currencies].sort().map((currency) => ({ currency, until: input.date })),
+          entries,
+        }
       : null;
   },
   evaluate(input, loaded, rules) {
@@ -109,14 +116,29 @@ export const revaluation: Treatment<RevaluationInput> = {
       else losses += amount;
     };
     for (const item of loaded.openItems.values())
-      if (monetary.has(item.kind))
+      if (monetaryKinds.has(item.kind)) {
+        // The item as it stood at the date: a revaluation booked after later entries (a year-end
+        // revaluation posted in February) revalues the balance of its date, not today's.
+        let bani = item.balanceBani;
+        let minor = item.balanceMinor;
+        for (const entryId of item.history ?? []) {
+          const entry = loaded.entries.get(entryId);
+          if (!entry || entry.date <= input.date) continue;
+          for (const line of entry.lines)
+            if (line.openItem === item.id) {
+              const sign = line.side === 'D' ? 1n : -1n;
+              bani -= sign * line.bani;
+              minor -= sign * (line.currency?.minor ?? 0n);
+            }
+        }
         revalue(
           { account: item.controlAccount, openItem: item.id, partyId: item.partyId },
           item.currency,
-          item.balanceBani,
-          item.balanceMinor,
+          bani,
+          minor,
           item.schedule?.method === INDEXED_LEASE_METHOD,
         );
+      }
     for (const balance of loaded.balances)
       revalue({ account: balance.account }, balance.currency, balance.bani, balance.minor);
     if (issues.some((issue) => issue.severity === 'block')) return { effect: null, issues };

@@ -5,6 +5,7 @@ import { requireCondition } from 'xfactura-core/errors';
 import { canonical, hashOf } from 'xfactura-core/hash';
 import { accountCodePattern } from 'xfactura-core/kernel';
 import { chartAmendments, controlKindOf, referenceChart } from 'xfactura-core/ro/chart';
+import { impairmentPolicies } from 'xfactura-core/ro/yearend';
 import {
   booksSystems,
   entityFormOf,
@@ -134,6 +135,9 @@ export const profileAxes = {
   'policy.payroll.employer_share': ['635', '6458'],
   // Whether an asset is depreciated for the month it is disposed of.
   'policy.assets.disposal_month': ['included', 'excluded'],
+  // How receivables are tested for impairment at the year's end (OMFP 1802/2014 pct. 332, 353):
+  // each individually, or every one overdue beyond a number of days (core ro/yearend).
+  'policy.impairment.receivables': impairmentPolicies,
 } as const;
 export const profileInput = z
   .object({

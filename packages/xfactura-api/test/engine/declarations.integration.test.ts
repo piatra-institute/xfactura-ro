@@ -1,7 +1,15 @@
 import { afterAll, describe, expect, test } from 'bun:test';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { z } from 'zod';
+import { sha256Hex } from 'xfactura-core/hash';
 import type { ActionView } from '../../source/engine/kernel/actions';
-import type { DeclarationValidator } from '../../source/engine/adapters/declaration-validator';
+import {
+  DukIntegrator,
+  dukConfigFolder,
+  type DeclarationValidator,
+} from '../../source/engine/adapters/declaration-validator';
 import type { DeclarationKind } from '../../source/engine/modules/declarations';
 import { loadState } from '../../source/engine/kernel/state';
 import { invoiceXml, type XmlInput } from './fixtures/invoice';
@@ -249,5 +257,77 @@ describe('declarations', () => {
     expect((await s.refused(prepare('2025-12')))?.code).toBe('FORMAT_GAP');
     const operation = s.engine.operations.get('declarations.authorize.request');
     expect([operation.agent, operation.permission]).toEqual([false, 'review']);
+  });
+});
+
+describe("ANAF's DUKIntegrator", () => {
+  const files = { input: '/in/D300.xml', result: '/out/result.txt', output: '/out/D300.pdf' };
+
+  test('runs with its config folder, given first, as DUKIntegrator reads it', () => {
+    expect(DukIntegrator.command('/kit', '/config', '-v', 'D300', files)).toEqual([
+      '-Djava.awt.headless=true',
+      '-jar',
+      '/kit/DUKIntegrator.jar',
+      '-c',
+      '/config',
+      '-v',
+      'D300',
+      '/in/D300.xml',
+      '/out/result.txt',
+    ]);
+    expect(DukIntegrator.command('/kit', '/config', '-p', 'D300', files).slice(3)).toEqual([
+      '-c',
+      '/config',
+      '-p',
+      'D300',
+      '/in/D300.xml',
+      '/out/result.txt',
+      '0',
+      '0',
+      '/out/D300.pdf',
+    ]);
+  });
+
+  test("the kit's config, without the wait before exit, outside the kit and private", async () => {
+    const kit = await mkdtemp(path.join(tmpdir(), 'xfactura-kit-'));
+    try {
+      await mkdir(path.join(kit, 'config'));
+      const own = `proxy=auto\ntipDeclaratie=D112\nkit=${kit}\n`;
+      await writeFile(path.join(kit, 'config', 'config.properties'), own);
+      const folder = await dukConfigFolder(kit);
+      expect(await dukConfigFolder(kit)).toBe(folder);
+      expect(path.relative(kit, folder).startsWith('..')).toBe(true);
+      expect(await readFile(path.join(folder, 'config.properties'), 'utf8')).toBe(
+        `${own}\nmaxWaitBeforeExitMillis=0\n`,
+      );
+      expect(await readFile(path.join(kit, 'config', 'config.properties'), 'utf8')).toBe(own);
+      expect((await stat(folder)).mode & 0o077).toBe(0);
+      // Removed by a cleaning of the temporary directory, it is made again.
+      await rm(folder, { recursive: true, force: true });
+      expect(await dukConfigFolder(kit)).toBe(folder);
+      expect(await readFile(path.join(folder, 'config.properties'), 'utf8')).toBe(
+        `${own}\nmaxWaitBeforeExitMillis=0\n`,
+      );
+      await rm(folder, { recursive: true, force: true });
+
+      // A folder of that name others may write to is not used.
+      const other = path.join(kit, 'other');
+      await mkdir(path.join(other, 'config'), { recursive: true });
+      const theirs = `kit=${other}\n`;
+      await writeFile(path.join(other, 'config', 'config.properties'), theirs);
+      const properties = `${theirs}\nmaxWaitBeforeExitMillis=0\n`;
+      const shared = path.join(
+        tmpdir(),
+        `xfactura-duk-config-${sha256Hex(`${process.getuid?.() ?? ''}\n${properties}`).slice(0, 16)}`,
+      );
+      await mkdir(shared);
+      await chmod(shared, 0o777);
+      const used = await dukConfigFolder(other);
+      expect(used).not.toBe(shared);
+      expect(await readFile(path.join(used, 'config.properties'), 'utf8')).toBe(properties);
+      await Promise.all([shared, used].map((dir) => rm(dir, { recursive: true, force: true })));
+    } finally {
+      await rm(kit, { recursive: true, force: true });
+    }
   });
 });

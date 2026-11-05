@@ -11,6 +11,7 @@ import { d406Begun, type D406StartAt } from '../saft/applicability';
 import {
   confirmQuestion,
   factQuestion,
+  figuresQuestion,
   recordedAt,
   recordedInYear,
   yearlyAxes,
@@ -27,7 +28,7 @@ import {
  * gap, never a pass. Each item records the rule and the slots, with their basis, it came from.
  */
 
-export const CLOSURE_VERSION = 'ro-closure@5';
+export const CLOSURE_VERSION = 'ro-closure@6';
 
 export type ClosureStatus = 'ELIGIBLE' | 'NEEDS_EVIDENCE' | 'UNSUPPORTED';
 
@@ -78,6 +79,15 @@ export interface ClosureBooks {
   /** The years (YYYY) a fixed asset was held: a card of the register, or a balance or movement
    * on a tangible asset account (21x). */
   assetYears: readonly string[];
+  /** The half-year report's decision for each year the range touches (`ro.halfyear.report`,
+   * core `annual/half-year.ts`): owed, not owed, unknown with what it lacks, or a rule gap. */
+  halfYear?: readonly {
+    year: string;
+    status: 'required' | 'none' | 'unknown' | 'gap';
+    due: string | null;
+    message: string;
+    missing: readonly string[];
+  }[];
 }
 
 export interface ClosureInput {
@@ -1364,6 +1374,84 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
           },
         });
     }
+    // The half-year report at 30 June (Legea nr. 82/1991 art. 28 alin. (2), the Ministry's order
+    // of each year): owed by the entities under OMFP nr. 1.802/2014 the order names. The engine
+    // does not prepare it: owed, it is UNSUPPORTED and kept outside, explicitly assigned; unknown,
+    // it names what it lacks; a year no order is read for is a rule gap.
+    const half = month.endsWith('-06')
+      ? (books.halfYear ?? []).find((item) => item.year === String(year))
+      : undefined;
+    if (half && half.status !== 'none')
+      rules.push({
+        id: `obligation.halfyear@${year}`,
+        clauses: ['OMF1194/2025:art.2,anexa.pct.16-17', 'ANAF/raportari-semestriale:2026'],
+        reads: [`books@${month}`],
+        derives: [],
+        run(read, emit) {
+          const system = read(`books@${month}`);
+          if (system.state === 'known' && system.value === 'single') return;
+          const item = {
+            kind: 'SF.halfyear',
+            deadline: null,
+            period: `${year}-06`,
+            deadlinePeriod: null,
+          };
+          if (system.state !== 'known') {
+            emit.obligation({
+              ...item,
+              state: system.state === 'unsupported' ? 'unsupported' : 'needs_evidence',
+              blockers: blockersOf(system),
+            });
+            return;
+          }
+          if (half.status === 'unknown') {
+            emit.obligation({
+              ...item,
+              state: 'needs_evidence',
+              blockers: [
+                emit.need({
+                  code: 'INPUT_UNKNOWN',
+                  fact: `halfyear/${year}`,
+                  message: half.message,
+                  question: half.missing.some((what) => what.startsWith('cifra'))
+                    ? figuresQuestion(year - 1, ['netTurnover'])
+                    : {
+                        kind: 'evidence.missing',
+                        subject: { kind: 'company', id: `halfyear-${year}` },
+                        params: { what: half.message },
+                      },
+                }),
+              ],
+            });
+            return;
+          }
+          emit.obligation({
+            ...item,
+            state: 'unsupported',
+            blockers: [
+              emit.unsupported(
+                half.status === 'gap'
+                  ? {
+                      trigger: 'RULE_GAP',
+                      message: half.message,
+                      missingCapabilities: ['ro.halfyear.report'],
+                      evidenceIds: [],
+                      resolution:
+                        'Ordinul ministrului pentru raportarea la 30 iunie, citit și registrat.',
+                    }
+                  : {
+                      trigger: 'HALFYEAR_REPORT',
+                      message: half.message,
+                      missingCapabilities: ['HALFYEAR_REPORT'],
+                      evidenceIds: [],
+                      resolution:
+                        'Raportarea contabilă la 30 iunie se întocmește și se depune în afara aplicației, atribuit explicit.',
+                    },
+              ),
+            ],
+          });
+        },
+      });
   }
 
   // Cases the engine does not cover, from the books and the determinations.

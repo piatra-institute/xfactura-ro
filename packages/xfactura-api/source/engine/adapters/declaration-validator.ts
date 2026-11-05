@@ -1,10 +1,12 @@
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { requireCondition } from 'xfactura-core/errors';
+import { sha256Hex } from 'xfactura-core/hash';
 
 const run = promisify(execFile);
 
@@ -65,10 +67,59 @@ export class AnafKits implements DeclarationValidator {
   }
 }
 
+/** The config folder of each kit, by the kit's directory. */
+const configFolders = new Map<string, Promise<string>>();
+
+/**
+ * The config folder DUKIntegrator runs with (`-c`): the kit's own config.properties followed by
+ * `maxWaitBeforeExitMillis=0`. DUKIntegrator ends by calling System.exit and halting the JVM
+ * `maxWaitBeforeExitMillis` later, 1000 ms when the property is absent (as in both kits), so each
+ * call waited about a second after writing its result; with 0 it halts at once. The folder is in
+ * the temporary directory, named by its content and its user, so the installation's processes
+ * share it; DUKIntegrator writes its logs (emergency.log, emergency.trc) there instead of in the
+ * kit, which stays as pinned and may be read-only. It is made on a kit's first call, and again
+ * when its file is gone (a cleaning of the temporary directory).
+ */
+export async function dukConfigFolder(dist: string): Promise<string> {
+  const known = configFolders.get(dist);
+  const folder = await known?.catch(() => undefined);
+  if (folder && existsSync(path.join(folder, 'config.properties'))) return folder;
+  if (configFolders.get(dist) === known) {
+    const made = makeConfigFolder(dist);
+    configFolders.set(dist, made);
+    // A failure is not kept: the next call tries again.
+    made.catch(() => configFolders.get(dist) === made && configFolders.delete(dist));
+  }
+  return configFolders.get(dist)!;
+}
+
+async function makeConfigFolder(dist: string) {
+  const own = path.join(dist, 'config', 'config.properties');
+  const kit = existsSync(own) ? await readFile(own, 'utf8') : '';
+  const properties = `${kit}\nmaxWaitBeforeExitMillis=0\n`;
+  const user = process.getuid?.();
+  const name = sha256Hex(`${user ?? ''}\n${properties}`).slice(0, 16);
+  let folder = path.join(tmpdir(), `xfactura-duk-config-${name}`);
+  await mkdir(folder, { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'EEXIST') throw error;
+  });
+  // A folder of another user, a link, or one others may write to is not used: a private one is.
+  const info = await lstat(folder);
+  if (!info.isDirectory() || (user !== undefined && info.uid !== user) || info.mode & 0o077)
+    folder = await mkdtemp(path.join(tmpdir(), 'xfactura-duk-config-'));
+  // Written whole and renamed, so a JVM starting meanwhile reads one file or the other.
+  const file = path.join(folder, 'config.properties');
+  const written = `${file}.${randomUUID()}`;
+  await writeFile(written, properties, { mode: 0o600 });
+  await rename(written, file);
+  return folder;
+}
+
 /**
  * ANAF's DUKIntegrator run as a command (`-v` validates, `-p` validates and writes the PDF),
- * with the declaration packages installed in its `lib` by `bun run validators:fetch`. Its
- * result file holds "ok" or one message per line ("E:" errors, "A:" warnings).
+ * with the declaration packages installed in its `lib` by `bun run validators:fetch` and the
+ * config folder of `dukConfigFolder`. Its result file holds "ok" or one message per line ("E:"
+ * errors, "A:" warnings).
  */
 export class DukIntegrator implements DeclarationValidator {
   constructor(
@@ -88,30 +139,39 @@ export class DukIntegrator implements DeclarationValidator {
     return this.invoke('-p', kind, xml);
   }
 
+  /** The java arguments of a call. DUKIntegrator reads `-c` only as its first argument. */
+  static command(
+    dist: string,
+    config: string,
+    mode: '-v' | '-p',
+    kind: string,
+    files: { input: string; result: string; output: string },
+  ) {
+    // The PDF mode takes the attached ZIP as `0` when the declaration has none.
+    const rest = mode === '-v' ? [files.result] : [files.result, '0', '0', files.output];
+    return [
+      '-Djava.awt.headless=true',
+      '-jar',
+      path.join(dist, 'DUKIntegrator.jar'),
+      '-c',
+      config,
+      mode,
+      kind,
+      files.input,
+      ...rest,
+    ];
+  }
+
   private async invoke(mode: '-v' | '-p', kind: string, xml: Uint8Array) {
+    const config = await dukConfigFolder(this.dist);
     const directory = await mkdtemp(path.join(tmpdir(), 'xfactura-duk-'));
     try {
       const input = path.join(directory, `${kind}.xml`);
       const result = path.join(directory, 'result.txt');
       const output = path.join(directory, `${kind}.pdf`);
       await writeFile(input, xml);
-      // The PDF mode takes the attached ZIP as `0` when the declaration has none.
-      const args = mode === '-v' ? [result] : [result, '0', '0', output];
-      await run(
-        'java',
-        [
-          '-Djava.awt.headless=true',
-          '-jar',
-          path.join(this.dist, 'DUKIntegrator.jar'),
-          mode,
-          kind,
-          input,
-          ...args,
-        ],
-        {
-          timeout: 120_000,
-        },
-      ).catch(() => undefined);
+      const args = DukIntegrator.command(this.dist, config, mode, kind, { input, result, output });
+      await run('java', args, { timeout: 120_000 }).catch(() => undefined);
       const text = existsSync(result) ? await readFile(result, 'utf8') : '';
       const messages = text
         .split(/\r?\n/)

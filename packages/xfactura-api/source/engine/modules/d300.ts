@@ -145,9 +145,11 @@ const rowsByCode: Record<'output' | 'input', Record<string, [string, string | nu
 };
 // Exempt operations (V2), base only: an intra-community supply of goods on rd. 1, exempt with
 // the right of deduction (exports, art. 294 alin. (1), 295, 296, 297 alin. (4) lit. d)) on rd.
-// 14, without it (art. 292) on rd. 15, and purchases exempt or not taxable on rd. 29
-// (OPANAF nr. 174/2026, instructions of rd. 1, 14, 15 and 29); the year-end pro-rata adjustment
-// and the adjustment of stock and services on rd. 34, signed, as the capital goods'.
+// 14, without it (art. 292) on rd. 15, and purchases exempt or not taxable on rd. 29, those from
+// a supplier not registered for VAT (category O, outside the scope of VAT or under the special
+// scheme: "neimpozabilă sau supusă unui regim special de taxă") among them (OPANAF nr. 174/2026,
+// instructions of rd. 1, 14, 15 and 29); the year-end pro-rata adjustment and the adjustment of
+// stock and services on rd. 34, signed, as the capital goods'.
 Object.assign(rowsByCode.output, {
   [exemptCodes.intraCommunity]: [['R1_1', null]],
   [exemptCodes.withDeduction]: [['R14_1', null]],
@@ -156,6 +158,7 @@ Object.assign(rowsByCode.output, {
 });
 Object.assign(rowsByCode.input, {
   [exemptCodes.purchase]: [['R26_1', null]],
+  O: [['R26_1', null]],
   [adjustmentCodes.prorata]: [],
   [adjustmentCodes.stock]: [],
 });

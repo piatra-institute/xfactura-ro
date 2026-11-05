@@ -90,6 +90,7 @@ export const workKinds = [
   'taxaccount.correction',
   'vat.prorata',
   'vat.capitalGoods',
+  'yearend.review',
   'close.finding',
   'period.unclosed',
   'rule.gap',
@@ -1114,12 +1115,61 @@ function vatAdjustmentDetector(source: VatAdjustmentWorkOf): Detector {
   };
 }
 
+// The year-end in full: the annual inventory and its differences, the impairments, the
+// provisions, the cut-off, the result, the year close and the next year's opening (core
+// ro/yearend/agent.ts).
+
+/** An item of the year-end module, as the worklist reads it. */
+export type YearEndWorkItem = {
+  subject: { kind: string; id: string };
+  severity: 'block' | 'warn';
+  period: string;
+  message: string;
+  details: { [key: string]: JsonValue };
+  next: WorkStep[];
+};
+export type YearEndWorkOf = (
+  tx: Transaction,
+  companyId: string,
+  today: LocalDate,
+) => Promise<YearEndWorkItem[]>;
+
+function yearEndDetector(source: YearEndWorkOf): Detector {
+  const cursorOf = (item: YearEndWorkItem) => `${item.subject.kind}:${item.subject.id}`;
+  return {
+    id: 'yearend',
+    kinds: ['yearend.review'],
+    async list({ tx, companyId, today }, page) {
+      const found = (await source(tx, companyId, today))
+        .sort((a, b) => cursorOf(a).localeCompare(cursorOf(b)))
+        .filter((item) =>
+          page.only !== undefined
+            ? item.subject.id === page.only
+            : page.after === null || cursorOf(item) > page.after,
+        );
+      const items = found.slice(0, page.limit).map((item): Draft => ({
+        kind: 'yearend.review',
+        subject: item.subject,
+        severity: item.severity,
+        due: null,
+        period: item.period,
+        message: item.message,
+        details: item.details,
+        next: item.next,
+        cursor: cursorOf(item),
+      }));
+      return { items, next: found.length > page.limit ? items.at(-1)!.cursor : null };
+    },
+  };
+}
+
 // Month-close checks of the months not closed, up to the current one.
 
 /** What to do about a close finding, by its code. */
 const findingSteps: Record<string, (month: Month) => WorkStep[]> = {
   UNEXPLAINED_MOVEMENTS: () => [propose('bank.settle')],
   TAX_STATEMENT_DIFFERS: () => [agent('taxaccount.reconcile')],
+  YEAR_END_REVIEW: () => [agent('work.list', { kinds: ['yearend.review'] })],
   STATEMENT_GAP: () => [
     agent('bank.import'),
     agent('bank.importCsv'),
@@ -1401,8 +1451,8 @@ const documentsDetector: Detector = {
         and(
           eq(documents.companyId, companyId),
           position(documents.id, page),
-          // Contracts and statements of the tax account book nothing.
-          sql`${q(documents.kind)} not in ('contract', 'tax.statement')`,
+          // Contracts, statements of the tax account and inventory lists book nothing.
+          sql`${q(documents.kind)} not in ('contract', 'tax.statement', 'inventory.list')`,
           // Once per group: its root stands for it.
           sql`not exists (select 1 from ${documentLinks} g
             where g.company_id = ${q(documents.companyId)} and g.from_id = ${q(documents.id)}
@@ -2025,6 +2075,8 @@ export interface WorkSources {
   annual: AnnualWorkOf;
   taxaccount: TaxAccountWorkOf;
   vatAdjustments: VatAdjustmentWorkOf;
+  /** The year-end's review; none without it (a test engine). */
+  yearEnd?: YearEndWorkOf;
 }
 
 /** The detectors in worklist order: decisions and blocked work first, then intake. */
@@ -2039,6 +2091,7 @@ export function workDetectors(sources: WorkSources): Detector[] {
     annualDetector(sources.annual),
     taxAccountDetector(sources.taxaccount),
     vatAdjustmentDetector(sources.vatAdjustments),
+    ...(sources.yearEnd ? [yearEndDetector(sources.yearEnd)] : []),
     closeDetector(sources.closeChecks),
     rulesDetector(sources.register),
     betterSourceDetector,

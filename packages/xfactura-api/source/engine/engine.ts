@@ -75,6 +75,14 @@ import {
   payeeWithholding,
 } from 'xfactura-core/ro/treatments/withholding';
 import { withholdingDefinitions, withholdingVersions } from 'xfactura-core/ro/withholding';
+import {
+  assetImpairment,
+  inventoryDifferences,
+  provisionRecord,
+  receivableImpairment,
+  yearEndDefinitions,
+  yearEndVersions,
+} from 'xfactura-core/ro/yearend';
 import { ParameterRegister } from 'xfactura-core/rules';
 import { clause, sourceOf } from 'xfactura-core/ro/sources';
 import { addDays, bucharestDate } from 'xfactura-core/time';
@@ -238,6 +246,18 @@ import {
   taxAccountWork,
 } from './modules/taxaccount';
 import { calendarInput, obligationsCalendar, obligationView } from './modules/obligations';
+import {
+  compareInput,
+  openingInput,
+  profitDeterminationsInput,
+  reopenYearInput,
+  YearEnd,
+  yearCloseHandler,
+  yearEndChecks,
+  yearEndWork,
+  yearInput as closeYearInput,
+  yearReopenHandler,
+} from './modules/yearend';
 import {
   closureInput,
   closureView,
@@ -453,6 +473,7 @@ export const defaultRegister = () =>
       ...nonpayerDefinitions,
       ...exemptDefinitions,
       ...receiptDefinitions,
+      ...yearEndDefinitions,
     ],
     [
       ...vatVersions,
@@ -477,6 +498,7 @@ export const defaultRegister = () =>
       ...nonpayerVersions,
       ...exemptVersions,
       ...receiptVersions,
+      ...yearEndVersions,
     ],
   );
 
@@ -545,6 +567,9 @@ export class Engine {
   readonly automation: Automation;
   /** Graduation, policies earned from it, their sweeps and demotions. */
   readonly autonomy: Autonomy;
+  /** The year-end in full: the inventory against the books, the review, the year's opening
+   * against its close (core ro/yearend). */
+  readonly yearEnd: YearEnd;
 
   constructor(
     readonly db: Database,
@@ -632,6 +657,10 @@ export class Engine {
       lateRegistration,
       capitalGoodsAdjustment,
       prorataAdjustment,
+      inventoryDifferences,
+      receivableImpairment,
+      assetImpairment,
+      provisionRecord,
       ...(options.treatments ?? []),
     );
     this.templates = new Templates(this.commands, this.proposals);
@@ -653,10 +682,18 @@ export class Engine {
       ...cashVatChecks((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
       ...pitChecks((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
       ...taxAccountChecks((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
+      ...yearEndChecks((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
       ...(options.closeChecks ?? []),
     ];
     this.actions.add(closeHandler(this.closeChecks));
     this.actions.add(reopenHandler);
+    this.actions.add(
+      yearCloseHandler((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
+    );
+    this.actions.add(yearReopenHandler);
+    this.yearEnd = new YearEnd(this.commands, (tx, companyId) =>
+      this.proposals.ruleContext(tx, companyId),
+    );
     this.reports = new Reports(this.commands, (tx, companyId) =>
       this.proposals.ruleContext(tx, companyId),
     );
@@ -726,7 +763,7 @@ export class Engine {
       d300Declaration((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
       d390Declaration((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
       d301Declaration((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
-      d394Declaration((tx, companyId) => this.proposals.ruleContext(tx, companyId)),
+      d394Declaration((tx, companyId) => this.proposals.ruleContext(tx, companyId), secret),
       d406Declaration(
         objects,
         (tx, companyId) => this.proposals.ruleContext(tx, companyId),
@@ -819,6 +856,8 @@ export class Engine {
         profit: (tx, companyId, today) => profitWork(tx, companyId, today),
         vatAdjustments: async (tx, companyId, today) =>
           vatAdjustmentWork(tx, companyId, today, await this.proposals.ruleContext(tx, companyId)),
+        yearEnd: async (tx, companyId, today) =>
+          yearEndWork(tx, companyId, today, await this.proposals.ruleContext(tx, companyId)),
         taxaccount: async (tx, companyId, today) =>
           taxAccountWork(
             tx,
@@ -1864,6 +1903,114 @@ export class Engine {
         input: reopenInput,
         output: actionView,
         run: (actor, key, input) => this.actions.request(actor, key, 'periods.reopen', input),
+      }),
+      define({
+        id: 'years.close.request',
+        description:
+          'Pregătește închiderea exercițiului financiar: verificările de sfârșit de an, lunile rămase deschise și închiderea pe conturi, parteneri și imobilizări; executată, blochează exercițiul.',
+        summary:
+          'Requests the year close: the year-end review, the months left open and the itemized closing snapshot (accounts, open items, assets, balances carried) for a person to approve; executed, it locks the year.',
+        toolset: 'close',
+        dataClasses: ['books'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'review',
+        agent: true,
+        effect: 'prepare',
+        approval: 'none',
+        input: closeYearInput,
+        output: actionView,
+        run: (actor, key, input) => this.actions.request(actor, key, 'years.close', input),
+      }),
+      define({
+        id: 'years.reopen.request',
+        description:
+          'Pregătește redeschiderea motivată a unui exercițiu închis, înaintea depunerii situațiilor financiare.',
+        summary:
+          'Requests the reasoned reopening of a closed financial year, before its annual statements are filed, for a person to approve.',
+        toolset: 'close',
+        dataClasses: ['books'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'review',
+        agent: false,
+        effect: 'prepare',
+        approval: 'none',
+        input: reopenYearInput,
+        output: actionView,
+        run: (actor, key, input) => this.actions.request(actor, key, 'years.reopen', input),
+      }),
+      define({
+        id: 'years.opening',
+        description:
+          'Deschiderea exercițiului comparată cu închiderea exercițiului precedent, pe conturi, parteneri, imobilizări și soldurile preluate.',
+        summary:
+          "Checks a year's opening against its previous year's recorded close, per account, open item, asset and carried balance, with every difference.",
+        toolset: 'close',
+        dataClasses: ['books'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: openingInput,
+        output: z.looseObject({ matches: z.boolean().nullable(), closed: z.boolean() }),
+        run: (actor, _, input) => this.yearEnd.opening(actor, input),
+      }),
+      define({
+        id: 'inventory.compare',
+        description:
+          'Listele de inventariere ale unei date comparate cu registrele: imobilizări lipsă, în plus sau depreciate, casa, băncile, confirmările partenerilor, ce nu acoperă listele.',
+        summary:
+          "The inventory lists of a date against the books: missing, surplus and impaired fixed assets, cash, banks, the partners' confirmations, and what the lists leave out.",
+        toolset: 'close',
+        dataClasses: ['books'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: compareInput,
+        output: z.looseObject({ date: z.string(), lists: z.array(z.string()) }),
+        run: (actor, _, input) => this.yearEnd.compare(actor, input),
+      }),
+      define({
+        id: 'yearend.review',
+        description:
+          'Ce așteaptă sfârșitul exercițiului: inventarierea și diferențele ei, ajustările, provizioanele, separarea exercițiilor, rezultatul și impozitul.',
+        summary:
+          "What a financial year's end still waits on: the inventory and its differences, impairments, provisions, the cut-off, the result and its tax.",
+        toolset: 'close',
+        dataClasses: ['books'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: closeYearInput,
+        output: page(z.unknown()).extend({ closed: z.boolean() }),
+        run: (actor, _, input) => this.yearEnd.review(actor, input),
+      }),
+      define({
+        id: 'yearend.profitDeterminations',
+        description:
+          'Ce spun impozitului pe profit ajustările și provizioanele anului (art. 26): partea deductibilă și reluările neimpozabile, ca determinări pentru tax.profit.',
+        summary:
+          "What the year's impairments and provisions tell the profit tax (art. 26): their deductible parts and the reversals not taxable, as `tax.profit` determinations.",
+        toolset: 'tax',
+        dataClasses: ['books', 'tax'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: profitDeterminationsInput,
+        output: page(z.unknown()).extend({ year: z.number() }),
+        run: (actor, _, input) => this.yearEnd.profitDeterminations(actor, input),
       }),
       define({
         id: 'periods.list',

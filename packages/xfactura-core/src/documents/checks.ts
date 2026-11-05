@@ -11,6 +11,12 @@ import {
   type TaxStatementDocument,
 } from '../ro/taxaccount/documents';
 import {
+  inventoryCitations,
+  inventoryProblems,
+  isInventoryKind,
+  type InventoryList,
+} from '../ro/yearend/documents';
+import {
   documentKinds,
   isInvoiceKind,
   isIssuedKind,
@@ -140,6 +146,10 @@ export function companyParty(
       return { ok: false, message: 'Bonul poartă codul fiscal al altui cumpărător.' };
     return { ok: true };
   }
+  if (isInventoryKind(kind))
+    return own((body as InventoryList).company.taxId)
+      ? { ok: true }
+      : { ok: false, message: 'Lista de inventariere privește altă entitate decât compania.' };
   if (isTaxKind(kind)) {
     const document = body as TaxDecisionDocument | TaxStatementDocument;
     return own(document.taxpayer.taxId)
@@ -200,6 +210,23 @@ export function checkDocument(context: CheckContext): {
       ]),
     );
     checks.push(singleDate(receipt.issueDate, context.today));
+  } else if (isInventoryKind(kind)) {
+    const list = body as InventoryList;
+    const problems = inventoryProblems(list);
+    checks.push(
+      problems.length
+        ? failed('TOTALS', problems.join(' '), problems)
+        : passed('TOTALS', 'Listele de inventariere sunt consecvente.'),
+    );
+    checks.push(
+      taxIdCheck([
+        { taxId: list.company.taxId, country: 'RO' },
+        ...(list.partners ?? []).flatMap((row) =>
+          row.taxId ? [{ taxId: row.taxId, country: 'RO' }] : [],
+        ),
+      ]),
+    );
+    checks.push(singleDate(list.date, context.today));
   } else if (isTaxKind(kind)) {
     const problems = taxDocumentProblems(kind, body);
     checks.push(
@@ -483,6 +510,8 @@ function datesOutcome(problems: string[]) {
 /** The fields every extraction of a kind must cite: what identifies it and what it costs. */
 export function requiredCitations(kind: string, body?: unknown): string[] {
   if (isTaxKind(kind)) return body === undefined ? [] : taxDocumentCitations(kind, body);
+  if (isInventoryKind(kind))
+    return body === undefined ? [] : inventoryCitations(body as InventoryList);
   if (kind === documentKinds.receipt)
     return ['issueDate', 'number', 'seller.taxId', 'totals.gross', 'totals.tax'];
   if (kind === documentKinds.contract) return ['date', 'effectiveFrom'];

@@ -9,14 +9,7 @@ import type { LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
 import { artifactEvents, artifacts, fiscalYears, profileFacts } from '../db/schema';
 import type { Actor, Commands } from '../kernel/commands';
-import {
-  annualInput,
-  disclosuresOf,
-  documentsOf,
-  halfYearOf,
-  informativeOf,
-  openQuestions,
-} from './annual';
+import { annualInput, disclosuresOf, documentsOf, informativeOf, openQuestions } from './annual';
 import { statementConfigs } from './s1005';
 
 /** The latest prepared statement of a kind and year not superseded, with its summary. */
@@ -116,14 +109,14 @@ export type AnnualWork = {
 
 /**
  * The annual statements' worklist (core `ro/annual/agent.ts`): for each financial year ended in
- * the last fifteen months, the statement its size category gives and what it waits on; and the
- * half-year report of the current year when one is owed, which the engine does not prepare.
+ * the last fifteen months, the statement its size category gives and what it waits on. The
+ * half-year report is the obligation closure's (`SF.halfyear`), on the calendar.
  */
 export async function annualWork(
   tx: Transaction,
   companyId: string,
   today: LocalDate,
-  rules: RuleContext,
+  _rules: RuleContext,
 ): Promise<AnnualWork[]> {
   const items: AnnualWork[] = [];
   const since = `${Number(today.slice(0, 4)) - 2}-01-01`;
@@ -179,19 +172,7 @@ export async function annualWork(
       },
     });
   }
-  const year = Number(today.slice(0, 4));
-  const half = await halfYearOf(tx, companyId, year, rules);
-  if (half.status === 'required' || half.status === 'unknown')
-    items.push({
-      subjectId: `halfyear|${year}`,
-      severity: 'block',
-      year,
-      kind: 'halfyear',
-      message:
-        half.status === 'required'
-          ? `Raportarea contabilă la 30 iunie ${year} se datorează (${half.lines.join(' ')}): aplicația nu o întocmește; se întocmește în afara ei, atribuit explicit.`
-          : `Nu se știe dacă raportarea la 30 iunie ${year} se datorează: lipsesc ${half.missing.join(', ')}.`,
-      details: { kind: 'halfyear', year, status: half.status, due: half.due },
-    });
+  // The half-year report is the obligation closure's (`SF.halfyear`): the calendar and its
+  // worklist items show it, owed or unknown.
   return items;
 }

@@ -35,6 +35,7 @@ import {
 } from 'xfactura-core/ro/saft/d406';
 import { supplierAppliesCashVat } from 'xfactura-core/ro/cash-vat';
 import {
+  d406BaseRateCode,
   d406CashVatReleaseCode,
   d406RatedAdjustments,
   d406ReverseCharges,
@@ -879,6 +880,8 @@ export function d406Declaration(
         books.periodTaxes.filter((tax) => tax.tax === 'VAT'),
         (tax) => tax.entryId,
       );
+      // The pro-rata of each pro-rata code's purchases: its BaseRate in the TaxTable.
+      const baseRates = new Map<string, Set<number>>();
       const vatOf = async (entryId: string, number: number) => {
         const taxes = taxesOf.get(entryId) ?? [];
         const found: { tax: (typeof taxes)[number]; code: string }[] = [];
@@ -897,18 +900,24 @@ export function d406Declaration(
               );
             continue;
           }
+          // A purchase deducted under a pro-rata (art. 300 alin. (5)) is reported as one when the
+          // whole entry is; one partly deducted otherwise has no single code.
           const deduction =
             tax.direction === 'output'
               ? undefined
-              : tax.deductibleBani === tax.taxBani
-                ? 'full'
-                : tax.deductibleBani === 0n
-                  ? 'none'
-                  : // Half of it deducted (art. 298), within a ban of rounding.
-                    2n * tax.deductibleBani - tax.taxBani <= 1n &&
-                      tax.taxBani - 2n * tax.deductibleBani <= 1n
-                    ? 'half'
-                    : 'partial';
+              : attributes.prorata !== undefined
+                ? BigInt(attributes.prorataTax ?? '0') === tax.taxBani
+                  ? 'prorata'
+                  : 'partial'
+                : tax.deductibleBani === tax.taxBani
+                  ? 'full'
+                  : tax.deductibleBani === 0n
+                    ? 'none'
+                    : // Half of it deducted (art. 298), within a ban of rounding.
+                      2n * tax.deductibleBani - tax.taxBani <= 1n &&
+                        tax.taxBani - 2n * tax.deductibleBani <= 1n
+                      ? 'half'
+                      : 'partial';
           // A reverse charge at the standard rate of its tax point; an adjustment of rd. 34 at
           // the rate of the VAT it adjusts, as its entry records it.
           const rate = d406ReverseCharges.includes(tax.code)
@@ -942,6 +951,11 @@ export function d406Declaration(
               `Operațiunile ${tax.direction === 'output' ? 'cu TVA colectată' : 'cu TVA deductibilă'} cu codul ${tax.code}${rate ? ` (${rate}%)` : ''}${deduction === 'partial' ? ', deduse parțial,' : deduction === 'none' ? ', fără drept de deducere,' : ''} nu au un cod de taxă SAF-T stabilit (nota ${number}).`,
             );
             continue;
+          }
+          if (d406BaseRateCode(code)) {
+            const rates = baseRates.get(code) ?? new Set<number>();
+            rates.add(Number(attributes.prorata));
+            baseRates.set(code, rates);
           }
           found.push({ tax, code });
         }
@@ -1463,6 +1477,13 @@ export function d406Declaration(
         salesInvoices,
         purchaseInvoices,
         payments,
+        ...(baseRates.size
+          ? {
+              baseRates: Object.fromEntries(
+                [...baseRates].map(([code, rates]) => [code, [...rates].sort((a, b) => a - b)]),
+              ),
+            }
+          : {}),
       };
       // The writer's checks, each with where it applies; a CNP is never shown.
       const where = (path: string) => {

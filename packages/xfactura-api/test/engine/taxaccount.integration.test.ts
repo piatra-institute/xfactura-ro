@@ -178,6 +178,130 @@ describe('payments to the single account', () => {
     ]);
   });
 
+  test('taxes withheld from rent and from a non-resident are paid into the single account with the others', async () => {
+    const { s, anaf, fact, owe, movement } = await company([
+      { day: '25', side: 'D', amount: '860.00', ref: 'TAX-WHT', text: 'Plata contul unic' },
+    ]);
+    await fact('tax.facilities', 'none');
+    await owe('444', '500.00', '2026-11-25');
+    // Rent of October paid to an individual on 20.10: 10% of 2,500 less 20% = 200 lei
+    // (OPANAF nr. 874/2024, poz. 33^3).
+    const landlord = await s.invoke<{ id: string }>(s.owner, 'parties.create', {
+      kind: 'ro_individual',
+      country: 'RO',
+      name: 'Popescu Ana',
+    });
+    const rent = await s.book('payees.recognize', {
+      kind: 'rent',
+      partyId: landlord.id,
+      evidenceId: (await s.evidence('contract-inchiriere.pdf')).id,
+      date: '2026-10-01',
+      period: '2026-10',
+      amount: '2500.00',
+      account: '612',
+    });
+    const rentTax = await s.book('payees.withhold', {
+      openItem: rent.effect!.openItems[0]!.id,
+      date: '2026-10-20',
+      gross: '2500.00',
+      authorityId: anaf,
+    });
+    expect(lines(rentTax)).toEqual(['D 462 200.00', 'C 446 200.00']);
+    // A licence from a company outside the Union, paid on 15.10: 16% of 1,000 lei withheld
+    // without a residence certificate (OPANAF nr. 551/2021, poz. 20).
+    const supplier = await s.invoke<{ id: string }>(s.owner, 'parties.create', {
+      kind: 'non_eu',
+      country: 'US',
+      taxId: '12-3456789',
+      name: 'Software Inc',
+    });
+    const licence = await s.book(
+      'ledger.general',
+      journal(
+        (await s.evidence('factura-licenta.pdf')).id,
+        [
+          { account: '628', side: 'D', amount: '1000.00' },
+          { account: '401', side: 'C', amount: '1000.00', newItem: 'licenta' },
+        ],
+        { date: '2026-10-05', newItems: [{ ref: 'licenta', partyId: supplier.id }] },
+      ),
+    );
+    const asked = await s.invoke<{ id: string }>(s.owner, 'questions.ask', {
+      kind: 'nonresident.payee',
+      subject: { kind: 'party', id: supplier.id },
+      params: {},
+    });
+    await s.invoke(s.owner, 'questions.answer', {
+      questionId: asked.id,
+      value: {
+        income: 'royalties',
+        beneficiary: 'company',
+        contractEvidenceId: (await s.evidence('contract-licenta.pdf')).id,
+        reason: 'Licența acordă dreptul de a reproduce și distribui programul.',
+      },
+    });
+    const withheld = await s.invoke<ProposalView>(s.owner, 'proposals.propose', {
+      treatment: 'nonresidents.withhold',
+      input: {
+        openItem: licence.effect!.openItems[0]!.id,
+        date: '2026-10-15',
+        gross: '1000.00',
+        authorityId: anaf,
+        noExchangeOfInformation: false,
+        borneBy: 'beneficiary',
+      },
+      basis: { answers: [asked.id] },
+    });
+    expect(lines(withheld)).toEqual(['D 401 160.00', 'C 446 160.00']);
+    await s.post(await s.approve(withheld, s.reviewer, ['WHT_CERTIFICATE']));
+
+    // Each 446 item is its own obligation of the single account, due on 25.11 (art. 84^1 alin.
+    // (6), art. 224 alin. (5)).
+    const position = await s.invoke<{
+      items: { type: string; due: string | null; singleAccount: boolean; balance: string }[];
+    }>(s.owner, 'taxaccount.position', { date: '2026-11-24' });
+    expect(
+      position.items
+        .map((item) => [item.type, item.due, item.singleAccount, item.balance])
+        .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+    ).toEqual([
+      ['nonresident_royalty_tax', '2026-11-25', true, '160.00'],
+      ['rent_tax', '2026-11-25', true, '200.00'],
+      ['salary_tax', '2026-11-25', true, '500.00'],
+    ]);
+    // The payment covers them all: nothing is left undistributed.
+    const paid = await s.propose('tax.pay', {
+      movementId: movement('TAX-WHT').id,
+      authorityId: anaf,
+      to: 'single',
+    });
+    expect(
+      distribution(paid)
+        .map((item) => [item.obligation, item.stage, item.amount])
+        .sort((a, b) => a[0]!.localeCompare(b[0]!)),
+    ).toEqual([
+      ['Impozit pe redevențele obținute din România de nerezidenți 2026-10', 'due', '160.00'],
+      [
+        'Impozit pe veniturile din cedarea folosinței bunurilor, reținut la sursă 2026-10',
+        'due',
+        '200.00',
+      ],
+      ['Impozit pe veniturile din salarii și asimilate salariilor', 'due', '500.00'],
+    ]);
+    expect(lines(paid).sort()).toEqual([
+      'C 5121 860.00',
+      'D 444 500.00',
+      'D 446 160.00',
+      'D 446 200.00',
+    ]);
+    expect(codes(paid)).toEqual([]);
+    await s.post(await s.approve(paid));
+    const after = await s.invoke<{ items: unknown[] }>(s.owner, 'taxaccount.position', {
+      date: '2026-11-30',
+    });
+    expect(after.items).toEqual([]);
+  });
+
   test('state aid to repay changes the order: the payment is not distributed', async () => {
     const { s, anaf, fact, owe, movement } = await company([
       { day: '20', side: 'D', amount: '1000.00', ref: 'TAX-SA', text: 'Plata contul unic' },

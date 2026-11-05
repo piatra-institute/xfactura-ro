@@ -256,9 +256,34 @@ describe('D394 calculation', () => {
     expect(() => calculateD394(one({ invoices: -1 }))).toThrow('număr natural');
     expect(() => calculateD394(one({ rate: '0' as '21' }))).toThrow('Cota 0');
     expect(() => calculateD394(one({ type: 'A', partner: individual('1900101400012') }))).toThrow(
-      'doar livrări',
+      'livrări (L) și achiziții (N)',
     );
-    expect(() => calculateD394(one({ type: 'N' as 'L' }))).toThrow('nu este acoperit');
+    expect(() => calculateD394(one({ type: 'LS' as 'L' }))).toThrow('nu este acoperit');
+    // N: from an unregistered partner, at rate 0, with its document, the nature for individuals.
+    const n = (patch: Partial<D394Operation>) =>
+      one({
+        type: 'N',
+        rate: '0',
+        partner: individual('1900101400012'),
+        document: 'contract',
+        products: [{ code: '35', invoices: 1, base: 1, vat: 0 }],
+        ...patch,
+      });
+    expect(() => calculateD394(n({}))).not.toThrow();
+    expect(() => calculateD394(n({ partner: registered('14399840', 'A') }))).toThrow(
+      'persoane neînregistrate',
+    );
+    expect(() => calculateD394(n({ rate: '21' }))).toThrow('Cota 21');
+    expect(() => calculateD394(n({ document: undefined }))).toThrow('tipul documentului');
+    expect(() => calculateD394(n({ vat: 1 }))).toThrow('nu au TVA');
+    expect(() => calculateD394(n({ products: [] }))).toThrow('natura bunurilor');
+    expect(() =>
+      calculateD394(n({ products: [{ code: '29', invoices: 1, base: 1, vat: 0 }] })),
+    ).toThrow('nomenclatorul produselor');
+    expect(() =>
+      calculateD394(n({ partner: { kind: 'unregistered', code: '6859662', name: 'X SRL' } })),
+    ).toThrow('doar pentru achizițiile de la persoane fizice');
+    expect(() => calculateD394(one({ document: 'invoice' }))).toThrow('doar pentru achizițiile');
     expect(() => calculateD394(model({ cashVatDeductible: { '21': 0.5 } }))).toThrow(
       'fără zecimale',
     );
@@ -347,6 +372,61 @@ describe('D394 XML', () => {
         ' judP="17" strP="Str. Brăilei" nrFact="1" baza="300" tva="63"/>',
     ]);
     expect(attribute(xml, 'nrCui2', 'informatii')).toBe('2');
+  });
+
+  test('writes acquisitions from unregistered persons (N) by document type, with their nature', () => {
+    const xml = writeD394(
+      model({
+        operations: [
+          {
+            ...operation(
+              'N',
+              '0',
+              { kind: 'unregistered', code: '6859662', name: 'X SRL' },
+              2,
+              900,
+              0,
+            ),
+            document: 'invoice',
+          },
+          {
+            ...operation('N', '0', individual('1900101400012'), 1, 2500, 0),
+            document: 'contract',
+            products: [{ code: '35', invoices: 1, base: 2500, vat: 0 }],
+          },
+          {
+            ...operation('N', '0', individual(), 1, 4000, 0),
+            document: 'purchaseSlip',
+            products: [
+              { code: '1001', invoices: 1, base: 3000, vat: 0 },
+              { code: '1003', invoices: 0, base: 1000, vat: 0 },
+            ],
+          },
+        ],
+      }),
+    );
+    const flat = xml.replace(/>\s+</g, '><');
+    expect(
+      [...flat.matchAll(/<rezumat1 [^>]*?(\/>|>.*?<\/rezumat1>)/g)].map((match) => match[0]),
+    ).toEqual([
+      '<rezumat1 tip_partener="2" cota="0" facturiLS="0" bazaLS="0" facturiN="2" document_N="1" bazaN="900"/>',
+      '<rezumat1 tip_partener="2" cota="0" facturiN="1" document_N="2" bazaN="4000">' +
+        '<detaliu bun="21" nrN="1" valN="4000"/></rezumat1>',
+      '<rezumat1 tip_partener="2" cota="0" facturiN="1" document_N="4" bazaN="2500">' +
+        '<detaliu bun="35" nrN="1" valN="2500"/></rezumat1>',
+    ]);
+    expect(xml).toContain(
+      '<op1 tip="N" tip_partener="2" cota="0" cuiP="6859662" denP="X SRL" tip_document="1"' +
+        ' nrFact="2" baza="900"/>',
+    );
+    expect(flat).toContain(
+      '<op1 tip="N" tip_partener="2" cota="0" cuiP="1900101400012" denP="Ionescu Mihai"' +
+        ' tip_document="4" nrFact="1" baza="2500"><op11 nrFactPR="1" codPR="35" bazaPR="2500"/></op1>',
+    );
+    // No rezumat2 for rate 0; each record counts in nrCui2; N is outside the control sum.
+    expect(xml).not.toContain('<rezumat2');
+    expect(attribute(xml, 'nrCui2', 'informatii')).toBe('3');
+    expect(attribute(xml, 'totalPlata_A')).toBe('3');
   });
 
   test('writes the refund flags only with a refund', () => {

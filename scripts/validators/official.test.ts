@@ -483,6 +483,71 @@ const statements: Record<string, D394> = {
     ],
     simplified: { '21': { receipts: { base: 248, vat: 52 } } },
   }),
+  // Acquisitions from persons not registered for VAT (N, rate 0, no VAT): an exempt invoice of a
+  // company outside VAT (its CUI, no nature needed), two invoices outside the scope of VAT from
+  // another, the rent of an individual's flat under a contract (CNP, services) and wheat bought
+  // from a farmer without a code, on a purchase slip (its NC code, under 21 in detaliu).
+  unregistered: statement({
+    ...invoiced,
+    operations: [
+      sale(registered('14399840', 'Client Unu SRL'), '21', 1, 2000, 420),
+      {
+        type: 'N',
+        rate: '0',
+        partner: { kind: 'unregistered', code: '6859662', name: 'Clinica Exemplu SRL' },
+        invoices: 1,
+        base: 300,
+        vat: 0,
+        document: 'invoice',
+      },
+      {
+        type: 'N',
+        rate: '0',
+        partner: { kind: 'unregistered', code: '10376500', name: 'Mică Întreprindere SRL' },
+        invoices: 2,
+        base: 1500,
+        vat: 0,
+        document: 'invoice',
+      },
+      {
+        type: 'N',
+        rate: '0',
+        partner: { kind: 'unregistered', code: '1900101400012', name: 'Ionescu Mihai' },
+        invoices: 1,
+        base: 2500,
+        vat: 0,
+        document: 'contract',
+        products: [{ code: '35', invoices: 1, base: 2500, vat: 0 }],
+      },
+      {
+        type: 'N',
+        rate: '0',
+        partner: { kind: 'unregistered', code: '2900101400022', name: 'Ionescu Maria' },
+        invoices: 1,
+        base: 800,
+        vat: 0,
+        document: 'other',
+        products: [
+          { code: '34', invoices: 1, base: 600, vat: 0 },
+          { code: '22', invoices: 0, base: 200, vat: 0 },
+        ],
+      },
+      {
+        type: 'N',
+        rate: '0',
+        partner: {
+          kind: 'unregistered',
+          name: 'Georgescu Elena',
+          address: { country: 'RO', county: 'RO-GL', locality: 'Galați', street: 'Str. Brăilei' },
+        },
+        invoices: 1,
+        base: 4000,
+        vat: 0,
+        document: 'purchaseSlip',
+        products: [{ code: '1001', invoices: 1, base: 4000, vat: 0 }],
+      },
+    ],
+  }),
   // The first v5 period, with every other covered section.
   'all-sections': statement({
     period: { year: 2025, month: 8 },
@@ -585,6 +650,30 @@ describe('official D394 validation', () => {
         ],
       });
       const unallocated = statement({ ...domestic, series: [invoiced.series[1]] });
+      // N: the nature (op11) only for individuals, and required for them.
+      const unregistered = statements.unregistered!;
+      const [company, individual] = [unregistered.operations[1]!, unregistered.operations[3]!];
+      const natured = statement({
+        ...unregistered,
+        operations: unregistered.operations.map((operation) =>
+          operation === company
+            ? { ...operation, products: [{ code: '35', invoices: 1, base: 300, vat: 0 }] }
+            : operation,
+        ),
+      });
+      const unnatured = statement({
+        ...unregistered,
+        operations: unregistered.operations.map((operation) =>
+          operation === individual ? { ...operation, products: [] } : operation,
+        ),
+      });
+      expect(checkD394(natured).map((check) => check.code)).toEqual(['D394_PRODUCTS']);
+      expect(checkD394(unnatured).map((check) => check.code)).toEqual(['D394_PRODUCTS']);
+      const n = writeD394(unregistered);
+      const edit = (from: string, to: string) => {
+        expect(n).toContain(from);
+        return n.replace(from, to);
+      };
       expect(checkD394(duplicate).map((check) => check.code)).toEqual(['D394_DUPLICATE']);
       expect(checkD394(noCounty).map((check) => check.code)).toEqual(['D394_ADDRESS']);
       expect(checkD394(unallocated).map((check) => check.code)).toEqual(['D394_SERIES']);
@@ -595,6 +684,11 @@ describe('official D394 validation', () => {
         duplicate: writeD394(duplicate),
         'no-county': writeD394(noCounty),
         unallocated: writeD394(unallocated),
+        'nature-company': edit(
+          'baza="300"/>',
+          'baza="300"><op11 nrFactPR="1" codPR="35" bazaPR="300"/></op1>',
+        ),
+        'nature-missing': edit('<op11 nrFactPR="1" codPR="35" bazaPR="2500"/>', ''),
       });
       expect(results['control-sum']).toStartWith('E:');
       expect(results['control-sum']).toContain('R17');
@@ -603,6 +697,8 @@ describe('official D394 validation', () => {
       expect(results.duplicate).toContain('R218.4');
       expect(results['no-county']).toContain('R222.3');
       expect(results.unallocated).toContain('R112.2');
+      expect(results['nature-company']).toContain('R233.4');
+      expect(results['nature-missing']).toContain('R233.6');
     },
     120_000,
   );

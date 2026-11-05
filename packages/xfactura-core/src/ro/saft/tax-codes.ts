@@ -20,15 +20,21 @@ import { vatTaxCodes } from './data/tax';
  * la incasare", 3013xx, 3413xx, 3513xx). The release a collection or payment books (4428 to 4427
  * or 4426) is a general-ledger entry without a source document: sheet TVA_NoteContabile, "TVA
  * neexigibilă" 3801xx (d406CashVatReleaseCode).
+ *
+ * A purchase whose VAT is deducted under a pro-rata (art. 300 alin. (5), `prorata` on its tax
+ * entry) takes its code from sheet Achizitii baserate (36xxxx), the TaxTable giving the pro-rata
+ * as the code's BaseRate (ANAF's guide, section 2.5; answers v1.2, MF.TT.11: 90% is 0,9000).
  */
 export type D406VatCodeRow = {
   direction: 'output' | 'input';
-  /** The engine's code: S-<rate>, RC-EU-SERV, RC-NONEU-SERV, EXP-EU-SERV, EXP-NONEU-SERV. */
+  /** The engine's code: S-<rate>, RC-EU-SERV, RC-NONEU-SERV, EXP-EU-SERV, EXP-NONEU-SERV,
+   * TI-A-<rate>, TI-L, the exempt codes, O. */
   code: string;
   /** The VAT rate, for the reverse charges taxed at the standard rate of their tax point. */
   rate?: string;
-  /** For acquisitions: the VAT deducted in full, by half or not at all. */
-  deduction?: 'full' | 'half' | 'none';
+  /** For acquisitions: the VAT deducted in full, by half, not at all, or under a pro-rata (art.
+   * 300 alin. (5): the provisional pro-rata, which the TaxTable gives as the code's BaseRate). */
+  deduction?: 'full' | 'half' | 'none' | 'prorata';
   /** The supplier applies VAT on collection. */
   cashVat?: true;
   /** The SAF-T TaxCode. */
@@ -277,11 +283,97 @@ export const d406VatCodes: readonly D406VatCodeRow[] = [
     description: `Achizitii pentru care se aplica TVA la incasare ${code.slice(2)}%`,
     d300: '',
   })),
+  // Achizitii baserate: a purchase for operations with and without the right of deduction.
+  {
+    direction: 'input',
+    code: 'S-21',
+    deduction: 'prorata',
+    taxCode: '361104',
+    description:
+      'Achiziţii de bunuri şi servicii taxabile cu cota de 21%, altele decât importurile si cele supuse masurilor de simplificare',
+    d300: '24',
+  },
+  {
+    direction: 'input',
+    code: 'S-19',
+    deduction: 'prorata',
+    taxCode: '361101',
+    description:
+      'Achiziţii de bunuri şi servicii taxabile cu cota de 19%, altele decât importurile si cele supuse masurilor de simplificare',
+    d300: '24.1',
+  },
+  {
+    direction: 'input',
+    code: 'S-11',
+    deduction: 'prorata',
+    taxCode: '361105',
+    description:
+      'Achiziţii de bunuri şi servicii taxabile cu cota de 11% altele decât importurile si cele supuse masurilor de simplificare',
+    d300: '25',
+  },
+  ...(
+    [
+      ['S-21', '361305'],
+      ['S-19', '361301'],
+      ['S-11', '361306'],
+    ] as const
+  ).map(([code, taxCode]): D406VatCodeRow => ({
+    direction: 'input',
+    code,
+    deduction: 'prorata',
+    cashVat: true,
+    taxCode,
+    description: `Achizitii pentru care se aplica TVA la incasare ${code.slice(2)}%`,
+    d300: '',
+  })),
+];
+
+/**
+ * The domestic reverse charge (art. 331, src/ro/receipts/reverse-charge.ts), from the sheets'
+ * "supuse măsurilor de simplificare" rows: a supply (TI-L) is Livrari 310312, without VAT (D300 rd.
+ * 13); an acquisition (TI-A-<rate>) is one operation, its collected VAT (rd. 12) and its deduction
+ * (rd. 27 in ANAF's sheets) reported once, with the acquisition, by its deduction: Achizitii ded
+ * 100% 3009xx, Achizitii neded 3509xx; the collected side has no code of its own.
+ */
+export const d406DomesticReverseChargeCodes: readonly D406VatCodeRow[] = [
+  {
+    direction: 'output',
+    code: 'TI-L',
+    taxCode: '310312',
+    description:
+      'Livrari de bunuri si prestari de servicii supuse masurilor de simplificare (taxare inversa)',
+    d300: '13',
+  },
+  ...(
+    [
+      ['21', '300906', '350906', '12.1/27.1'],
+      ['11', '300907', '350907', '12.2/27.2'],
+      ['19', '300901', '350901', '12.3/27.3'],
+      ['9', '300902', '350902', '12.4/27.4'],
+      ['5', '300903', '350903', '12.5/27.5'],
+    ] as const
+  ).flatMap(([rate, full, none, d300]): D406VatCodeRow[] =>
+    (
+      [
+        ['full', full],
+        ['none', none],
+      ] as const
+    ).map(([deduction, taxCode]) => ({
+      direction: 'input',
+      code: `TI-A-${rate}`,
+      deduction,
+      taxCode,
+      description: `Achiziţii de bunuri şi servicii supuse măsurilor de simplificare taxabile cu cota de ${rate}${['21', '11'].includes(rate) && deduction === 'full' ? '' : ' '}%`,
+      d300,
+    })),
+  ),
 ];
 
 /**
  * Exempt operations and the adjustments of deductible VAT (V2, src/ro/exempt): an exempt
- * purchase (EX-IN, D300 rd. 29) on the deductible sheet, its VAT being nil; the adjustments of
+ * purchase (EX-IN, D300 rd. 29) on the deductible sheet, its VAT being nil, and a purchase outside
+ * the scope of VAT (category O: a supplier not registered for VAT, D300 rd. 29's "neimpozabilă sau
+ * supusă unui regim special de taxă", OPANAF nr. 174/2026) on the same row; the adjustments of
  * rd. 34 by the rate of the VAT they adjust (`rate` attribute): the pro-rata's "Ajustări conform
  * pro-rata", the capital goods' and the stock's "Ajustări de taxă".
  */
@@ -325,6 +417,15 @@ export const d406ExemptCodes: readonly D406VatCodeRow[] = [
       'Achiziţii de bunuri şi servicii scutite de taxă sau neimpozabile altele decat AIC servicii scutite de taxa',
     d300: '29',
   },
+  {
+    direction: 'input',
+    code: 'O',
+    deduction: 'full',
+    taxCode: '308302',
+    description:
+      'Achiziţii de bunuri şi servicii scutite de taxă sau neimpozabile altele decat AIC servicii scutite de taxa',
+    d300: '29',
+  },
   ...(
     [
       ['ADJ-300', '21', '307327', 'Ajustări conform pro-rata'],
@@ -353,6 +454,13 @@ export const d406RatedAdjustments = ['ADJ-300', 'ADJ-304', 'ADJ-305'];
 
 /** The engine's codes whose collected side is reported with the acquisition. */
 export const d406ReverseCharges = ['RC-EU-SERV', 'RC-NONEU-SERV'];
+/** Whether a tax entry's collected side is reported with its acquisition: the reverse charges
+ * across the border and the domestic one's acquisitions. */
+export const d406CollectedWithAcquisition = (code: string) =>
+  d406ReverseCharges.includes(code) || /^TI-A-\d+$/.test(code);
+
+/** Whether a TaxCode is of sheet Achizitii baserate: the TaxTable gives it the pro-rata. */
+export const d406BaseRateCode = (taxCode: string) => vatTaxCodes[taxCode]?.kind === 'baserate';
 
 /**
  * The TaxCode of a tax entry: a code of vatTaxCodes; null for the collected side of a reverse
@@ -362,12 +470,12 @@ export function d406VatTaxCode(entry: {
   direction: 'output' | 'input';
   code: string;
   rate?: string;
-  deduction?: 'full' | 'half' | 'none' | 'partial';
+  deduction?: 'full' | 'half' | 'none' | 'prorata' | 'partial';
   /** The supplier (the company, for a sale) applies VAT on collection. */
   cashVat?: boolean;
 }): string | null | undefined {
-  if (entry.direction === 'output' && d406ReverseCharges.includes(entry.code)) return null;
-  const row = [...d406VatCodes, ...d406ExemptCodes].find(
+  if (entry.direction === 'output' && d406CollectedWithAcquisition(entry.code)) return null;
+  const row = [...d406VatCodes, ...d406DomesticReverseChargeCodes, ...d406ExemptCodes].find(
     (item) =>
       item.direction === entry.direction &&
       item.code === entry.code &&

@@ -228,6 +228,17 @@ const partyStatusVersion = (id: string) => `CAST(COALESCE((
         SELECT max(s.seq) FROM acc_party_status s
         WHERE s.company_id = NEW.company_id AND s.party_id = substr(${id}, 1, instr(${id}, '|') - 1)
           AND s.as_of = substr(${id}, instr(${id}, '|') + 1)), 0) AS TEXT)`;
+/** Whether `date` falls in a financial year whose latest executed reviewed action of the year
+ * (`years.close` or `years.reopen`, kernel actions) is a close. */
+const lockedYear = (date: string) => `EXISTS (
+      SELECT 1 FROM acc_fiscal_years y
+      WHERE y.company_id = NEW.company_id AND y.kind = 'financial'
+        AND ${date} BETWEEN y.date_from AND y.date_to
+        AND (SELECT r.operation FROM acc_action_requests r
+          JOIN acc_action_executions x ON x.company_id = r.company_id AND x.request_id = r.id
+          WHERE r.company_id = y.company_id AND r.operation IN ('years.close', 'years.reopen')
+            AND json_extract(r.input_json, '$.financialYearId') = y.id
+          ORDER BY x.rowid DESC LIMIT 1) = 'years.close')`;
 const latest = (table: string, scope: string) =>
   `(SELECT kind FROM ${table} WHERE company_id = NEW.company_id AND ${scope} ORDER BY seq DESC LIMIT 1)`;
 /** The id of a question's latest answer, NULL while it has none. */
@@ -460,6 +471,11 @@ const entryChecks: Check[] = [
     violation: `${latest('acc_period_events', 'month = NEW.period')} = 'close'`,
   },
   {
+    code: 'closed_year',
+    rule: 'Nothing is posted into a financial year a reviewed year close locked, until a reviewed reopening.',
+    violation: lockedYear('NEW.date'),
+  },
+  {
     code: 'entry_number',
     rule: 'Entries are numbered without gaps within a financial year and journal class.',
     violation: `NEW.number <> 1 + COALESCE((
@@ -672,6 +688,11 @@ const approvalChecks: Check[] = [
 ];
 
 const periodEventChecks: Check[] = [
+  {
+    code: 'closed_year_month',
+    rule: 'A month of a financial year a reviewed year close locked is not reopened, until the year is.',
+    violation: `NEW.kind = 'reopen' AND ${lockedYear("NEW.month || '-01'")}`,
+  },
   {
     code: 'period_sequence',
     rule: 'Close and reopen events of a month are numbered without gaps and alternate, starting with a close.',
