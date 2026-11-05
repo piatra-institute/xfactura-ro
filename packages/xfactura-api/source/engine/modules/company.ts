@@ -96,7 +96,14 @@ export const profileAxes = {
   // Payment facilities or insolvency (Codul de procedură fiscală art. 163 alin. (10)): a payment
   // to the single account is then extinguished in another order, which the tax account does not
   // cover (core ro/taxaccount); without the fact, a payment is not distributed.
-  'tax.facilities': ['none', 'rescheduling', 'deferral', 'insolvency', 'restructuring'],
+  'tax.facilities': [
+    'none',
+    'rescheduling',
+    'deferral',
+    'insolvency',
+    'restructuring',
+    'state_aid',
+  ],
   employer: ['no', 'yes'],
   // Yearly determinations (core ro/determinations): each year's fact, confirmed from the
   // computation or stated with its document; and what decides the product's scope.

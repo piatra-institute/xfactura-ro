@@ -178,6 +178,22 @@ describe('payments to the single account', () => {
     ]);
   });
 
+  test('state aid to repay changes the order: the payment is not distributed', async () => {
+    const { s, anaf, fact, owe, movement } = await company([
+      { day: '20', side: 'D', amount: '1000.00', ref: 'TAX-SA', text: 'Plata contul unic' },
+    ]);
+    await owe('4418', '1000.00', '2026-10-26');
+    await fact('tax.facilities', 'state_aid');
+    const proposal = await s.propose('tax.pay', {
+      movementId: movement('TAX-SA').id,
+      authorityId: anaf,
+      to: 'single',
+    });
+    const refused = proposal.issues.find((issue) => issue.code === 'TAX_FACILITIES_UNSUPPORTED');
+    expect(refused?.severity).toBe('block');
+    expect(refused?.message).toContain('pct. 3^1');
+  });
+
   test('VAT is paid into its own account; the single account does not take it', async () => {
     const { s, anaf, fact, movement } = await company([
       { day: '24', side: 'D', amount: '500.00', ref: 'TAX-UNIC', text: 'Plata contul unic' },

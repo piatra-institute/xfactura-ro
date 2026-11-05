@@ -64,7 +64,7 @@ export const questions: readonly AgentQuestion[] = [
     answeredBy: 'owner',
     evidence: ['the rescheduling or deferral decision', 'the court decision opening insolvency'],
     summary:
-      'Whether the company has payment facilities or is in insolvency or restructuring (`tax.facilities`): the single account then follows another order, which the engine does not cover.',
+      'Whether the company has payment facilities, is in insolvency or restructuring, or has state aid to repay (`tax.facilities`): the single account then follows another order, which the engine does not cover.',
   },
   {
     kind: 'vat.refund',

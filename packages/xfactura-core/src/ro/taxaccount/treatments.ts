@@ -103,8 +103,8 @@ function taxRules(rules: RuleContext, date: LocalDate): TaxRules | Issue {
 }
 
 /** The facts the distribution depends on: a legal person's single account (55.03), without
- * payment facilities or insolvency, whose order the engine does not apply (art. 163 alin. (10),
- * art. 165 alin. (4)–(6), OPANAF nr. 1.613/2018 cap. II–III). */
+ * payment facilities, insolvency or state aid to repay, whose order the engine does not apply
+ * (art. 163 alin. (10), art. 165 alin. (4)–(6), OPANAF nr. 1.613/2018 pct. 3^1 and cap. II–III). */
 function scopeIssues(loaded: Loaded, date: LocalDate): Issue[] {
   const form = profileAt(loaded, 'entity.form', date);
   if (form === 'pfa' || form === 'ii' || form === 'if')
@@ -119,7 +119,7 @@ function scopeIssues(loaded: Loaded, date: LocalDate): Issue[] {
     return [
       questionIssue(
         'TAX_FACILITIES',
-        'Nu se știe dacă societatea beneficiază de înlesniri la plată (eșalonare, amânare) sau este în insolvență ori în proceduri de prevenire a insolvenței: distribuirea plăților urmează atunci altă ordine (art. 163 alin. (10)). Întrebați (profile.fact tax.facilities).',
+        'Nu se știe dacă societatea beneficiază de înlesniri la plată (eșalonare, amânare), este în insolvență ori în proceduri de prevenire a insolvenței sau are de restituit ajutoare de stat ori de minimis: distribuirea plăților urmează atunci altă ordine (art. 163 alin. (10), OPANAF nr. 1.613/2018 pct. 3^1). Întrebați (profile.fact tax.facilities).',
         {
           kind: 'profile.fact',
           subject: { kind: 'profile', id: 'tax.facilities' },
@@ -131,7 +131,9 @@ function scopeIssues(loaded: Loaded, date: LocalDate): Issue[] {
     return [
       block(
         'TAX_FACILITIES_UNSUPPORTED',
-        'Cu înlesniri la plată sau în insolvență, plățile se sting în ordinea art. 165 alin. (4)–(6) și a OPANAF nr. 1.613/2018 cap. II–III, pe care aplicația nu o acoperă.',
+        facilities === 'state_aid'
+          ? 'Plățile sting întâi ajutoarele de stat sau de minimis de restituit și dobânzile lor (OPANAF nr. 1.613/2018 pct. 3^1, introdus de OPANAF nr. 146/2025), ordine pe care aplicația nu o acoperă.'
+          : 'Cu înlesniri la plată sau în insolvență, plățile se sting în ordinea art. 165 alin. (4)–(6) și a OPANAF nr. 1.613/2018 cap. II–III, pe care aplicația nu o acoperă.',
       ),
     ];
   return [];

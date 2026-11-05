@@ -36,6 +36,102 @@ AI agents drive the engine: they gather evidence, propose bookings, ask the ques
 
 PFA, II and IF are in scope ([PFA_II_IF.md](PFA_II_IF.md)). Excise, fiscal groups, IFRS and medium, large or audited entities stay explicitly unsupported.
 
+## Agent-first backlog
+
+The ordered work after Phase 1 and the first Phase 2 modules, as of 5 November 2026:
+- built in Phase 2 so far: determinations and obligation closure, profit tax and the micro ↔ profit transitions, small-entity statements, the remaining PFA work, quarterly D112, the ANAF tax account, the D406 extras, the non-payer branch;
+- what exists in detail: [IMPLEMENTATION.md](IMPLEMENTATION.md) and [ACCOUNTING_ENGINE.md](ACCOUNTING_ENGINE.md).
+
+Sizes: S (one focused piece), M (a module), L (several modules' worth). Every module ships its `agent.ts`, cited parameters, review specs for the readings the text leaves open, database guards with attacks, and an official-validator test where ANAF publishes a validator.
+
+### Now: inputs only the owner can supply
+
+| Item | Why it matters |
+|---|---|
+| Commit the work, after re-staging (the index holds intermediate versions) | A large uncommitted change set is the biggest operational risk. |
+| Send the first review packets to the expert, in `bun scripts/review/queue.ts` order. The first: `ro.vat.rate.reduced` + `ro.micro.rate`, then `ro.taxaccount.distribution`, `ro.vat.deduction.limited`, `ro.vat.exemption.threshold`, `ro.vat.rate` | Nothing can run live until rules are signed. The 26 ready packets take about 166 minutes. |
+| Download by hand (legislatie.just.ro refuses automated requests): OPANAF 1612/2018, 1613/2018, 146/2025, 874/2024 and OMFP 1899/2004 | Without them, amendments to the tax-account rules after 2025 are unverified. |
+| Recruit one partner accountant (CECCAR), ideally a SAGA or WinMentor user | Unlocks the `interpreted` tier and shadow use, checking the evaluation's expected answers, and the differential comparison. |
+| The pilot company's SPV archives, filed returns, trial balances and bank statements (in `.private/`) | The first real replay. |
+| An Anthropic API key with a budget for `bun run eval:record` | The first measurement of a real agent; today only the scripted baseline is scored. |
+
+### Wave 1: unblock ordinary services companies (November–December 2026)
+
+| # | Module | Content | Oracle | Size |
+|---|---|---|---|---|
+| 1 | V2 Exempt supplies, pro-rata, capital goods | Purchases and sales in categories E, K and G. Insurance, medical and some rents are refused today (`TAX_CATEGORY`); this hits almost every company. Also: art. 292 with the option to tax; pro-rata (art. 300) with its December adjustment; capital-goods adjustments (art. 304–305), including the art. 304 stock adjustment that the deregistration path refuses today; assets bought before 2016 (art. 306). | DUKIntegrator D300/D394, e-TVA | M–L |
+| 2 | V3 Receipts and domestic reverse charge | `receipts.recognize`: a fiscal receipt with the buyer's CUI as a simplified invoice up to the art. 319 limit (source it); VAT from expense reports; receipts in D394; domestic reverse charge (art. 331). Fuel and parking receipts are common to every company. | DUKIntegrator D394 | M |
+| 3 | O1 Withholding | D406 withholding codes (today `D406_WHT` refuses any period with dividend or interest withholding; pin ANAF's 16.02.2026 definitions, which add 604040). Rent and IP paid to individuals. Interim dividends (463). Non-resident payees: art. 223–224, residence certificates, treaty rates, D207. | SAF-T kit, D100/D205/D207 validators | M |
+| 4 | Wave-1 small fixes | Asset sales on 7583 (refused by `invoices.recognize`, so the D406 assets file can't report a sale). A first financial year starting mid-year (determinations read facts at 1 January). D101 listed for an SRL whose tax regime is unknown. The half-year report in the closure, not only the worklist. `cross-border.ts` and `etva.ts` still choose the rate by BT-7. Art. 291 alin. (6) regularisation of advances across a rate change. | existing suites | S each |
+
+### Wave 2: the FY2026 close and the 2027 rollover (December 2026 – February 2027)
+
+| # | Module | Content | Oracle | Size |
+|---|---|---|---|---|
+| 5 | Y1 Year-end in full | Annual inventory (OMF 2861/2009) and its differences; impairment on 491; provisions (untaken leave, bonuses, litigation) per policy; FX and cut-off review of 408/418/471/472; the reviewed opening roll-forward into 2027 (itemized opening equals the closing snapshot). | property tests, replay | M |
+| 6 | R0 Rollover 2027 | 92 of 94 keys stop on 1 January ([ROLLOVER.md](ROLLOVER.md)). Source the December acts (minimum-wage decision, fiscal measures, budget laws) and review the stable keys again. Pin the 2027 return formats as ANAF publishes them: D300, D394, D112, D406, D100. | texts, new ANAF packages | S–M, calendar-driven |
+| 7 | FY2026 forms as published | S1005 and S1003 for FY2026 (expected January–February 2027); D212 for 2026 income (due 25 May 2027); D101 for FY2026 (due 25 June 2027). Each is a `FORMAT_GAP` until pinned; nothing is inferred from 2025. | ANAF packages | S each |
+
+### Wave 3: remaining VAT schemes, payroll, profit-tax leftovers (Q1 2027)
+
+| # | Module | Content | Size |
+|---|---|---|---|
+| 8 | V4 Special VAT schemes | OSS/IOSS (distance sales to EU consumers above €10k, the OSS return); margin schemes (art. 311–312: second-hand goods, art, travel agencies); the agricultural flat rate (art. 315^1). | M ×3 |
+| 9 | W1 Payroll extras | Benefits in kind; the other sick-leave codes; payroll corrections with D112 rectification; garnishments; the administrator's mandate contract; REGES tracked as an external obligation. | M |
+| 10 | Profit-tax leftovers | The annual system with prepayments; sponsorship carried forward (D107 and D101 row 43.2); reinvested-profit and other exemptions and credits; the D700 and D710 writers (both tracked as filed outside today); prior-year rectifications. | M |
+| 11 | PFA/IF leftovers | An IF with several sources; an IF on a norm (pending the expert); how D212 presents a method change within the year; tax not final at source on declared income. | S–M |
+| 12 | Tax-account leftovers | Payment facilities and insolvency; the individuals' single account (55.04); art. 167's offset order; ANAF's month-end interim distribution; D300 row 42. | S–M |
+
+### Wave 4: goods (Q1–Q2 2027)
+
+| # | Module | Content | Size |
+|---|---|---|---|
+| 13 | G1 Stock | Items and warehouses; NIR, consumption slips, delivery notes, transfers and returns; FIFO or weighted average as a policy; the retail sale-price method (378/4428); counts and write-downs (397); `effect@2 stockMoves`; register equals 30x–37x; the D406 stock file. | L |
+| 14 | G2 Retail and B2C | Z reports and receipts; card settlements (5125); B2C e-Factura; fiscal cash registers (AMEF) tracked. | M |
+| 15 | G3 EU goods, imports, exports | D390 L/A/T/R; VIES and transport proof; customs declarations and the VAT deferral certificate; Intrastat watch; e-Transport tracker. | L |
+| 16 | G4 Production | BOMs, work orders, WIP (331), finished goods (345/348/711), overhead allocation. | L |
+
+### Wave 5: leftovers
+
+| # | Module | Content | Size |
+|---|---|---|---|
+| 17 | F1/X1 | Overdrafts and revolving credit; the calendar for interest-only months; local taxes (rates from the local council's decision as evidence); the environment fund where it applies. | S each |
+| 18 | Live e-Factura | The first live call from the owner's session; verifying the Ministry's XMLDSig against a pinned chain. | S–M |
+
+### Correctness track (runs alongside every wave)
+
+| Item | Content |
+|---|---|
+| Expert reviews | Send packets as the queue ranks them. Write specs for the 67 keys that have none, so the queue can score them. Partner accountants raise rules to `interpreted`. |
+| Cross-return checks | A registry run in the `declarations.authorize.request` preview: D300↔D394, D300↔D406↔trial balance, D112↔payroll↔421/431/444, D100↔4418/446, D205↔D100s, D204↔D212s, F10↔trial balance, D101↔fiscal register. |
+| Readiness report per profile | `scripts/conformance/report.ts`: preview, shadow or live per company type, from the register and the recorded proof ([CONFORMANCE.md](CONFORMANCE.md)). |
+| Parameter mutation tests | `scripts/mutate-params.ts`: perturb each version; a mutant no test catches enters the review queue. |
+| Differential comparison | SAGA, WinMentor or Ciel outputs from the partner accountant, compared field by field (`scripts/differential/`, kept in `.private/`). |
+| Pilot replay | The pilot company's quarter and FY2025, against its filed returns and its accountant's books. |
+| Agent evaluation | Record real-model runs. Add worlds for a non-payer, a profit-tax SRL, a small entity, a PFA on a norm and an IF. The partner accountant checks the expected answers. |
+| Validator hygiene | ANAF publishes new validator versions often (D112 J27.0.8 on 3 November 2026). Check the packages monthly. Note that some validators don't check arithmetic (S1003 2025, D406 balances), so the engine's own checks are the only line there. |
+| Test speed | Reuse one Java process in the official-validator suite; agents run only the affected tests while working and the full set once; keep the machine awake during long runs. |
+
+### Product track: Phase 4, after Phase 2 unless the owner moves it earlier
+
+| Item | Content | Size |
+|---|---|---|
+| Agent runtime | `engine/agent/`: providers for Anthropic, OpenAI and OpenAI-compatible endpoints; the `Keyring` with key ids; egress records; limits and a three-level kill switch; the run loop (intake, worklist, ask, propose, report); run records. | L |
+| MCP over OAuth | An authorization server with PKCE and client ID metadata documents; a consent screen; short-lived tokens bound to grants; scopes matching toolsets; live checks from Claude.ai, Claude Code and ChatGPT. | M |
+| Dashboard | Five views (De verificat, Întrebări, Termene, Registre, Setări) plus the accountant portfolio; batch approval with exact totals; evidence beside the effect; camera upload. | L |
+| PDF page images | `evidence.render` for providers without PDF input: PDFium compiled to WebAssembly (MIT) or MuPDF (AGPL, which would settle ADR 0004). | S |
+| Chat | Streaming chat with a per-member grant; citations checked against tool results. | M |
+
+Phase 5 (hosting, sign-up, quotas, backups, retiring the legacy extraction) stays set aside until the owner reopens it.
+
+### Decisions the owner still owes
+
+1. Whether to build Phase 4 for services SRLs and PFAs before the goods wave. That would change the "all regimes first" order.
+2. The PDF renderer licence (PDFium or MuPDF).
+3. Whether reviewers' names and CECCAR numbers may be published in the repository (`--publish-identity`).
+4. Hosted identity (standalone Better Auth or the Piatra handoff), before Phase 4.
+5. Whether AMEF cash registers and e-Transport are integrated or only tracked (the recommendation is tracked first).
+
 ## Sequencing
 
 Keep the public invoicer available. Agents perform routine work through the same typed command API used by the application. The UI primarily verifies evidence, exact effects, decisions and results; manual accounting remains available without a model. Every domain feature needs an API/tool capability and a corresponding review projection.
