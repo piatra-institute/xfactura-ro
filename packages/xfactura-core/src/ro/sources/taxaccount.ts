@@ -186,6 +186,25 @@ export const taxAccountSources: readonly LegalSource[] = [
       },
     ],
   },
+  // Downloaded by the owner from the legislative portal, which refuses automated requests.
+  {
+    id: 'OMFP1899/2004',
+    kind: 'act',
+    title:
+      'Procedura de restituire și de rambursare a sumelor de la buget, precum și de acordare a dobânzilor cuvenite contribuabililor pentru sumele restituite sau rambursate cu depășirea termenului legal, aprobată prin OMFP nr. 1.899/2004 (textul inițial; trimite la OG nr. 92/2003, înlocuită de L207/2015 ale cărei art. 168 și 182 reglementează acum restituirea și dobânzile)',
+    issuer: 'Ministerul Finanțelor Publice',
+    publication: 'Monitorul Oficial nr. 13 din 5 ianuarie 2005',
+    urls: ['https://legislatie.just.ro/Public/DetaliiDocument/58349'],
+    fetch: false,
+    snapshots: [
+      {
+        url: 'https://legislatie.just.ro/Public/DetaliiDocument/58349',
+        sha256: '113faad70d43b1d8666e791f8a71609ccc0a05d9307d9b223a3fc94d486ecc41',
+        retrievedOn: '2026-11-05',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
 ];
 
 const located = (id: string, source: string, locator: string, summary: string): Clause => ({
@@ -424,5 +443,11 @@ export const taxAccountClauses: readonly Clause[] = [
     'ANAF/Cod-fiscal-consolidat',
     'art. 303 alin. (7)–(8)',
     'Soldul sumei negative a TVA se rambursează la cerere, prin bifarea casetei din decont, sau se reportează; un sold de cel mult 5.000 lei se reportează obligatoriu; cererea se poate retrage până la comunicarea deciziei.',
+  ),
+  located(
+    'OMFP1899/2004:cap.I',
+    'OMFP1899/2004',
+    'anexa, cap. I pct. 1–4',
+    'Restituirea se face la cerere, în 45 de zile de la înregistrarea ei (pct. 2), cerută în termenul de prescripție de 5 ani de la 1 ianuarie a anului următor celui în care s-a născut dreptul (pct. 3), după verificarea și compensarea cu obligațiile restante (pct. 4). Text din 2004: se citește împreună cu L207/2015 art. 168.',
   ),
 ];

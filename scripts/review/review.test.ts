@@ -35,27 +35,33 @@ test("the core register is the engine's default register", () => {
 });
 
 const snapshots = existsSync(sourcesDirectory) ? test : test.skip;
-snapshots('every located clause of the seed specs shows its excerpt from the snapshots', () => {
-  const mediaType = (id: string, sha: string) =>
-    legalSources.find((source) => source.id === id)?.snapshots.find((s) => s.sha256 === sha)
-      ?.mediaType;
-  const items = buildPacket(
-    reviewContext(),
-    reviewSpecs.map((spec) => spec.key),
-  ).items;
-  const excerpts = excerptsFor(items, mediaType);
-  const located = items
-    .flatMap((item) => item.sources)
-    .filter((source) => source.status === 'located');
-  const unavailable = excerpts.filter(
-    (excerpt) => !excerpt.shown && located.some((source) => source.clause === excerpt.clause),
-  );
-  expect(unavailable).toEqual([]);
-  // Pending clauses say why, without failing the packet.
-  expect(excerpts.find((excerpt) => excerpt.clause === 'L141/2025:rates')?.text).toBe(
-    'excerpt unavailable: the clause is pending: its source has no registered snapshot',
-  );
-});
+snapshots(
+  'every located clause of the seed specs shows its excerpt from the snapshots',
+  () => {
+    const mediaType = (id: string, sha: string) =>
+      legalSources.find((source) => source.id === id)?.snapshots.find((s) => s.sha256 === sha)
+        ?.mediaType;
+    const items = buildPacket(
+      reviewContext(),
+      reviewSpecs.map((spec) => spec.key),
+    ).items;
+    const excerpts = excerptsFor(items, mediaType);
+    const located = items
+      .flatMap((item) => item.sources)
+      .filter((source) => source.status === 'located');
+    const unavailable = excerpts.filter(
+      (excerpt) => !excerpt.shown && located.some((source) => source.clause === excerpt.clause),
+    );
+    expect(unavailable).toEqual([]);
+    // Pending clauses say why, without failing the packet.
+    expect(excerpts.find((excerpt) => excerpt.clause === 'L141/2025:rates')?.text).toBe(
+      'excerpt unavailable: the clause is pending: its source has no registered snapshot',
+    );
+    // Every spec's excerpts are extracted from the stored PDFs, which takes longer than Bun's
+    // default five seconds.
+  },
+  120_000,
+);
 
 test('a missing snapshot gives "excerpt unavailable", and the packet is still generated', async () => {
   const result = await generatePacket(['ro.micro.rate'], {
