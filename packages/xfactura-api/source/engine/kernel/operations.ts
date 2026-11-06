@@ -30,13 +30,13 @@ export interface OperationMetadata {
 }
 
 /** Data whose disclosure harms a person or opens access, beyond the books themselves. */
-const sensitive: readonly DataClass[] = ['personal', 'payroll', 'credentials'];
+const sensitive: readonly DataClass[] = ['personal', 'payroll', 'health', 'credentials'];
 
 /**
  * An operation's risk, derived from what it declares, never set by hand:
  * - `low`: nothing final happens and nothing sensitive is read: reads of the books, reference
  *   data and evidence, and drafts inside the engine (proposals, imports, requests);
- * - `medium`: sensitive data (personal, payroll, credentials) is read or written, or a
+ * - `medium`: sensitive data (personal, payroll, health, credentials) is read or written, or a
  *   reversible request reaches ANAF;
  * - `high`: something final is committed, a person's decision or the company's configuration
  *   is recorded, or credentials are written;

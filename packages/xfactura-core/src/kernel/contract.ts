@@ -37,6 +37,12 @@ export const dataClasses = [
   'personal',
   /** Employees, employment terms and pay. */
   'payroll',
+  /**
+   * Data concerning health (GDPR art. 9): medical leave and its certificates, their indemnity
+   * and diagnosis codes, work accidents and occupational diseases. No toolset grants it: an agent
+   * reads it only under an operation that declares it, named in its grant.
+   */
+  'health',
   /** Tax computations, returns and the company's standing with ANAF. */
   'tax',
   /** Access: invitations, agent credentials, the ANAF connection. */

@@ -46,22 +46,27 @@ export class PartyIdentities {
 /**
  * The data step of migration 0031 (`personal_data`): every individual's identifier of the
  * earlier forms (an unkeyed `cnp:<sha256>`, or a CNP an individual was created with) is replaced
- * by its keyed form. Run after the migrations, before the invariants are installed again: the
- * append-only guard of `acc_parties` is dropped in the same transaction and restored by
+ * by its keyed form. A Romanian partner of another kind known by a CNP (the seller of a received
+ * e-Factura invoice, recorded as a company under the CNP in clear, before 5 November 2026) becomes
+ * the individual it is; when the company already knows that individual, the copy keeps no
+ * identifier rather than the CNP. Run after the migrations, before the invariants are installed
+ * again: the append-only guard of `acc_parties` is dropped in the same transaction and restored by
  * `ensureInvariants`. Idempotent; a database holding such identifiers needs the secret.
  */
 export async function rekeyIndividuals(client: Client, secret: string | undefined) {
   const rows = (
     await client.execute(
-      `SELECT company_id, id, tax_id FROM acc_parties
+      `SELECT company_id, id, kind, tax_id FROM acc_parties
        WHERE tax_id IS NOT NULL AND tax_id NOT LIKE '${keyedCnpPrefix}%'
-         AND (tax_id GLOB 'cnp:*' OR (kind = 'ro_individual' AND length(tax_id) = 13))`,
+         AND (tax_id GLOB 'cnp:*' OR (kind = 'ro_individual' AND length(tax_id) = 13)
+           OR (country = 'RO' AND length(tax_id) IN (13, 15)))`,
     )
   ).rows
     .map((row) => ({
       companyId: String(row.company_id),
       id: String(row.id),
-      taxId: String(row.tax_id),
+      kind: String(row.kind),
+      taxId: String(row.tax_id).replace(/^RO/i, ''),
     }))
     .filter((row) => legacyCnp.test(row.taxId) || isValidCnp(row.taxId));
   if (!rows.length) return 0;
@@ -73,11 +78,27 @@ export async function rekeyIndividuals(client: Client, secret: string | undefine
   const transaction = await client.transaction('write');
   try {
     await transaction.execute('DROP TRIGGER IF EXISTS inv_acc_parties_no_update');
-    for (const row of rows)
+    // Individuals first, so that a company copy of one of them finds it keyed.
+    const assigned = new Set<string>();
+    for (const row of rows.sort(
+      (a, b) => Number(b.kind === 'ro_individual') - Number(a.kind === 'ro_individual'),
+    )) {
+      const keyed = identities.rekeyed(row.companyId, row.taxId);
+      const known =
+        row.kind !== 'ro_individual' &&
+        (assigned.has(`${row.companyId}/${keyed}`) ||
+          (
+            await transaction.execute({
+              sql: `SELECT 1 FROM acc_parties WHERE company_id = ? AND country = 'RO' AND tax_id = ?`,
+              args: [row.companyId, keyed],
+            })
+          ).rows.length > 0);
+      if (!known) assigned.add(`${row.companyId}/${keyed}`);
       await transaction.execute({
-        sql: 'UPDATE acc_parties SET tax_id = ? WHERE company_id = ? AND id = ?',
-        args: [identities.rekeyed(row.companyId, row.taxId), row.companyId, row.id],
+        sql: `UPDATE acc_parties SET kind = 'ro_individual', tax_id = ? WHERE company_id = ? AND id = ?`,
+        args: [known ? null : keyed, row.companyId, row.id],
       });
+    }
     await transaction.commit();
     return rows.length;
   } catch (error) {

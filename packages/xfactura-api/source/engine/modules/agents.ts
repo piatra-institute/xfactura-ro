@@ -3,7 +3,7 @@ import { and, asc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireCondition } from 'xfactura-core/errors';
 import { canonical } from 'xfactura-core/hash';
-import { toolsets, type Toolset } from 'xfactura-core/kernel';
+import { toolsets, type DataClass, type Toolset } from 'xfactura-core/kernel';
 import { agentGrants } from '../db/schema';
 import { idSchema, type Actor, type Commands } from '../kernel/commands';
 import { sha256 } from '../adapters/object-store';
@@ -71,13 +71,19 @@ export class Agents {
   constructor(
     private readonly commands: Commands,
     private readonly secret: string,
-    /** The operations a grant may name, with their toolsets. */
-    private readonly grantable: () => { id: string; toolset: Toolset }[],
+    /** The operations a grant may name, with their toolsets and data classes. */
+    private readonly grantable: () => {
+      id: string;
+      toolset: Toolset;
+      dataClasses: readonly DataClass[];
+    }[],
   ) {}
 
   /**
    * The operation ids a grant's scopes name. A toolset expands to its agent operations now, and
-   * the grant stores the expansion: operations added to the toolset later are not granted.
+   * the grant stores the expansion: operations added to the toolset later are not granted. No
+   * toolset expands to an operation that declares `health` (`payroll.absences.list`, an export):
+   * a grant reads health data only by naming one.
    */
   private expand(scopes: string[]) {
     const operations = this.grantable();
@@ -87,7 +93,9 @@ export class Agents {
     for (const scope of scopes) {
       if (scope.startsWith(toolsetScope)) {
         const toolset = scope.slice(toolsetScope.length) as Toolset;
-        const members = operations.filter((operation) => operation.toolset === toolset);
+        const members = operations.filter(
+          (operation) => operation.toolset === toolset && !operation.dataClasses.includes('health'),
+        );
         if (members.length === 0) unknown.push(scope);
         else named.push(toolset);
         for (const operation of members) ids.add(operation.id);

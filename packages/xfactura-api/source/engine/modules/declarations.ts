@@ -19,14 +19,27 @@ import { appendAudit, type Actor, type Commands } from '../kernel/commands';
 import { maskCnpText } from '../kernel/personal';
 
 type State = (typeof artifactStates)[number];
-export type DeclarationProblem = { code: string; message: string };
+/** A return's problem; `health` when it names a medical certificate or quotes its codes (D112's
+ * sick leave), which a caller who may not read health data reads as `healthProblem`. */
+export type DeclarationProblem = { code: string; message: string; health?: true };
+
+/** The steps whose detail comes from outside the engine (ANAF's validator, ANAF's answer as
+ * recorded), and what a caller who may not read a return's health data reads instead. */
+const outsideDetails: readonly string[] = ['validation_failed', 'accepted', 'rejected'];
+const healthDetail =
+  'Ascuns: mesajul validatorului sau al ANAF poate cita date de sănătate (coduri de diagnostic) din D112.';
+
+/** What a problem about sick leave says to a caller who may not read health data. */
+const healthProblem =
+  'Concediul medical al unui salariat (date de sănătate pe care această identitate nu le poate citi) împiedică declarația: un proprietar sau un revizor vede problema pregătind-o.';
 
 /** The returns whose files carry individuals' identifying data: the CNPs they open from their
  * seals (D112's insured, D204's members, D205's beneficiaries, D212's taxpayer, D394's and
  * D406's individuals) or a non-resident's identification (D207); D112 also each insured's pay and
- * the diagnosis codes of their medical certificates. */
+ * the diagnosis and indemnity codes of their medical certificates: `health`, whether or not a
+ * month had sick leave, so that a file's classes never tell that someone was ill. */
 const personalReturns: Record<string, DataClass[]> = {
-  D112: ['payroll', 'personal'],
+  D112: ['health', 'payroll', 'personal'],
   D204: ['personal'],
   D205: ['personal'],
   D207: ['personal'],
@@ -36,8 +49,9 @@ const personalReturns: Record<string, DataClass[]> = {
 };
 
 /** The data classes of a return's files beyond `evidence`: its XML, ANAF's PDF of it, the signed
- * copy and ANAF's answers are `tax`, and some `personal` and `payroll` too (`personalReturns`).
- * `evidence.read`, `.list` and `.get` give them only to a caller who may read every one. */
+ * copy and ANAF's answers are `tax`, and some `personal`, `payroll` and `health` too
+ * (`personalReturns`). `evidence.read`, `.list` and `.get` give them only to a caller who may read
+ * every one. */
 export const declarationClasses = (kind: string): DataClass[] => [
   'tax',
   ...(personalReturns[kind] ?? []),
@@ -226,7 +240,7 @@ export class Declarations {
       'declarations.prepare',
       input,
       'write',
-      async (tx) => {
+      async (tx, access) => {
         const format = kind.format(period);
         requireCondition(
           format,
@@ -262,14 +276,22 @@ export class Declarations {
           );
         }
         const result = await kind.prepare(tx, actor.companyId, period, options);
+        // A problem about a medical certificate names it and may quote its codes: a caller who
+        // may not read health data learns only that sick leave stops the return.
+        const health = (await this.commands.disclosable(tx, actor, access.role))(['health']);
+        const problems = health
+          ? result.problems
+          : result.problems.map((problem) =>
+              problem.health
+                ? { code: problem.code, message: healthProblem, health: true as const }
+                : problem,
+            );
         requireCondition(
-          !result.problems.length,
-          result.problems[0]?.code ?? 'DECLARATION',
-          result.problems[0]?.message ?? '',
+          !problems.length,
+          problems[0]?.code ?? 'DECLARATION',
+          problems[0]?.message ?? '',
           422,
-          {
-            problems: result.problems,
-          },
+          { problems },
         );
         const bytes = Buffer.from(result.xml, 'utf8');
         const hash = sha256(bytes);
@@ -686,7 +708,7 @@ export class Declarations {
         .where(and(eq(artifacts.companyId, actor.companyId), eq(artifacts.id, artifactId)));
       requireCondition(row, 'NOT_FOUND', 'Declarația nu există.', 404);
       const disclosable = await this.commands.disclosable(tx, actor, access.role);
-      return this.describe(tx, row, !disclosable(declarationClasses(row.kind)));
+      return this.describe(tx, row, disclosable);
     });
   }
 
@@ -698,15 +720,25 @@ export class Declarations {
         .where(eq(artifacts.companyId, actor.companyId))
         .orderBy(asc(artifacts.kind), asc(artifacts.period), asc(artifacts.createdAt));
       const disclosable = await this.commands.disclosable(tx, actor, access.role);
-      return Promise.all(
-        rows.map((row) => this.describe(tx, row, !disclosable(declarationClasses(row.kind)))),
-      );
+      return Promise.all(rows.map((row) => this.describe(tx, row, disclosable)));
     });
   }
 
-  /** A return with its steps. `mask`: for a caller who may not read the return's classes, the
-   * steps' details carry no CNP (ANAF's validator may quote the records it refuses). */
-  private async describe(tx: Transaction, row: typeof artifacts.$inferSelect, mask = false) {
+  /**
+   * A return with its steps, as a caller reads it. For a caller who may not read the return's
+   * classes, the steps' details carry no CNP (ANAF's validator may quote the records it refuses);
+   * and for a return that holds health data (D112), a caller who may not read it reads no detail
+   * from outside the engine (the validator's messages, ANAF's answer), which may quote a
+   * diagnosis code: only that it is withheld.
+   */
+  private async describe(
+    tx: Transaction,
+    row: typeof artifacts.$inferSelect,
+    disclosable: (classes: readonly DataClass[]) => boolean,
+  ) {
+    const classes = declarationClasses(row.kind);
+    const mask = !disclosable(classes);
+    const withheld = classes.includes('health') && !disclosable(['health']);
     const steps = await tx
       .select()
       .from(artifactEvents)
@@ -726,7 +758,12 @@ export class Declarations {
       steps: steps.map((step) => ({
         state: step.state,
         actor: step.actor,
-        detail: mask && step.detail ? maskCnpText(step.detail, true) : step.detail,
+        detail:
+          withheld && step.detail && outsideDetails.includes(step.state)
+            ? healthDetail
+            : mask && step.detail
+              ? maskCnpText(step.detail, true)
+              : step.detail,
         evidenceId: step.evidenceId,
         at: step.createdAt,
       })),

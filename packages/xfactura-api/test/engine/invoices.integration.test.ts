@@ -39,6 +39,48 @@ const codes = (proposal: ProposalView) => proposal.issues.map((issue) => issue.c
 const balance = async (s: Scenario, account: string) =>
   (await s.trialBalance()).rows.find((row) => row.account === account)?.closing;
 
+// Synthetic BNR rates for the invoices in euro below.
+const bnr = `<?xml version="1.0" encoding="utf-8"?>
+<DataSet xmlns="http://www.bnr.ro/xsd"><Header><Publisher>National Bank of Romania</Publisher><PublishingDate>2026-04-17</PublishingDate><MessageType>DR</MessageType></Header>
+<Body><Subject>Reference rates</Subject><OrigCurrency>RON</OrigCurrency>
+<Cube date="2026-03-27"><Rate currency="EUR">4.9800</Rate></Cube>
+<Cube date="2026-04-01"><Rate currency="EUR">4.9900</Rate></Cube>
+<Cube date="2026-04-17"><Rate currency="EUR">5.0050</Rate></Cube>
+</Body></DataSet>`;
+async function importRates(s: Scenario) {
+  const { id: evidenceId } = await s.invoke<{ id: string }>(s.owner, 'evidence.record', {
+    filename: 'nbrfxrates.xml',
+    mediaType: 'application/xml',
+    base64: Buffer.from(bnr).toString('base64'),
+  });
+  await s.invoke(s.owner, 'fx.importBnr', { evidenceId });
+}
+/** A document in euro, its VAT in lei (BT-6 = RON, BT-111) as CIUS-RO asks. */
+async function importEuro(s: Scenario, input: XmlInput, ronVat: string) {
+  const xml = invoiceXml({ ...input, currency: 'EUR' })
+    .replace(
+      '</cbc:DocumentCurrencyCode>',
+      '</cbc:DocumentCurrencyCode><cbc:TaxCurrencyCode>RON</cbc:TaxCurrencyCode>',
+    )
+    .replace(
+      '<cac:LegalMonetaryTotal>',
+      `<cac:TaxTotal><cbc:TaxAmount currencyID="RON">${ronVat}</cbc:TaxAmount></cac:TaxTotal><cac:LegalMonetaryTotal>`,
+    );
+  const { id: evidenceId } = await s.invoke<{ id: string }>(s.owner, 'evidence.record', {
+    filename: `${input.number}.xml`,
+    mediaType: 'application/xml',
+    base64: Buffer.from(xml).toString('base64'),
+  });
+  return s.invoke<{ id: string; kind: string; partyId: string }>(s.owner, 'invoices.import', {
+    evidenceId,
+  });
+}
+const rated = (proposal: ProposalView) =>
+  proposal.effect?.lines.map(
+    (line) =>
+      `${line.side} ${line.account} ${line.amount}${line.currency ? ` [${line.currency.code} ${line.currency.amount} @ ${line.currency.rate}]` : ''}`,
+  );
+
 describe('import', () => {
   test('decides the direction from the company and records the counterparty once', async () => {
     const s = await company();
@@ -338,6 +380,81 @@ describe('invoices on several accounts and rates', () => {
     ]);
     await s.post(await s.approve(credited, s.reviewer, ['REDUCED_RATE']));
     expect(await balance(s, '401')).toEqual({ debit: '0.00', credit: '1255.50' });
+  });
+
+  // F-MIX in euro of 1 April at 4.9900: 1,200.00 EUR = 5,988.00 lei (4,990.00 and 998.00), VAT
+  // 232.00 EUR = 1,157.68 lei, split 1,047.90 / 109.78 by the euro VAT. CN-MIX of 20 April at
+  // 5.0050 (17 April): 150.00 EUR = 750.75 lei of expense (500.50 and 250.25); its VAT 26.50 EUR at
+  // F-MIX's 4.9900 = 132.235 → 132.24 (104.79 / 27.45 by the euro VAT), its base 150.00 × 4.99 =
+  // 748.50 (499.00 / 249.50); the payable 176.50 EUR at 4.9900 = 880.735 → 880.74; 750.75 + 132.24
+  // − 880.74 = 2.25 lost.
+  test('in euro: the credit note’s parts in euro, each at the note’s rate, its VAT at the invoice’s', async () => {
+    const s = await company();
+    await importRates(s);
+    const document = await importEuro(s, { ...mixed, date: '2026-04-01' }, '1157.68');
+    const original = await s.propose('invoices.recognize', {
+      documentId: document.id,
+      allocations: [
+        { account: '628', vat: 'S-21', amount: '1000.00' },
+        { account: '623', vat: 'S-11', amount: '200.00', deduction: 'none' },
+      ],
+    });
+    expect(rated(original)).toEqual([
+      'D 628 4990.00 [EUR 1000.00 @ 4.9900]',
+      'D 623 1107.78 [EUR 222.00 @ 4.9900]',
+      'D 4426 1047.90 [EUR 210.00 @ 4.9900]',
+      'C 401 7145.68 [EUR 1432.00 @ 4.9900]',
+    ]);
+    await s.post(await s.approve(original, s.reviewer, ['REDUCED_RATE']));
+    const note = await importEuro(
+      s,
+      {
+        number: 'CN-MIX',
+        credit: true,
+        originalNumber: 'F-MIX',
+        date: '2026-04-20',
+        net: '150.00',
+        tax: '26.50',
+        gross: '176.50',
+        taxes: [
+          { rate: '21', net: '100.00', tax: '21.00' },
+          { rate: '11', net: '50.00', tax: '5.50' },
+        ],
+      },
+      '132.24',
+    );
+    // Its parts are in euro: amounts in lei do not cover the categories.
+    const inLei = await s.propose('invoices.credit', {
+      documentId: note.id,
+      originalDocumentId: document.id,
+      allocations: [
+        { account: '628', vat: 'S-21', amount: '500.50' },
+        { account: '623', vat: 'S-11', amount: '250.25', deduction: 'none' },
+      ],
+    });
+    expect(codes(inLei)).toContain('ALLOCATION');
+    const credited = await s.revise('invoices.credit', inLei, {
+      documentId: note.id,
+      originalDocumentId: document.id,
+      allocations: [
+        { account: '628', vat: 'S-21', amount: '100.00' },
+        { account: '623', vat: 'S-11', amount: '50.00', deduction: 'none' },
+      ],
+    });
+    expect(codes(credited)).toEqual(['REDUCED_RATE']);
+    expect(rated(credited)).toEqual([
+      'D 628 -500.50 [EUR -100.00 @ 5.0050]',
+      'D 623 -277.70 [EUR -55.50 @ 5.0050]',
+      'D 4426 -104.79 [EUR -21.00 @ 4.9900]',
+      'C 401 -880.74 [EUR -176.50 @ 4.9900]',
+      'D 6651 2.25',
+    ]);
+    expect(vat(credited)).toEqual([
+      'vat:S-21 S-21 -499.00/-104.79 deducted -104.79 line 2',
+      'vat:S-11 S-11 -249.50/-27.45 deducted 0.00 line -',
+    ]);
+    await s.post(await s.approve(credited, s.reviewer, ['REDUCED_RATE']));
+    expect(await balance(s, '401')).toEqual({ debit: '0.00', credit: '6264.94' });
   });
 
   test('one account takes every category; a sale collects VAT by rate', async () => {
@@ -755,6 +872,113 @@ describe('credit notes', () => {
     await s.post(await s.approve(proposal, s.reviewer, ['CREDIT_REFUND']));
     expect(await balance(s, '461')).toEqual({ debit: '60.50', credit: '0.00' });
     expect(await balance(s, '401')).toEqual({ debit: '0.00', credit: '0.00' });
+  });
+
+  // V-EU, issued on 2 April for a supply of 27 March (BT-72): its VAT is chargeable on 27 March,
+  // at that day's 4.9800 (210.00 EUR = 1,045.80 lei, base 4,980.00), its revenue at the issue
+  // date's 4.9900 (4,990.00); the receivable, 6,035.80 lei for 1,210.00 EUR, mixes the two rates.
+  // CN-EU of 20 April at 5.0050: its VAT 21.00 EUR at 4.9800 = 104.58 (base 498.00), as V-EU's VAT
+  // entry records it, not V-EU's 4.9900 nor its own; revenue 500.50; the receivable, carried at
+  // no single rate, leaves in proportion, 6,035.80 × 121 / 1,210 = 603.58; 500.50 + 104.58 −
+  // 603.58 = 1.50 gained.
+  test('in euro, the VAT keeps the rate the invoice’s base was converted at, its tax point’s', async () => {
+    const s = await company();
+    await importRates(s);
+    const original = await importEuro(
+      s,
+      {
+        number: 'V-EU',
+        direction: 'sale',
+        date: '2026-04-02',
+        deliveryDate: '2026-03-27',
+        net: '1000.00',
+        tax: '210.00',
+        gross: '1210.00',
+      },
+      '1045.80',
+    );
+    const sold = await s.book('invoices.recognize', { documentId: original.id, account: '704' });
+    expect(rated(sold)).toEqual([
+      'D 4111 6035.80 [EUR 1210.00 @ 4.9900]',
+      'C 704 4990.00 [EUR 1000.00 @ 4.9900]',
+      'C 4427 1045.80 [EUR 210.00 @ 4.9800]',
+    ]);
+    const credit = await importEuro(
+      s,
+      {
+        number: 'CN-EU',
+        direction: 'sale',
+        credit: true,
+        originalNumber: 'V-EU',
+        date: '2026-04-20',
+        net: '100.00',
+        tax: '21.00',
+        gross: '121.00',
+      },
+      '104.58',
+    );
+    const proposal = await s.propose('invoices.credit', {
+      documentId: credit.id,
+      originalDocumentId: original.id,
+      account: '704',
+    });
+    expect(codes(proposal)).toEqual([]);
+    expect(rated(proposal)).toEqual([
+      'D 4111 -603.58 [EUR -121.00 @ 5.0050]',
+      'C 704 -500.50 [EUR -100.00 @ 5.0050]',
+      'C 4427 -104.58 [EUR -21.00 @ 4.9800]',
+      'C 7651 1.50',
+    ]);
+    expect(proposal.effect?.taxEntries[0]).toMatchObject({
+      base: '-498.00',
+      amount: '-104.58',
+      taxPeriod: '2026-04',
+    });
+  });
+
+  test('under VAT on collection an invoice in euro is still refused, and so none of its credit notes is booked', async () => {
+    const s = await company();
+    await importRates(s);
+    await s.invoke(s.owner, 'profile.record', {
+      axis: 'vat.cash',
+      value: 'yes',
+      effectiveFrom: '2026-01-01',
+      evidenceId: (await s.evidence('tva-incasare.pdf')).id,
+    });
+    const original = await importEuro(
+      s,
+      { number: 'V-CASH', direction: 'sale', date: '2026-04-01', note: 'TVA la încasare' },
+      '104.79',
+    );
+    const proposal = await s.propose('invoices.recognize', {
+      documentId: original.id,
+      account: '704',
+    });
+    expect(codes(proposal)).toContain('CASH_VAT_CURRENCY');
+    const credit = await importEuro(
+      s,
+      {
+        number: 'CN-CASH',
+        direction: 'sale',
+        credit: true,
+        originalNumber: 'V-CASH',
+        date: '2026-04-20',
+        net: '50.00',
+        tax: '10.50',
+        gross: '60.50',
+        note: 'TVA la încasare',
+      },
+      '52.40',
+    );
+    expect(
+      codes(
+        await s.propose('invoices.credit', {
+          documentId: credit.id,
+          originalDocumentId: original.id,
+          account: '704',
+        }),
+      ),
+    ).toEqual(['ORIGINAL_OPEN_ITEM']);
   });
 
   test('must name the invoice it credits', async () => {

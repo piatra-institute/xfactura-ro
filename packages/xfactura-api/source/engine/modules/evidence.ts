@@ -1,7 +1,8 @@
-import { and, asc, eq, inArray, isNotNull, like, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireCondition } from 'xfactura-core/errors';
 import type { DataClass } from 'xfactura-core/kernel';
+import { questionKind, questionKindIds } from 'xfactura-core/questions/kinds';
 import { isValidCnp } from 'xfactura-core/ro/identifiers';
 import type { Transaction } from '../db/database';
 import {
@@ -13,6 +14,7 @@ import {
   evidence,
   garnishmentReleases,
   garnishments,
+  payrollLines,
   payrollRuns,
   questionAnswers,
   questions,
@@ -237,8 +239,16 @@ export async function evidenceClasses(
       .from(table)
       .where(and(eq(table.companyId, companyId), among(column))))
       add(row.id, ['payroll', 'personal']);
+  // An answer holding data beyond the books (a month's benefits, its sick leave): its file and
+  // the files it cites (the medical certificates, the benefits' documents) hold it too.
+  const classed = questionKindIds.filter((kind) => questionKind(kind)?.dataClasses?.length);
+  const wanted = ids ? new Set(ids) : null;
   for (const row of await tx
-    .select({ id: questionAnswers.evidenceId })
+    .select({
+      id: questionAnswers.evidenceId,
+      kind: questions.kind,
+      value: questionAnswers.value,
+    })
     .from(questionAnswers)
     .innerJoin(
       questions,
@@ -247,12 +257,19 @@ export async function evidenceClasses(
         eq(questions.id, questionAnswers.questionId),
       ),
     )
+    .where(and(eq(questionAnswers.companyId, companyId), inArray(questions.kind, classed)))) {
+    const kind = questionKind(row.kind)!;
+    const cited = kind.evidence(JSON.parse(row.value) as never);
+    for (const id of [row.id, ...cited])
+      if (!wanted || wanted.has(id)) add(id, kind.dataClasses ?? []);
+  }
+  // The documents a payroll run's benefits in kind were valued from.
+  for (const row of await tx
+    .select({ id: sql<string>`b.value` })
+    .from(payrollLines)
+    .innerJoin(sql`json_each(${payrollLines.input}, '$.benefitEvidence') b`, sql`1`)
     .where(
-      and(
-        eq(questionAnswers.companyId, companyId),
-        like(questions.kind, 'payroll.%'),
-        among(questionAnswers.evidenceId),
-      ),
+      and(eq(payrollLines.companyId, companyId), ids ? inArray(sql`b.value`, [...ids]) : undefined),
     ))
     add(row.id, ['payroll', 'personal']);
   for (const row of await tx
@@ -280,6 +297,17 @@ export async function evidenceClasses(
       add(row.id, ['personal']);
   return new Map([...classes].map(([id, set]) => [id, [...set].sort()]));
 }
+
+/** A data class as a refusal names it, in Romanian. */
+const classNames: Record<DataClass, string> = {
+  books: 'înregistrări contabile',
+  evidence: 'documente originale',
+  personal: 'date personale (o persoană fizică numită prin CNP)',
+  payroll: 'date salariale',
+  health: 'date de sănătate (concedii medicale, coduri de diagnostic)',
+  tax: 'date fiscale',
+  credentials: 'credențiale',
+};
 
 /** Original source files: immutable, content-addressed and company-scoped. */
 export class Evidence {
@@ -374,12 +402,23 @@ export class Evidence {
       ...((await evidenceClasses(tx, actor.companyId, [id])).get(id) ?? []),
     ];
     const disclosable = await this.commands.disclosable(tx, actor, role);
+    if (disclosable(held)) return;
+    // Why, explicitly: the classes the caller may not read, and whether its grant or its role
+    // stops it. A file an agent extracted becomes `personal` once the document it recorded names
+    // an individual by CNP; it reads it again only if its grant covers `personal`.
+    const readable = await this.commands.readable(tx, actor);
+    const missing = held.filter((kind) => !disclosable([kind]));
+    const reason = missing.every((kind) => readable([kind])) ? 'role' : 'grant';
     requireCondition(
-      disclosable(held),
+      false,
       'EVIDENCE_CLASS',
-      'Documentul conține date pe care nu le puteți citi (date personale sau salariale).',
+      `Documentul conține ${missing.map((kind) => classNames[kind]).join(', ')}, pe care ${
+        reason === 'grant'
+          ? 'citirile numite de permisiunea acestui agent nu le acoperă: o permisiune care numește o citire a acestor clase îl citește'
+          : 'rolul de vizualizator nu le citește: le citesc proprietarii și revizorii'
+      } (clasele: ${missing.join(', ')}).`,
       403,
-      { dataClasses: held },
+      { dataClasses: held, missing, reason },
     );
   }
 

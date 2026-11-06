@@ -5,10 +5,13 @@ import { requireCondition } from 'xfactura-core/errors';
 import { canonical, hashOf, sha256Hex } from 'xfactura-core/hash';
 import type { DataClass } from 'xfactura-core/kernel';
 import type { Database, Transaction } from '../db/database';
+import type { PartyIdentities } from '../db/identity';
 import { agentGrants, audit, commands, memberships, type Role } from '../db/schema';
 import { auditRefs, refsOf } from './events';
 
 export type Permission = 'read' | 'write' | 'review' | 'manage';
+/** The classes a person reads only under a role that may record them (`Commands.disclosable`). */
+const recorded: readonly DataClass[] = ['personal', 'payroll', 'health'];
 const permissions: Record<Role, readonly Permission[]> = {
   owner: ['read', 'write', 'review', 'manage'],
   reviewer: ['read', 'write', 'review'],
@@ -160,14 +163,18 @@ export class Commands {
   /** The identifiers of the records the engine creates: random by default, seeded by the
    * evaluation harness so that a run lists its records in the same order every time. */
   readonly ids: Ids;
+  /** Individuals' party identifiers, the keyed hash of a CNP (`db/identity.ts`), for whatever
+   * records a partner from a document that names one by CNP; none without the secret. */
+  readonly identities: PartyIdentities | undefined;
 
   constructor(
     readonly db: Database,
     private readonly policy: OperationPolicy,
-    options: { clock?: Clock; ids?: Ids } = {},
+    options: { clock?: Clock; ids?: Ids; identities?: PartyIdentities } = {},
   ) {
     this.clock = options.clock ?? Date.now;
     this.ids = options.ids ?? randomUUID;
+    this.identities = options.identities;
   }
 
   authorize(
@@ -217,8 +224,10 @@ export class Commands {
 
   /**
    * Whether this principal may read data of every class given, as the change feed decides
-   * (`events.since`): a person always, since roles carry no data-class rules yet; an agent when
-   * the read operations its grant names, `events.since` aside, together cover them.
+   * (`events.since`): a person always (roles carry data-class rules only where the engine holds
+   * personal data in clear, `disclosable`); an agent when the read operations its grant names,
+   * `events.since` aside, together cover them. Only an operation that declares `health` covers
+   * it, and no toolset expands to one (`Agents`): a grant names it.
    */
   async readable(
     tx: Pick<Transaction, 'select'>,
@@ -241,9 +250,10 @@ export class Commands {
   /**
    * Whether this principal may read data of every class given where the engine holds it in clear:
    * a file that carries CNPs or diagnoses opened from their seals, a CNP a document, a citation or
-   * a validator's message holds. As `readable` for an agent, and, for `personal` and `payroll`,
-   * only under a role that may record such data (`write`: owners and reviewers, and their
-   * agents): a viewer, who records no CNP, never reads one.
+   * a validator's message holds, an answer about sick leave. As `readable` for an agent, and, for
+   * `personal`, `payroll` and `health`, only under a role that may record such data (`write`:
+   * owners and reviewers, the accountant who files D112, and their agents): a viewer, who records
+   * no CNP and no sick leave, never reads one.
    */
   async disclosable(
     tx: Pick<Transaction, 'select'>,
@@ -253,8 +263,7 @@ export class Commands {
     const readable = await this.readable(tx, actor);
     return (classes) =>
       readable(classes) &&
-      (roleAllows(role, 'write') ||
-        !classes.some((kind) => kind === 'personal' || kind === 'payroll'));
+      (roleAllows(role, 'write') || !classes.some((kind) => recorded.includes(kind)));
   }
 
   /** The data classes an operation declares; undefined for one the engine does not know. */
@@ -279,6 +288,10 @@ export class Commands {
    * An authorized, idempotent mutation. A repeated key with the same input returns the stored
    * result after rechecking authority; a repeated key with different input is refused. Agent
    * keys live in their own namespace. The result must be plain JSON.
+   *
+   * `present` is what the caller reads of a result, applied when it is returned: the first time
+   * and on every replay, whatever was stored (a result recorded before a redaction existed
+   * included). The stored result is the command's own, never a caller's view of it.
    */
   async run<T>(
     actor: Actor,
@@ -287,6 +300,7 @@ export class Commands {
     input: unknown,
     permission: Permission,
     execute: (tx: Transaction, access: Access) => Promise<T>,
+    present?: (tx: Transaction, access: Access, result: T) => Promise<T>,
   ): Promise<T> {
     commandKey(key);
     idSchema.parse(actor.companyId);
@@ -311,7 +325,7 @@ export class Commands {
           'Cheia a fost deja folosită pentru alte date.',
           409,
         );
-        return previous.result as T;
+        return present ? present(tx, access, previous.result as T) : (previous.result as T);
       }
       const result = await execute(tx, access);
       await tx.insert(commands).values({
@@ -335,7 +349,7 @@ export class Commands {
           ...auditRefs(refsOf(operation, result)),
         },
       });
-      return result;
+      return present ? present(tx, access, result) : result;
     });
   }
 }

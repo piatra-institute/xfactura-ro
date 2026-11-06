@@ -307,10 +307,14 @@ export class Sales {
     });
   }
 
-  /** A partner with its current details; for agents, an individual's identifier and any CNP in
-   * the details are masked (`maskedTaxId`, `maskCnps`). */
+  /**
+   * A partner with its current details. For agents, an individual's identifier and any CNP in the
+   * details are masked (`maskedTaxId`, `maskCnps`); for a viewer, any CNP. An individual's details
+   * (address, phone, email: identifying data beyond the name) go only to a caller who may read
+   * personal data: otherwise they are null and the view `redacted`.
+   */
   partyDetails(actor: Actor, input: { partyId: string }) {
-    return this.commands.read(actor, 'parties.get', async (tx) => {
+    return this.commands.read(actor, 'parties.get', async (tx, access) => {
       const [party] = await tx
         .select()
         .from(parties)
@@ -318,15 +322,18 @@ export class Sales {
       requireCondition(party, 'NOT_FOUND', 'Partenerul nu există.', 404);
       const details = await latestDetails(tx, actor.companyId, party.id);
       const shown = details?.details ?? null;
-      return {
+      const personal = (await this.commands.disclosable(tx, actor, access.role))(['personal']);
+      const view = {
         id: party.id,
         kind: party.kind,
         country: party.country,
         taxId: maskedTaxId(actor, party),
         name: party.name,
         version: details?.version ?? null,
-        details: actor.agentId ? maskCnps(shown) : shown,
       };
+      if (party.kind === 'ro_individual' && shown && !personal)
+        return { ...view, details: null, redacted: true as const };
+      return { ...view, details: actor.agentId || !personal ? maskCnps(shown) : shown };
     });
   }
 

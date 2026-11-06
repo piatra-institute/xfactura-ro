@@ -630,8 +630,9 @@ describe('what an agent reads of the payroll', () => {
   });
 
   // declarations.prepare unsealed the CNPs into the D112 XML and kept it as ordinary evidence,
-  // which evidence.read gave any agent granted it, whatever classes its grant covered.
-  test('the D112 XML reaches only those who may read payroll and personal data', async () => {
+  // which evidence.read gave any agent granted it, whatever classes its grant covered. The XML
+  // also carries the diagnoses of medical certificates: health data (5 November 2026).
+  test('the D112 XML reaches only those who may read payroll, personal and health data', async () => {
     const { s, hire, prepare, recognize } = await employer({ cui: '18547290' });
     await s.invoke(s.owner, 'sales.seller.record', {
       details: {
@@ -665,7 +666,11 @@ describe('what an agent reads of the payroll', () => {
     );
     expect(refusal).toMatchObject({
       code: 'EVIDENCE_CLASS',
-      details: { dataClasses: ['evidence', 'payroll', 'personal', 'tax'] },
+      details: {
+        dataClasses: ['evidence', 'health', 'payroll', 'personal', 'tax'],
+        missing: ['health', 'payroll', 'personal'],
+        reason: 'grant',
+      },
     });
     expect(JSON.stringify(refusal).includes(code)).toBe(false);
     expect(
@@ -693,10 +698,20 @@ describe('what an agent reads of the payroll', () => {
     expect(
       (await s.refused(s.invoke(s.viewer, 'evidence.get', { id: d112.evidenceId })))?.code,
     ).toBe('EVIDENCE_CLASS');
-    // An agent whose reads cover payroll and personal reads it.
+    // An agent whose reads cover payroll and personal, but not health, does not read it; one
+    // granted a read of health data (payroll.absences.list) does.
     const payroll = await reader(s, ['declarations.list', 'evidence.read', 'questions.list']);
     expect(
-      await holds(s.invoke(payroll, 'evidence.read', { id: d112.evidenceId, mode: 'text' })),
+      await s.refused(s.invoke(payroll, 'evidence.read', { id: d112.evidenceId, mode: 'text' })),
+    ).toMatchObject({ code: 'EVIDENCE_CLASS', details: { missing: ['health'], reason: 'grant' } });
+    const health = await reader(s, [
+      'declarations.list',
+      'evidence.read',
+      'questions.list',
+      'payroll.absences.list',
+    ]);
+    expect(
+      await holds(s.invoke(health, 'evidence.read', { id: d112.evidenceId, mode: 'text' })),
     ).toBe(true);
   });
 });

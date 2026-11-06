@@ -451,7 +451,7 @@ describe('the stock register', () => {
   });
 });
 
-// The review of November 2026 (review-findings.integration.test.ts), fixed: the weighted average
+// The review of November 2026, fixed: the weighted average
 // reads what a pool held on the exit's date, a negative pool refilled past zero holds the
 // receipt's cost, and the periodic average's month nets reversals and returns.
 describe('valuation on the dates the moves carry', () => {

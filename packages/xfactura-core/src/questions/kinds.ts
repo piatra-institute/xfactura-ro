@@ -1,5 +1,5 @@
 import { z, type ZodType } from 'zod';
-import type { Issue, JsonValue } from '../kernel';
+import type { DataClass, Issue, JsonValue } from '../kernel';
 import { annualDisclosures, annualDocument, annualInformative } from '../ro/annual/questions';
 import { provisionsReview, receivableCollectibility, untakenLeave } from '../ro/yearend/questions';
 import { supplierItem } from '../ro/stock/questions';
@@ -55,6 +55,12 @@ export interface QuestionKind<Params = Record<string, unknown>, Answer = unknown
   prompt(subject: QuestionSubject, params: Params): string;
   /** The files an answer cites (a vehicle log, medical certificates); they must be kept. */
   evidence(answer: Answer): string[];
+  /**
+   * The data an answer holds beyond the books, which the answer's file and the files it cites
+   * hold too: a month's benefits per employee (`payroll`, `personal`), its sick leave (`health`
+   * as well). A caller who may not read them reads the question without its answer's value.
+   */
+  dataClasses?: readonly DataClass[];
   /** The period an answer holds for (`perPeriod`). */
   period?(params: Params): string;
   /**
@@ -227,6 +233,8 @@ const payrollAbsences = define({
     value.absences.flatMap((item) =>
       item.certificateEvidenceId ? [item.certificateEvidenceId] : [],
     ),
+  // Who was on sick leave, with which code and certificate, is health data.
+  dataClasses: ['health', 'payroll', 'personal'],
   period: (params) => params.month,
 });
 
@@ -253,6 +261,7 @@ const payrollBenefits = define({
   prompt: (subject, params) =>
     `Ce avantaje în natură a primit ${subject.kind === 'employee' ? 'salariatul' : 'fiecare salariat'} în luna ${params.month} (autoturismul firmei folosit în scop personal, locuință, cadouri, prime de asigurare, tichete peste limita legală)? Atașați documentul valorii fiecăruia; dacă nu au fost, răspundeți cu o listă goală.`,
   evidence: (value) => value.benefits.map((item) => item.evidenceId),
+  dataClasses: ['payroll', 'personal'],
   period: (params) => params.month,
 });
 

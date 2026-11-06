@@ -2776,24 +2776,14 @@ official(
     }
 
     /**
-     * Not covered (the closure says so, OSS_D406): the D406 of a quarter with sales in the Union
-     * scheme, which D406 reports under 310340 at each consumer state's rate, a code the file does
-     * not write. Each blocks from the close of its first month with such a sale, until it is filed
-     * outside the engine. The
-     * quarters below the threshold are prepared, the consumers each a customer of their own (04).
-     * 2027's returns, from November, wait for the rules of 2027 (see the non-payer's) and block no
-     * close of 2026.
+     * Every quarter's D406 is prepared, the consumers each a customer of their own (04): below the
+     * threshold their sales under 310346, in the Union scheme under 310340 at each consumer
+     * state's rate (`ro.d406.oss`). 2027's returns, from November, wait for the rules of 2027 (see
+     * the non-payer's) and block no close of 2026.
      */
-    const d406Gap = (today: string) =>
-      [
-        ['2026-Q3', '2026-08-01'],
-        ['2026-Q4', '2026-11-01'],
-      ]
-        .filter(([, from]) => today >= from!)
-        .map(([quarter]) => `obligation.due D406|${quarter}`);
     async function close(m: string) {
       await b.at(`${nextMonth(m)}-03`);
-      await b.close(m, d406Gap(b.today()));
+      await b.close(m);
     }
 
     /** What each quarter's VAT settlement and micro tax book, by hand:
@@ -3115,46 +3105,48 @@ official(
         });
       }
 
-      // The year is not covered in full: the D406 of the quarters with sales in the Union scheme
-      // (310340 at the consumer states' rates) the engine does not write, and the closure says so.
+      // The year is covered in full: the D406 of the quarters with sales in the Union scheme too.
       const closure = await b.closure('2026-01', '2026-12');
-      expect(closure).toMatchObject({
-        status: 'UNSUPPORTED',
-        needs: [],
-        unsupported: [expect.objectContaining({ trigger: 'OSS_D406' })],
-      });
-      expect(
-        closure.obligations
-          .filter((item) => item.state !== 'applies')
-          .map((item) => `${item.kind} ${item.period} ${item.state}`),
-      ).toEqual(['D406 2026-Q3 unsupported', 'D406 2026-Q4 unsupported']);
+      expect(closure).toMatchObject({ status: 'ELIGIBLE', needs: [], unsupported: [] });
+      expect(closure.obligations.filter((item) => item.state !== 'applies')).toEqual([]);
       // Every return the closure calls covered is prepared and validated, or is a published
-      // format the engine does not write yet (FORMAT_GAP): the closure and the writers agree. The
-      // two quarters it does not cover the worklist offers no one to prepare, and the writer
-      // refuses them, as it says.
+      // format the engine does not write yet (FORMAT_GAP): the closure and the writers agree.
       const gaps: Record<string, string> = { 'S1005 2026': 'FORMAT_GAP' };
-      const listed = closure.obligations
-        .filter((item) => item.state === 'applies')
-        .map((item) => `${item.kind} ${item.period}`);
+      const listed = closure.obligations.map((item) => `${item.kind} ${item.period}`);
       expect(listed.filter((key) => !filed[key])).toEqual([]);
       for (const key of listed) {
         if (gaps[key]) expect(filed[key], key).toStartWith(`${gaps[key]}: `);
         else validated(filed[key] as Artifact);
       }
-      for (const quarter of ['2026-Q3', '2026-Q4']) {
-        expect(filed[`D406 ${quarter}`], quarter).toBeUndefined();
-        const refused = await b.s.refused(
-          b.prepare('D406', quarter, {
-            contact: { firstName: 'Ana', lastName: 'Popescu', phone: '0236123456' },
-          }),
-        );
-        expect(refused?.code, quarter).toBe('D406_TAX_CODE');
-      }
-      // Below the threshold, the consumers' sales with the place in Romania under 310346.
+      // Below the threshold, the consumers' sales with the place in Romania under 310346; in the
+      // Union scheme, 310340 at each consumer state's rate, once per state and rate (the TaxTable),
+      // beside the consulting's 310344: Q3 the sales from EX-9, Q4 their own and CN-1, the credit
+      // note of EX-11 at France's 20%, negative.
       for (const quarter of ['2026-Q1', '2026-Q2'])
         expect(
           summaryOf<{ vatCodes: string[] }>(filed[`D406 ${quarter}`] as Artifact).vatCodes,
         ).toContain('310346');
+      const stateRates = (quarter: string) =>
+        summaryOf<{ vatCodes: string[]; stateRates: { country: string; percentage: string }[] }>(
+          filed[`D406 ${quarter}`] as Artifact,
+        );
+      expect(stateRates('2026-Q3')).toMatchObject({
+        vatCodes: ['301104', '310340', '310344'],
+        stateRates: [
+          { country: 'DE', percentage: '7' },
+          { country: 'DE', percentage: '19' },
+          { country: 'FR', percentage: '20' },
+          { country: 'IT', percentage: '22' },
+        ],
+      });
+      expect(stateRates('2026-Q4')).toMatchObject({
+        vatCodes: ['301104', '310340', '310344'],
+        stateRates: [
+          { country: 'DE', percentage: '19' },
+          { country: 'FR', percentage: '20' },
+          { country: 'IT', percentage: '22' },
+        ],
+      });
       expect(listed.filter((key) => key.startsWith('D398'))).toEqual([
         'D398 2026-Q3',
         'D398 2026-Q4',

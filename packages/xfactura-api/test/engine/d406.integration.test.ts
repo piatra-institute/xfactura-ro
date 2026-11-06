@@ -1761,3 +1761,273 @@ describe('D406 outside VAT, abroad and over several accounts', () => {
     ).toEqual(['D406_SPLIT']);
   });
 });
+
+describe('D406 and the Union scheme (OSS)', () => {
+  // BNR's EUR rates of the third quarter: 5,0600 from 9 July, 5,0700 from 7 August, 5,0900 from
+  // 11 September.
+  const rates = `<?xml version="1.0" encoding="utf-8"?>
+<DataSet xmlns="http://www.bnr.ro/xsd"><Header><Publisher>National Bank of Romania</Publisher><PublishingDate>2026-09-15</PublishingDate><MessageType>DR</MessageType></Header>
+<Body><Subject>Reference rates</Subject><OrigCurrency>RON</OrigCurrency>
+<Cube date="2026-07-09"><Rate currency="EUR">5.0600</Rate></Cube>
+<Cube date="2026-08-07"><Rate currency="EUR">5.0700</Rate></Cube>
+<Cube date="2026-08-19"><Rate currency="EUR">5.0750</Rate></Cube>
+<Cube date="2026-09-11"><Rate currency="EUR">5.0900</Rate></Cube>
+</Body></DataSet>`;
+  const cities: Record<string, string> = { DE: 'Berlin', FR: 'Lyon', IT: 'Roma' };
+
+  /**
+   * A quarterly payer registered in the Union scheme, its third quarter by hand:
+   *   XF0001 (20 August): 1.000 lei + 21% to a Romanian company;
+   *   EX-9 (10 July): a German consumer's e-course 400 € at 19% (76 €) and e-newspaper 100 € at
+   *   7% (7 €) on one invoice, at 5,0600: 2.949,98 lei, revenue 2.530,00, 419,98 on 4423;
+   *   EX-11 (10 August): a French course 1.000 € at 20% (200 €), at 5,0700: 6.084,00 lei;
+   *   CN-1 (14 September): half of it credited, 500 € + 100 € at 5,0900, by red storno: revenue
+   *   −2.545,00 and −509,00 on 4423, the receivable released at EX-11's 5,0700 (−3.042,00), 12,00
+   *   gained; its tax entry, base −2.545,00 and VAT −509,00, at the note's own rate as its 4423
+   *   line: the VAT is France's, declared in euro (art. 315), so the rate of a Romanian base's
+   *   adjustment (art. 282 alin. (9), `ro.fx.adjustment.vat`) is not its;
+   *   EX-13 (15 September): an Italian sale 500 € at 22% (110 €), at 5,0900 (2.545,00 and 559,90
+   *   lei), issued in error and reversed in full the next day (ledger.reverse, in red).
+   */
+  async function unionScheme(validator?: DeclarationValidator) {
+    const books = await company('quarterly', validator);
+    const { s, file, fact, sell } = books;
+    await fact('vat.distance', 'destination');
+    await fact('vat.oss', 'union');
+    await s.invoke(s.owner, 'fx.importBnr', { evidenceId: await file('nbrfxrates-t3.xml', rates) });
+    const anaf = await s.invoke<{ id: string }>(s.owner, 'parties.create', {
+      kind: 'ro_public_institution',
+      country: 'RO',
+      taxId: '8000000000',
+      name: 'ANAF',
+    });
+    await sell('2026-08-20', [service('1000')]);
+    const detailed = new Set<string>();
+    const consumer = async (input: XmlInput, extra: Record<string, unknown> = {}) => {
+      const imported = await s.invoke<{ id: string; partyId: string }>(s.owner, 'invoices.import', {
+        evidenceId: await file(
+          `${input.number}.xml`,
+          invoiceXml({
+            company: cui,
+            direction: 'sale',
+            counterparty: '0000000000000',
+            currency: 'EUR',
+            ...input,
+          }),
+        ),
+      });
+      // The consumer's billing address, without a code of its state.
+      if (!detailed.has(imported.partyId)) {
+        detailed.add(imported.partyId);
+        await s.invoke(s.owner, 'parties.recordDetails', {
+          partyId: imported.partyId,
+          details: {
+            name: 'Consumator',
+            legalId: '0000000000000',
+            address: { lines: ['Strada 1'], city: cities[input.country!]!, country: input.country },
+          },
+        });
+      }
+      const proposal = await s.propose('invoices.euConsumer', {
+        documentId: imported.id,
+        account: '704',
+        supply: 'electronic',
+        authorityId: anaf.id,
+        ...(input.credit
+          ? {}
+          : {
+              location: [
+                { kind: 'billing_address', country: input.country },
+                { kind: 'ip', country: input.country },
+              ],
+            }),
+        ...extra,
+      });
+      expect(proposal.issues.filter((issue) => issue.severity === 'block')).toEqual([]);
+      const posted = await s.post(
+        await s.approve(
+          proposal,
+          s.reviewer,
+          proposal.issues.filter((issue) => issue.severity === 'ack').map((issue) => issue.code),
+        ),
+      );
+      return { documentId: imported.id, posted };
+    };
+    const german = await consumer(
+      {
+        number: 'EX-9',
+        date: '2026-07-10',
+        country: 'DE',
+        taxes: [
+          { rate: '19', net: '400.00', tax: '76.00' },
+          { rate: '7', net: '100.00', tax: '7.00' },
+        ],
+        net: '500.00',
+        tax: '83.00',
+        gross: '583.00',
+      },
+      { categories: { '7': 'NEWSPAPERS' } },
+    );
+    expect(lines(german.posted)).toEqual(['D 4111 2949.98', 'C 704 2530.00', 'C 4423 419.98']);
+    const french = await consumer({
+      number: 'EX-11',
+      date: '2026-08-10',
+      country: 'FR',
+      rate: '20',
+      net: '1000.00',
+      tax: '200.00',
+      gross: '1200.00',
+    });
+    const refund = await consumer(
+      {
+        number: 'CN-1',
+        credit: true,
+        originalNumber: 'EX-11',
+        date: '2026-09-14',
+        country: 'FR',
+        rate: '20',
+        net: '500.00',
+        tax: '100.00',
+        gross: '600.00',
+      },
+      { originalDocumentId: french.documentId },
+    );
+    expect(lines(refund.posted)).toEqual([
+      'D 4111 -3042.00',
+      'C 704 -2545.00',
+      'C 4423 -509.00',
+      'C 7651 12.00',
+    ]);
+    const italian = await consumer({
+      number: 'EX-13',
+      date: '2026-09-15',
+      country: 'IT',
+      rate: '22',
+      net: '500.00',
+      tax: '110.00',
+      gross: '610.00',
+    });
+    await s.book('ledger.reverse', {
+      entryId: italian.posted.entry!.id,
+      date: '2026-09-16',
+      reason: 'Factura EX-13 a fost emisă din eroare.',
+      evidenceId: (await s.evidence('anulare-ex13.pdf')).id,
+      method: 'red',
+    });
+    return { ...books, refund: refund.posted };
+  }
+  const lines = (proposal: ProposalView) =>
+    proposal.effect?.lines.map((line) => `${line.side} ${line.account} ${line.amount}`);
+  /** A line's VAT: its TaxCode, TaxPercentage, TaxBase and TaxAmount. */
+  const vatOf = (node: XmlElement) =>
+    children(node, 'TaxInformation')
+      .filter((tax) => value(tax, 'TaxType') === '300')
+      .map(
+        (tax) =>
+          `${value(tax, 'TaxCode')} ${value(tax, 'TaxPercentage')}% ${value(tax, 'TaxBase')} ${value(children(tax, 'TaxAmount')[0]!, 'Amount')}`,
+      );
+
+  test("a quarter with domestic and Union scheme sales: 310340 at each consumer state's rate, its credit note and storno negative", async () => {
+    const { s, prepare, refund } = await unionScheme();
+    // CN-1's base and VAT in lei, as its tax entry holds them: 500 € and 100 € at 5,0900, its
+    // ledger's rate, so its base is its revenue line and its VAT 20% of it.
+    const credited = refund.effect!.taxEntries[0]!;
+    expect([credited.base, credited.amount]).toEqual(['-2545.00', '-509.00']);
+    const note = '310340 20% -2545.00 -509.00';
+    const prepared = await prepare('2026-Q3');
+    const summary = JSON.parse(prepared.steps[0]!.detail!) as {
+      vatCodes: string[];
+      stateRates: { code: string; country: string; percentage: string }[];
+    };
+    expect(summary.vatCodes).toEqual(['310340', '310344']);
+    expect(summary.stateRates.map((rate) => `${rate.country} ${rate.percentage}`)).toEqual([
+      'DE 7',
+      'DE 19',
+      'FR 20',
+      'IT 22',
+    ]);
+    const file = await fileOf(s, prepared);
+    // The TaxTable: 310340 once per state and rate, the state as its Country.
+    expect(
+      children(file, 'TaxCodeDetails').map((node) =>
+        ['TaxCode', 'TaxPercentage', 'BaseRate', 'Country']
+          .map((tag) => value(node, tag))
+          .join(' '),
+      ),
+    ).toEqual([
+      '310340 7 1 DE',
+      '310340 19 1 DE',
+      '310340 20 1 FR',
+      '310340 22 1 IT',
+      '310344 21 1 RO',
+    ]);
+    // The ledger, in lei at the BNR's rates the books use (D398 alone is in euro): EX-9's two
+    // rates on its revenue line, the credit note and the storno negative, 4423 and 7651 no base.
+    expect(
+      transactionLines(file, 'EX-9').map((line) => [value(line, 'AccountID'), ...vatOf(line)]),
+    ).toEqual([['4111'], ['704', '310340 19% 2024.00 384.56', '310340 7% 506.00 35.42'], ['4423']]);
+    expect(
+      transactionLines(file, 'CN-1').map((line) => [value(line, 'AccountID'), ...vatOf(line)]),
+    ).toEqual([['4111'], ['704', note], ['4423'], ['7651']]);
+    const italian = children(file, 'Transaction')
+      .flatMap((transaction) => children(transaction, 'TransactionLine'))
+      .flatMap(vatOf)
+      .filter((tax) => tax.includes(' 22% '));
+    expect(italian).toEqual(['310340 22% 2545.00 559.90', '310340 22% -2545.00 -559.90']);
+    // The consumers are customers of their own (04 and a code of the books, MF.C.3).
+    const invoices = children(file, 'Invoice');
+    const invoice = (number: string) =>
+      invoices.find((node) => value(node, 'InvoiceNo') === number)!;
+    for (const number of ['EX-9', 'EX-11', 'CN-1', 'EX-13'])
+      expect(value(children(invoice(number), 'CustomerInfo')[0]!, 'CustomerID')).toStartWith('04');
+    // Each invoice line at its rate; the totals one per rate; the credit note at its own rate.
+    expect(
+      children(invoice('EX-9'), 'InvoiceLine').map((line) => [
+        value(line, 'Description'),
+        ...vatOf(line),
+      ]),
+    ).toEqual([
+      ['Servicii documentate', '310340 19% 2024.00 384.56'],
+      ['Servicii documentate', '310340 7% 506.00 35.42'],
+    ]);
+    const totals = children(invoice('EX-9'), 'InvoiceDocumentTotals')[0]!;
+    expect(
+      children(totals, 'TaxInformationTotals').map(
+        (tax) => `${value(tax, 'TaxPercentage')} ${value(tax, 'TaxBase')}`,
+      ),
+    ).toEqual(['19 2024.00', '7 506.00']);
+    expect(value(totals, 'GrossTotal')).toBe('2949.98');
+    expect(value(invoice('CN-1'), 'InvoiceType')).toBe('381');
+    expect(children(invoice('CN-1'), 'InvoiceLine').flatMap(vatOf)).toEqual([note]);
+    // The domestic sale keeps its own code.
+    expect(children(invoice('XF0001'), 'InvoiceLine').flatMap(vatOf)).toEqual([
+      '310344 21% 1000.00 210.00',
+    ]);
+
+    // The closure no longer reports the quarter's D406 unsupported (OSS_D406): it waits only on
+    // the company's facts this test leaves unrecorded, like its D398.
+    const closure = await s.invoke<{
+      obligations: { kind: string; period: string; state: string }[];
+      unsupported: { trigger: string }[];
+    }>(s.owner, 'closure.evaluate', { from: '2026-07', to: '2026-09' });
+    expect(
+      closure.obligations
+        .filter((item) => ['D406', 'D398'].includes(item.kind))
+        .map((item) => `${item.kind} ${item.period} ${item.state}`),
+    ).toEqual(['D398 2026-Q3 needs_evidence', 'D406 2026-Q3 needs_evidence']);
+    expect(closure.unsupported).toEqual([]);
+  });
+
+  official(
+    "a quarter with Union scheme sales passes ANAF's SAF-T validator",
+    async () => {
+      const { prepare } = await unionScheme(kits());
+      const prepared = await prepare('2026-Q3');
+      expect([prepared.state, prepared.steps.at(-1)?.detail ?? null]).toEqual([
+        'validated_official',
+        null,
+      ]);
+    },
+    120_000,
+  );
+});

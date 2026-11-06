@@ -59,6 +59,7 @@ import {
 import type { ActionHandler } from '../kernel/actions';
 import type { Actor, Commands } from '../kernel/commands';
 import { entryStands, holdsSubject, linesUnder } from '../kernel/ledger';
+import { differencesWithoutPersons, payClasses } from '../kernel/personal';
 import type { CloseCheck, Finding } from '../kernel/periods';
 import { loadState } from '../kernel/state';
 import type { WorkStep, YearEndWorkItem } from '../kernel/work';
@@ -1501,7 +1502,9 @@ export class YearEnd {
     });
   }
 
-  /** The opening of a year against its previous year's close. */
+  /** The opening of a year against its previous year's close. An agent whose reads do not cover
+   * `payroll` and `personal` sees the personnel accounts' items summed (`differencesWithoutPersons`):
+   * an employee's unpaid pay is one of them. */
   opening(actor: Actor, input: z.infer<typeof openingInput>) {
     return this.commands.read(actor, 'years.opening', async (tx) => {
       const year = await yearById(tx, actor.companyId, input.financialYearId);
@@ -1530,7 +1533,9 @@ export class YearEnd {
         closed: true,
         snapshotHash: check.snapshotHash,
         matches: check.differences.length === 0 && check.openings.length === 0,
-        differences: check.differences as unknown as JsonValue[],
+        differences: ((await this.commands.readable(tx, actor))(payClasses)
+          ? check.differences
+          : differencesWithoutPersons(check.differences)) as unknown as JsonValue[],
         openings: check.openings,
       };
     });

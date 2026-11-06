@@ -35,4 +35,35 @@ export const saftAnchors: Readonly<Record<string, readonly Anchor[]>> = {
   'ANAF/SAFT_Ghid_2021:2.12': [
     { from: '2.12. Subsecțiunea Assets (Active)', to: 'acest element se va completa cu 0.' },
   ],
+  'ANAF/SAFT_Ghid_2021:2.5': [
+    {
+      from: '2.5. Subsecțiunea Tax Table (Tabelă taxe)',
+      to: 'descrierea codului de taxă din nomenclatorul aferent.',
+    },
+  ],
+  'ANAF/SAFT_FAQ_2022:MF.TT.12': [
+    {
+      from: 'În cadrul raportării Declarației informative D406 -SAF-T pentru România, valoare implicită',
+      to: 'nomenclator disponibil în cadrul Schemei SAF-T pentru România.',
+    },
+  ],
+  'ANAF/SAFT_FAQ_2022:R6.distanta': [
+    {
+      from: '2. Societatea realizeaza vanzarile la distanta din Bulgaria si Ungaria',
+      to: 'se raportează în decontul de TVA din alte țări.',
+    },
+  ],
+  // The workbook has no text extraction: the anchors name its cells' strings, in its order.
+  'ANAF/D406:MF.TT.9-12': [
+    {
+      from: 'MF.TT.9 TaxPercentage Tax percentage Procentul de impozitare',
+      to: 'Valoare implicită ”RO” pentru România',
+    },
+  ],
+  'ANAF/D406:Livrari.310325': [
+    {
+      from: 'Livrari de bunuri/ prestari de servicii care nu sunt raportabile in decontul de TVA din Romania si care se raporteaza in decontul de TVA din alte tari',
+      to: 'reportable in the VAT return from other countries',
+    },
+  ],
 };

@@ -720,6 +720,20 @@ export const keyAnnotations: Readonly<Record<string, KeyAnnotation>> = {
     },
     obligations: ['D406'],
   },
+  'ro.d406.oss': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-SRV-02', 'RO-SRV-03'],
+      basis:
+        'A company registered in the Union scheme (OSS): every D406 of a period with its sales.',
+    },
+    risk: {
+      kind: 'presentation',
+      basis:
+        "The validator takes either code and country; ANAF's analyses read the code, the rate and the VAT.",
+    },
+    obligations: ['D406'],
+  },
   'ro.d406.assets.presentation': {
     reach: {
       estimate: 2,
@@ -941,6 +955,33 @@ export const keyAnnotations: Readonly<Record<string, KeyAnnotation>> = {
     },
     risk: { kind: 'tax_amount', basis: 'Whether the treaty rate or the domestic one applies.' },
     obligations: ['D100.withholding', 'D207'],
+  },
+  'ro.fx.adjustment.vat': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-SRV-03', 'RO-SRV-02'],
+      basis:
+        'Every credit note in a currency, issued or received, on an invoice taxed in Romania (invoices.credit, invoices.euConsumer at the place of origin).',
+    },
+    risk: {
+      kind: 'tax_amount',
+      basis:
+        'The rate sets the VAT a credit note reduces in the VAT return, by the rate difference between the invoice and the note.',
+    },
+    obligations: ['D300', 'D394', 'D406'],
+  },
+  'ro.fx.adjustment.books': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-SRV-03'],
+      basis: 'Every credit note in a currency, issued or received (invoices.credit).',
+    },
+    risk: {
+      kind: 'presentation',
+      basis:
+        'The rate splits the same lei between the revenue or expense the note reduces and the exchange difference; the VAT and the partner’s item do not change.',
+    },
+    obligations: ['D406', 'S1005'],
   },
 };
 

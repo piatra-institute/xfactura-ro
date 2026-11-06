@@ -28,7 +28,13 @@ import { legalReserveSpec, lossCarryforwardSpec, socialLimitSpec, sponsorshipSpe
 import { d406AssetsDeadlineSpec, d406PresentationSpec, d406StartSpec } from './saft';
 import { reverseChargeSpec, simplifiedInvoiceSpec } from './receipts';
 import { flatRateSpec, goodsMarginSpec, travelMarginSpec } from './schemes';
-import { distanceThresholdSpec, ossDeclarationsSpec, ossPayableSpec, ossReturnSpec } from './oss';
+import {
+  d406OssSpec,
+  distanceThresholdSpec,
+  ossDeclarationsSpec,
+  ossPayableSpec,
+  ossReturnSpec,
+} from './oss';
 import { accountsSpec, advanceSpec, distributionSpec } from './taxaccount';
 import { vatDeductionLimitedSpec, vatRateSpec, vatReducedRateSpec } from './vat';
 import { impairmentAccountsSpec, inventoryAccountsSpec, provisionAccountsSpec } from './yearend';
@@ -47,6 +53,7 @@ import {
   nonresidentRateSpec,
   rentRateSpec,
 } from './withholding';
+import { adjustmentBooksSpec, adjustmentVatSpec } from './credit';
 
 /** Every parameter a packet can be generated for. A key without a spec cannot be reviewed. */
 export const reviewSpecs: readonly ReviewSpec[] = [
@@ -103,6 +110,7 @@ export const reviewSpecs: readonly ReviewSpec[] = [
   regesChangeSpec,
   distanceThresholdSpec,
   ossDeclarationsSpec,
+  d406OssSpec,
   ossPayableSpec,
   ossReturnSpec,
   stockAccountsSpec,
@@ -116,4 +124,6 @@ export const reviewSpecs: readonly ReviewSpec[] = [
   productionAccountsSpec,
   productionCostingSpec,
   productionCoefficientSpec,
+  adjustmentVatSpec,
+  adjustmentBooksSpec,
 ];

@@ -1126,3 +1126,198 @@ describe('D406 partners on several accounts', () => {
     expect(codes(repeated)).toContain('error:D406_PARTY_DUPLICATE');
   });
 });
+
+describe("D406 the Union scheme's sales, at the consumer states' rates", () => {
+  // EX-9: a German e-course (400 € + 19%) and an e-newspaper (100 € + 7%) on one invoice to a
+  // consumer, at 5,06; EX-11: a French course (1.000 € + 20%), at 5,07; each VAT on 4423, owed
+  // in euro through D398 (sheet Livrari 310340: "În funcție de Cota TVA din statul membru").
+  const german = d406PartyId({ kind: 'internal', code: 'A1B2C3' });
+  const french = d406PartyId({ kind: 'internal', code: 'D4E5F6' });
+  const oss = (base: string, amount: string, percentage: string, country: string) => ({
+    type: '300',
+    code: '310340',
+    percentage,
+    country,
+    base,
+    amount,
+  });
+  const eur = (amount: string, rate: string) => ({ currency: { code: 'EUR', amount, rate } });
+  const consumerSale: D406Transaction = {
+    id: 'VZ-9',
+    date: '2026-10-10',
+    description: 'Factura EX-9 consumator DE (OSS)',
+    lines: [
+      line('30', '4111.01', 'debit', '2949.98', { ...eur('583.00', '5.06'), customer: german }),
+      line('31', '704', 'credit', '2530.00', {
+        tax: [oss('2024.00', '384.56', '19', 'DE'), oss('506.00', '35.42', '7', 'DE')],
+      }),
+      line('32', '4423', 'credit', '419.98', eur('83.00', '5.06')),
+    ],
+  };
+  const frenchSale: D406Transaction = {
+    id: 'VZ-11',
+    date: '2026-10-12',
+    description: 'Factura EX-11 consumator FR (OSS)',
+    lines: [
+      line('33', '4111.01', 'debit', '6084.00', { ...eur('1200.00', '5.07'), customer: french }),
+      line('34', '704', 'credit', '5070.00', { tax: [oss('5070.00', '1014.00', '20', 'FR')] }),
+      line('35', '4423', 'credit', '1014.00', eur('200.00', '5.07')),
+    ],
+  };
+  const invoiceLine = (amount: string, tax: ReturnType<typeof oss>) => ({
+    account: '704',
+    product: 'SRV',
+    description: 'Curs online',
+    quantity: '1',
+    unitPrice: amount,
+    amount,
+    tax: [tax],
+  });
+  const scheme = (extra: Partial<D406> = {}) => {
+    const base = model();
+    return model({
+      accounts: [...base.accounts, { code: '4423', description: 'TVA de plată', opening: '0' }],
+      customers: [
+        ...base.customers,
+        ...[
+          [german, 'Berlin', 'DE'],
+          [french, 'Lyon', 'FR'],
+        ].map(([id, city, country]) => ({
+          id: id!,
+          name: 'Consumator',
+          address: { city: city!, country: country! },
+          account: '4111.01',
+          opening: '0',
+        })),
+      ],
+      journals: [
+        {
+          ...base.journals[0]!,
+          transactions: [...base.journals[0]!.transactions, consumerSale, frenchSale],
+        },
+      ],
+      salesInvoices: [
+        ...base.salesInvoices,
+        {
+          number: 'EX-9',
+          party: german,
+          date: '2026-10-10',
+          type: '380',
+          transaction: 'VZ-9',
+          lines: [
+            invoiceLine('2024.00', oss('2024.00', '384.56', '19', 'DE')),
+            invoiceLine('506.00', oss('506.00', '35.42', '7', 'DE')),
+          ],
+        },
+        {
+          number: 'EX-11',
+          party: french,
+          date: '2026-10-12',
+          type: '380',
+          transaction: 'VZ-11',
+          lines: [invoiceLine('5070.00', oss('5070.00', '1014.00', '20', 'FR'))],
+        },
+      ],
+      ...extra,
+    });
+  };
+
+  test('list 310340 once per state and rate, each line and total at its rate', () => {
+    expect(checkD406(scheme())).toEqual([]);
+    const calculation = calculateD406(scheme());
+    expect(calculation.vatCodes).toEqual(['301104', '310340', '310344']);
+    expect(calculation.stateRates).toEqual([
+      { code: '310340', country: 'DE', percentage: '7' },
+      { code: '310340', country: 'DE', percentage: '19' },
+      { code: '310340', country: 'FR', percentage: '20' },
+    ]);
+    const xml = writeD406(scheme());
+    const table = xml.slice(xml.indexOf('<nsSAFT:TaxTable>'), xml.indexOf('</nsSAFT:TaxTable>'));
+    const details = [
+      ...table.matchAll(/<nsSAFT:TaxCodeDetails>([\s\S]*?)<\/nsSAFT:TaxCodeDetails>/g),
+    ].map((match) =>
+      ['TaxCode', 'TaxPercentage', 'BaseRate', 'Country']
+        .map((tag) => between(match[1]!, tag))
+        .join(' '),
+    );
+    expect(details).toEqual([
+      '301104 21 1 RO',
+      '310340 7 1 DE',
+      '310340 19 1 DE',
+      '310340 20 1 FR',
+      '310344 21 1 RO',
+    ]);
+    // The line's TaxPercentage is its state's rate; the invoice's totals keep one per rate.
+    const invoice = xml.slice(xml.indexOf('<nsSAFT:InvoiceNo>EX-9<'));
+    const totals = invoice.slice(
+      invoice.indexOf('<nsSAFT:InvoiceDocumentTotals>'),
+      invoice.indexOf('</nsSAFT:InvoiceDocumentTotals>'),
+    );
+    expect(
+      [...totals.matchAll(/<nsSAFT:TaxPercentage>([^<]*)<[\s\S]*?<nsSAFT:TaxBase>([^<]*)</g)].map(
+        (match) => `${match[1]} ${match[2]}`,
+      ),
+    ).toEqual(['19 2024.00', '7 506.00']);
+    expect(between(totals, 'GrossTotal')).toBe('2949.98');
+    const ledger = xml.slice(xml.indexOf('<nsSAFT:RecordID>34<'));
+    expect(between(ledger, 'TaxCode')).toBe('310340');
+    expect(between(ledger, 'TaxPercentage')).toBe('20');
+  });
+
+  test("a credit note's negative lines, a decimal rate and RO as the table's country", () => {
+    // CN-1: half the French course credited in red, at its 20%.
+    const credit: D406Transaction = {
+      id: 'VZ-12',
+      date: '2026-10-20',
+      description: 'Nota de credit CN-1 (OSS)',
+      lines: [
+        line('36', '4111.01', 'debit', '-3054.00', { ...eur('-600.00', '5.09'), customer: french }),
+        line('37', '704', 'credit', '-2545.00', { tax: [oss('-2545.00', '-509.00', '20', 'FR')] }),
+        line('38', '4423', 'credit', '-509.00', eur('-100.00', '5.09')),
+      ],
+    };
+    const base = scheme();
+    const credited = scheme({
+      journals: [
+        { ...base.journals[0]!, transactions: [...base.journals[0]!.transactions, credit] },
+      ],
+    });
+    expect(checkD406(credited)).toEqual([]);
+    expect(calculateD406(credited).stateRates.filter((rate) => rate.country === 'FR')).toEqual([
+      { code: '310340', country: 'FR', percentage: '20' },
+    ]);
+    // France's 5,5% written as the nomenclature writes rates; RO as the entry's country.
+    const reduced = structuredClone(base);
+    reduced.journals[0]!.transactions.at(-1)!.lines[1]!.tax = [
+      oss('5070.00', '278.85', '5.50', 'RO'),
+    ];
+    expect(checkD406(reduced)).toEqual([]);
+    expect(calculateD406(reduced).stateRates).toContainEqual({
+      code: '310340',
+      country: 'RO',
+      percentage: '5.5',
+    });
+    expect(writeD406(reduced)).toContain('<nsSAFT:TaxPercentage>5.5</nsSAFT:TaxPercentage>');
+  });
+
+  test('refuse 310340 without its rate or state, and a state rate on a code with its own', () => {
+    const at = (tax: D406Line['tax']) => {
+      const value = structuredClone(scheme());
+      value.journals[0]!.transactions.at(-1)!.lines[1]!.tax = tax;
+      return codes(value);
+    };
+    const { percentage: _percentage, ...noRate } = oss('5070.00', '1014.00', '20', 'FR');
+    expect(at([noRate])).toEqual(['error:D406_TAX_CODE']);
+    expect(at([oss('5070.00', '1014.00', '20', 'EL')])).toEqual(['error:D406_TAX_CODE']);
+    expect(at([oss('5070.00', '1014.00', '120', 'FR')])).toEqual(['error:D406_TAX_CODE']);
+    expect(at([{ ...vat('5070.00', '1064.70'), percentage: '21', country: 'RO' }])).toEqual([
+      'error:D406_TAX_CODE',
+    ]);
+    // The VAT is checked against the state's rate, as ANAF's tests 20–22 check the base.
+    expect(at([oss('5070.00', '1064.70', '20', 'FR')])).toEqual(['warning:D406_VAT']);
+    // A code without a single rate that is no Member State's stays refused.
+    expect(at([{ type: '300', code: '380200', base: '5070.00', amount: '0' }])).toEqual([
+      'error:D406_TAX_CODE',
+    ]);
+  });
+});

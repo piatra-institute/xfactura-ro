@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { formatMoney } from 'xfactura-core/money';
 import { documents, entries, parties, taxEntries } from '../db/schema';
 import type { Actor, Commands } from '../kernel/commands';
+import { maskedTaxId } from './company';
 
 // A VAT period: a month (2026-10), or a quarter (2026-Q4) for quarterly payers.
 const month = z.string().regex(/^\d{4}-(0[1-9]|1[0-2]|Q[1-4])$/);
@@ -57,6 +58,7 @@ export class VatRegisters {
           document: documents.number,
           documentDate: documents.docDate,
           counterparty: parties.name,
+          counterpartyKind: parties.kind,
           counterpartyTaxId: parties.taxId,
           code: taxEntries.code,
           base: taxEntries.baseBani,
@@ -109,7 +111,10 @@ export class VatRegisters {
           document: row.document,
           documentDate: row.documentDate,
           counterparty: row.counterparty,
-          counterpartyTaxId: row.counterpartyTaxId,
+          // An individual's identifier (the keyed hash of a CNP) is masked for agents.
+          counterpartyTaxId: row.counterpartyKind
+            ? maskedTaxId(actor, { kind: row.counterpartyKind, taxId: row.counterpartyTaxId })
+            : row.counterpartyTaxId,
           code: row.code,
           base: ron(row.base),
           vat: ron(row.vat),

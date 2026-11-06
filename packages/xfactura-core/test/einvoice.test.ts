@@ -166,6 +166,17 @@ describe('e-Factura UBL', () => {
         deliveryDate: '2026-02-28',
         taxPointCode: '3' as const,
       },
+      // A credit note in euro, its VAT in lei at its invoice's rate (Codul fiscal art. 282 alin.
+      // (9)): 22.05 EUR × 4.9670 = 109.52.
+      {
+        typeCode: '381' as const,
+        precedingInvoices: [{ number: 'XF-0', issueDate: '2026-02-01' }],
+        currency: 'EUR',
+        vatCurrency: 'RON' as const,
+        vatAccountingTotal: '109.52',
+        notes: ['Curs BNR 4,9670 lei/euro, al facturii XF-0'],
+        payment: { meansCode: '30', accounts: [{ id: 'RO49AAAA1B31007593840000' }] },
+      },
     ]) {
       const { invoice, read } = roundTrip(
         draft(

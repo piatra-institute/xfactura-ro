@@ -6,6 +6,7 @@ import { documentIdentity, normalizedTaxId } from 'xfactura-core/documents/schem
 import { invoiceKinds } from 'xfactura-core/ro/treatments/invoices';
 import { parseInvoiceXml, type InvoiceDocument } from 'xfactura-core/ubl/invoice-document';
 import type { Transaction } from '../db/database';
+import type { PartyIdentities } from '../db/identity';
 import { companies, documents, evidence } from '../db/schema';
 import type { ObjectStore } from '../adapters/object-store';
 import type { Actor, Commands, Ids } from '../kernel/commands';
@@ -28,6 +29,8 @@ export async function recordInvoice(
   bytes: Uint8Array,
   origin: 'spv' | 'upload',
   ids: Ids,
+  /** Keys an individual counterparty's CNP into its party identifier (`partyFor`). */
+  identities?: PartyIdentities,
 ) {
   const body = parseInvoiceXml(bytes);
   const [company] = await tx.select().from(companies).where(eq(companies.id, actor.companyId));
@@ -63,7 +66,7 @@ export async function recordInvoice(
     );
     return { row: existing, body, created: false };
   }
-  const partyId = await partyFor(tx, actor, sale ? body.customer : body.supplier, ids);
+  const partyId = await partyFor(tx, actor, sale ? body.customer : body.supplier, ids, identities);
   const [row] = await tx
     .insert(documents)
     .values({
@@ -110,6 +113,7 @@ export class Invoices {
         await this.objects.get(actor.companyId, source.hash),
         'upload',
         this.commands.ids,
+        this.commands.identities,
       );
       return documentViewOf(tx, recorded.row);
     });

@@ -5,10 +5,10 @@ import { canonical, hashOf } from 'xfactura-core/hash';
 import type { JsonValue } from 'xfactura-core/kernel';
 import { bucharestDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
-import { actionDecisions, actionExecutions, actionRequests } from '../db/schema';
-import type { Actor, Commands, Permission } from './commands';
+import { actionDecisions, actionExecutions, actionRequests, type Role } from '../db/schema';
+import type { Access, Actor, Commands, Permission } from './commands';
 import { requireActiveApprover, requireSegregated, segregationOn } from './controls';
-import { payClasses, previewWithoutPersons } from './personal';
+import { maskCnps, payClasses, previewWithoutPersons } from './personal';
 
 /**
  * A reviewed action without journal lines (closing or reopening a month, …). A request stores a
@@ -115,9 +115,16 @@ export class Actions {
           createdBy: actor.actorId,
           agentId: actor.agentId ?? null,
         });
-        return this.shown(tx, actor, await this.view(tx, actor.companyId, id));
+        return this.view(tx, actor.companyId, id);
       },
+      this.present(actor),
     );
+  }
+
+  /** What a command's caller reads of the action it returns, stored or new (`shown`). */
+  private present(actor: Actor) {
+    return (tx: Transaction, access: Access, view: ActionView) =>
+      this.shown(tx, actor, access.role, view);
   }
 
   async decide(
@@ -127,128 +134,144 @@ export class Actions {
   ) {
     requireCondition(!actor.agentId, 'AGENT_SCOPE', 'Decizia aparține unei persoane.', 403);
     const operation = input.decision === 'approve' ? 'actions.approve' : 'actions.reject';
-    return this.commands.run(actor, key, operation, input, 'review', async (tx, access) => {
-      // The decision's time: segregation is read on its day, here and by the database.
-      const now = this.clock();
-      const request = await this.find(tx, actor.companyId, input.id);
-      const handler = this.handler(request.operation);
-      requireCondition(
-        request.previewHash === input.previewHash,
-        'STALE',
-        'Previzualizarea verificată nu mai este actuală.',
-        409,
-      );
-      // Rejecting only stops a request, so a requester may still reject their own.
-      if (input.decision === 'approve')
-        requireSegregated(
-          await segregationOn(tx, actor.companyId, bucharestDate(now)),
-          actor.actorId,
-          { createdBy: request.createdBy, agentId: request.agentId },
-          'action',
+    return this.commands.run(
+      actor,
+      key,
+      operation,
+      input,
+      'review',
+      async (tx, access) => {
+        // The decision's time: segregation is read on its day, here and by the database.
+        const now = this.clock();
+        const request = await this.find(tx, actor.companyId, input.id);
+        const handler = this.handler(request.operation);
+        requireCondition(
+          request.previewHash === input.previewHash,
+          'STALE',
+          'Previzualizarea verificată nu mai este actuală.',
+          409,
         );
-      const parsed = handler.input.parse(JSON.parse(request.input));
-      const current = await handler.preview(tx, actor.companyId, parsed);
-      requireCondition(
-        hashOf(current.preview) === request.previewHash,
-        'STALE',
-        'Registrele s-au schimbat de la cerere. Solicitați o previzualizare nouă.',
-        409,
-        handler.changes?.(JSON.parse(request.preview) as JsonValue, current.preview),
-      );
-      requireCondition(
-        input.decision === 'reject' || !current.blocking,
-        'BLOCKING_ISSUES',
-        'Previzualizarea are constatări care împiedică aprobarea.',
-        409,
-      );
-      requireCondition(
-        input.decision === 'approve' || (input.reason?.trim().length ?? 0) >= 10,
-        'REASON',
-        'Motivați respingerea în cel puțin 10 caractere.',
-      );
-      if (input.decision === 'approve')
-        await handler.approvable?.(tx, actor.companyId, actor.actorId, parsed, current.preview);
-      const [existing] = await tx
-        .select()
-        .from(actionDecisions)
-        .where(
-          and(
-            eq(actionDecisions.companyId, actor.companyId),
-            eq(actionDecisions.requestId, input.id),
-          ),
+        // Rejecting only stops a request, so a requester may still reject their own.
+        if (input.decision === 'approve')
+          requireSegregated(
+            await segregationOn(tx, actor.companyId, bucharestDate(now)),
+            actor.actorId,
+            { createdBy: request.createdBy, agentId: request.agentId },
+            'action',
+          );
+        const parsed = handler.input.parse(JSON.parse(request.input));
+        const current = await handler.preview(tx, actor.companyId, parsed);
+        requireCondition(
+          hashOf(current.preview) === request.previewHash,
+          'STALE',
+          'Registrele s-au schimbat de la cerere. Solicitați o previzualizare nouă.',
+          409,
+          handler.changes?.(JSON.parse(request.preview) as JsonValue, current.preview),
         );
-      requireCondition(!existing, 'DECIDED', 'Acțiunea are deja o decizie.', 409);
-      await tx.insert(actionDecisions).values({
-        companyId: actor.companyId,
-        requestId: input.id,
-        decision: input.decision,
-        previewHash: input.previewHash,
-        decidedBy: actor.actorId,
-        decidedEpoch: access.epoch,
-        // None, as agents never decide; the database refuses one (`inv:decision_person`).
-        agentId: actor.agentId ?? null,
-        reason: input.reason ?? null,
-        engineAt: now,
-      });
-      return this.view(tx, actor.companyId, input.id);
-    });
+        requireCondition(
+          input.decision === 'reject' || !current.blocking,
+          'BLOCKING_ISSUES',
+          'Previzualizarea are constatări care împiedică aprobarea.',
+          409,
+        );
+        requireCondition(
+          input.decision === 'approve' || (input.reason?.trim().length ?? 0) >= 10,
+          'REASON',
+          'Motivați respingerea în cel puțin 10 caractere.',
+        );
+        if (input.decision === 'approve')
+          await handler.approvable?.(tx, actor.companyId, actor.actorId, parsed, current.preview);
+        const [existing] = await tx
+          .select()
+          .from(actionDecisions)
+          .where(
+            and(
+              eq(actionDecisions.companyId, actor.companyId),
+              eq(actionDecisions.requestId, input.id),
+            ),
+          );
+        requireCondition(!existing, 'DECIDED', 'Acțiunea are deja o decizie.', 409);
+        await tx.insert(actionDecisions).values({
+          companyId: actor.companyId,
+          requestId: input.id,
+          decision: input.decision,
+          previewHash: input.previewHash,
+          decidedBy: actor.actorId,
+          decidedEpoch: access.epoch,
+          // None, as agents never decide; the database refuses one (`inv:decision_person`).
+          agentId: actor.agentId ?? null,
+          reason: input.reason ?? null,
+          engineAt: now,
+        });
+        return this.view(tx, actor.companyId, input.id);
+      },
+      this.present(actor),
+    );
   }
 
   async execute(actor: Actor, key: string, input: { id: string }) {
-    return this.commands.run(actor, key, 'actions.execute', input, 'review', async (tx) => {
-      const request = await this.find(tx, actor.companyId, input.id);
-      const handler = this.handler(request.operation);
-      const [decision] = await tx
-        .select()
-        .from(actionDecisions)
-        .where(
-          and(
-            eq(actionDecisions.companyId, actor.companyId),
-            eq(actionDecisions.requestId, input.id),
-          ),
+    return this.commands.run(
+      actor,
+      key,
+      'actions.execute',
+      input,
+      'review',
+      async (tx) => {
+        const request = await this.find(tx, actor.companyId, input.id);
+        const handler = this.handler(request.operation);
+        const [decision] = await tx
+          .select()
+          .from(actionDecisions)
+          .where(
+            and(
+              eq(actionDecisions.companyId, actor.companyId),
+              eq(actionDecisions.requestId, input.id),
+            ),
+          );
+        requireCondition(
+          decision?.decision === 'approve',
+          'APPROVAL_REQUIRED',
+          'Acțiunea nu este aprobată.',
+          409,
         );
-      requireCondition(
-        decision?.decision === 'approve',
-        'APPROVAL_REQUIRED',
-        'Acțiunea nu este aprobată.',
-        409,
-      );
-      const [done] = await tx
-        .select()
-        .from(actionExecutions)
-        .where(
-          and(
-            eq(actionExecutions.companyId, actor.companyId),
-            eq(actionExecutions.requestId, input.id),
-          ),
+        const [done] = await tx
+          .select()
+          .from(actionExecutions)
+          .where(
+            and(
+              eq(actionExecutions.companyId, actor.companyId),
+              eq(actionExecutions.requestId, input.id),
+            ),
+          );
+        if (done) return this.view(tx, actor.companyId, input.id);
+        await requireActiveApprover(
+          tx,
+          actor.companyId,
+          { userId: decision.decidedBy, epoch: decision.decidedEpoch },
+          'Persoana care a aprobat acțiunea nu mai este proprietar sau revizor activ. Cereți din nou acțiunea și o aprobare nouă.',
         );
-      if (done) return this.shown(tx, actor, await this.view(tx, actor.companyId, input.id));
-      await requireActiveApprover(
-        tx,
-        actor.companyId,
-        { userId: decision.decidedBy, epoch: decision.decidedEpoch },
-        'Persoana care a aprobat acțiunea nu mai este proprietar sau revizor activ. Cereți din nou acțiunea și o aprobare nouă.',
-      );
-      const parsed = handler.input.parse(JSON.parse(request.input));
-      const current = await handler.preview(tx, actor.companyId, parsed);
-      requireCondition(
-        hashOf(current.preview) === request.previewHash && !current.blocking,
-        'STALE',
-        'Registrele s-au schimbat de la aprobare. Solicitați o previzualizare nouă.',
-        409,
-        handler.changes?.(JSON.parse(request.preview) as JsonValue, current.preview),
-      );
-      const result = await handler.execute(tx, actor, parsed, input.id, current.preview, {
-        decision: { decidedBy: decision.decidedBy, decidedEpoch: decision.decidedEpoch },
-      });
-      await tx.insert(actionExecutions).values({
-        companyId: actor.companyId,
-        requestId: input.id,
-        result: canonical(result),
-        executedBy: actor.actorId,
-      });
-      return this.shown(tx, actor, await this.view(tx, actor.companyId, input.id));
-    });
+        const parsed = handler.input.parse(JSON.parse(request.input));
+        const current = await handler.preview(tx, actor.companyId, parsed);
+        requireCondition(
+          hashOf(current.preview) === request.previewHash && !current.blocking,
+          'STALE',
+          'Registrele s-au schimbat de la aprobare. Solicitați o previzualizare nouă.',
+          409,
+          handler.changes?.(JSON.parse(request.preview) as JsonValue, current.preview),
+        );
+        const result = await handler.execute(tx, actor, parsed, input.id, current.preview, {
+          decision: { decidedBy: decision.decidedBy, decidedEpoch: decision.decidedEpoch },
+        });
+        await tx.insert(actionExecutions).values({
+          companyId: actor.companyId,
+          requestId: input.id,
+          result: canonical(result),
+          executedBy: actor.actorId,
+        });
+        return this.view(tx, actor.companyId, input.id);
+      },
+      this.present(actor),
+    );
   }
 
   private async find(tx: Transaction, companyId: string, id: string) {
@@ -287,23 +310,35 @@ export class Actions {
     };
   }
 
-  /** A view as this caller sees it: an agent whose reads do not cover `payroll` and `personal`
-   * sees no one's pay in a preview (the year close's snapshot sums the personnel accounts' open
-   * items, `previewWithoutPersons`). The preview hash is the one approved, whatever is shown. */
-  private async shown(tx: Transaction, actor: Actor, view: ActionView): Promise<ActionView> {
-    if ((await this.commands.readable(tx, actor))(payClasses)) return view;
-    return { ...view, preview: previewWithoutPersons(view.operation, view.preview) as JsonValue };
+  /** A view as this caller sees it, wherever it leaves the engine (`actions.get`, `.list`, and
+   * what `*.request`, `actions.approve`, `.reject` and `.execute` return, stored or new): an
+   * agent whose reads do not cover `payroll` and `personal` sees no one's pay in a preview (the
+   * year close's snapshot sums the personnel accounts' open items, `previewWithoutPersons`), and
+   * a caller who may not read personal data in clear no CNP (a finding quoting a record). The
+   * preview hash is the one approved, whatever is shown. */
+  private async shown(
+    tx: Transaction,
+    actor: Actor,
+    role: Role,
+    view: ActionView,
+  ): Promise<ActionView> {
+    const pay = (await this.commands.readable(tx, actor))(payClasses);
+    const cnps = (await this.commands.disclosable(tx, actor, role))(['personal']);
+    let preview = view.preview;
+    if (!pay) preview = previewWithoutPersons(view.operation, preview) as JsonValue;
+    if (!cnps) preview = maskCnps(preview);
+    return pay && cnps ? view : { ...view, preview };
   }
 
   get(actor: Actor, id: string) {
-    return this.commands.read(actor, 'actions.get', async (tx) =>
-      this.shown(tx, actor, await this.view(tx, actor.companyId, id)),
+    return this.commands.read(actor, 'actions.get', async (tx, access) =>
+      this.shown(tx, actor, access.role, await this.view(tx, actor.companyId, id)),
     );
   }
 
   /** Requests in the order they were made, with the status `view` derives, filtered in SQL. */
   list(actor: Actor, input: z.infer<typeof actionQuery>) {
-    return this.commands.read(actor, 'actions.list', async (tx) => {
+    return this.commands.read(actor, 'actions.list', async (tx, access) => {
       const company = eq(actionRequests.companyId, actor.companyId);
       let cursor: { createdAt: string; id: string } | undefined;
       if (input.after) {
@@ -357,7 +392,7 @@ export class Actions {
       return {
         items: await Promise.all(
           page.map(async (row) =>
-            this.shown(tx, actor, await this.view(tx, actor.companyId, row.id)),
+            this.shown(tx, actor, access.role, await this.view(tx, actor.companyId, row.id)),
           ),
         ),
         next: rows.length > input.limit ? page.at(-1)!.id : null,

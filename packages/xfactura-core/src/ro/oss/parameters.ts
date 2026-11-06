@@ -53,10 +53,8 @@ const declarations = z
      * to D398 alone, or rd. 3 (base only), as the order's general wording of rd. 3 reads. */
     d300: z.enum(['none', 'R3']),
     /** D394 lists the taxable operations on the national territory: the place of these sales is
-     * abroad. */
+     * abroad. D406 reports them as `ro.d406.oss` reads ANAF's SAF-T texts (saft/parameters.ts). */
     d394: z.literal('none'),
-    /** The SAF-T TaxCode of a sale declared in the Union scheme. */
-    d406: z.literal('310340'),
   })
   .strict();
 export type OssDeclarations = z.infer<typeof declarations>;
@@ -123,7 +121,7 @@ export const ossDefinitions: ParameterDefinition[] = [
     scope: [],
     value: declarations,
     description:
-      'Unde raportează decontul de TVA (300), declarația 394 și SAF-T (D406) vânzările declarate în regimul special Uniune.',
+      'Unde raportează decontul de TVA (300) și declarația 394 vânzările declarate în regimul special Uniune.',
   },
   {
     key: 'ro.vat.ioss',
@@ -222,7 +220,7 @@ export const ossVersions: ParameterVersion[] = [
   ),
   version(
     'ro.vat.oss.declarations',
-    { d300: 'none', d394: 'none', d406: '310340' },
+    { d300: 'none', d394: 'none' },
     ['ANAF/D406:Livrari.310340-310346', 'OPANAF174/2026:rd.3', 'OPANAF3769/2015:anexa2.sect2'],
     '2026-01-01',
   ),

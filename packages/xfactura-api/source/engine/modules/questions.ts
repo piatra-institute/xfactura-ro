@@ -2,6 +2,7 @@ import { and, asc, eq, gt, inArray, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireCondition } from 'xfactura-core/errors';
 import { canonical, hashOf } from 'xfactura-core/hash';
+import type { DataClass } from 'xfactura-core/kernel';
 import {
   answerLifetimes,
   normalizeSubject,
@@ -15,7 +16,7 @@ import type { Transaction } from '../db/database';
 import { answerMediaType } from '../db/invariants';
 import { evidence, questionAnswers, questions, questionWithdrawals } from '../db/schema';
 import type { ObjectStore } from '../adapters/object-store';
-import { roleAllows, type Actor, type Commands } from '../kernel/commands';
+import { roleAllows, type Access, type Actor, type Commands } from '../kernel/commands';
 import { q } from '../kernel/work';
 import { profileInput, writeProfileFact } from './company';
 
@@ -76,7 +77,10 @@ export const questionView = z.object({
     .object({
       id: z.string(),
       seq: z.number(),
+      /** Null and `redacted` for a caller who may not read the kind's data classes (a month's
+       * sick leave is `health`): the question shows as answered, without what was answered. */
       value: z.unknown(),
+      redacted: z.literal(true).optional(),
       /** The answer kept as evidence (`application/vnd.xfactura.answer+json`). */
       evidenceId: z.string(),
       answeredBy: z.string(),
@@ -140,6 +144,24 @@ async function load(tx: Transaction, companyId: string, rows: QuestionRow[]): Pr
     answer: latest.get(row.id) ?? null,
     withdrawn: withdrawn.has(row.id),
   }));
+}
+
+/** Whether a caller may read data of these classes (`Commands.disclosable`). */
+type Disclosable = (classes: readonly DataClass[]) => boolean;
+
+/**
+ * A question as a caller reads it. An answer holding data beyond the books (the kind's
+ * `dataClasses`: a month's benefits per employee, its sick leave) keeps its place, without its
+ * value, for a caller who may not read every class of it: a viewer, or an agent whose grant
+ * covers no `health` for an answer about sick leave. Applied to stored command results too.
+ */
+export function shownQuestion<View extends QuestionView>(
+  question: View,
+  disclosable: Disclosable,
+): View {
+  const classes = questionKind(question.kind)?.dataClasses ?? [];
+  if (!question.answer || disclosable(classes)) return question;
+  return { ...question, answer: { ...question.answer, value: null, redacted: true } };
 }
 
 function view(asked: Asked): QuestionView {
@@ -229,6 +251,12 @@ export class Questions {
     private readonly clock: () => number = Date.now,
   ) {}
 
+  /** A command's question as its caller reads it (`shownQuestion`), stored or new. */
+  private present<View extends QuestionView>(actor: Actor) {
+    return async (tx: Transaction, access: Access, question: View) =>
+      shownQuestion(question, await this.commands.disclosable(tx, actor, access.role));
+  }
+
   private async find(tx: Transaction, companyId: string, id: string) {
     const [row] = await tx
       .select()
@@ -240,54 +268,62 @@ export class Questions {
 
   /** Returns the answer that still holds, or the question already open, or opens a new one. */
   ask(actor: Actor, key: string, input: z.infer<typeof askInput>) {
-    return this.commands.run(actor, key, 'questions.ask', input, 'write', async (tx) => {
-      const kind = kindOf(input.kind);
-      requireCondition(
-        kind.subjects.includes(input.subject.kind),
-        'QUESTION_SUBJECT',
-        `O întrebare ${kind.id} privește: ${kind.subjects.join(', ')}.`,
-        422,
-        { subjects: [...kind.subjects] },
-      );
-      // One spelling per subject, so that a treatment's issue, the worklist and the agent name
-      // the same question.
-      const subject = normalizeSubject(kind.id, input.subject);
-      requireCondition(
-        subject.id.length > 0,
-        'QUESTION_SUBJECT',
-        'Obiectul întrebării nu are identificator.',
-        422,
-        { subjects: [...kind.subjects] },
-      );
-      const found = await standing(tx, actor.companyId, { ...input, subject });
-      if (found.answered) return { ...view(found.answered), reused: true };
-      if (found.open) {
-        // An answer that holds whatever the parameters is one question per subject: the open one
-        // is returned as it was asked.
+    return this.commands.run(
+      actor,
+      key,
+      'questions.ask',
+      input,
+      'write',
+      async (tx) => {
+        const kind = kindOf(input.kind);
         requireCondition(
-          kind.holds === 'untilChanged' ||
-            hashOf(kind.params.parse(JSON.parse(found.open.row.params))) === hashOf(found.params),
-          'QUESTION_OPEN',
-          'Aceeași întrebare despre același obiect așteaptă deja un răspuns, cu alți parametri: retrageți-o întâi.',
-          409,
-          { questionId: found.open.row.id },
+          kind.subjects.includes(input.subject.kind),
+          'QUESTION_SUBJECT',
+          `O întrebare ${kind.id} privește: ${kind.subjects.join(', ')}.`,
+          422,
+          { subjects: [...kind.subjects] },
         );
-        return { ...view(found.open), reused: true };
-      }
-      const id = this.commands.ids();
-      await tx.insert(questions).values({
-        id,
-        companyId: actor.companyId,
-        kind: input.kind,
-        subjectKind: subject.kind,
-        subjectId: subject.id,
-        params: canonical(found.params),
-        askedBy: actor.actorId,
-        agentId: actor.agentId ?? null,
-        due: input.due ?? null,
-      });
-      return { ...view(await this.find(tx, actor.companyId, id)), reused: false };
-    });
+        // One spelling per subject, so that a treatment's issue, the worklist and the agent name
+        // the same question.
+        const subject = normalizeSubject(kind.id, input.subject);
+        requireCondition(
+          subject.id.length > 0,
+          'QUESTION_SUBJECT',
+          'Obiectul întrebării nu are identificator.',
+          422,
+          { subjects: [...kind.subjects] },
+        );
+        const found = await standing(tx, actor.companyId, { ...input, subject });
+        if (found.answered) return { ...view(found.answered), reused: true };
+        if (found.open) {
+          // An answer that holds whatever the parameters is one question per subject: the open one
+          // is returned as it was asked.
+          requireCondition(
+            kind.holds === 'untilChanged' ||
+              hashOf(kind.params.parse(JSON.parse(found.open.row.params))) === hashOf(found.params),
+            'QUESTION_OPEN',
+            'Aceeași întrebare despre același obiect așteaptă deja un răspuns, cu alți parametri: retrageți-o întâi.',
+            409,
+            { questionId: found.open.row.id },
+          );
+          return { ...view(found.open), reused: true };
+        }
+        const id = this.commands.ids();
+        await tx.insert(questions).values({
+          id,
+          companyId: actor.companyId,
+          kind: input.kind,
+          subjectKind: subject.kind,
+          subjectId: subject.id,
+          params: canonical(found.params),
+          askedBy: actor.actorId,
+          agentId: actor.agentId ?? null,
+          due: input.due ?? null,
+        });
+        return { ...view(await this.find(tx, actor.companyId, id)), reused: false };
+      },
+      this.present(actor),
+    );
   }
 
   /**
@@ -297,117 +333,138 @@ export class Questions {
    */
   answer(actor: Actor, key: string, input: z.infer<typeof answerInput>) {
     requireCondition(!actor.agentId, 'AGENT_SCOPE', 'Răspunsul aparține unei persoane.', 403);
-    return this.commands.run(actor, key, 'questions.answer', input, 'write', async (tx, access) => {
-      const asked = await this.find(tx, actor.companyId, input.questionId);
-      requireCondition(!asked.withdrawn, 'QUESTION_WITHDRAWN', 'Întrebarea a fost retrasă.', 409);
-      const kind = kindOf(asked.row.kind);
-      const params = kind.params.parse(JSON.parse(asked.row.params));
-      const value = kind.answer(params).parse(input.value);
-      // Kinds whose answers record company facts (`profile.fact`, `determination.confirm`).
-      const recordsFact = kind.facts !== undefined;
-      requireCondition(
-        !recordsFact || roleAllows(access.role, 'review'),
-        'FORBIDDEN',
-        'Un fapt al companiei se înregistrează de un proprietar sau un revizor.',
-        403,
-      );
-      const cited = [...new Set(kind.evidence(value))];
-      if (cited.length) {
-        const kept = await tx
-          .select({ id: evidence.id })
-          .from(evidence)
-          .where(and(eq(evidence.companyId, actor.companyId), inArray(evidence.id, cited)));
+    return this.commands.run(
+      actor,
+      key,
+      'questions.answer',
+      input,
+      'write',
+      async (tx, access) => {
+        const asked = await this.find(tx, actor.companyId, input.questionId);
+        requireCondition(!asked.withdrawn, 'QUESTION_WITHDRAWN', 'Întrebarea a fost retrasă.', 409);
+        const kind = kindOf(asked.row.kind);
+        const params = kind.params.parse(JSON.parse(asked.row.params));
+        const value = kind.answer(params).parse(input.value);
+        // Kinds whose answers record company facts (`profile.fact`, `determination.confirm`).
+        const recordsFact = kind.facts !== undefined;
         requireCondition(
-          kept.length === cited.length,
-          'EVIDENCE',
-          'Documentul justificativ nu este disponibil.',
-          404,
-          { missing: cited.filter((id) => !kept.some((row) => row.id === id)) },
+          !recordsFact || roleAllows(access.role, 'review'),
+          'FORBIDDEN',
+          'Un fapt al companiei se înregistrează de un proprietar sau un revizor.',
+          403,
         );
-      }
-      const id = this.commands.ids();
-      const seq = (asked.answer?.seq ?? 0) + 1;
-      const subject = { kind: asked.row.subjectKind, id: asked.row.subjectId };
-      // The answer as evidence: what was asked, what the person answered, and when.
-      const bytes = new TextEncoder().encode(
-        canonical({
-          schema: 'xfactura.answer@1',
-          answerId: id,
+        const cited = [...new Set(kind.evidence(value))];
+        if (cited.length) {
+          const kept = await tx
+            .select({ id: evidence.id })
+            .from(evidence)
+            .where(and(eq(evidence.companyId, actor.companyId), inArray(evidence.id, cited)));
+          requireCondition(
+            kept.length === cited.length,
+            'EVIDENCE',
+            'Documentul justificativ nu este disponibil.',
+            404,
+            { missing: cited.filter((id) => !kept.some((row) => row.id === id)) },
+          );
+        }
+        const id = this.commands.ids();
+        const seq = (asked.answer?.seq ?? 0) + 1;
+        const subject = { kind: asked.row.subjectKind, id: asked.row.subjectId };
+        // The answer as evidence: what was asked, what the person answered, and when.
+        const bytes = new TextEncoder().encode(
+          canonical({
+            schema: 'xfactura.answer@1',
+            answerId: id,
+            questionId: asked.row.id,
+            seq,
+            kind: kind.id,
+            subject,
+            params,
+            prompt: kind.prompt(subject, params),
+            value,
+            evidence: cited,
+            answeredBy: actor.actorId,
+            answeredAt: new Date(this.clock()).toISOString(),
+          }),
+        );
+        const hash = await this.objects.put(actor.companyId, bytes);
+        const evidenceId = this.commands.ids();
+        await tx.insert(evidence).values({
+          id: evidenceId,
+          companyId: actor.companyId,
+          hash,
+          filename: `raspuns-${asked.row.id}-${seq}.json`,
+          mediaType: answerMediaType,
+          size: bytes.length,
+          createdBy: actor.actorId,
+          engineAt: this.commands.clock(),
+        });
+        await tx.insert(questionAnswers).values({
+          id,
+          companyId: actor.companyId,
           questionId: asked.row.id,
           seq,
-          kind: kind.id,
-          subject,
-          params,
-          prompt: kind.prompt(subject, params),
-          value,
-          evidence: cited,
+          value: canonical(value),
+          evidenceId,
           answeredBy: actor.actorId,
-          answeredAt: new Date(this.clock()).toISOString(),
-        }),
-      );
-      const hash = await this.objects.put(actor.companyId, bytes);
-      const evidenceId = this.commands.ids();
-      await tx.insert(evidence).values({
-        id: evidenceId,
-        companyId: actor.companyId,
-        hash,
-        filename: `raspuns-${asked.row.id}-${seq}.json`,
-        mediaType: answerMediaType,
-        size: bytes.length,
-        createdBy: actor.actorId,
-        engineAt: this.commands.clock(),
-      });
-      await tx.insert(questionAnswers).values({
-        id,
-        companyId: actor.companyId,
-        questionId: asked.row.id,
-        seq,
-        value: canonical(value),
-        evidenceId,
-        answeredBy: actor.actorId,
-        agentId: null,
-        epoch: access.epoch,
-        engineAt: this.clock(),
-      });
-      const profileFactIds: string[] = [];
-      for (const fact of kind.facts?.(params, value) ?? [])
-        profileFactIds.push(
-          (
-            await writeProfileFact(
-              tx,
-              actor,
-              profileInput.parse({ ...fact, evidenceId }),
-              this.commands.ids,
-            )
-          ).id,
-        );
-      const result = view(await this.find(tx, actor.companyId, asked.row.id));
-      return profileFactIds.length
-        ? { ...result, profileFactId: profileFactIds[0]!, profileFactIds }
-        : result;
-    });
+          agentId: null,
+          epoch: access.epoch,
+          engineAt: this.clock(),
+        });
+        const profileFactIds: string[] = [];
+        for (const fact of kind.facts?.(params, value) ?? [])
+          profileFactIds.push(
+            (
+              await writeProfileFact(
+                tx,
+                actor,
+                profileInput.parse({ ...fact, evidenceId }),
+                this.commands.ids,
+              )
+            ).id,
+          );
+        const result = view(await this.find(tx, actor.companyId, asked.row.id));
+        return profileFactIds.length
+          ? { ...result, profileFactId: profileFactIds[0]!, profileFactIds }
+          : result;
+      },
+      this.present(actor),
+    );
   }
 
   /** Withdraws a question nobody answered. */
   withdraw(actor: Actor, key: string, input: z.infer<typeof withdrawInput>) {
-    return this.commands.run(actor, key, 'questions.withdraw', input, 'write', async (tx) => {
-      const asked = await this.find(tx, actor.companyId, input.questionId);
-      requireCondition(!asked.answer, 'QUESTION_ANSWERED', 'Întrebarea are deja un răspuns.', 409);
-      requireCondition(!asked.withdrawn, 'QUESTION_WITHDRAWN', 'Întrebarea a fost retrasă.', 409);
-      await tx.insert(questionWithdrawals).values({
-        companyId: actor.companyId,
-        questionId: asked.row.id,
-        reason: input.reason,
-        createdBy: actor.actorId,
-        agentId: actor.agentId ?? null,
-      });
-      return view(await this.find(tx, actor.companyId, asked.row.id));
-    });
+    return this.commands.run(
+      actor,
+      key,
+      'questions.withdraw',
+      input,
+      'write',
+      async (tx) => {
+        const asked = await this.find(tx, actor.companyId, input.questionId);
+        requireCondition(
+          !asked.answer,
+          'QUESTION_ANSWERED',
+          'Întrebarea are deja un răspuns.',
+          409,
+        );
+        requireCondition(!asked.withdrawn, 'QUESTION_WITHDRAWN', 'Întrebarea a fost retrasă.', 409);
+        await tx.insert(questionWithdrawals).values({
+          companyId: actor.companyId,
+          questionId: asked.row.id,
+          reason: input.reason,
+          createdBy: actor.actorId,
+          agentId: actor.agentId ?? null,
+        });
+        return view(await this.find(tx, actor.companyId, asked.row.id));
+      },
+      this.present(actor),
+    );
   }
 
   /** Questions in the order they were asked, by status or kind, a page at a time. */
   list(actor: Actor, input: z.infer<typeof questionQuery>) {
-    return this.commands.read(actor, 'questions.list', async (tx) => {
+    return this.commands.read(actor, 'questions.list', async (tx, access) => {
       const answered = sql`exists (select 1 from ${questionAnswers} a
         where a.company_id = ${q(questions.companyId)} and a.question_id = ${q(questions.id)})`;
       const withdrawn = sql`exists (select 1 from ${questionWithdrawals} w
@@ -450,10 +507,79 @@ export class Questions {
         .orderBy(asc(questions.createdAt), asc(questions.id))
         .limit(input.limit + 1);
       const page = rows.slice(0, input.limit);
+      const disclosable = await this.commands.disclosable(tx, actor, access.role);
       return {
-        items: (await load(tx, actor.companyId, page)).map(view),
+        items: (await load(tx, actor.companyId, page)).map((asked) =>
+          shownQuestion(view(asked), disclosable),
+        ),
         next: rows.length > input.limit ? page.at(-1)!.id : null,
       };
     });
   }
+
+  /**
+   * A month's absences as people answered them (`payroll.absences`): each subject's answer that
+   * holds for the month, with its sick leave (indemnity codes, certificates). The read that
+   * grants `health` to an agent naming it; a caller who may not read health data (a viewer, an
+   * agent of one) reads each answer without its absences.
+   */
+  absences(actor: Actor, input: z.infer<typeof absencesInput>) {
+    return this.commands.read(actor, 'payroll.absences.list', async (tx, access) => {
+      const disclosable = await this.commands.disclosable(tx, actor, access.role);
+      const shown = disclosable(questionKind('payroll.absences')!.dataClasses ?? []);
+      const subjects = await tx
+        .selectDistinct({ kind: questions.subjectKind, id: questions.subjectId })
+        .from(questions)
+        .where(
+          and(
+            eq(questions.companyId, actor.companyId),
+            eq(questions.kind, 'payroll.absences'),
+            sql`json_extract(${questions.params}, '$.month') = ${input.month}`,
+          ),
+        )
+        .orderBy(asc(questions.subjectKind), asc(questions.subjectId));
+      const items: z.infer<typeof absencesView>['items'] = [];
+      for (const subject of subjects) {
+        const { answered } = await standing(tx, actor.companyId, {
+          kind: 'payroll.absences',
+          subject,
+          params: { month: input.month },
+        });
+        if (!answered?.answer) continue;
+        items.push({
+          questionId: answered.row.id,
+          answerId: answered.answer.id,
+          subject,
+          evidenceId: answered.answer.evidenceId,
+          ...(shown
+            ? {
+                absences: (JSON.parse(answered.answer.value) as { absences: unknown[] }).absences,
+              }
+            : { absences: null, redacted: true as const }),
+        });
+      }
+      return { month: input.month, items, next: null };
+    });
+  }
 }
+
+export const absencesInput = z
+  .object({ month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/) })
+  .strict();
+export const absencesView = z.object({
+  month: z.string(),
+  items: z.array(
+    z.object({
+      questionId: z.string(),
+      answerId: z.string(),
+      subject: z.object({ kind: z.string(), id: z.string() }),
+      /** The answer kept as evidence (`health`, `payroll`, `personal`). */
+      evidenceId: z.string(),
+      /** As answered: `{ employeeId, kind, from, to, code?, certificateEvidenceId? }`; null and
+       * `redacted` for a caller who may not read health data. */
+      absences: z.array(z.unknown()).nullable(),
+      redacted: z.literal(true).optional(),
+    }),
+  ),
+  next: z.string().nullable(),
+});

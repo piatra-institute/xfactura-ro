@@ -18,6 +18,9 @@ import { stockAccountSynthetics } from 'xfactura-core/kernel';
  * `ensureInvariants`, not kept as migration history, so a table rebuild cannot drop one silently.
  */
 
+/** A CNP's shape in a GLOB: 13 digits. */
+const cnpDigits = '[0-9]'.repeat(13);
+
 // Tables whose rows never change once written.
 const appendOnly = [
   'acc_companies',
@@ -1843,6 +1846,12 @@ const triggers: Trigger[] = [
         rule: "An individual's identifier is the keyed hash of their CNP (`cnp:k1:` and an HMAC under the installation's secret), never the CNP itself nor an unkeyed hash of it, which a birth date makes easy to find.",
         violation: `NEW.tax_id IS NOT NULL AND (NEW.kind = 'ro_individual' OR NEW.tax_id GLOB 'cnp:*')
           AND NOT (NEW.tax_id GLOB 'cnp:k1:*' AND length(NEW.tax_id) = 71)`,
+      },
+      {
+        code: 'party_cnp',
+        rule: "A Romanian partner is never known by a CNP, whatever its kind: 13 digits (a CUI has at most 10) are an individual's code, kept only as its keyed hash. A received invoice of an individual recorded its seller as a company under the CNP in clear.",
+        violation: `NEW.country = 'RO' AND NEW.tax_id IS NOT NULL
+          AND (NEW.tax_id GLOB '${cnpDigits}' OR upper(NEW.tax_id) GLOB 'RO${cnpDigits}')`,
       },
     ],
   },

@@ -341,7 +341,7 @@ describe('review queue', () => {
     const { packets, missing, rows } = reviewQueue(base, '2026-10-30' as LocalDate);
     expect(rows).toHaveLength(base.register.keys().length);
     expect(packets.map((packet) => [packet.kind, packet.keys])).toEqual([
-      ['mechanical', ['ro.vat.rate.reduced', 'ro.micro.rate']],
+      ['mechanical', ['ro.vat.rate.reduced', 'ro.fx.adjustment.vat', 'ro.micro.rate']],
       ['interpretation', ['ro.dividend.tax_rate']],
       ['interpretation', ['ro.taxaccount.distribution']],
       ['interpretation', ['ro.vat.simplified_invoice.limit_eur']],
@@ -397,6 +397,8 @@ describe('review queue', () => {
       ['interpretation', ['ro.deadline.D406.assets']],
       ['interpretation', ['ro.profit.social_limit']],
       ['interpretation', ['ro.size.thresholds']],
+      ['interpretation', ['ro.d406.oss']],
+      ['interpretation', ['ro.fx.adjustment.books']],
       ['interpretation', ['ro.stock.accounts']],
       ['interpretation', ['ro.taxaccount.accounts']],
       ['interpretation', ['ro.vat.import']],

@@ -12,6 +12,7 @@ import { stockAnchors } from './anchors-stock';
 import { retailAnchors } from './anchors-retail';
 import { tradeAnchors } from './anchors-trade';
 import { productionAnchors } from './anchors-production';
+import { creditAnchors } from './anchors-credit';
 import type { Anchor } from './types';
 
 /**
@@ -405,4 +406,5 @@ export const clauseAnchors: Readonly<Record<string, readonly Anchor[]>> = {
   ...tradeAnchors,
   ...payrollAnchors,
   ...productionAnchors,
+  ...creditAnchors,
 };

@@ -19,6 +19,7 @@ import { entries, taxEntries } from '../db/schema';
 import type { Actor, Commands } from '../kernel/commands';
 import { entryStands } from '../kernel/ledger';
 import type { CloseCheck } from '../kernel/periods';
+import { maskCnps } from '../kernel/personal';
 import type { WorkStep } from '../kernel/work';
 import type { DeclarationProblem } from './declarations';
 
@@ -344,10 +345,15 @@ export const schemeChecks: CloseCheck[] = [
 export class SpecialSchemes {
   constructor(private readonly commands: Commands) {}
 
+  /** The register as this caller reads it: a purchase from an individual names the CNP the
+   * invoice states, masked for a caller who may not read personal data (`maskCnps`). */
   register(actor: Actor, input: z.infer<typeof goodsRegisterInput>) {
-    return this.commands.read(actor, 'margin.goods.register', (tx) =>
-      goodsRegister(tx, actor.companyId, input),
-    );
+    return this.commands.read(actor, 'margin.goods.register', async (tx, access) => {
+      const register = await goodsRegister(tx, actor.companyId, input);
+      return (await this.commands.disclosable(tx, actor, access.role))(['personal'])
+        ? register
+        : maskCnps(register);
+    });
   }
 }
 

@@ -87,6 +87,17 @@ const drafts: Record<string, InvoiceDraft> = {
     vatAccountingTotal: '104.30',
     notes: ['Curs BNR 4,9670 lei/euro'],
   },
+  // A credit note in euro: BT-6 and its VAT in lei (BT-111) at its invoice's rate, 21.00 EUR ×
+  // 4.9670 = 104.31 (Codul fiscal art. 282 alin. (9)).
+  'euro-credit-note': {
+    ...base,
+    typeCode: '381',
+    currency: 'EUR',
+    vatCurrency: 'RON',
+    vatAccountingTotal: '104.31',
+    precedingInvoices: [{ number: 'XF-0', issueDate: '2026-02-10' }],
+    notes: ['Curs BNR 4,9670 lei/euro, al facturii XF-0'],
+  },
   exempt: { ...base, lines: [service('100', { category: 'E', exemptionCode: 'VATEX-EU-132' })] },
   'reverse-charge': {
     ...base,

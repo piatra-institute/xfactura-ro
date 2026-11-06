@@ -1363,28 +1363,6 @@ async function booksOf(
           ? ('goods' as const)
           : ('flat_rate' as const),
     })),
-    // Sales in the Union scheme (V4), by the month of their tax point, entries that stand.
-    ossMonths: (
-      await tx
-        .selectDistinct({ month: sql<string>`substr(${taxEntries.taxPoint}, 1, 7)` })
-        .from(taxEntries)
-        .innerJoin(
-          entries,
-          and(eq(entries.companyId, taxEntries.companyId), eq(entries.id, taxEntries.entryId)),
-        )
-        .where(
-          and(
-            eq(taxEntries.companyId, companyId),
-            eq(taxEntries.tax, 'VAT'),
-            gte(taxEntries.taxPoint, from),
-            lte(taxEntries.taxPoint, to),
-            eq(taxEntries.code, 'EXP-OSS'),
-            entryStands('"acc_entries"'),
-          ),
-        )
-    )
-      .map((row) => row.month)
-      .sort(),
     sponsorshipMonths: await monthsOfLines(['6582']),
     payrollWithoutContractMonths: payrollTax.filter((month) => !employmentMonths.includes(month)),
     incomeSources: years.map((year) => {

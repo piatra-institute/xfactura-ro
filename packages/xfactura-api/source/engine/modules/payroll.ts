@@ -67,8 +67,10 @@ import {
   proposals,
   proposalVersions,
   regesRecords,
+  type Role,
 } from '../db/schema';
 import { appendAudit, type Actor, type Commands } from '../kernel/commands';
+import { healthClasses, issuesWithoutHealth } from '../kernel/personal';
 import { entryStands } from '../kernel/ledger';
 import { loadState } from '../kernel/state';
 import type { YearEndWorkItem } from '../kernel/work';
@@ -735,464 +737,483 @@ export class Payroll {
    * kept as computed, with the issues that stop it; computing the month again supersedes it.
    */
   prepareRun(actor: Actor, key: string, input: z.infer<typeof runInput>) {
-    return this.commands.run(actor, key, 'payroll.runs.prepare', input, 'write', async (tx) => {
-      const monthDays = input.workingDays ?? workingDays(input.month as Month);
-      // A posted month is computed again only as a correction, a later round that books the
-      // difference (`payroll.recognize`) and makes the month's D112 rectifying.
-      const posted = (await postedRuns(tx, actor.companyId, input.month)).at(-1);
-      requireCondition(
-        !posted || input.correction,
-        'RUN_POSTED',
-        `Statul de plată pentru ${input.month} este înregistrat: o corecție se calculează cu motivul și documentul ei (correction).`,
-      );
-      requireCondition(
-        posted || !input.correction,
-        'CORRECTION_NOTHING',
-        `Luna ${input.month} nu are un stat de plată înregistrat de corectat.`,
-      );
-      requireCondition(
-        input.correction?.reason !== 'legal',
-        'CORRECTION_LEGAL',
-        'Salariile sau diferențele stabilite prin lege ori prin hotărâre judecătorească pentru perioade anterioare (Codul fiscal art. 78 alin. (3)–(4), art. 146 alin. (9)–(9^1), D112 cu tip_rec 2) nu sunt acoperite de aplicație.',
-      );
-      if (input.correction) {
-        const [file] = await tx
-          .select({ id: evidence.id })
-          .from(evidence)
-          .where(
-            and(
-              eq(evidence.companyId, actor.companyId),
-              eq(evidence.id, input.correction.evidenceId),
-            ),
-          );
-        requireCondition(file, 'EVIDENCE', 'Documentul corecției nu este disponibil.', 404);
-      }
-      const round = posted ? posted.round + 1 : 1;
-      const start = monthStart(input.month as Month);
-      const end = monthEnd(input.month as Month);
-      const rules = await this.rules(tx, actor.companyId);
-      if (input.correction?.reason === 'retroactive') {
-        let reading: string | null = null;
-        try {
-          reading = rules.param<string>(
-            'ro.payroll.correction.retroactive',
-            'payroll_month_start',
-            start,
-          );
-        } catch (error) {
-          if (!(error instanceof RuleGapError)) throw error;
-        }
-        requireCondition(
-          reading === 'recompute_month',
-          'RULE_GAP',
-          'Regula corecției retroactive (ro.payroll.correction.retroactive) nu acoperă luna.',
+    return this.commands.run(
+      actor,
+      key,
+      'payroll.runs.prepare',
+      input,
+      'write',
+      (tx) => this.computeRun(tx, actor, input),
+      (tx, access, run) => this.shown(tx, actor, access.role, run),
+    );
+  }
+
+  /** A month's run computed and stored (`payroll.runs.prepare`). */
+  private async computeRun(tx: Transaction, actor: Actor, input: z.infer<typeof runInput>) {
+    const monthDays = input.workingDays ?? workingDays(input.month as Month);
+    // A posted month is computed again only as a correction, a later round that books the
+    // difference (`payroll.recognize`) and makes the month's D112 rectifying.
+    const posted = (await postedRuns(tx, actor.companyId, input.month)).at(-1);
+    requireCondition(
+      !posted || input.correction,
+      'RUN_POSTED',
+      `Statul de plată pentru ${input.month} este înregistrat: o corecție se calculează cu motivul și documentul ei (correction).`,
+    );
+    requireCondition(
+      posted || !input.correction,
+      'CORRECTION_NOTHING',
+      `Luna ${input.month} nu are un stat de plată înregistrat de corectat.`,
+    );
+    requireCondition(
+      input.correction?.reason !== 'legal',
+      'CORRECTION_LEGAL',
+      'Salariile sau diferențele stabilite prin lege ori prin hotărâre judecătorească pentru perioade anterioare (Codul fiscal art. 78 alin. (3)–(4), art. 146 alin. (9)–(9^1), D112 cu tip_rec 2) nu sunt acoperite de aplicație.',
+    );
+    if (input.correction) {
+      const [file] = await tx
+        .select({ id: evidence.id })
+        .from(evidence)
+        .where(
+          and(
+            eq(evidence.companyId, actor.companyId),
+            eq(evidence.id, input.correction.evidenceId),
+          ),
         );
-      }
-      const { loaded: profile } = await loadState(tx, actor.companyId, { profile: true });
-      const regime = profileAt(profile, 'income_tax', end);
-      const minimumNet = this.minimumNet(input.month, monthDays, rules);
-      // Since when a lowered base salary loses the minimum-wage relief, if the month has one.
-      let frozenSince: string | null = null;
+      requireCondition(file, 'EVIDENCE', 'Documentul corecției nu este disponibil.', 404);
+    }
+    const round = posted ? posted.round + 1 : 1;
+    const start = monthStart(input.month as Month);
+    const end = monthEnd(input.month as Month);
+    const rules = await this.rules(tx, actor.companyId);
+    if (input.correction?.reason === 'retroactive') {
+      let reading: string | null = null;
       try {
-        frozenSince = rules.param<MinimumWageRelief>(
-          'ro.payroll.minimum_wage_relief',
+        reading = rules.param<string>(
+          'ro.payroll.correction.retroactive',
           'payroll_month_start',
           start,
-        ).baseFrozenSince;
+        );
       } catch (error) {
         if (!(error instanceof RuleGapError)) throw error;
       }
-      const allTerms = await tx
-        .select()
-        .from(employmentTerms)
-        .where(eq(employmentTerms.companyId, actor.companyId))
-        .orderBy(asc(employmentTerms.contractId), asc(employmentTerms.seq));
-      const byContract = new Map<string, Terms[]>();
-      for (const row of allTerms)
-        byContract.set(row.contractId, [...(byContract.get(row.contractId) ?? []), row]);
-      const entryOf = new Map(input.entries.map((entry) => [entry.contractId, entry]));
-      for (const contractId of entryOf.keys())
-        requireCondition(
-          byContract.has(contractId),
-          'ENTRY_CONTRACT',
-          'O linie a statului se referă la un contract necunoscut.',
-        );
-      const birthDates = new Map(
-        (
-          await tx
-            .select({
-              id: employees.id,
-              birthDate: employees.birthDate,
-              partyId: employees.partyId,
-            })
-            .from(employees)
-            .where(eq(employees.companyId, actor.companyId))
-        ).map((row) => [row.id, row]),
+      requireCondition(
+        reading === 'recompute_month',
+        'RULE_GAP',
+        'Regula corecției retroactive (ro.payroll.correction.retroactive) nu acoperă luna.',
       );
+    }
+    const { loaded: profile } = await loadState(tx, actor.companyId, { profile: true });
+    const regime = profileAt(profile, 'income_tax', end);
+    const minimumNet = this.minimumNet(input.month, monthDays, rules);
+    // Since when a lowered base salary loses the minimum-wage relief, if the month has one.
+    let frozenSince: string | null = null;
+    try {
+      frozenSince = rules.param<MinimumWageRelief>(
+        'ro.payroll.minimum_wage_relief',
+        'payroll_month_start',
+        start,
+      ).baseFrozenSince;
+    } catch (error) {
+      if (!(error instanceof RuleGapError)) throw error;
+    }
+    const allTerms = await tx
+      .select()
+      .from(employmentTerms)
+      .where(eq(employmentTerms.companyId, actor.companyId))
+      .orderBy(asc(employmentTerms.contractId), asc(employmentTerms.seq));
+    const byContract = new Map<string, Terms[]>();
+    for (const row of allTerms)
+      byContract.set(row.contractId, [...(byContract.get(row.contractId) ?? []), row]);
+    const entryOf = new Map(input.entries.map((entry) => [entry.contractId, entry]));
+    for (const contractId of entryOf.keys())
+      requireCondition(
+        byContract.has(contractId),
+        'ENTRY_CONTRACT',
+        'O linie a statului se referă la un contract necunoscut.',
+      );
+    const birthDates = new Map(
+      (
+        await tx
+          .select({
+            id: employees.id,
+            birthDate: employees.birthDate,
+            partyId: employees.partyId,
+          })
+          .from(employees)
+          .where(eq(employees.companyId, actor.companyId))
+      ).map((row) => [row.id, row]),
+    );
 
-      const lines: (typeof payrollLines.$inferInsert)[] = [];
-      for (const [contractId, versions] of byContract) {
-        const inForce = versions.filter((version) => version.effectiveFrom <= end);
-        const terms = inForce.at(-1);
-        const entry = entryOf.get(contractId);
-        const active =
-          terms && terms.startDate <= end && (!terms.endDate || terms.endDate >= start);
-        if (!active) {
-          requireCondition(
-            !entry,
-            'ENTRY_INACTIVE',
-            'O linie a statului se referă la un contract care nu este activ în lună.',
-          );
-          continue;
-        }
-        const issues: PayIssue[] = [];
-        const mandate = terms.kind === 'mandate';
-        if (mandate && (entry?.leaveDays || entry?.sickLeave?.length))
-          issues.push({
-            code: 'MANDATE_LEAVE',
-            message:
-              'Pentru un contract de mandat, concediul de odihnă și concediul medical nu sunt calculate de aplicație (Codul muncii nu se aplică mandatului; asigurarea pentru concedii medicale a administratorului este de stabilit cu expertul contabil).',
-          });
-        const full = terms.startDate <= start && (!terms.endDate || terms.endDate >= end);
-        const changed = versions.some(
-          (version) => version.effectiveFrom > start && version.effectiveFrom <= end,
+    const lines: (typeof payrollLines.$inferInsert)[] = [];
+    for (const [contractId, versions] of byContract) {
+      const inForce = versions.filter((version) => version.effectiveFrom <= end);
+      const terms = inForce.at(-1);
+      const entry = entryOf.get(contractId);
+      const active = terms && terms.startDate <= end && (!terms.endDate || terms.endDate >= start);
+      if (!active) {
+        requireCondition(
+          !entry,
+          'ENTRY_INACTIVE',
+          'O linie a statului se referă la un contract care nu este activ în lună.',
         );
-        // Sick leave suspends the contract on the certificates' working days.
-        const sick = entry?.sickLeave?.length
-          ? await this.sickPay(tx, actor.companyId, contractId, input.month, entry, rules)
-          : null;
-        if (sick) issues.push(...sick.issues);
-        const suspended = sick?.suspendedDays ?? 0;
-        const activeDays = entry?.activeDays ?? (full ? monthDays - suspended : undefined);
-        if (activeDays === undefined)
+        continue;
+      }
+      const issues: (PayIssue & { health?: true })[] = [];
+      const mandate = terms.kind === 'mandate';
+      if (mandate && (entry?.leaveDays || entry?.sickLeave?.length))
+        issues.push({
+          ...(entry?.sickLeave?.length ? { health: true as const } : {}),
+          code: 'MANDATE_LEAVE',
+          message:
+            'Pentru un contract de mandat, concediul de odihnă și concediul medical nu sunt calculate de aplicație (Codul muncii nu se aplică mandatului; asigurarea pentru concedii medicale a administratorului este de stabilit cu expertul contabil).',
+        });
+      const full = terms.startDate <= start && (!terms.endDate || terms.endDate >= end);
+      const changed = versions.some(
+        (version) => version.effectiveFrom > start && version.effectiveFrom <= end,
+      );
+      // Sick leave suspends the contract on the certificates' working days.
+      const sick = entry?.sickLeave?.length
+        ? await this.sickPay(tx, actor.companyId, contractId, input.month, entry, rules)
+        : null;
+      // A certificate's issues name it and its code: health data, redacted for a reader who
+      // may not read it (`issuesWithoutHealth`).
+      if (sick) issues.push(...sick.issues.map((issue) => ({ ...issue, health: true as const })));
+      const suspended = sick?.suspendedDays ?? 0;
+      const activeDays = entry?.activeDays ?? (full ? monthDays - suspended : undefined);
+      if (activeDays === undefined)
+        issues.push({
+          code: 'PARTIAL_MONTH',
+          message: 'Contractul începe sau se încheie în lună: completați zilele active.',
+        });
+      else if (activeDays + suspended > monthDays)
+        issues.push({
+          code: 'DAYS',
+          message: 'Zilele active și cele de concediu medical depășesc zilele lucrătoare.',
+        });
+      let leave: Record<string, string | number> | null = null;
+      let leaveItems: PayInput['items'] | undefined;
+      if (entry?.leaveDays && activeDays !== undefined) {
+        if (entry.leaveDays > activeDays)
           issues.push({
-            code: 'PARTIAL_MONTH',
-            message: 'Contractul începe sau se încheie în lună: completați zilele active.',
+            code: 'LEAVE_DAYS',
+            message: 'Zilele de concediu depășesc zilele active.',
           });
-        else if (activeDays + suspended > monthDays)
-          issues.push({
-            code: 'DAYS',
-            message: 'Zilele active și cele de concediu medical depășesc zilele lucrătoare.',
-          });
-        let leave: Record<string, string | number> | null = null;
-        let leaveItems: PayInput['items'] | undefined;
-        if (entry?.leaveDays && activeDays !== undefined) {
-          if (entry.leaveDays > activeDays)
-            issues.push({
-              code: 'LEAVE_DAYS',
-              message: 'Zilele de concediu depășesc zilele active.',
-            });
-          else if (!entry.items) {
-            // Codul muncii art. 150: the daily average of the previous three months' pay, at
-            // least the base salary for the leave days; bonuses are not averaged.
-            const history = await this.leaveHistory(tx, actor.companyId, contractId, input.month);
-            const base = terms.baseSalaryBani;
-            const days = BigInt(monthDays);
-            const leaveDays = BigInt(entry.leaveDays);
-            const averaged =
-              history.days > 0 && history.amount * days > base * BigInt(history.days);
-            const pay = averaged
-              ? wholeLei(history.amount * leaveDays, BigInt(history.days))
-              : wholeLei(base * leaveDays, days);
-            const worked = wholeLei(base * BigInt(activeDays - entry.leaveDays), days);
-            leaveItems = [
-              ...(worked
-                ? [{ kind: 'salary' as const, amount: worked, label: 'Salariu de bază' }]
-                : []),
-              {
-                kind: 'leave' as const,
-                amount: pay,
-                label: `Concediu de odihnă, ${entry.leaveDays} zile`,
-              },
-            ];
-            leave = {
-              days: entry.leaveDays,
-              basis: averaged ? 'average' : 'base',
-              historyAmount: String(history.amount),
-              historyDays: history.days,
-              months: history.months,
-              clause: 'L53/2003-A:art.150',
-            };
-          }
-        }
-        if (sick && entry?.items?.some((item) => item.kind.startsWith('sick_')))
-          issues.push({
-            code: 'SICK_ITEMS',
-            message:
-              'Indemnizațiile de concediu medical se calculează din certificate: nu le completați și în sumele lunii.',
-          });
-        const worked =
-          sick && !leaveItems && !entry?.items && full && !changed && activeDays !== undefined
-            ? wholeLei(terms.baseSalaryBani * BigInt(activeDays), BigInt(monthDays))
-            : null;
-        const ownItems =
-          leaveItems ??
-          entry?.items?.map((item) => ({
-            kind: item.kind,
-            amount: parseMoney(item.amount, 'RON'),
-            label: item.label,
-          })) ??
-          (worked !== null
-            ? worked
+        else if (!entry.items) {
+          // Codul muncii art. 150: the daily average of the previous three months' pay, at
+          // least the base salary for the leave days; bonuses are not averaged.
+          const history = await this.leaveHistory(tx, actor.companyId, contractId, input.month);
+          const base = terms.baseSalaryBani;
+          const days = BigInt(monthDays);
+          const leaveDays = BigInt(entry.leaveDays);
+          const averaged = history.days > 0 && history.amount * days > base * BigInt(history.days);
+          const pay = averaged
+            ? wholeLei(history.amount * leaveDays, BigInt(history.days))
+            : wholeLei(base * leaveDays, days);
+          const worked = wholeLei(base * BigInt(activeDays - entry.leaveDays), days);
+          leaveItems = [
+            ...(worked
               ? [{ kind: 'salary' as const, amount: worked, label: 'Salariu de bază' }]
-              : []
-            : full && !changed && activeDays === monthDays
-              ? [
-                  {
-                    kind: 'salary' as const,
-                    amount: terms.baseSalaryBani,
-                    label: 'Salariu de bază',
-                  },
-                ]
-              : undefined);
-        // Benefits in kind: valued with their documents, the taxable part an item of the month.
-        let benefitResults: BenefitResult[] = [];
-        if (entry?.benefits?.length) {
-          const valued = await this.benefits(
-            tx,
-            actor.companyId,
-            contractId,
-            input.month,
-            entry.benefits,
-            { baseSalary: terms.baseSalaryBani, micro: regime ? regime === 'micro' : null },
+              : []),
+            {
+              kind: 'leave' as const,
+              amount: pay,
+              label: `Concediu de odihnă, ${entry.leaveDays} zile`,
+            },
+          ];
+          leave = {
+            days: entry.leaveDays,
+            basis: averaged ? 'average' : 'base',
+            historyAmount: String(history.amount),
+            historyDays: history.days,
+            months: history.months,
+            clause: 'L53/2003-A:art.150',
+          };
+        }
+      }
+      if (sick && entry?.items?.some((item) => item.kind.startsWith('sick_')))
+        issues.push({
+          code: 'SICK_ITEMS',
+          message:
+            'Indemnizațiile de concediu medical se calculează din certificate: nu le completați și în sumele lunii.',
+        });
+      const worked =
+        sick && !leaveItems && !entry?.items && full && !changed && activeDays !== undefined
+          ? wholeLei(terms.baseSalaryBani * BigInt(activeDays), BigInt(monthDays))
+          : null;
+      const ownItems =
+        leaveItems ??
+        entry?.items?.map((item) => ({
+          kind: item.kind,
+          amount: parseMoney(item.amount, 'RON'),
+          label: item.label,
+        })) ??
+        (worked !== null
+          ? worked
+            ? [{ kind: 'salary' as const, amount: worked, label: 'Salariu de bază' }]
+            : []
+          : full && !changed && activeDays === monthDays
+            ? [
+                {
+                  kind: 'salary' as const,
+                  amount: terms.baseSalaryBani,
+                  label: 'Salariu de bază',
+                },
+              ]
+            : undefined);
+      // Benefits in kind: valued with their documents, the taxable part an item of the month.
+      let benefitResults: BenefitResult[] = [];
+      if (entry?.benefits?.length) {
+        const valued = await this.benefits(
+          tx,
+          actor.companyId,
+          contractId,
+          input.month,
+          entry.benefits,
+          { baseSalary: terms.baseSalaryBani, micro: regime ? regime === 'micro' : null },
+          rules,
+        );
+        issues.push(...valued.issues);
+        benefitResults = valued.results;
+      }
+      // Vouchers within Legea nr. 165/2018 (`ro.payroll.voucher.limits`): an excess is a benefit
+      // in every base, declared with the others.
+      let voucherItems = ownItems;
+      const voucherKinds: PayItemKind[] = ['meal_vouchers', 'holiday_vouchers'];
+      const statedOf = (kind: PayItemKind) =>
+        (ownItems ?? [])
+          .filter((item) => item.kind === kind)
+          .reduce((total, item) => total + item.amount, 0n);
+      const meal = statedOf('meal_vouchers');
+      const holiday = statedOf('holiday_vouchers');
+      if (ownItems && (meal || holiday) && activeDays !== undefined)
+        try {
+          const split = voucherExcess(
+            input.month as Month,
+            { meal, holiday },
+            {
+              daysWorked: activeDays - (entry?.leaveDays ?? 0),
+              holidayEarlier: holiday
+                ? await this.holidayVouchersEarlier(tx, actor.companyId, contractId, input.month)
+                : 0n,
+              minimumWage:
+                BigInt(
+                  rules.param<string>('ro.payroll.minimum_wage', 'payroll_month_start', start),
+                ) * 100n,
+            },
             rules,
           );
-          issues.push(...valued.issues);
-          benefitResults = valued.results;
-        }
-        // Vouchers within Legea nr. 165/2018 (`ro.payroll.voucher.limits`): an excess is a benefit
-        // in every base, declared with the others.
-        let voucherItems = ownItems;
-        const voucherKinds: PayItemKind[] = ['meal_vouchers', 'holiday_vouchers'];
-        const statedOf = (kind: PayItemKind) =>
-          (ownItems ?? [])
-            .filter((item) => item.kind === kind)
-            .reduce((total, item) => total + item.amount, 0n);
-        const meal = statedOf('meal_vouchers');
-        const holiday = statedOf('holiday_vouchers');
-        if (ownItems && (meal || holiday) && activeDays !== undefined)
-          try {
-            const split = voucherExcess(
-              input.month as Month,
-              { meal, holiday },
-              {
-                daysWorked: activeDays - (entry?.leaveDays ?? 0),
-                holidayEarlier: holiday
-                  ? await this.holidayVouchersEarlier(tx, actor.companyId, contractId, input.month)
-                  : 0n,
-                minimumWage:
-                  BigInt(
-                    rules.param<string>('ro.payroll.minimum_wage', 'payroll_month_start', start),
-                  ) * 100n,
-              },
-              rules,
-            );
-            issues.push(...split.issues);
-            if (split.excess.length) {
-              benefitResults = [...benefitResults, ...split.excess];
-              const labelOf = (kind: PayItemKind) =>
-                ownItems.find((item) => item.kind === kind)!.label;
-              voucherItems = [
-                ...ownItems.filter((item) => !voucherKinds.includes(item.kind)),
-                ...(split.meal
-                  ? [
-                      {
-                        kind: 'meal_vouchers' as const,
-                        amount: split.meal,
-                        label: labelOf('meal_vouchers'),
-                      },
-                    ]
-                  : []),
-                ...(split.holiday
-                  ? [
-                      {
-                        kind: 'holiday_vouchers' as const,
-                        amount: split.holiday,
-                        label: labelOf('holiday_vouchers'),
-                      },
-                    ]
-                  : []),
-              ];
-            }
-          } catch (error) {
-            if (!(error instanceof RuleGapError)) throw error;
-            issues.push({ code: 'RULE_GAP', message: error.message });
+          issues.push(...split.issues);
+          if (split.excess.length) {
+            benefitResults = [...benefitResults, ...split.excess];
+            const labelOf = (kind: PayItemKind) =>
+              ownItems.find((item) => item.kind === kind)!.label;
+            voucherItems = [
+              ...ownItems.filter((item) => !voucherKinds.includes(item.kind)),
+              ...(split.meal
+                ? [
+                    {
+                      kind: 'meal_vouchers' as const,
+                      amount: split.meal,
+                      label: labelOf('meal_vouchers'),
+                    },
+                  ]
+                : []),
+              ...(split.holiday
+                ? [
+                    {
+                      kind: 'holiday_vouchers' as const,
+                      amount: split.holiday,
+                      label: labelOf('holiday_vouchers'),
+                    },
+                  ]
+                : []),
+            ];
           }
-        const benefitItems = benefitResults.flatMap((result) => {
-          const taxable = benefitTotals([result]).taxable;
-          return taxable
-            ? [{ kind: 'benefit' as const, amount: taxable, label: result.label }]
-            : [];
-        });
-        const items = voucherItems
-          ? [...voucherItems, ...(sick?.items ?? []), ...benefitItems]
-          : voucherItems;
-        if (!items)
-          issues.push({
-            code: 'SALARY_ITEMS',
-            message:
-              'Pentru o lună incompletă sau cu termenii contractului modificați, completați sumele lunii.',
-          });
-        const person = birthDates.get(terms.employeeId)!;
-        const turns26 = `${Number(person.birthDate.slice(0, 4)) + 26}${person.birthDate.slice(4)}`;
-        const under26 = turns26 > end ? true : turns26 <= start ? false : entry?.under26;
-        if (under26 === undefined)
-          issues.push({
-            code: 'YOUNG_TO_DECIDE',
-            message:
-              'Salariatul împlinește 26 de ani în această lună: precizați dacă se acordă deducerea suplimentară.',
-          });
-        let computed: { result: PayResult | null; issues: PayIssue[] } = { result: null, issues };
-        let payInput: PayInput | null = null;
-        if (!issues.length) {
-          payInput = {
-            month: input.month as Month,
-            baseSalary: terms.baseSalaryBani,
-            dailyHours: terms.dailyHours,
-            mainJob: terms.mainJob,
-            workingDays: monthDays,
-            activeDays: activeDays!,
-            items: items!,
-            dependents: terms.dependents,
-            under26: under26!,
-            childrenInSchool: terms.childrenInSchool,
-            unionDues: terms.unionDuesBani,
-            minimumExemption: (terms.minimumExemption as PayInput['minimumExemption']) ?? null,
-            ...(mandate ? { mandate: true } : {}),
-            baseReduced: frozenSince
-              ? versions.some(
-                  (version, index) =>
-                    index > 0 &&
-                    version.effectiveFrom >= frozenSince &&
-                    version.effectiveFrom <= end &&
-                    version.baseSalaryBani < versions[index - 1]!.baseSalaryBani,
-                )
-              : false,
-          };
-          computed = calculatePay(payInput, rules);
+        } catch (error) {
+          if (!(error instanceof RuleGapError)) throw error;
+          issues.push({ code: 'RULE_GAP', message: error.message });
         }
-        // Garnishments take from the net pay, in the Labour Code's order and within the limits.
-        let garnished: { orderId: string; partyId: string; amount: bigint }[] = [];
-        if (computed.result) {
-          const orders = await this.ordersOf(tx, actor.companyId, contractId, end);
-          if (orders.length) {
-            const taken = garnish(
-              input.month as Month,
-              computed.result.net,
-              orders.map((order) => order.order),
-              {
-                minimumNet,
-                protectedIndemnities: (sick?.items.length ?? 0) > 0,
-              },
-              rules,
-            );
-            if (taken.issues.length)
-              computed = { result: null, issues: [...computed.issues, ...taken.issues] };
-            else {
-              computed.result.steps.push(...taken.steps);
-              garnished = taken.withheld.map((item) => ({
-                ...item,
-                partyId: orders.find((order) => order.order.id === item.orderId)!.partyId,
-              }));
-            }
-          }
-        }
-        const amounts = computed.result ?? zero;
-        lines.push({
-          companyId: actor.companyId,
-          runId: '',
-          contractId,
-          termsSeq: terms.seq,
-          employeeId: terms.employeeId,
-          partyId: person.partyId,
-          input: canonical({
-            ...(payInput ?? { activeDays: activeDays ?? null, items: items ?? null }),
-            ...(leave ? { leave } : {}),
-            ...(sick ? { sick: sick.record } : {}),
-            ...(benefitResults.length ? { benefits: benefitRecord(benefitResults) } : {}),
-          }),
-          result: canonical(
-            computed.result
-              ? {
-                  steps: computed.result.steps,
-                  deduction: computed.result.deduction,
-                  ...(garnished.length
-                    ? {
-                        garnishments: garnished.map((item) => ({
-                          ...item,
-                          amount: String(item.amount),
-                        })),
-                      }
-                    : {}),
-                }
-              : { issues: computed.issues },
-          ),
-          cash: amounts.cash,
-          vouchers: amounts.vouchers,
-          cas: amounts.cas,
-          cass: amounts.cass,
-          casEmployer: amounts.casEmployer,
-          cassEmployer: amounts.cassEmployer,
-          tax: amounts.tax,
-          unionDues: amounts.unionDues,
-          net: amounts.net,
-          cam: amounts.cam,
-          issues: computed.issues.length,
+      const benefitItems = benefitResults.flatMap((result) => {
+        const taxable = benefitTotals([result]).taxable;
+        return taxable ? [{ kind: 'benefit' as const, amount: taxable, label: result.label }] : [];
+      });
+      const items = voucherItems
+        ? [...voucherItems, ...(sick?.items ?? []), ...benefitItems]
+        : voucherItems;
+      if (!items)
+        issues.push({
+          code: 'SALARY_ITEMS',
+          message:
+            'Pentru o lună incompletă sau cu termenii contractului modificați, completați sumele lunii.',
         });
+      const person = birthDates.get(terms.employeeId)!;
+      const turns26 = `${Number(person.birthDate.slice(0, 4)) + 26}${person.birthDate.slice(4)}`;
+      const under26 = turns26 > end ? true : turns26 <= start ? false : entry?.under26;
+      if (under26 === undefined)
+        issues.push({
+          code: 'YOUNG_TO_DECIDE',
+          message:
+            'Salariatul împlinește 26 de ani în această lună: precizați dacă se acordă deducerea suplimentară.',
+        });
+      let computed: { result: PayResult | null; issues: PayIssue[] } = { result: null, issues };
+      let payInput: PayInput | null = null;
+      if (!issues.length) {
+        payInput = {
+          month: input.month as Month,
+          baseSalary: terms.baseSalaryBani,
+          dailyHours: terms.dailyHours,
+          mainJob: terms.mainJob,
+          workingDays: monthDays,
+          activeDays: activeDays!,
+          items: items!,
+          dependents: terms.dependents,
+          under26: under26!,
+          childrenInSchool: terms.childrenInSchool,
+          unionDues: terms.unionDuesBani,
+          minimumExemption: (terms.minimumExemption as PayInput['minimumExemption']) ?? null,
+          ...(mandate ? { mandate: true } : {}),
+          baseReduced: frozenSince
+            ? versions.some(
+                (version, index) =>
+                  index > 0 &&
+                  version.effectiveFrom >= frozenSince &&
+                  version.effectiveFrom <= end &&
+                  version.baseSalaryBani < versions[index - 1]!.baseSalaryBani,
+              )
+            : false,
+        };
+        computed = calculatePay(payInput, rules);
       }
-      requireCondition(
-        lines.length,
-        'NO_CONTRACTS',
-        `Niciun contract nu este activ în ${input.month}.`,
-      );
+      // Garnishments take from the net pay, in the Labour Code's order and within the limits.
+      let garnished: { orderId: string; partyId: string; amount: bigint }[] = [];
+      if (computed.result) {
+        const orders = await this.ordersOf(tx, actor.companyId, contractId, end);
+        if (orders.length) {
+          const taken = garnish(
+            input.month as Month,
+            computed.result.net,
+            orders.map((order) => order.order),
+            {
+              minimumNet,
+              protectedIndemnities: (sick?.items.length ?? 0) > 0,
+            },
+            rules,
+          );
+          if (taken.issues.length)
+            computed = { result: null, issues: [...computed.issues, ...taken.issues] };
+          else {
+            computed.result.steps.push(...taken.steps);
+            garnished = taken.withheld.map((item) => ({
+              ...item,
+              partyId: orders.find((order) => order.order.id === item.orderId)!.partyId,
+            }));
+          }
+        }
+      }
+      const amounts = computed.result ?? zero;
+      lines.push({
+        companyId: actor.companyId,
+        runId: '',
+        contractId,
+        termsSeq: terms.seq,
+        employeeId: terms.employeeId,
+        partyId: person.partyId,
+        input: canonical({
+          ...(payInput ?? { activeDays: activeDays ?? null, items: items ?? null }),
+          ...(leave ? { leave } : {}),
+          ...(sick ? { sick: sick.record } : {}),
+          ...(benefitResults.length ? { benefits: benefitRecord(benefitResults) } : {}),
+          // The documents the benefits' values come from: payroll and personal files
+          // (`evidenceClasses`).
+          ...(entry?.benefits?.length
+            ? {
+                benefitEvidence: [
+                  ...new Set(entry.benefits.map((benefit) => benefit.evidenceId)),
+                ].sort(),
+              }
+            : {}),
+        }),
+        result: canonical(
+          computed.result
+            ? {
+                steps: computed.result.steps,
+                deduction: computed.result.deduction,
+                ...(garnished.length
+                  ? {
+                      garnishments: garnished.map((item) => ({
+                        ...item,
+                        amount: String(item.amount),
+                      })),
+                    }
+                  : {}),
+              }
+            : { issues: computed.issues },
+        ),
+        cash: amounts.cash,
+        vouchers: amounts.vouchers,
+        cas: amounts.cas,
+        cass: amounts.cass,
+        casEmployer: amounts.casEmployer,
+        cassEmployer: amounts.cassEmployer,
+        tax: amounts.tax,
+        unionDues: amounts.unionDues,
+        net: amounts.net,
+        cam: amounts.cam,
+        issues: computed.issues.length,
+      });
+    }
+    requireCondition(
+      lines.length,
+      'NO_CONTRACTS',
+      `Niciun contract nu este activ în ${input.month}.`,
+    );
 
-      const id = this.commands.ids();
-      const resultHash = hashOf(lines.map(({ companyId: _company, runId: _run, ...line }) => line));
-      const issueCount = lines.filter((line) => line.issues).length;
-      await tx.insert(payrollRuns).values({
-        id,
-        companyId: actor.companyId,
-        month: input.month,
-        round,
-        workingDays: monthDays,
-        resultHash,
-        issues: issueCount,
-        ...(posted
-          ? {
-              corrects: posted.runId,
-              correctionReason: input.correction!.reason as 'error' | 'retroactive',
-              correctionEvidenceId: input.correction!.evidenceId,
-            }
-          : {}),
-        createdBy: actor.actorId,
-      });
-      await tx.insert(payrollRunEvents).values({
-        companyId: actor.companyId,
-        runId: id,
-        seq: 1,
-        state: 'prepared',
-        createdBy: actor.actorId,
-      });
-      await tx.insert(payrollLines).values(lines.map((line) => ({ ...line, runId: id })));
-      for (const previous of await this.runsOf(tx, actor.companyId, input.month))
-        if (previous.id !== id && previous.state === 'prepared' && previous.round === round)
-          await tx.insert(payrollRunEvents).values({
-            companyId: actor.companyId,
-            runId: previous.id,
-            seq: previous.seq + 1,
-            state: 'superseded',
-            detail: `Înlocuit de ${id}.`,
-            createdBy: actor.actorId,
-          });
-      await appendAudit(tx, {
-        companyId: actor.companyId,
-        actorId: actor.actorId,
-        ...(actor.agentId ? { agentId: actor.agentId } : {}),
-        action: 'payroll.runs.prepared',
-        body: { runId: id, month: input.month, lines: lines.length, issues: issueCount },
-      });
-      return this.view(tx, actor.companyId, id);
+    const id = this.commands.ids();
+    const resultHash = hashOf(lines.map(({ companyId: _company, runId: _run, ...line }) => line));
+    const issueCount = lines.filter((line) => line.issues).length;
+    await tx.insert(payrollRuns).values({
+      id,
+      companyId: actor.companyId,
+      month: input.month,
+      round,
+      workingDays: monthDays,
+      resultHash,
+      issues: issueCount,
+      ...(posted
+        ? {
+            corrects: posted.runId,
+            correctionReason: input.correction!.reason as 'error' | 'retroactive',
+            correctionEvidenceId: input.correction!.evidenceId,
+          }
+        : {}),
+      createdBy: actor.actorId,
     });
+    await tx.insert(payrollRunEvents).values({
+      companyId: actor.companyId,
+      runId: id,
+      seq: 1,
+      state: 'prepared',
+      createdBy: actor.actorId,
+    });
+    await tx.insert(payrollLines).values(lines.map((line) => ({ ...line, runId: id })));
+    for (const previous of await this.runsOf(tx, actor.companyId, input.month))
+      if (previous.id !== id && previous.state === 'prepared' && previous.round === round)
+        await tx.insert(payrollRunEvents).values({
+          companyId: actor.companyId,
+          runId: previous.id,
+          seq: previous.seq + 1,
+          state: 'superseded',
+          detail: `Înlocuit de ${id}.`,
+          createdBy: actor.actorId,
+        });
+    await appendAudit(tx, {
+      companyId: actor.companyId,
+      actorId: actor.actorId,
+      ...(actor.agentId ? { agentId: actor.agentId } : {}),
+      action: 'payroll.runs.prepared',
+      body: { runId: id, month: input.month, lines: lines.length, issues: issueCount },
+    });
+    return this.view(tx, actor.companyId, id);
   }
 
   /**
@@ -2134,18 +2155,39 @@ export class Payroll {
   }
 
   getRun(actor: Actor, runId: string) {
-    return this.commands.db.read((tx) => this.view(tx, actor.companyId, runId));
+    return this.commands.read(actor, 'payroll.runs.get', async (tx, access) =>
+      this.shown(tx, actor, access.role, await this.view(tx, actor.companyId, runId)),
+    );
   }
 
   listRuns(actor: Actor) {
-    return this.commands.db.read(async (tx) => {
+    return this.commands.read(actor, 'payroll.runs.list', async (tx, access) => {
       const rows = await tx
         .select({ id: payrollRuns.id })
         .from(payrollRuns)
         .where(eq(payrollRuns.companyId, actor.companyId))
         .orderBy(desc(payrollRuns.month), desc(payrollRuns.createdAt));
-      return Promise.all(rows.map((row) => this.view(tx, actor.companyId, row.id)));
+      return Promise.all(
+        rows.map(async (row) =>
+          this.shown(tx, actor, access.role, await this.view(tx, actor.companyId, row.id)),
+        ),
+      );
     });
+  }
+
+  /** A run as this caller reads it: a reader who may not read health data (a viewer) sees its
+   * medical certificates' issues as `healthIssue`, without the certificate and its code. */
+  private async shown(
+    tx: Transaction,
+    actor: Actor,
+    role: Role,
+    run: Awaited<ReturnType<Payroll['view']>>,
+  ) {
+    if ((await this.commands.disclosable(tx, actor, role))(healthClasses)) return run;
+    return {
+      ...run,
+      lines: run.lines.map((line) => ({ ...line, issues: issuesWithoutHealth(line.issues) })),
+    };
   }
 
   private async runsOf(tx: Transaction, companyId: string, runMonth: string) {
@@ -2198,7 +2240,7 @@ export class Payroll {
       issues: run.issues,
       lines: rows.map(({ line, name }) => {
         const result = JSON.parse(line.result) as {
-          issues?: PayIssue[];
+          issues?: (PayIssue & { health?: true })[];
           steps?: { code: string; amount: string }[];
           garnishments?: { orderId: string; partyId: string; amount: string }[];
         };

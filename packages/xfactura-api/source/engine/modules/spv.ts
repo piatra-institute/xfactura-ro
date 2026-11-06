@@ -21,6 +21,7 @@ import { EFacturaUnavailable, type EFacturaPort, type SpvMessage } from '../adap
 import { sha256, type ObjectStore } from '../adapters/object-store';
 import { appendAudit, type Actor, type Commands } from '../kernel/commands';
 import type { CloseCheck } from '../kernel/periods';
+import { maskCnpText } from '../kernel/personal';
 import { recordInvoice } from './invoices';
 
 type State = (typeof submissionStates)[number];
@@ -548,6 +549,7 @@ export class Spv {
         member.bytes,
         'spv',
         this.commands.ids,
+        this.commands.identities,
       );
       return {
         outcome: recorded.created ? ('created' as const) : ('matched' as const),
@@ -599,6 +601,7 @@ export class Spv {
         member.bytes,
         'spv',
         this.commands.ids,
+        this.commands.identities,
       );
       return { outcome: 'created' as const, documentId: recorded.row.id };
     }
@@ -668,7 +671,7 @@ export class Spv {
   }
 
   view(actor: Actor, submissionId: string) {
-    return this.commands.read(actor, 'spv.submissions', async (tx) => {
+    return this.commands.read(actor, 'spv.submissions', async (tx, access) => {
       const [row] = await tx
         .select({ submission: submissions, number: documents.number })
         .from(submissions)
@@ -681,12 +684,14 @@ export class Spv {
         )
         .where(and(eq(submissions.companyId, actor.companyId), eq(submissions.id, submissionId)));
       requireCondition(row, 'NOT_FOUND', 'Transmiterea nu există.', 404);
-      return this.describe(tx, actor.companyId, row.submission, row.number);
+      const cnps = (await this.commands.disclosable(tx, actor, access.role))(['personal']);
+      return this.describe(tx, actor.companyId, row.submission, row.number, !cnps);
     });
   }
 
   list(actor: Actor) {
-    return this.commands.read(actor, 'spv.submissions', async (tx) => {
+    return this.commands.read(actor, 'spv.submissions', async (tx, access) => {
+      const cnps = (await this.commands.disclosable(tx, actor, access.role))(['personal']);
       const rows = await tx
         .select({ submission: submissions, number: documents.number })
         .from(submissions)
@@ -700,14 +705,17 @@ export class Spv {
         .where(eq(submissions.companyId, actor.companyId))
         .orderBy(asc(submissions.createdAt), asc(submissions.id));
       return Promise.all(
-        rows.map((row) => this.describe(tx, actor.companyId, row.submission, row.number)),
+        rows.map((row) => this.describe(tx, actor.companyId, row.submission, row.number, !cnps)),
       );
     });
   }
 
+  /** ANAF's messages; a caller who may not read personal data in clear reads their details
+   * without CNPs (a B2C buyer's, quoted by the comparison of a sale or by ANAF). */
   messages(actor: Actor) {
-    return this.commands.read(actor, 'spv.messages', async (tx) =>
-      tx
+    return this.commands.read(actor, 'spv.messages', async (tx, access) => {
+      const cnps = (await this.commands.disclosable(tx, actor, access.role))(['personal']);
+      const rows = await tx
         .select({
           id: spvMessages.id,
           uploadId: spvMessages.uploadId,
@@ -719,15 +727,24 @@ export class Spv {
         })
         .from(spvMessages)
         .where(eq(spvMessages.companyId, actor.companyId))
-        .orderBy(asc(spvMessages.createdAtAnaf), asc(spvMessages.id)),
-    );
+        .orderBy(asc(spvMessages.createdAtAnaf), asc(spvMessages.id));
+      return cnps
+        ? rows
+        : rows.map((row) => ({
+            ...row,
+            detail: row.detail === null ? null : maskCnpText(row.detail, true),
+          }));
+    });
   }
 
+  /** A submission with its steps; `mask`: ANAF's messages without CNPs, for a caller who may
+   * not read personal data in clear. */
   private async describe(
     tx: Transaction,
     companyId: string,
     submission: typeof submissions.$inferSelect,
     number: string | null,
+    mask = false,
   ) {
     const steps = await tx
       .select()
@@ -747,7 +764,7 @@ export class Spv {
       state: last.state,
       uploadId: steps.findLast((step) => step.uploadId)?.uploadId ?? null,
       downloadId: steps.findLast((step) => step.downloadId)?.downloadId ?? null,
-      detail: last.detail,
+      detail: mask && last.detail ? maskCnpText(last.detail, true) : last.detail,
       steps: steps.map((step) => ({ state: step.state, at: step.createdAt })),
     };
   }
@@ -756,13 +773,21 @@ export class Spv {
 /** Where an SPV copy of a sale differs from the document in the books. */
 function compareSale(books: InvoiceDocument, spv: InvoiceDocument) {
   const differences: string[] = [];
-  const same = (label: string, a: unknown, b: unknown) => {
+  const same = (label: string, a: unknown, b: unknown, shown = (value: string) => value) => {
     if (canonical(a) !== canonical(b))
-      differences.push(`${label}: ${canonical(a)} în registre, ${canonical(b)} în SPV`);
+      differences.push(
+        `${label}: ${shown(canonical(a))} în registre, ${shown(canonical(b))} în SPV`,
+      );
   };
   same('tip', books.documentType, spv.documentType);
   same('monedă', books.currency, spv.currency);
-  same('client', books.customer.taxId.replace(/^RO/i, ''), spv.customer.taxId.replace(/^RO/i, ''));
+  // A B2C buyer's CNP is compared, never written into the message (`maskCnpText`).
+  same(
+    'client',
+    books.customer.taxId.replace(/^RO/i, ''),
+    spv.customer.taxId.replace(/^RO/i, ''),
+    (value) => maskCnpText(value),
+  );
   same('totaluri', books.totals, spv.totals);
   same('TVA', books.taxes, spv.taxes);
   return differences;

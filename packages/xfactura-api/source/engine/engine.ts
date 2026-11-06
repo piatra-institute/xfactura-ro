@@ -205,6 +205,8 @@ import {
 } from './modules/templates';
 import { Autonomy, demotionProjector, policyRequestInput } from './modules/autonomy';
 import {
+  absencesInput,
+  absencesView,
   answerInput,
   askInput,
   askView,
@@ -710,6 +712,7 @@ export class Engine {
     this.commands = new Commands(db, this.operations.policy, {
       clock: this.clock,
       ...(options.ids ? { ids: options.ids } : {}),
+      identities: new PartyIdentities(secret),
     });
     // A policy names treatments; what the engine knows of each is read when one is created.
     this.policies = new PostingPolicies(this.commands, (id) =>
@@ -820,7 +823,9 @@ export class Engine {
     this.companies = new Companies(this.commands, secret);
     this.configuration = new Configuration(this.commands, new PartyIdentities(secret));
     this.agents = new Agents(this.commands, secret, () =>
-      this.operations.grantable().map(({ id, toolset }) => ({ id, toolset })),
+      this.operations
+        .grantable()
+        .map(({ id, toolset, dataClasses }) => ({ id, toolset, dataClasses })),
     );
     this.evidence = new Evidence(this.commands, objects);
     this.invoices = new Invoices(this.commands, objects);
@@ -1528,6 +1533,24 @@ export class Engine {
         input: questionWithdrawInput,
         output: questionView,
         run: (actor, key, input) => this.questions.withdraw(actor, key, input),
+      }),
+      define({
+        id: 'payroll.absences.list',
+        description:
+          'Absențele unei luni, așa cum le-au răspuns oamenii: concediile medicale cu codul de indemnizație și certificatul fiecăruia, concediile fără plată și celelalte. Date de sănătate: niciun grup de permisiuni nu o cuprinde, un agent o primește numai numită.',
+        summary:
+          "Lists a month's absences as people answered them (payroll.absences): sick leave with each certificate's indemnity code and file, unpaid and other leave. Health data: no toolset includes it, a grant must name it.",
+        toolset: 'payroll',
+        dataClasses: ['payroll', 'personal', 'health'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: absencesInput,
+        output: absencesView,
+        run: (actor, _, input) => this.questions.absences(actor, input),
       }),
       define({
         id: 'openItems.list',
@@ -3667,7 +3690,12 @@ export class Engine {
         effect: 'read',
         approval: 'none',
         input: z.object({ partyId: id }).strict(),
-        output: partyView.extend({ version: z.number().nullable(), details: z.unknown() }),
+        output: partyView.extend({
+          version: z.number().nullable(),
+          details: z.unknown(),
+          /** An individual's details withheld from a caller who may not read personal data. */
+          redacted: z.literal(true).optional(),
+        }),
         run: (actor, _key, input) => this.sales.partyDetails(actor, input),
       }),
       define({
@@ -3991,9 +4019,10 @@ export class Engine {
         description:
           'Cere un export complet al companiei: toate înregistrările și documentele originale.',
         summary:
-          'Requests a complete export of the company: every record and original file, CNPs and pay included; only its requester (or an owner) downloads it.',
+          'Requests a complete export of the company: every record and original file, CNPs, pay and health data included; only its requester (or an owner) downloads it.',
         toolset: 'admin',
-        dataClasses: ['books', 'evidence', 'personal', 'payroll', 'tax'],
+        // Every class but credentials, health included: no toolset grants an export.
+        dataClasses: ['books', 'evidence', 'personal', 'payroll', 'health', 'tax'],
         // What an export holds leaves the engine with it: nothing withdraws it once downloaded.
         reversible: false,
         externalEffect: false,
@@ -4018,7 +4047,8 @@ export class Engine {
         summary:
           'Reads the status of an export this credential requested (an owner reads any); the file, which holds every record and original, downloads from /exports/{id}.',
         toolset: 'admin',
-        dataClasses: ['books', 'evidence', 'personal', 'payroll', 'tax'],
+        // Every class but credentials, health included: no toolset grants an export.
+        dataClasses: ['books', 'evidence', 'personal', 'payroll', 'health', 'tax'],
         reversible: true,
         externalEffect: false,
         permission: 'review',

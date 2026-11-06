@@ -3916,6 +3916,31 @@ const attacks: Attack[] = [
         }),
       ),
   })),
+  // A received e-Factura invoice of an individual recorded its seller as a company under the CNP
+  // in clear, shown to every agent as the partner's identifier (5 November 2026).
+  ...(
+    [
+      ['a company known by a CNP', 'ro_legal_entity', '1800101400016'],
+      ['a company known by a CNP with RO', 'ro_legal_entity', 'RO1800101400016'],
+      ['an enterprise known by a CNP', 'ro_individual_enterprise', '2900501170024'],
+    ] as const
+  ).map(([name, kind, taxId]): Attack => ({
+    trigger: 'inv_party_guard',
+    code: 'party_cnp',
+    name,
+    run: async (world) =>
+      world.db.write((tx) =>
+        tx.insert(parties).values({
+          id: randomUUID(),
+          companyId: world.company,
+          kind,
+          country: 'RO',
+          taxId,
+          name: 'Persoană',
+          createdBy: world.owner,
+        }),
+      ),
+  })),
   {
     trigger: 'inv_membership_insert',
     code: 'system_member',
@@ -4321,8 +4346,18 @@ describe('database invariants', () => {
         weights.reduce((sum, weight, index) => sum + weight * Number(body[index]), 0) % 11;
       return `${body}${control === 10 ? 1 : control}`;
     };
-    const [hashedCnp, rawCnp] = [cnp('290050117002'), cnp('180010112345')];
-    const [hashed, raw, company] = [randomUUID(), randomUUID(), randomUUID()];
+    const [hashedCnp, rawCnp, sellerCnp] = [
+      cnp('290050117002'),
+      cnp('180010112345'),
+      cnp('170030112345'),
+    ];
+    const [hashed, raw, company, seller, copy] = [
+      randomUUID(),
+      randomUUID(),
+      randomUUID(),
+      randomUUID(),
+      randomUUID(),
+    ];
     // The books as they were: the guard that now refuses these identifiers did not exist.
     await world.db.client.execute('DROP TRIGGER inv_party_guard');
     await world.db.write((tx) =>
@@ -4334,8 +4369,12 @@ describe('database invariants', () => {
               'ro_individual',
               `cnp:${createHash('sha256').update(hashedCnp).digest('hex')}`,
             ],
+            // The seller of a received invoice recorded as a company under the CNP (with RO) of
+            // an individual the books know, before it; and another under its own CNP.
+            [copy, 'ro_legal_entity', `RO${rawCnp}`],
             [raw, 'ro_individual', rawCnp],
             [company, 'ro_legal_entity', '14399840'],
+            [seller, 'ro_legal_entity', sellerCnp],
           ] as const
         ).map(([id, kind, taxId]) => ({
           id,
@@ -4352,18 +4391,24 @@ describe('database invariants', () => {
     const secret = 'synthetic-installation-secret-of-32-characters';
     await world.db.migrate({ secret });
     const identities = new PartyIdentities(secret);
-    const taxIds = new Map(
+    const rows = new Map(
       (
         await world.db.orm
-          .select({ id: parties.id, taxId: parties.taxId })
+          .select({ id: parties.id, kind: parties.kind, taxId: parties.taxId })
           .from(parties)
           .where(eq(parties.companyId, world.company))
-      ).map((row) => [row.id, row.taxId]),
+      ).map((row) => [row.id, row]),
     );
+    const taxIds = new Map([...rows].map(([id, row]) => [id, row.taxId]));
     expect([taxIds.get(hashed), taxIds.get(raw), taxIds.get(company)]).toEqual([
       identities.ofCnp(world.company, hashedCnp),
       identities.ofCnp(world.company, rawCnp),
       '14399840',
+    ]);
+    // The seller is the individual it is; the copy keeps no identifier rather than the CNP.
+    expect([rows.get(seller), rows.get(copy)]).toMatchObject([
+      { kind: 'ro_individual', taxId: identities.ofCnp(world.company, sellerCnp) },
+      { kind: 'ro_individual', taxId: null },
     ]);
     // Once keyed, nothing is left to do, and the guards are back.
     await world.db.migrate();

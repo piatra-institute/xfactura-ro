@@ -508,7 +508,7 @@ describe('personal data', () => {
     // The owner reads every export of the company, an agent's included.
     expect((await download(its.id)).status).toBe(200);
     expect(engine.operations.get('exports.get')).toMatchObject({
-      dataClasses: ['books', 'evidence', 'personal', 'payroll', 'tax'],
+      dataClasses: ['books', 'evidence', 'personal', 'payroll', 'health', 'tax'],
       risk: 'medium',
     });
     expect(engine.operations.get('exports.request').risk).toBe('high');
@@ -524,6 +524,190 @@ describe('personal data', () => {
     expect(await again.json()).toMatchObject({
       error: { code: 'PARTY_EXISTS', details: { partyId: first.id } },
     });
+  });
+
+  /** A synthetic CNP with a valid control digit. */
+  const cnpOf = (body: string) => {
+    const weights = [2, 7, 9, 1, 4, 6, 3, 5, 8, 2, 7, 9];
+    const control =
+      weights.reduce((sum, weight, index) => sum + weight * Number(body[index]), 0) % 11;
+    return `${body}${control === 10 ? 1 : control}`;
+  };
+  /** A viewer of the company, signed in: its session cookie. */
+  async function viewer() {
+    const email = `viewer-${randomUUID().slice(0, 8)}@http.test`;
+    const provisioning = createAuth(db, { publicUrl, authSecret: secret }, true);
+    const created = await provisioning.api.signUpEmail({
+      body: { email, password: 'synthetic-http-password', name: 'viewer' },
+    });
+    const invitation = await engine.companies.invite(
+      { actorId: ids.owner!, companyId: company },
+      randomUUID(),
+      { email, role: 'viewer' },
+    );
+    await engine.companies.accept(created.user.id, invitation.token);
+    const response = await app.request(`${publicUrl}/api/accounting/auth/sign-in/email`, {
+      method: 'POST',
+      headers: { origin: publicUrl, 'content-type': 'application/json' },
+      body: JSON.stringify({ email, password: 'synthetic-http-password' }),
+    });
+    return response.headers
+      .getSetCookie()
+      .map((value) => value.split(';')[0])
+      .join('; ');
+  }
+  async function mcp(token: string) {
+    const transport = new StreamableHTTPClientTransport(
+      new URL(`${publicUrl}/api/accounting/v1/companies/${company}/mcp`),
+      {
+        authProvider: { token: async () => token },
+        fetch: async (url, init) => {
+          const request = new Request(url, init);
+          request.headers.set('host', new URL(request.url).host);
+          return app.fetch(request);
+        },
+      },
+    );
+    const client = new Client({ name: 'xfactura-personal-data-test', version: '1' });
+    await client.connect(transport);
+    return client;
+  }
+
+  // questions.list declared payroll and personal, so a review grant read the month's sick
+  // leave; and what a command returned, questions.ask's answer that holds among them, was not
+  // redacted, nor its retry (5 November 2026).
+  test('sick leave over REST and MCP: a review grant and a viewer read the answer without its value', async () => {
+    const certificate = await upload('Certificat de concediu medical CCMAM 21', 'certificat.txt');
+    const agent = await grant(['toolset:review', 'toolset:reference', 'evidence.read']);
+    const ask = {
+      kind: 'payroll.absences',
+      subject: { kind: 'company', id: company },
+      params: { month: '2026-09' },
+    };
+    const asked = await ok<{ id: string }>(
+      await capability('questions.ask', ask, { token: agent.token }),
+    );
+    const sick = [
+      {
+        employeeId: randomUUID(),
+        kind: 'medical',
+        from: '2026-09-07',
+        to: '2026-09-11',
+        code: '08',
+        certificateEvidenceId: certificate.id,
+      },
+    ];
+    await ok(
+      await capability('questions.answer', { questionId: asked.id, value: { absences: sick } }),
+    );
+    const client = await mcp(agent.token);
+    try {
+      const key = randomUUID();
+      const again = await client.callTool({
+        name: 'capabilities.invoke',
+        arguments: { id: 'questions.ask', input: ask, idempotencyKey: key },
+      });
+      expect(again.isError).not.toBe(true);
+      expect(again.structuredContent).toMatchObject({
+        id: asked.id,
+        reused: true,
+        answer: { value: null, redacted: true },
+      });
+      // Its retry over REST reads the same.
+      expect(
+        await ok(await capability('questions.ask', ask, { token: agent.token, key })),
+      ).toMatchObject({ answer: { value: null, redacted: true } });
+      const read = await client.callTool({
+        name: 'evidence.read',
+        arguments: { input: { id: certificate.id, mode: 'text' } },
+      });
+      expect(read.isError).toBe(true);
+      expect(JSON.stringify(read.content)).toContain('EVIDENCE_CLASS');
+      expect(JSON.stringify(read.content)).not.toContain('CCMAM');
+    } finally {
+      await client.close();
+    }
+    const listed = async (options: Parameters<typeof call>[3]) =>
+      (
+        await ok<{ items: { id: string; answer: { value: unknown; redacted?: true } }[] }>(
+          await capability('questions.list', { kind: 'payroll.absences' }, options),
+        )
+      ).items.find((item) => item.id === asked.id)!.answer;
+    expect(await listed({ token: agent.token })).toMatchObject({ value: null, redacted: true });
+    expect(await listed({ cookie: await viewer() })).toMatchObject({ value: null, redacted: true });
+    expect((await listed({})).value).toEqual({ absences: sick });
+    // Named, the read of health data gives the agent the answer.
+    const health = await grant(['questions.list', 'payroll.absences.list']);
+    expect((await listed({ token: health.token })).value).toEqual({ absences: sick });
+  });
+
+  // An agent's own extraction became personal once the document it recorded named an individual
+  // by CNP, and evidence.read refused it without saying why.
+  test('re-reading an extraction over REST: the refusal says which classes and why', async () => {
+    const code = cnpOf('180010112345');
+    const agent = await grant(['toolset:inbox']);
+    const stored = await ok<{ id: string }>(
+      await capability(
+        'evidence.record',
+        {
+          filename: 'AF-3.txt',
+          mediaType: 'text/plain',
+          base64: Buffer.from(
+            `Factura AF nr. 3 din 05.09.2026\nFurnizor: Ion Popescu, CNP ${code}\nTotal: 300,00 lei`,
+          ).toString('base64'),
+        },
+        { token: agent.token },
+      ),
+    );
+    const read = () =>
+      capability('evidence.read', { id: stored.id, mode: 'text' }, { token: agent.token });
+    expect((await read()).status).toBe(200);
+    await ok(
+      await capability(
+        'documents.record',
+        {
+          evidenceId: stored.id,
+          kind: 'invoice.received',
+          body: {
+            number: 'AF 3',
+            issueDate: '2026-09-05',
+            currency: 'RON',
+            supplier: { name: 'Ion Popescu', taxId: code, country: 'RO' },
+            customer: { name: 'HTTP SRL', taxId: 'RO23456789', country: 'RO' },
+            lines: [{ description: 'Bunuri', net: '300.00', vatCategory: 'O', vatRate: '0' }],
+            taxes: [{ base: '300.00', tax: '0.00', category: 'O', rate: '0' }],
+            totals: { net: '300.00', tax: '0.00', gross: '300.00' },
+          },
+          citations: { 'supplier.taxId': { page: 1, line: 2, text: code } },
+        },
+        { token: agent.token },
+      ),
+    );
+    const refused = await read();
+    expect(refused.status).toBe(403);
+    const body = (await refused.json()) as { error: { message: string } };
+    expect(body).toMatchObject({
+      error: {
+        code: 'EVIDENCE_CLASS',
+        details: { dataClasses: ['evidence', 'personal'], missing: ['personal'], reason: 'grant' },
+      },
+    });
+    expect(body.error.message).toContain('date personale');
+    expect(JSON.stringify(body).includes(code)).toBe(false);
+    // A viewer's session is refused by its role; the owner's reads it.
+    const download = (cookie?: string) =>
+      call(
+        'GET',
+        `/companies/${company}/evidence/${stored.id}`,
+        undefined,
+        cookie ? { cookie } : {},
+      );
+    const denied = await download(await viewer());
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toMatchObject({
+      error: { code: 'EVIDENCE_CLASS', details: { missing: ['personal'], reason: 'role' } },
+    });
+    expect((await download()).status).toBe(200);
   });
 });
 

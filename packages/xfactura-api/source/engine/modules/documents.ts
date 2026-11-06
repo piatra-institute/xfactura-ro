@@ -39,6 +39,7 @@ import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
 import { bucharestDate, daysBetween, type LocalDate } from 'xfactura-core/time';
 import type { InvoiceDocument } from 'xfactura-core/ubl/invoice-document';
 import type { Transaction } from '../db/database';
+import type { PartyIdentities } from '../db/identity';
 import { maskCnps } from '../kernel/personal';
 import {
   companies,
@@ -48,6 +49,7 @@ import {
   evidence,
   parties,
   proposals,
+  type Role,
 } from '../db/schema';
 import type { Actor, Commands, Ids } from '../kernel/commands';
 import { entryStands, holdsSubject } from '../kernel/ledger';
@@ -155,14 +157,27 @@ export const linkInput = z
 type DocumentRow = typeof documents.$inferSelect;
 type EvidenceRow = typeof evidence.$inferSelect;
 
-/** Finds the partner by country and tax identifier, or records it from the document. */
+/**
+ * Finds the partner by country and tax identifier, or records it from the document. A Romanian
+ * partner the document names by a CNP (an individual selling to the company, a B2C buyer of an
+ * SPV copy) is the individual, known by the keyed hash of the CNP (`PartyIdentities`), never by
+ * the CNP: the database refuses one (`inv:party_cnp`).
+ */
 export async function partyFor(
   tx: Transaction,
   actor: Actor,
   party: { name: string; taxId: string; country: string },
   ids: Ids,
+  identities?: PartyIdentities,
 ) {
-  const taxId = party.country === 'RO' ? normalizedTaxId(party.taxId) : party.taxId;
+  const normalized = party.country === 'RO' ? normalizedTaxId(party.taxId) : party.taxId;
+  const individual = party.country === 'RO' && isValidCnp(normalized);
+  requireCondition(
+    !individual || identities,
+    'PARTY_IDENTITY',
+    'O persoană fizică se înregistrează ca partener doar după CNP-ul cheiat al instalării.',
+  );
+  const taxId = individual ? identities!.ofCnp(actor.companyId, normalized) : normalized;
   const [existing] = await tx
     .select({ id: parties.id })
     .from(parties)
@@ -178,7 +193,7 @@ export async function partyFor(
   await tx.insert(parties).values({
     id,
     companyId: actor.companyId,
-    kind: party.country === 'RO' ? 'ro_legal_entity' : 'eu_taxable',
+    kind: individual ? 'ro_individual' : party.country === 'RO' ? 'ro_legal_entity' : 'eu_taxable',
     country: party.country,
     taxId,
     name: party.name,
@@ -334,17 +349,25 @@ export class Documents {
   async record(actor: Actor, key: string, input: z.infer<typeof recordInput>) {
     const source = await this.source(actor, 'documents.record', input.evidenceId);
     const layer = await this.evidence.textLayer(actor.companyId, source);
-    return this.commands.run(actor, key, 'documents.record', input, 'write', async (tx) => {
-      const recorded = await this.extracted(tx, actor, {
-        kind: input.kind,
-        body: input.body,
-        citations: input.citations,
-        source,
-        part: input.part,
-        layer,
-      });
-      return this.detail(tx, recorded.row);
-    });
+    return this.commands.run(
+      actor,
+      key,
+      'documents.record',
+      input,
+      'write',
+      async (tx) => {
+        const recorded = await this.extracted(tx, actor, {
+          kind: input.kind,
+          body: input.body,
+          citations: input.citations,
+          source,
+          part: input.part,
+          layer,
+        });
+        return this.detail(tx, recorded.row);
+      },
+      (tx, access, detail) => this.shown(tx, actor, access.role, detail),
+    );
   }
 
   /**
@@ -394,58 +417,66 @@ export class Documents {
       input.evidenceId ?? old.evidenceId!,
     );
     const layer = await this.evidence.textLayer(actor.companyId, source);
-    return this.commands.run(actor, key, 'documents.supersede', input, 'write', async (tx) => {
-      const [successor] = await tx
-        .select({ id: documentLinks.fromId })
-        .from(documentLinks)
-        .where(
-          and(
-            eq(documentLinks.companyId, actor.companyId),
-            eq(documentLinks.toId, old.id),
-            eq(documentLinks.kind, 'supersedes'),
-          ),
+    return this.commands.run(
+      actor,
+      key,
+      'documents.supersede',
+      input,
+      'write',
+      async (tx) => {
+        const [successor] = await tx
+          .select({ id: documentLinks.fromId })
+          .from(documentLinks)
+          .where(
+            and(
+              eq(documentLinks.companyId, actor.companyId),
+              eq(documentLinks.toId, old.id),
+              eq(documentLinks.kind, 'supersedes'),
+            ),
+          );
+        requireCondition(
+          !successor,
+          'DOCUMENT_SUPERSEDED',
+          'Documentul a fost deja înlocuit: corectați ultima extragere.',
+          409,
+          { supersededBy: successor?.id },
         );
-      requireCondition(
-        !successor,
-        'DOCUMENT_SUPERSEDED',
-        'Documentul a fost deja înlocuit: corectați ultima extragere.',
-        409,
-        { supersededBy: successor?.id },
-      );
-      const [posted] = await tx
-        .select({ posted: sql<number>`1` })
-        .from(documents)
-        .where(
-          and(
-            eq(documents.companyId, actor.companyId),
-            eq(documents.id, old.id),
-            postedFor(tx, actor.companyId, old.id, await rootOf(tx, actor.companyId, old.id)),
-          ),
+        const [posted] = await tx
+          .select({ posted: sql<number>`1` })
+          .from(documents)
+          .where(
+            and(
+              eq(documents.companyId, actor.companyId),
+              eq(documents.id, old.id),
+              postedFor(tx, actor.companyId, old.id, await rootOf(tx, actor.companyId, old.id)),
+            ),
+          );
+        requireCondition(
+          !posted,
+          'DOCUMENT_POSTED',
+          'Documentul este contabilizat: stornați întâi înregistrarea (ledger.reverse), apoi corectați extragerea și propuneți-l din nou.',
+          409,
         );
-      requireCondition(
-        !posted,
-        'DOCUMENT_POSTED',
-        'Documentul este contabilizat: stornați întâi înregistrarea (ledger.reverse), apoi corectați extragerea și propuneți-l din nou.',
-        409,
-      );
-      const recorded = await this.extracted(tx, actor, {
-        kind: old.kind as ExtractedKind,
-        body: input.body,
-        citations: input.citations,
-        source,
-        part: input.part ?? Number(old.sourceKey.split(':')[2]),
-        layer,
-        correcting: true,
-      });
-      await tx.insert(documentLinks).values({
-        companyId: actor.companyId,
-        fromId: recorded.row.id,
-        toId: old.id,
-        kind: 'supersedes',
-        createdBy: actor.actorId,
-      });
-      return this.detail(tx, recorded.row);
-    });
+        const recorded = await this.extracted(tx, actor, {
+          kind: old.kind as ExtractedKind,
+          body: input.body,
+          citations: input.citations,
+          source,
+          part: input.part ?? Number(old.sourceKey.split(':')[2]),
+          layer,
+          correcting: true,
+        });
+        await tx.insert(documentLinks).values({
+          companyId: actor.companyId,
+          fromId: recorded.row.id,
+          toId: old.id,
+          kind: 'supersedes',
+          createdBy: actor.actorId,
+        });
+        return this.detail(tx, recorded.row);
+      },
+      (tx, access, detail) => this.shown(tx, actor, access.role, detail),
+    );
   }
 
   /**
@@ -666,12 +697,22 @@ export class Documents {
         .from(documents)
         .where(and(eq(documents.companyId, actor.companyId), eq(documents.id, id)));
       requireCondition(row, 'NOT_FOUND', 'Documentul nu este disponibil.', 404);
-      const detail = await this.detail(tx, row);
-      const disclosable = await this.commands.disclosable(tx, actor, access.role);
-      return disclosable(['personal'])
-        ? detail
-        : { ...detail, body: maskCnps(detail.body), citations: maskCnps(detail.citations) };
+      return this.shown(tx, actor, access.role, await this.detail(tx, row));
     });
+  }
+
+  /** A document as this caller reads it, wherever it leaves the engine (`documents.get`, and
+   * what `.record` and `.supersede` return, stored or new): a CNP the body or a citation holds
+   * is masked for a caller who may not read personal data. */
+  private async shown<Detail extends { body: unknown; citations: unknown }>(
+    tx: Transaction,
+    actor: Actor,
+    role: Role,
+    detail: Detail,
+  ): Promise<Detail> {
+    return (await this.commands.disclosable(tx, actor, role))(['personal'])
+      ? detail
+      : { ...detail, body: maskCnps(detail.body), citations: maskCnps(detail.citations) };
   }
 
   private async detail(tx: Transaction, row: DocumentRow) {

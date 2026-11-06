@@ -26,7 +26,7 @@ import { monthEnd, parseLocalDate as date, type LocalDate, type Month } from '..
 import { invoiceDocumentSchema, type InvoiceDocument } from '../../ubl/invoice-document';
 import { selectRate } from '../fx';
 import { obligationDue } from '../obligations';
-import { invoiceKinds, taxPointOf } from '../treatments/invoices';
+import { adjustmentVatRate, invoiceKinds, taxPointOf } from '../treatments/invoices';
 import { creditPartner } from '../treatments/settlement';
 import type { DistanceThreshold } from './parameters';
 import { memberStateOf, resolveRate } from './rates';
@@ -247,6 +247,14 @@ export const euConsumerRecognition: Treatment<EuConsumerInput> = {
         : taxPointOf(parsed.data),
     );
     const until = [parsed.data.issueDate, point].sort().at(-1)!;
+    // A credit note's Romanian VAT keeps its sale's rate (`adjustmentVatRate`): the rates of
+    // that tax point.
+    const sold = invoiceDocumentSchema.safeParse(
+      loaded.documents.get(input.originalDocumentId ?? '')?.body,
+    );
+    const days = [
+      ...new Set([until, ...(sold.success ? [taxPointOf(sold.data)] : [])]),
+    ].sort() as string[];
     const carried = [...loaded.openItems.values()]
       .filter(
         (item) => item.documentId === input.originalDocumentId && item.currency !== LEDGER_CURRENCY,
@@ -258,7 +266,7 @@ export const euConsumerRecognition: Treatment<EuConsumerInput> = {
       taxPeriods: periodsTo(loaded, point).map((period) => ({ tax: 'VAT', period })),
       ...(parsed.data.currency === LEDGER_CURRENCY
         ? {}
-        : { fx: [{ currency: parsed.data.currency, until: date(until) }] }),
+        : { fx: days.map((day) => ({ currency: parsed.data.currency, until: date(day) })) }),
     };
   },
   evaluate(input, loaded, rules) {
@@ -445,12 +453,24 @@ export const euConsumerRecognition: Treatment<EuConsumerInput> = {
 
     // Amounts in lei: the receivable at the accounting rate of the issue date, the VAT base and
     // VAT at the VAT rate of the tax point (art. 290); revenue is what is left of the receivable.
+    // A credit note's Romanian VAT, at the place of origin, keeps its sale's rate (art. 282 alin.
+    // (9), `adjustmentVatRate`). In the Union scheme the VAT is the consumer state's, declared in
+    // euro (art. 315 alin. (11)–(12)): its lei are the books' alone, at the note's own rate, as
+    // its 4423 line.
     const foreign = body.currency !== LEDGER_CURRENCY;
     let accounting: FxRate | undefined;
     let vatRate: FxRate | undefined;
     if (foreign) {
       const a = selectRate(loaded, rules, body.currency, date(body.issueDate), 'accounting');
-      const v = selectRate(loaded, rules, body.currency, taxPoint, 'vat');
+      const v =
+        original && place === 'origin'
+          ? adjustmentVatRate(loaded, rules, body.currency, taxPoint, {
+              taxPoint: supplied,
+              entries: [...loaded.entries.values()]
+                .flatMap((entry) => entry.taxEntries)
+                .filter((entry) => entry.documentId === input.originalDocumentId),
+            })
+          : selectRate(loaded, rules, body.currency, taxPoint, 'vat');
       if ('code' in a) issues.push(a);
       else accounting = a;
       if ('code' in v) issues.push(v);

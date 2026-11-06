@@ -207,11 +207,12 @@ export const creditRefundAccounts = { sale: '462', purchase: '461' } as const;
  * currency, at the rate it is carried at: `releaseAtCarrying`), never past zero; what the credit
  * note credits beyond it (the invoice already collected or paid) a refund owed to the customer
  * or by the supplier, a new item of the partner in the document's currency at the credit note's
- * lei (`creditRefundAccounts`), to refund, collect or offset. `bani` and `minor` are the credit
- * note's total, positive, at its own rate (`minor` in the currency; lei when the item is in lei).
- * `excess` is the lei the partner's lines release beyond the credit note's own: the exchange
- * difference between the carrying amount and the credit note's rate (a loss on a sale, a gain on
- * a purchase), for the caller to book on 6651 or 7651.
+ * rate (`creditRefundAccounts`), to refund, collect or offset. `bani` is the credit note's total
+ * in lei as its other lines book it (its revenue or expense and its VAT, each at its own rate),
+ * `minor` the same total in the currency (lei when the item is in lei), both positive. `excess`
+ * is the lei the partner's lines release beyond `bani`: the exchange difference between the
+ * carrying amount, the refund's rate and the rates of the credit note's other lines (positive, a
+ * loss on a sale and a gain on a purchase), for the caller to book on 6651 or 7651.
  */
 export function creditPartner(input: {
   item: OpenItemState;
@@ -267,14 +268,11 @@ export function creditPartner(input: {
   const lines = release.lines.map((line) => red(line));
   const openItems: OpenItemSpec[] = [];
   const rest = minor - reduced;
-  // The refund at the credit note's lei: its total less the part reducing the original at its
-  // own rate, so that a credit note in lei leaves no difference.
+  // The refund opens at the credit note's rate, its lei exactly its currency at that rate (as the
+  // ledger and the SAF-T line state it): a new monetary item recorded on the day of its
+  // transaction (OMFP 1802/2014 pct. 319). In lei it is what the original does not take.
   const refundBani =
-    rest === 0n
-      ? 0n
-      : foreign
-        ? bani - convertMinor(reduced, item.currency, rate!)
-        : bani - reduced;
+    rest === 0n ? 0n : foreign ? convertMinor(rest, item.currency, rate!) : bani - reduced;
   let refund: { account: string; bani: bigint; minor: bigint } | null = null;
   if (rest > 0n) {
     const account = purchase ? creditRefundAccounts.purchase : creditRefundAccounts.sale;

@@ -13,6 +13,7 @@ import {
 } from './accounts';
 import { invoiceTypes, paymentMechanisms, units, vatRegimes } from './data/codes';
 import { taxTypes, vatTaxCodes } from './data/tax';
+import { d406MemberStateRateCodes } from './tax-codes';
 import { whtTaxCodes } from '../withholding/codes';
 
 /**
@@ -48,7 +49,8 @@ import { whtTaxCodes } from '../withholding/codes';
  * its D100 TaxType and its WHT TaxCode; TaxType 000 and TaxCode 000000 otherwise); ANAF's
  * consistency tests expect no tax amount on 4426, 4427 and 4428. The TaxTable lists the VAT codes
  * and the WHT codes used, each WHT TaxType an entry (BaseRate 1 for both, as the validator reads
- * the guide's 100).
+ * the guide's 100); a code whose rate is the Member State's of the supply (310340, the Union
+ * scheme's sales) once per state and rate, the line giving that rate as its TaxPercentage.
  *
  * Amounts are lei with two decimals, as decimal strings; balances are signed, debit positive.
  */
@@ -133,6 +135,19 @@ export type D406Tax = {
   amount: string;
   /** TaxAmount in the line's currency, for a foreign-currency line. */
   currencyAmount?: string;
+  /** The ExchangeRate of TaxAmount, when it is not the line's: the VAT of a credit note in a
+   * currency, converted at its invoice's rate while the line is at the note's own (Codul fiscal
+   * art. 282 alin. (9)). Each amount structure states its own rate, its lei its currency at it
+   * (Amount = CurrencyAmount × ExchangeRate, ANAF's answers v1.2, MF.C.6). */
+  rate?: string;
+  /** TaxPercentage of a code whose rate is the Member State's where the supply takes place
+   * (d406MemberStateRateCodes: 310340, a sale declared in the Union scheme, "În funcție de Cota
+   * TVA din statul membru în care sa fac livrările", sheet Livrari): that state's rate, which the
+   * TaxTable lists as a TaxCodeDetails of its own. Every other code has its nomenclature's. */
+  percentage?: string;
+  /** The Country of that TaxCodeDetails, ISO 3166-1 alpha-2: the Member State whose rate it is
+   * (GR, not the VAT prefix EL), or RO, the default of MF.TT.12 (`ro.d406.oss`). */
+  country?: string;
 };
 
 export type D406Line = {
@@ -389,6 +404,12 @@ export function d406Period(model: Pick<D406, 'type' | 'period'>): { start: strin
 
 const amountPattern = /^-?(0|[1-9]\d{0,15})(\.\d{1,2})?$/;
 const ratePattern = /^(0|[1-9]\d{0,13})(\.\d{1,4})?$/;
+/** A Member State's VAT rate in percent: 19, 5.5, 13.5. */
+const percentagePattern = /^(0|[1-9]\d?)(\.\d{1,2})?$/;
+/** A rate as the nomenclature writes its percentages: without trailing zeros (19, 5.5). */
+const decimalText = (value: string) => (value.includes('.') ? value.replace(/\.?0+$/, '') : value);
+/** The Member States by their ISO 3166-1 codes (GR, not the VAT prefix EL). */
+const memberStates = new Set(Object.keys(euVatPrefixes));
 const lei = (text: string) => parseScaled(text, 2);
 const text = (cents: bigint) => formatScaled(cents, 2);
 
@@ -473,6 +494,12 @@ function inputProblems(model: D406): Problem[] {
       amount(`${path}.amount`, tax.amount);
       if (tax.base !== undefined) amount(`${path}.base`, tax.base);
       if (tax.currencyAmount !== undefined) amount(`${path}.currencyAmount`, tax.currencyAmount);
+      if (tax.rate !== undefined && (!ratePattern.test(tax.rate) || /^0(\.0*)?$/.test(tax.rate)))
+        problems.push({
+          code: 'D406_RATE',
+          path: `${path}.rate`,
+          message: 'Cursul de schimb este pozitiv, cu cel mult patru zecimale.',
+        });
     });
   }
   for (const kind of ['salesInvoices', 'purchaseInvoices'] as const)
@@ -551,8 +578,16 @@ export type D406AccountTotals = D406Balance & {
 };
 
 export type D406InvoiceTotals = {
-  /** TaxInformationTotals per TaxType and TaxCode. */
-  taxes: { type: string; code: string; base: bigint; amount: bigint }[];
+  /** TaxInformationTotals per TaxType and TaxCode, and per Member State's rate of a code that
+   * takes one. */
+  taxes: {
+    type: string;
+    code: string;
+    percentage?: string;
+    country?: string;
+    base: bigint;
+    amount: bigint;
+  }[];
   /** NetTotal, GrossTotal */
   net: bigint;
   gross: bigint;
@@ -573,6 +608,9 @@ export type D406Calculation = {
   payments: { count: number; debit: bigint; credit: bigint; gross: bigint[] };
   /** TaxTable: VAT codes used, ascending. */
   vatCodes: string[];
+  /** TaxTable: the Member States' rates used with the codes that take one (310340), one
+   * TaxCodeDetails each, by code, country and rate. */
+  stateRates: { code: string; country: string; percentage: string }[];
   /** TaxTable: WHT codes used, ascending. */
   whtCodes: string[];
   /** UOMTable: units used, in order of first use. */
@@ -590,8 +628,15 @@ function invoiceTotals(invoice: D406Invoice, normal: 'debit' | 'credit'): D406In
     const sign = (line.side ?? normal) === normal ? 1n : -1n;
     net += sign * lei(line.amount);
     for (const tax of line.tax) {
-      const key = `${tax.type}|${tax.code}`;
-      const total = taxes.get(key) ?? { type: tax.type, code: tax.code, base: 0n, amount: 0n };
+      const key = `${tax.type}|${tax.code}|${tax.country ?? ''}|${tax.percentage ?? ''}`;
+      const total = taxes.get(key) ?? {
+        type: tax.type,
+        code: tax.code,
+        ...(tax.percentage !== undefined ? { percentage: tax.percentage } : {}),
+        ...(tax.country !== undefined ? { country: tax.country } : {}),
+        base: 0n,
+        amount: 0n,
+      };
       total.base += sign * lei(tax.base ?? line.amount);
       total.amount += sign * lei(tax.amount);
       taxes.set(key, total);
@@ -634,11 +679,21 @@ export function calculateD406(model: D406): D406Calculation {
   );
   const ledger = { lines: 0, transactions: 0, debit: 0n, credit: 0n };
   const vatCodes = new Set<string>();
+  const stateRates = new Map<string, D406Calculation['stateRates'][number]>();
   const whtCodes = new Set<string>();
   const used = (taxes: readonly D406Tax[] | undefined) => {
     for (const tax of taxes ?? [])
-      if (tax.type === '300') vatCodes.add(tax.code);
-      else if (whtTaxCodes[tax.code]) whtCodes.add(tax.code);
+      if (tax.type === '300') {
+        vatCodes.add(tax.code);
+        if (tax.percentage !== undefined && tax.country !== undefined) {
+          const percentage = decimalText(tax.percentage);
+          stateRates.set(`${tax.code}|${tax.country}|${percentage}`, {
+            code: tax.code,
+            country: tax.country,
+            percentage,
+          });
+        }
+      } else if (whtTaxCodes[tax.code]) whtCodes.add(tax.code);
   };
   for (const journal of model.journals)
     for (const transaction of journal.transactions) {
@@ -725,6 +780,17 @@ export function calculateD406(model: D406): D406Calculation {
     purchases,
     payments,
     vatCodes: [...vatCodes].sort(),
+    stateRates: [...stateRates.values()].sort((a, b) =>
+      a.code !== b.code
+        ? a.code < b.code
+          ? -1
+          : 1
+        : a.country !== b.country
+          ? a.country < b.country
+            ? -1
+            : 1
+          : Number(a.percentage) - Number(b.percentage),
+    ),
     whtCodes: [...whtCodes].sort(),
     units: [...unitsUsed],
   };
@@ -767,8 +833,13 @@ export function address(value: D406Address, name = 'Address') {
 }
 
 function taxInformation(name: string, tax: D406Tax, currency?: D406Currency) {
+  // A Member State's rate for the codes that take one (310340), the nomenclature's otherwise.
   const percentage =
-    tax.type === '300' ? vatTaxCodes[tax.code]?.percentage : whtTaxCodes[tax.code]?.percentage;
+    tax.type === '300'
+      ? tax.percentage !== undefined
+        ? decimalText(tax.percentage)
+        : vatTaxCodes[tax.code]?.percentage
+      : whtTaxCodes[tax.code]?.percentage;
   return element(
     name,
     null,
@@ -780,7 +851,7 @@ function taxInformation(name: string, tax: D406Tax, currency?: D406Currency) {
       'TaxAmount',
       lei(tax.amount),
       currency && tax.currencyAmount !== undefined
-        ? { ...currency, amount: tax.currencyAmount }
+        ? { ...currency, amount: tax.currencyAmount, ...(tax.rate ? { rate: tax.rate } : {}) }
         : undefined,
     ),
   );
@@ -1071,6 +1142,7 @@ export function writeD406(model: D406): string {
               taxInformation('TaxInformationTotals', {
                 type: tax.type,
                 code: tax.code,
+                ...(tax.percentage !== undefined ? { percentage: tax.percentage } : {}),
                 base: text(tax.base),
                 amount: text(tax.amount),
               }),
@@ -1128,21 +1200,29 @@ export function writeD406(model: D406): string {
         null,
         leaf('TaxType', '300'),
         leaf('Description', taxTypes['300']),
-        calculation.vatCodes.map((code) =>
-          element(
-            'TaxCodeDetails',
-            null,
-            leaf('TaxCode', code),
-            leaf('Description', vatTaxCodes[code]!.description.slice(0, 256)),
-            leaf('TaxPercentage', vatTaxCodes[code]!.percentage!),
-            // Full right of deduction, or a pro-rata's code with each pro-rata applied to it; the
-            // validator reads BaseRate as a fraction of 1.
-            ...(vatTaxCodes[code]!.kind === 'baserate'
-              ? (model.baseRates?.[code] ?? []).map((percent) =>
-                  leaf('BaseRate', (percent / 100).toFixed(4)),
-                )
-              : [leaf('BaseRate', '1')]),
-            leaf('Country', 'RO'),
+        calculation.vatCodes.flatMap((code) =>
+          // A code whose rate is the Member State's where the supply takes place (310340): a
+          // TaxCodeDetails per state and rate used, the rate in TaxPercentage and the state in
+          // Country (MF.TT.12, "RO" the default; ANAF's answers v1.2: any ISO3166 code).
+          (vatTaxCodes[code]!.percentage === null
+            ? calculation.stateRates.filter((rate) => rate.code === code)
+            : [{ country: 'RO', percentage: vatTaxCodes[code]!.percentage! }]
+          ).map(({ country, percentage }) =>
+            element(
+              'TaxCodeDetails',
+              null,
+              leaf('TaxCode', code),
+              leaf('Description', vatTaxCodes[code]!.description.slice(0, 256)),
+              leaf('TaxPercentage', percentage),
+              // Full right of deduction, or a pro-rata's code with each pro-rata applied to it;
+              // the validator reads BaseRate as a fraction of 1.
+              ...(vatTaxCodes[code]!.kind === 'baserate'
+                ? (model.baseRates?.[code] ?? []).map((percent) =>
+                    leaf('BaseRate', (percent / 100).toFixed(4)),
+                  )
+                : [leaf('BaseRate', '1')]),
+              leaf('Country', country),
+            ),
           ),
         ),
       ),
@@ -1664,12 +1744,16 @@ export function checkD406(model: D406): D406Check[] {
         else if (
           tax.currencyAmount !== undefined &&
           amountPattern.test(tax.currencyAmount) &&
-          d406ConvertedAmount({ ...line.currency!, amount: tax.currencyAmount }) !== lei(tax.amount)
+          d406ConvertedAmount({
+            ...line.currency!,
+            amount: tax.currencyAmount,
+            rate: tax.rate ?? line.currency!.rate,
+          }) !== lei(tax.amount)
         )
           error(
             'D406_CONVERSION',
             `${line.path}.tax.${index}.amount`,
-            `TVA în lei (${tax.amount}) diferă de ${tax.currencyAmount} × ${line.currency!.rate}.`,
+            `TVA în lei (${tax.amount}) diferă de ${tax.currencyAmount} × ${tax.rate ?? line.currency!.rate}.`,
           );
       });
     }
@@ -1689,17 +1773,39 @@ export function checkD406(model: D406): D406Check[] {
             `${at}.code`,
             `Codul de taxă TVA ${tax.code} nu există printre codurile active.`,
           );
-        else if (entry.percentage === null)
+        else if (entry.percentage === null && !d406MemberStateRateCodes.includes(tax.code))
           error(
             'D406_TAX_CODE',
             `${at}.code`,
             `Codul de taxă ${tax.code} nu are o cotă unică; nu este acoperit.`,
           );
+        else if (
+          entry.percentage === null &&
+          (tax.percentage === undefined ||
+            !percentagePattern.test(tax.percentage) ||
+            tax.country === undefined ||
+            !memberStates.has(tax.country))
+        )
+          error(
+            'D406_TAX_CODE',
+            `${at}.percentage`,
+            `Codul de taxă ${tax.code} se raportează cu cota statului membru în care are loc livrarea: cota, în procente, și țara intrării din tabela de taxe (codul ISO 3166-1 al unui stat membru).`,
+          );
+        else if (
+          entry.percentage !== null &&
+          (tax.percentage !== undefined || tax.country !== undefined)
+        )
+          error(
+            'D406_TAX_CODE',
+            `${at}.percentage`,
+            `Codul de taxă ${tax.code} are cota din nomenclator (${entry.percentage}%), nu cota unui stat membru.`,
+          );
         else if (amountPattern.test(tax.amount) && amountPattern.test(tax.base ?? line.amount)) {
           // ANAF's consistency tests 20–22: the rate applied to the base gives the VAT.
+          const rate = tax.percentage ?? entry.percentage!;
           const base = lei(tax.base ?? line.amount);
           const expected = divRound(
-            base * BigInt(Math.round(Number(entry.percentage) * 100)),
+            base * BigInt(Math.round(Number(rate) * 100)),
             10000n,
             'halfAwayFromZero',
           );
@@ -1708,7 +1814,7 @@ export function checkD406(model: D406): D406Check[] {
             warning(
               'D406_VAT',
               `${at}.amount`,
-              `TVA (${tax.amount}) nu este ${entry.percentage}% din bază (${text(base)}).`,
+              `TVA (${tax.amount}) nu este ${rate}% din bază (${text(base)}).`,
             );
         }
       } else if (whtTaxCodes[tax.code]) {

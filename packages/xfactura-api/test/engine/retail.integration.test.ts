@@ -875,7 +875,7 @@ async function retailShop(
   return { ...c, store, receive, zReport, sell };
 }
 
-// The review of November 2026 (review-findings.integration.test.ts), fixed.
+// The review of November 2026, fixed.
 describe('the retail price method’s discharge (pct. 286 alin. (4))', () => {
   // The year basis applied the coefficient cumulated from the year's start to the month's exits
   // alone, without taking off what earlier months discharged.

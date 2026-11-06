@@ -156,6 +156,48 @@ export const saftClauses: readonly Clause[] = [
       'Pentru alte taxe decât TVA și impozitele reținute la sursă (WHT), contribuabilul alege TaxType-ul impozitului sau codul generic 000, cu TaxCode 000000; ANAF recomandă codul generic. WHT se raportează cu codurile din nomenclatorul WHT.',
   },
   {
+    id: 'ANAF/D406:MF.TT.9-12',
+    source: 'ANAF/D406',
+    locator:
+      'RO_SAFT_SchemaDefCod_16.02.2026.xlsx, foaia 2. MasterFiles, rândurile MF.TT.9–MF.TT.12 (TaxCodeDetails)',
+    status: 'located',
+    summary:
+      'TaxPercentage este procentul de impozitare, raportat în locul FlatTaxRate; BaseRate, pro-rata, între 0 și 1; Country, codul de țară din două litere după ISO3166-2-CountryCodes, cu valoarea implicită RO.',
+  },
+  {
+    id: 'ANAF/D406:Livrari.310325',
+    source: 'ANAF/D406',
+    locator: 'RO_SAFT_SchemaDefCod_16.02.2026.xlsx, foaia Livrari, codul 310325',
+    status: 'located',
+    summary:
+      'Codul 310325, „Livrari de bunuri/ prestari de servicii care nu sunt raportabile in decontul de TVA din Romania si care se raporteaza in decontul de TVA din alte tari”, are cota 0%, nu intră în sfera TVA și nu are rând în D300 sau D398.',
+  },
+  {
+    id: 'ANAF/SAFT_Ghid_2021:2.5',
+    source: 'ANAF/SAFT_Ghid_2021',
+    locator: 'secțiunea 2.5 „Subsecțiunea Tax Table (Tabelă taxe)”, notele',
+    status: 'located',
+    summary:
+      'Tabela de taxe cuprinde toate codurile de taxă TVA și WHT folosite în perioadă; BaseRate este pro-rata (100 pentru dreptul integral de deducere); TaxPercentage este procentul de taxă aplicabil codului de taxă respectiv; FlatTaxRate nu se raportează.',
+  },
+  {
+    id: 'ANAF/SAFT_FAQ_2022:MF.TT.12',
+    source: 'ANAF/SAFT_FAQ_2022',
+    locator: 'răspunsul la MF.TT.12 Country, în tabelul întrebărilor pe elemente',
+    status: 'located',
+    summary:
+      'Valoarea implicită a câmpului Country al tabelei de taxe este RO; câmpul se completează cu codul de țară din două litere după nomenclatorul ISO3166-2-CountryCodes al schemei.',
+  },
+  {
+    id: 'ANAF/SAFT_FAQ_2022:R6.distanta',
+    source: 'ANAF/SAFT_FAQ_2022',
+    locator:
+      'întrebarea 2 și răspunsul 6 (vânzări la distanță cu TVA declarată în Bulgaria și Ungaria)',
+    status: 'located',
+    summary:
+      'Vânzările la distanță neimpozabile în România, raportate în deconturile de TVA din Bulgaria și Ungaria cu codurile de TVA de acolo, se raportează în General Ledger Entries cu codul 310325.',
+  },
+  {
     id: 'ANAF/SAFT_Ghid_2021:2.12',
     source: 'ANAF/SAFT_Ghid_2021',
     locator: 'secțiunea 2.12 „Subsecțiunea Assets (Active)”, notele',

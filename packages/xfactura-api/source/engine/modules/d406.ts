@@ -42,8 +42,11 @@ import {
   d406ZReportCode,
   d406RatedAdjustments,
   d406ReverseCharges,
+  d406UnionSchemeTax,
   d406VatTaxCode,
+  type D406UnionSchemeReading,
 } from 'xfactura-core/ro/saft/tax-codes';
+import { ossCode } from 'xfactura-core/ro/oss';
 import { invoiceKinds } from 'xfactura-core/ro/treatments/invoices';
 import { regimeCodes } from 'xfactura-core/ro/treatments/vat-registration';
 import { vatPeriodEnd } from 'xfactura-core/ro/treatments/vat-settlement';
@@ -1033,6 +1036,26 @@ export function d406Declaration(
           return undefined;
         }
       };
+      // How the file reports the sales declared in the Union scheme (`ro.d406.oss`): 310340 at
+      // the consumer state's rate, the state as its TaxTable Country, or the expert's other
+      // reading; read once, for the period.
+      let unionScheme: D406UnionSchemeReading | null | undefined;
+      const unionSchemeReading = async () => {
+        if (unionScheme !== undefined) return unionScheme;
+        context ??= await rules(tx, companyId);
+        try {
+          unionScheme = context.param<D406UnionSchemeReading>(
+            'ro.d406.oss',
+            'reporting_period_start',
+            books.start,
+          );
+        } catch (error) {
+          if (!(error instanceof RuleGapError)) throw error;
+          problem('RULE_GAP', error.message);
+          unionScheme = null;
+        }
+        return unionScheme;
+      };
       /** An entry's VAT as TaxInformation, with the tax entry it came from. */
       const taxesOf = Map.groupBy(
         books.periodTaxes.filter((tax) => tax.tax === 'VAT'),
@@ -1042,7 +1065,13 @@ export function d406Declaration(
       const baseRates = new Map<string, Set<number>>();
       const vatOf = async (entryId: string, number: number) => {
         const taxes = taxesOf.get(entryId) ?? [];
-        const found: { tax: (typeof taxes)[number]; code: string }[] = [];
+        const found: {
+          tax: (typeof taxes)[number];
+          code: string;
+          /** The consumer state's rate and the TaxTable's Country of a 310340 line. */
+          percentage?: string;
+          country?: string;
+        }[] = [];
         // A sale outside VAT (art. 310) books no VAT: it is reported with the special scheme's
         // code on its revenue (`d406NonPayerSaleCode`), its base the revenue, no VAT. So is a
         // sale invoiced so on a day a late registration declares: its VAT is the
@@ -1118,6 +1147,36 @@ export function d406Declaration(
                 'D406_TAX_CODE',
                 `TVA la încasare cu codul ${tax.code} din nota ${number} nu are un cod de taxă SAF-T stabilit.`,
               );
+            continue;
+          }
+          // A sale declared in the Union scheme (core ro/oss), a credit note or storno of one
+          // included (its amounts negative): as `ro.d406.oss` reads ANAF's texts, 310340 at the
+          // consumer state's rate with the VAT owed there, the base and VAT in lei as the entry
+          // holds them (at the BNR's rate of its tax point, art. 290; D398 alone converts at the
+          // ECB's), or 310325 at 0% without that VAT.
+          if (tax.code === ossCode) {
+            const reading = await unionSchemeReading();
+            if (!reading) continue;
+            if (!attributes.country || !attributes.rate) {
+              problem(
+                'D406_TAX_CODE',
+                `Vânzarea în regimul special Uniune din nota ${number} nu are statul de consum și cota în registre.`,
+              );
+              continue;
+            }
+            const reported = d406UnionSchemeTax(reading, {
+              state: attributes.country,
+              rate: attributes.rate,
+            });
+            found.push({
+              tax: reported.vat
+                ? tax
+                : { ...tax, taxBani: 0n, ...(tax.taxMinor === null ? {} : { taxMinor: 0n }) },
+              code: reported.taxCode,
+              ...(reported.percentage !== undefined
+                ? { percentage: reported.percentage, country: reported.country! }
+                : {}),
+            });
             continue;
           }
           // A purchase deducted under a pro-rata (art. 300 alin. (5)) is reported as one when the
@@ -1339,6 +1398,10 @@ export function d406Declaration(
                 rate: line.fxRate ?? '',
               }
             : undefined;
+        // A credit note's VAT in a currency keeps its invoice's rate, not its line's (Codul
+        // fiscal art. 282 alin. (9)): its TaxAmount states that rate.
+        const taxRate = (tax: { fxRate: string | null }, currency: { rate: string }) =>
+          tax.fxRate && tax.fxRate !== currency.rate ? { rate: tax.fxRate } : {};
         const taxFor = new Map<number, D406Tax[]>();
         // A late registration's regularization (REG-310): the VAT collected on its expense (Dr
         // 635 / Cr 4427), the VAT deducted on its income (Dr 4426 / Cr 7588), each on the line
@@ -1372,7 +1435,7 @@ export function d406Declaration(
               `Nota ${header.number} are ${bases.length} linii de bază pentru ${keys.length} părți: TVA nu se poate atribui.`,
             );
           else
-            for (const { tax, code } of vat) {
+            for (const { tax, code, percentage, country } of vat) {
               const members = bases.flatMap((index, j) =>
                 keys[j] === categoryOf(tax) ? [{ index, j }] : [],
               );
@@ -1398,10 +1461,14 @@ export function d406Declaration(
                   {
                     type: '300',
                     code,
+                    ...(percentage !== undefined ? { percentage, country } : {}),
                     base: lei(shares[k]!),
                     amount: lei(amounts[k]!),
                     ...(minors && currencyOf(own[index]!, index)
-                      ? { currencyAmount: formatMoney(minors[k]!, tax.currency!) }
+                      ? {
+                          currencyAmount: formatMoney(minors[k]!, tax.currency!),
+                          ...taxRate(tax, currencyOf(own[index]!, index)!),
+                        }
                       : {}),
                   },
                 ]),
@@ -1428,13 +1495,17 @@ export function d406Declaration(
               : bases.length > 1
                 ? (taxFor.get(index) ?? [])
                 : index === base
-                  ? vat.map(({ tax, code }) => ({
+                  ? vat.map(({ tax, code, percentage, country }) => ({
                       type: '300',
                       code,
+                      ...(percentage !== undefined ? { percentage, country } : {}),
                       base: lei(tax.baseBani),
                       amount: lei(tax.taxBani),
                       ...(currency && tax.currency
-                        ? { currencyAmount: formatMoney(tax.taxMinor ?? 0n, tax.currency) }
+                        ? {
+                            currencyAmount: formatMoney(tax.taxMinor ?? 0n, tax.currency),
+                            ...taxRate(tax, currency),
+                          }
                         : {}),
                     }))
                   : [];
@@ -1628,7 +1699,18 @@ export function d406Declaration(
         // A lease's principal line keeps the lease's rate, not the invoice's: the partner's line
         // gives it.
         const rateLine = lease ? partnerLine : baseLine;
-        const rate = (rateLine.currency ? rateLine.fxRate : partnerLine.fxRate) ?? '';
+        // A Union scheme document's revenue, in lei only, is at its own rate, which its VAT item
+        // (4423) carries: a credit note's receivable leaves at its original's carrying rate.
+        const ossLine = vat.some(({ tax }) => tax.code === ossCode)
+          ? own.find(
+              (line) =>
+                line.currency &&
+                line.openItemId &&
+                books.items.get(line.openItemId)?.kind === 'tax.payable',
+            )
+          : undefined;
+        const rate = (rateLine.currency ? rateLine.fxRate : (ossLine ?? partnerLine).fxRate) ?? '';
+        const invoiceRate = rate;
         const withCurrency = Boolean(rateLine.currency);
         if (foreign && !/^\d+(\.\d+)?$/.test(rate)) {
           problem(
@@ -1659,10 +1741,23 @@ export function d406Declaration(
         }
         const lineLei = amounts.map(converted);
         // Each VAT is shared among the lines of its category in proportion to their amounts.
-        const shares = vat.map(({ tax, code }) => {
+        const shares = vat.map(({ tax, code, percentage, country }) => {
+          // A Union scheme invoice at several of its state's rates books one revenue line: each
+          // rate's VAT goes to the invoice's lines at that rate.
+          const rated =
+            tax.code === ossCode && vat.length > 1
+              ? (JSON.parse(tax.attributes) as { rate?: string }).rate
+              : undefined;
           const members = invoice.lines.flatMap((line, index) =>
-            bases.length === 1 || lineKey(line) === norm(categoryOf(tax)) ? [index] : [],
+            rated !== undefined
+              ? Number(line.vat.rate) === Number(rated)
+                ? [index]
+                : []
+              : bases.length === 1 || lineKey(line) === norm(categoryOf(tax))
+                ? [index]
+                : [],
           );
+          const rate = percentage !== undefined ? { percentage, country } : {};
           const spread = (total: bigint, values: bigint[]) => {
             const parts = prorate(
               total,
@@ -1674,9 +1769,27 @@ export function d406Declaration(
           };
           if (withCurrency && foreign) {
             const minor = spread(tax.taxMinor ?? 0n, amounts);
-            return { code, tax, members, minor, bani: minor.map(converted) };
+            // A credit note's VAT keeps its invoice's rate (Codul fiscal art. 282 alin. (9)).
+            const own = tax.fxRate && tax.fxRate !== invoiceRate ? tax.fxRate : undefined;
+            const bani = own
+              ? minor.map((value) =>
+                  d406ConvertedAmount({
+                    code: invoice.currency,
+                    amount: formatMoney(value, invoice.currency),
+                    rate: own,
+                  }),
+                )
+              : minor.map(converted);
+            return { code, ...rate, tax, members, minor, bani, ...(own ? { own } : {}) };
           }
-          return { code, tax, members, minor: undefined, bani: spread(tax.taxBani, lineLei) };
+          return {
+            code,
+            ...rate,
+            tax,
+            members,
+            minor: undefined,
+            bani: spread(tax.taxBani, lineLei),
+          };
         });
         const target = sale ? salesInvoices : purchaseInvoices;
         target.push({
@@ -1744,10 +1857,16 @@ export function d406Declaration(
                 .map((share) => ({
                   type: '300',
                   code: share.code,
+                  ...(share.percentage !== undefined
+                    ? { percentage: share.percentage, country: share.country }
+                    : {}),
                   base: lei(lineLei[index]!),
                   amount: lei(share.bani[index]!),
                   ...(share.minor
-                    ? { currencyAmount: formatMoney(share.minor[index]!, invoice.currency) }
+                    ? {
+                        currencyAmount: formatMoney(share.minor[index]!, invoice.currency),
+                        ...('own' in share && share.own ? { rate: share.own } : {}),
+                      }
                     : {}),
                 })),
             };
@@ -1868,6 +1987,7 @@ export function d406Declaration(
           );
         }
       if (problems.length) return { xml: '', inputs, problems, summary: null };
+      const calculation = calculateD406(model);
       return {
         xml: writeD406(model),
         inputs,
@@ -1883,7 +2003,10 @@ export function d406Declaration(
           purchaseInvoices: model.purchaseInvoices.length,
           payments: model.payments.length,
           products: model.products.length,
-          vatCodes: calculateD406(model).vatCodes,
+          vatCodes: calculation.vatCodes,
+          // The Member States' rates of the Union scheme's sales (310340), as the TaxTable lists
+          // them.
+          stateRates: calculation.stateRates,
         },
       };
     },

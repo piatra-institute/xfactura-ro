@@ -632,11 +632,161 @@ function withoutCustomers(): D406 {
   };
 }
 
+/**
+ * A quarter with domestic sales and sales declared in the Union scheme (D398): an e-course and an
+ * e-newspaper on one invoice to a German consumer (400 € at 19% and 100 € at 7%, at 5,06) and a
+ * French course (1.000 € at 20%, at 5,07), each consumer a customer of its own (04 and a code of
+ * the books), the VAT owed in euro on 4423; the French course half credited in red in the same
+ * quarter (500 € at 20%, at 5,08). 310340 at each consumer state's rate (sheet Livrari: "În
+ * funcție de Cota TVA din statul membru în care sa fac livrările"), the TaxTable listing it once
+ * per state and rate with the state as its Country (`ro.d406.oss`).
+ */
+function unionSchemeQuarter(): D406 {
+  const model = period('T', [7, 8, 9]);
+  const german = d406PartyId({ kind: 'internal', code: 'A1B2C3D4E5F6' });
+  const french = d406PartyId({ kind: 'internal', code: 'F6E5D4C3B2A1' });
+  const eur = (amount: string, rate: string) => ({ currency: { code: 'EUR', amount, rate } });
+  const oss = (base: string, amount: string, percentage: string, country: string) => ({
+    type: '300',
+    code: '310340',
+    percentage,
+    country,
+    base,
+    amount,
+  });
+  const sale = (
+    id: string,
+    date: string,
+    party: string,
+    gross: [string, string],
+    vat: [string, string],
+    rate: string,
+    revenue: string,
+    taxes: ReturnType<typeof oss>[],
+  ) => ({
+    id,
+    date,
+    description: `Factura ${id} consumator (OSS)`,
+    lines: [
+      {
+        id: `${id}-1`,
+        account: '4111.01',
+        side: 'debit' as const,
+        amount: gross[0],
+        ...eur(gross[1], rate),
+        customer: party,
+        document: id,
+        description: 'Consumator',
+      },
+      {
+        id: `${id}-2`,
+        account: '704',
+        side: 'credit' as const,
+        amount: revenue,
+        document: id,
+        description: 'Curs online',
+        tax: taxes,
+      },
+      {
+        id: `${id}-3`,
+        account: '4423',
+        side: 'credit' as const,
+        amount: vat[0],
+        ...eur(vat[1], rate),
+        document: id,
+        description: 'TVA prin regimul special Uniune (D398)',
+      },
+    ],
+  });
+  const de19 = oss('2024.00', '384.56', '19', 'DE');
+  const de7 = oss('506.00', '35.42', '7', 'DE');
+  const fr20 = oss('5070.00', '1014.00', '20', 'FR');
+  const credit = oss('-2540.00', '-508.00', '20', 'FR');
+  model.accounts.push({ code: '4423', description: 'TVA de plată', opening: '0' });
+  model.customers.push(
+    ...[
+      [german, 'Berlin', 'DE'],
+      [french, 'Lyon', 'FR'],
+    ].map(([id, city, country]) => ({
+      id: id!,
+      name: 'Consumator',
+      address: { city: city!, country: country! },
+      account: '4111.01',
+      opening: '0',
+    })),
+  );
+  model.journals[0]!.transactions.push(
+    sale(
+      'EX-9',
+      '2026-07-10',
+      german,
+      ['2949.98', '583.00'],
+      ['419.98', '83.00'],
+      '5.06',
+      '2530.00',
+      [de19, de7],
+    ),
+    sale(
+      'EX-11',
+      '2026-08-10',
+      french,
+      ['6084.00', '1200.00'],
+      ['1014.00', '200.00'],
+      '5.07',
+      '5070.00',
+      [fr20],
+    ),
+    sale(
+      'CN-1',
+      '2026-09-12',
+      french,
+      ['-3048.00', '-600.00'],
+      ['-508.00', '-100.00'],
+      '5.08',
+      '-2540.00',
+      [credit],
+    ),
+  );
+  const invoice = (
+    number: string,
+    date: string,
+    party: string,
+    type: string,
+    lines: [string, ReturnType<typeof oss>][],
+  ) => ({
+    number,
+    party,
+    date,
+    type,
+    transaction: number,
+    lines: lines.map(([amount, tax]) => ({
+      account: '704',
+      product: 'CURS',
+      description: 'Curs online',
+      quantity: amount.startsWith('-') ? '-1' : '1',
+      unitPrice: amount.replace('-', ''),
+      amount,
+      tax: [tax],
+    })),
+  });
+  model.products.push({ code: 'CURS', description: 'Curs online', kind: 'services', unit: 'E48' });
+  model.salesInvoices.push(
+    invoice('EX-9', '2026-07-10', german, '380', [
+      ['2024.00', de19],
+      ['506.00', de7],
+    ]),
+    invoice('EX-11', '2026-08-10', french, '380', [['5070.00', fr20]]),
+    invoice('CN-1', '2026-09-12', french, '381', [['-2540.00', credit]]),
+  );
+  return model;
+}
+
 const files: Record<string, D406> = {
   'month-2026-10': period('L', [10, 10, 10]),
   'month-2026-10-eur': period('L', [10, 10, 10], true),
   'quarter-2026-q3': period('T', [7, 8, 9]),
   'month-2026-04-lease': leaseMonth(),
+  'quarter-2026-q3-oss': unionSchemeQuarter(),
 };
 
 /** xmllint against the published XSD, whose target namespace is D406T's; the periodic file is in
@@ -719,7 +869,7 @@ describe('official D406 validation', () => {
   });
 
   validator(
-    'DUKIntegrator accepts the monthly, euro, quarterly and lease files without errors or warnings',
+    'DUKIntegrator accepts the monthly, euro, quarterly, lease and Union scheme files without errors or warnings',
     async () => {
       const results = await validateAnaf(
         'D406',

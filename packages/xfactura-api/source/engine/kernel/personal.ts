@@ -159,3 +159,73 @@ export function previewWithoutPersons(operation: string, preview: unknown) {
     closing: { ...closing, items: itemsWithoutPersons(closing.items) },
   };
 }
+
+/*
+ * Health data (GDPR art. 9): who was on medical leave, with which certificate, indemnity code and
+ * diagnosis, and work accidents. It is redacted for every caller who may not read the `health`
+ * class (`Commands.disclosable`): a viewer, and an agent whose grant names no operation declaring
+ * it.
+ */
+
+/** The classes a reader of health data needs. */
+export const healthClasses: readonly DataClass[] = ['health'];
+
+/** What a redacted sick-leave issue says instead: that one exists, not whose or which. */
+export const healthIssue = {
+  code: 'HEALTH_REDACTED',
+  message:
+    'O problemă privind un concediu medical (date de sănătate), pe care această identitate nu o poate citi: o vede un proprietar sau un revizor.',
+} as const;
+
+/** A payroll line's issues as a reader who may not read health data sees them: those of its
+ * medical certificates (marked `health`; before the mark, `SICK_*`), which name the certificate
+ * and its code, replaced by `healthIssue`. */
+export function issuesWithoutHealth<Issue extends { code: string; message: string; health?: true }>(
+  issues: Issue[],
+): (Issue | typeof healthIssue)[] {
+  return issues.map((issue) =>
+    issue.health || issue.code.startsWith('SICK_') ? healthIssue : issue,
+  );
+}
+
+type Difference = { section: string; id: string; closing: unknown; opening: unknown };
+
+/**
+ * A year's opening checked against its close (`years.opening`) as a reader who may not read pay
+ * sees it: the differences of open items on personnel accounts summed per account and currency,
+ * on each side, without the item and its person; the others as they are.
+ */
+export function differencesWithoutPersons<Item extends Difference>(differences: Item[]) {
+  const out: (Item | Difference)[] = [];
+  const merged = new Map<string, { closing: StoredItem; opening: StoredItem }>();
+  const add = (sum: StoredItem, item: StoredItem | null) => {
+    if (!item) return;
+    sum.bani = String(BigInt(sum.bani) + BigInt(item.bani));
+    sum.minor = String(BigInt(sum.minor) + BigInt(item.minor));
+  };
+  for (const difference of differences) {
+    const closing = difference.closing as StoredItem | null;
+    const opening = difference.opening as StoredItem | null;
+    const item = closing ?? opening;
+    if (difference.section !== 'items' || !item || !personnelAccount(item.account)) {
+      out.push(difference);
+      continue;
+    }
+    const id = `${item.account}/${item.currency}`;
+    let sums = merged.get(id);
+    if (!sums) {
+      const zero = () => ({
+        account: item.account,
+        currency: item.currency,
+        bani: '0',
+        minor: '0',
+      });
+      sums = { closing: zero(), opening: zero() };
+      merged.set(id, sums);
+      out.push({ section: 'items', id, ...sums });
+    }
+    add(sums.closing, closing);
+    add(sums.opening, opening);
+  }
+  return out;
+}

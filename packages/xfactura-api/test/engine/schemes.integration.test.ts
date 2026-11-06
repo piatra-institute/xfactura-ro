@@ -449,6 +449,57 @@ describe('margin.purchase and margin.sale: a second-hand dealer', () => {
     },
     120_000,
   );
+
+  // The register showed every caller the CNP the invoice of an individual states, and the VAT
+  // journal the individual's keyed identifier (5 November 2026).
+  test('a purchase from an individual: the register and the VAT journal show the CNP and its keyed hash to no agent', async () => {
+    const c = await company({ 'activity.goods': 'margin_goods' }, '707');
+    const code = '1800101400016';
+    const document = await c.importXml(
+      'AF-1',
+      invoiceXml({
+        company: cui,
+        number: 'AF-1',
+        date: '2026-10-02',
+        counterparty: code,
+        category: 'O',
+        net: '1000.00',
+        tax: '0.00',
+        gross: '1000.00',
+      }),
+    );
+    await c.book('margin.purchase', {
+      documentId: document.id,
+      scheme: 'goods',
+      goods: 'second_hand',
+      supplier: 'individual',
+    });
+    const grant = await c.s.invoke<{ token: string }>(c.s.reviewer, 'agents.issue', {
+      name: 'Asistent',
+      scopes: ['margin.goods.register', 'vat.journal'],
+      expiresAt: c.s.expiresIn(7),
+    });
+    const agent = await c.s.engine.agents.authenticate(grant.token, c.s.company.id);
+    type Register = { items: { purchase: { supplierTaxId: string } }[] };
+    const supplier = async (actor: typeof agent) =>
+      (await c.s.invoke<Register>(actor, 'margin.goods.register', {})).items[0]!.purchase
+        .supplierTaxId;
+    // Compared, not printed: a failure would print the CNP.
+    expect((await supplier(c.s.owner)) === code).toBe(true);
+    expect(await supplier(agent)).toBe('*************');
+    expect(await supplier(c.s.viewer)).toBe('*************');
+    type Journal = { rows: { counterpartyTaxId: string | null }[] };
+    const journal = async (actor: typeof agent) =>
+      (
+        await c.s.invoke<Journal>(actor, 'vat.journal', {
+          direction: 'input',
+          from: '2026-10',
+          to: '2026-10',
+        })
+      ).rows.map((row) => row.counterpartyTaxId);
+    expect((await journal(c.s.owner)).every((id) => id?.startsWith('cnp:k1:'))).toBe(true);
+    expect(await journal(agent)).toEqual((await journal(c.s.owner)).map(() => '*************'));
+  });
 });
 
 describe('invoices.flatRate: a purchase from a farmer', () => {

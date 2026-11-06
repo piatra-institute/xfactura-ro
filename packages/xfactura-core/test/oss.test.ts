@@ -22,7 +22,11 @@ import {
 import { emptyLoaded } from '../src/ro/reviews/specs/world';
 import { roRegister } from '../src/ro/register';
 import { d406StartOf } from '../src/ro/saft/applicability';
-import { d406VatTaxCode } from '../src/ro/saft/tax-codes';
+import {
+  d406UnionSchemeTax,
+  d406VatTaxCode,
+  type D406UnionSchemeReading,
+} from '../src/ro/saft/tax-codes';
 import { clause } from '../src/ro/sources';
 import { invoiceKinds } from '../src/ro/treatments/invoices';
 import { RuleContext } from '../src/rules';
@@ -766,10 +770,33 @@ describe('the D398 of the Union scheme', () => {
 });
 
 describe('SAF-T and the agent', () => {
-  test('below the threshold 310346 (D300 rd. 17); the Union scheme 310340 (D398 only)', () => {
+  test("below the threshold 310346 (D300 rd. 17); the Union scheme 310340 at the consumer state's rate (D398 only)", () => {
     expect(d406VatTaxCode({ direction: 'output', code: 'S-21', distance: true })).toBe('310346');
     expect(d406VatTaxCode({ direction: 'output', code: 'S-21' })).toBe('310344');
-    expect(d406VatTaxCode({ direction: 'output', code: 'EXP-OSS' })).toBe('310340');
+    // The Union scheme's sales are reported as `ro.d406.oss` reads ANAF's texts, never by the
+    // table of single-rate codes.
+    expect(d406VatTaxCode({ direction: 'output', code: 'EXP-OSS' })).toBeUndefined();
+    const reading = rules().param<D406UnionSchemeReading>(
+      'ro.d406.oss',
+      'reporting_period_start',
+      '2026-07-01' as LocalDate,
+    );
+    expect(reading).toEqual({ code: '310340', country: 'consumer' });
+    expect(d406UnionSchemeTax(reading, { state: 'DE', rate: '19' })).toEqual({
+      taxCode: '310340',
+      percentage: '19',
+      country: 'DE',
+      vat: true,
+    });
+    // Greece's VAT prefix is EL, its ISO 3166-1 code GR.
+    expect(d406UnionSchemeTax(reading, { state: 'EL', rate: '24' }).country).toBe('GR');
+    // The expert's other readings: RO as the TaxTable's Country, or 310325 at 0% without the VAT.
+    expect(d406UnionSchemeTax({ ...reading, country: 'RO' }, { state: 'FR', rate: '5.5' })).toEqual(
+      { taxCode: '310340', percentage: '5.5', country: 'RO', vat: true },
+    );
+    expect(
+      d406UnionSchemeTax({ code: '310325', country: 'RO' }, { state: 'DE', rate: '19' }),
+    ).toEqual({ taxCode: '310325', vat: false });
   });
 
   test('agent.ts names the documents, questions and detectors', () => {

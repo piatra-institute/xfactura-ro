@@ -13,6 +13,7 @@ import {
   type ReadSetEntry,
   type Treatment,
 } from 'xfactura-core/kernel';
+import { questionKind } from 'xfactura-core/questions/kinds';
 import { booksSystemOf, singleEntryExcluded } from 'xfactura-core/ro/entity';
 import {
   RuleContext,
@@ -38,7 +39,7 @@ import {
   withdrawals,
   type Role,
 } from '../db/schema';
-import { appendAudit, type Actor, type Commands } from './commands';
+import { appendAudit, type Access, type Actor, type Commands } from './commands';
 import { maskCnps, payClasses, personnelAccount, withoutPersons } from './personal';
 import {
   requireActiveApprover,
@@ -757,7 +758,15 @@ export class Proposals {
         }
         return this.view(tx, actor.companyId, proposalId);
       },
+      this.present(actor),
     );
+  }
+
+  /** What a command's caller reads of the proposal it returns, stored or new: the view
+   * `proposals.get` would show it, without the input it gave (`disclosed`). */
+  private present(actor: Actor) {
+    return async (tx: Transaction, access: Access, view: ProposalView) =>
+      (await this.disclosed(tx, actor, [view], false, access.role))[0]!;
   }
 
   /** Every question a basis cites is the company's and answered. */
@@ -879,6 +888,7 @@ export class Proposals {
           });
         return this.view(tx, actor.companyId, input.proposalId);
       },
+      this.present(actor),
     );
   }
 
@@ -888,71 +898,81 @@ export class Proposals {
     key: string,
     input: { proposalId: string; version: number; effectHash: string },
   ) {
-    return this.commands.run(actor, key, 'ledger.post', input, 'review', async (tx) => {
-      const [posted] = await tx
-        .select({ id: entries.id })
-        .from(entries)
-        .where(
-          and(eq(entries.companyId, actor.companyId), eq(entries.proposalId, input.proposalId)),
+    return this.commands.run(
+      actor,
+      key,
+      'ledger.post',
+      input,
+      'review',
+      async (tx, access) => {
+        const [posted] = await tx
+          .select({ id: entries.id })
+          .from(entries)
+          .where(
+            and(eq(entries.companyId, actor.companyId), eq(entries.proposalId, input.proposalId)),
+          );
+        if (posted) return this.view(tx, actor.companyId, input.proposalId);
+        const row = await this.current(tx, actor.companyId, input.proposalId, input.version);
+        requireCondition(
+          row.effectHash === input.effectHash,
+          'STALE',
+          'Versiunea verificată nu mai este actuală.',
+          409,
         );
-      if (posted) return this.view(tx, actor.companyId, input.proposalId);
-      const row = await this.current(tx, actor.companyId, input.proposalId, input.version);
-      requireCondition(
-        row.effectHash === input.effectHash,
-        'STALE',
-        'Versiunea verificată nu mai este actuală.',
-        409,
-      );
-      const [approval] = await tx
-        .select()
-        .from(approvals)
-        .where(
-          and(
-            eq(approvals.companyId, actor.companyId),
-            eq(approvals.proposalId, input.proposalId),
-            eq(approvals.version, input.version),
-            eq(approvals.effectHash, input.effectHash),
-          ),
+        const [approval] = await tx
+          .select()
+          .from(approvals)
+          .where(
+            and(
+              eq(approvals.companyId, actor.companyId),
+              eq(approvals.proposalId, input.proposalId),
+              eq(approvals.version, input.version),
+              eq(approvals.effectHash, input.effectHash),
+            ),
+          );
+        requireCondition(
+          approval,
+          'APPROVAL_REQUIRED',
+          'Aprobați versiunea exactă înainte de contabilizare.',
+          409,
         );
-      requireCondition(
-        approval,
-        'APPROVAL_REQUIRED',
-        'Aprobați versiunea exactă înainte de contabilizare.',
-        409,
-      );
-      await requireActiveApprover(
-        tx,
-        actor.companyId,
-        { userId: approval.approverId, epoch: approval.approverEpoch },
-        'Persoana care a aprobat versiunea nu mai este proprietar sau revizor activ. Revizuiți propunerea și cereți o aprobare nouă.',
-      );
-      const [proposal] = await tx
-        .select()
-        .from(proposals)
-        .where(and(eq(proposals.companyId, actor.companyId), eq(proposals.id, input.proposalId)));
-      const treatment = this.treatment(proposal!.treatmentId);
-      // Re-parsing must reproduce the stored input exactly; a non-idempotent schema shows up as STALE.
-      const stored = treatment.input.parse(JSON.parse(row.input));
-      const evaluated = await this.evaluate(
-        tx,
-        actor.companyId,
-        input.proposalId,
-        treatment,
-        stored,
-        storedBasis(row),
-      );
-      requireCondition(
-        evaluated.effectHash === row.effectHash,
-        'STALE',
-        'Registrele s-au schimbat de la aprobare. Revizuiți propunerea.',
-        409,
-        { issues: evaluated.issues },
-      );
-      await this.write(tx, actor, input.proposalId, input.version, evaluated, {
-        approvalId: approval.id,
-      });
-      return this.view(tx, actor.companyId, input.proposalId);
-    });
+        await requireActiveApprover(
+          tx,
+          actor.companyId,
+          { userId: approval.approverId, epoch: approval.approverEpoch },
+          'Persoana care a aprobat versiunea nu mai este proprietar sau revizor activ. Revizuiți propunerea și cereți o aprobare nouă.',
+        );
+        const [proposal] = await tx
+          .select()
+          .from(proposals)
+          .where(and(eq(proposals.companyId, actor.companyId), eq(proposals.id, input.proposalId)));
+        const treatment = this.treatment(proposal!.treatmentId);
+        // Re-parsing must reproduce the stored input exactly; a non-idempotent schema shows up as STALE.
+        const stored = treatment.input.parse(JSON.parse(row.input));
+        const evaluated = await this.evaluate(
+          tx,
+          actor.companyId,
+          input.proposalId,
+          treatment,
+          stored,
+          storedBasis(row),
+        );
+        // The refusal's issues are the proposal's, shown as its view shows them.
+        const cnps = (await this.commands.disclosable(tx, actor, access.role))(['personal']);
+        requireCondition(
+          evaluated.effectHash === row.effectHash,
+          'STALE',
+          'Registrele s-au schimbat de la aprobare. Revizuiți propunerea.',
+          409,
+          { issues: cnps ? evaluated.issues : maskCnps(evaluated.issues) },
+        );
+        await this.write(tx, actor, input.proposalId, input.version, evaluated, {
+          approvalId: approval.id,
+        });
+        return this.view(tx, actor.companyId, input.proposalId);
+      },
+      this.present(actor),
+    );
   }
 
   /**
@@ -1170,16 +1190,24 @@ export class Proposals {
   }
 
   async withdraw(actor: Actor, key: string, input: { proposalId: string; reason: string }) {
-    return this.commands.run(actor, key, 'proposals.withdraw', input, 'write', async (tx) => {
-      await this.current(tx, actor.companyId, input.proposalId);
-      await tx.insert(withdrawals).values({
-        companyId: actor.companyId,
-        proposalId: input.proposalId,
-        reason: input.reason,
-        createdBy: actor.actorId,
-      });
-      return this.view(tx, actor.companyId, input.proposalId);
-    });
+    return this.commands.run(
+      actor,
+      key,
+      'proposals.withdraw',
+      input,
+      'write',
+      async (tx) => {
+        await this.current(tx, actor.companyId, input.proposalId);
+        await tx.insert(withdrawals).values({
+          companyId: actor.companyId,
+          proposalId: input.proposalId,
+          reason: input.reason,
+          createdBy: actor.actorId,
+        });
+        return this.view(tx, actor.companyId, input.proposalId);
+      },
+      this.present(actor),
+    );
   }
 
   /** Writes the evaluated effect; the database invariants verify it once more. */
@@ -1425,7 +1453,9 @@ export class Proposals {
    * The effect shows no one's pay to an agent whose reads do not cover `payroll` and `personal`
    * (`withoutPersons`: the lines on personnel accounts summed, without the person, and their open
    * items left out), and no CNP (a B2C buyer's in a tax entry's attributes) to a caller who may
-   * not read personal data in clear (`Commands.disclosable`).
+   * not read personal data in clear (`Commands.disclosable`); an answer of the basis whose kind's
+   * classes the caller may not read (sick leave: `health`) without its value. Every view that
+   * leaves the engine goes through it: the reads', and what a command returns (`present`).
    */
   private async disclosed(
     tx: Transaction,
@@ -1437,7 +1467,19 @@ export class Proposals {
     if (!views.length) return views;
     const readable = await this.commands.readable(tx, actor);
     const pay = readable(payClasses);
-    const cnps = (await this.commands.disclosable(tx, actor, role))(['personal']);
+    const disclosable = await this.commands.disclosable(tx, actor, role);
+    const cnps = disclosable(['personal']);
+    // An answer the basis cites holding data the caller may not read (a month's sick leave,
+    // `health`) keeps its place without its value, as `questions.list` shows it.
+    const basisOf = (basis: ProposalView['basis']): ProposalView['basis'] =>
+      basis && {
+        ...basis,
+        answers: basis.answers.map((answer) =>
+          answer.kind && !disclosable(questionKind(answer.kind)?.dataClasses ?? [])
+            ? { ...answer, value: null, redacted: true as const }
+            : answer,
+        ),
+      };
     const shown = (view: ProposalView): ProposalView => {
       let effect = view.effect;
       if (effect && !pay)
@@ -1446,9 +1488,10 @@ export class Proposals {
           lines: withoutPersons(effect.lines),
           openItems: effect.openItems.filter((item) => !personnelAccount(item.controlAccount)),
         };
+      const basis = basisOf(view.basis);
       return cnps
-        ? { ...view, effect }
-        : { ...view, effect: maskCnps(effect), issues: maskCnps(view.issues) };
+        ? { ...view, effect, basis }
+        : { ...view, effect: maskCnps(effect), issues: maskCnps(view.issues), basis };
     };
     const inputs = new Map<string, string>();
     if (withInput)

@@ -261,7 +261,10 @@ export const proposalView = z.object({
           questionId: z.string(),
           answerId: z.string().nullable(),
           kind: z.string().nullable(),
+          /** Null and `redacted` for a caller who may not read the kind's data classes (an
+           * answer about sick leave is `health`), as `questions.list` shows it. */
           value: z.unknown(),
+          redacted: z.literal(true).optional(),
         }),
       ),
       template: z.object({ id: z.string(), version: z.number() }).optional(),

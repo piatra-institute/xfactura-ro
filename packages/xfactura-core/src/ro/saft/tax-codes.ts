@@ -570,36 +570,73 @@ export const d406CollectedWithAcquisition = (code: string) =>
 export const d406BaseRateCode = (taxCode: string) => vatTaxCodes[taxCode]?.kind === 'baserate';
 
 /**
- * Sales to consumers in other Member States (core ro/oss), from ANAF's sheet Livrari: with the
- * place in Romania below the threshold of art. 278^1, by rate (D300 rd. 17); declared in the
- * Union scheme, 310340, whose rate is the consumer state's (D398 only: the writer refuses a code
- * without a single rate, so such a sale stops the file).
+ * The codes whose rate is the Member State's where the supplies take place, not one of the
+ * nomenclature's: Livrari 310340, "Livrări de bunuri expediate/ transportate din RO sau servicii
+ * prestate din RO" (Supplies from Member State of identification), its D398 column 1 and its
+ * rate column "În funcție de Cota TVA din statul membru în care sa fac livrările"
+ * (RO_SAFT_SchemaDefCod_16.02.2026.xlsx). Each line gives the state's rate (TaxPercentage) and
+ * the state; the TaxTable lists a TaxCodeDetails per state and rate used.
  */
-export const d406DistanceCodes: readonly D406VatCodeRow[] = [
-  ...(
-    [
-      ['S-21', '310346'],
-      ['S-11', '310356'],
-      ['S-19', '310320'],
-      ['S-9', '310343'],
-      ['S-5', '310328'],
-    ] as const
-  ).map(([code, taxCode]): D406VatCodeRow => ({
-    direction: 'output',
-    code,
-    distance: true,
-    taxCode,
-    description: vatTaxCodes[taxCode]!.description,
-    d300: '17',
-  })),
-  {
-    direction: 'output',
-    code: 'EXP-OSS',
+export const d406MemberStateRateCodes: readonly string[] = ['310340'];
+
+/**
+ * Sales to consumers in other Member States (core ro/oss) with the place in Romania below the
+ * threshold of art. 278^1, from ANAF's sheet Livrari, by rate (D300 rd. 17). Those declared in
+ * the Union scheme (EXP-OSS) are reported as `ro.d406.oss` reads ANAF's texts
+ * (d406UnionSchemeTax), never by this table.
+ */
+export const d406DistanceCodes: readonly D406VatCodeRow[] = (
+  [
+    ['S-21', '310346'],
+    ['S-11', '310356'],
+    ['S-19', '310320'],
+    ['S-9', '310343'],
+    ['S-5', '310328'],
+  ] as const
+).map(([code, taxCode]): D406VatCodeRow => ({
+  direction: 'output',
+  code,
+  distance: true,
+  taxCode,
+  description: vatTaxCodes[taxCode]!.description,
+  d300: '17',
+}));
+
+/** How D406 reports a sale declared in the Union scheme (`ro.d406.oss`, saft/parameters.ts). */
+export type D406UnionSchemeReading = {
+  /** 310340, at the consumer state's rate, or 310325, at its 0%. */
+  code: '310340' | '310325';
+  /** The TaxTable's Country of a 310340 entry: the consumer state, or RO (MF.TT.12's default). */
+  country: 'consumer' | 'RO';
+};
+
+/** A Member State's ISO 3166-1 code from its VAT prefix (EL is Greece's prefix, GR its code). */
+const isoOf = (state: string) => (state === 'EL' ? 'GR' : state);
+
+/**
+ * The TaxInformation of a sale declared in the Union scheme (EXP-OSS, its tax entry's consumer
+ * state and rate) as `ro.d406.oss` reads ANAF's texts:
+ * - 310340 (Livrari: "Livrări de bunuri expediate/ transportate din RO sau servicii prestate din
+ *   RO", D398 column 1, its rate "În funcție de Cota TVA din statul membru în care sa fac
+ *   livrările") at the consumer state's rate, with its VAT; the TaxTable lists a TaxCodeDetails
+ *   per state and rate, the state or RO as its Country;
+ * - or 310325 ("Livrari de bunuri/ prestari de servicii care nu sunt raportabile in decontul de
+ *   TVA din Romania si care se raporteaza in decontul de TVA din alte tari", ANAF's answers v1.2,
+ *   Răspuns 6, for distance sales declared in Bulgaria and Hungary) at its 0%, without the VAT
+ *   owed abroad (`vat` false: TaxAmount 0).
+ */
+export function d406UnionSchemeTax(
+  reading: D406UnionSchemeReading,
+  sale: { state: string; rate: string },
+): { taxCode: string; percentage?: string; country?: string; vat: boolean } {
+  if (reading.code === '310325') return { taxCode: '310325', vat: false };
+  return {
     taxCode: '310340',
-    description: vatTaxCodes['310340']!.description,
-    d300: '',
-  },
-];
+    percentage: sale.rate,
+    country: reading.country === 'RO' ? 'RO' : isoOf(sale.state),
+    vat: true,
+  };
+}
 
 /**
  * Goods across the border (G3, src/ro/trade), from ANAF's sheets Achizitii ded 100% and Achizitii

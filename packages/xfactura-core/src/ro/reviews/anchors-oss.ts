@@ -76,7 +76,7 @@ export const ossAnchors: Readonly<Record<string, readonly Anchor[]>> = {
   'ANAF/D406:Livrari.310340-310346': [
     {
       from: 'Livrări de bunuri expediate/ transportate din RO sau servicii prestate din RO',
-      to: 'Supplies from Member State of identification',
+      to: 'În funcție de Cota TVA din statul membru în care sa fac livrările.',
     },
   ],
   'ANAF/D398:structura': [{ from: 'D398 Declaratie speciala de TVA', to: 'Tip REDUS' }],

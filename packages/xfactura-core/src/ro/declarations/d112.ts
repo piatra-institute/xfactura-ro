@@ -1382,6 +1382,9 @@ export type D112Check = {
   severity: 'error' | 'warning';
   path: string;
   message: string;
+  /** About sick leave or a work accident (section D, the medical-leave checks): it names a
+   * certificate or quotes its codes, health data the engine shows only to who may read it. */
+  health?: true;
 };
 
 const isCui = (code: string) => /^[1-9]\d{1,9}$/.test(code) && isValidCui(code);
@@ -1420,8 +1423,23 @@ const isEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim(
  */
 export function checkD112(model: D112): D112Check[] {
   const checks: D112Check[] = [];
-  const add = (severity: D112Check['severity'], code: string, path: string, message: string) =>
-    checks.push({ code, severity, path, message });
+  const add = (
+    severity: D112Check['severity'],
+    code: string,
+    path: string,
+    message: string,
+    health = false,
+  ) =>
+    checks.push({
+      code,
+      severity,
+      path,
+      message,
+      // A certificate's own checks, its fields' and every medical-leave code's.
+      ...(health || code.startsWith('D112_SICK') || /\.sickLeave\b/.test(path)
+        ? { health: true as const }
+        : {}),
+    });
   const error = (code: string, path: string, message: string) => add('error', code, path, message);
   const warning = (code: string, path: string, message: string) =>
     add('warning', code, path, message);
@@ -1457,10 +1475,12 @@ export function checkD112(model: D112): D112Check[] {
     !structure.sickLeave &&
     model.insured.some((insured) => insured.sickLeave?.length || insured.accidents?.cases)
   )
-    error(
+    add(
+      'error',
       'D112_SICK_PERIOD',
       'insured',
       `Concediile medicale și accidentele de muncă din ${structure.label} nu sunt acoperite: câmpurile lor în structura acelor luni nu se scriu.`,
+      true,
     );
 
   // d_rec and tip_rec.
@@ -1739,7 +1759,7 @@ export function checkD112(model: D112): D112Check[] {
         insured,
         path,
         { period, workingDays, certificates, minimumWage: structure!.minimumWage },
-        add,
+        (severity, code, at, message) => add(severity, code, at, message, true),
       );
   });
 

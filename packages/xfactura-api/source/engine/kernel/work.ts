@@ -55,6 +55,7 @@ import {
   type Role,
 } from '../db/schema';
 import type { Actor, Commands } from './commands';
+import { maskCnps, maskCnpText } from './personal';
 import { pausedScopes } from './automation';
 import { auditHead } from './events';
 import { entryStands, holdsSubject } from './ledger';
@@ -163,6 +164,9 @@ interface Caller {
   allowed: (operation: string) => boolean;
   /** Whether it may read a treatment's inputs (`Commands.readable` on the treatment's classes). */
   reads: (treatment: string) => boolean;
+  /** Whether it may read personal data in clear (`Commands.disclosable`): otherwise an item's
+   * message and details carry no CNP (an SPV message comparing a B2C sale quotes the buyer's). */
+  cnps: boolean;
 }
 
 /** One family of work items, listed with a limit and resumable at an item's cursor. */
@@ -2512,6 +2516,7 @@ export class Work {
         const classes = this.commands.dataClassesOf(`${treatment}.propose`);
         return !actor.agentId || (!!classes && readable(classes));
       },
+      cnps: (await this.commands.disclosable(tx, actor, role))(['personal']),
     };
   }
 
@@ -2541,8 +2546,9 @@ export class Work {
         severity: draft.severity,
         due: draft.due,
         period: draft.period,
-        message: draft.message,
-        details: draft.details,
+        // The fingerprint is the item's own, whatever the caller reads of it.
+        message: caller.cnps ? draft.message : maskCnpText(draft.message),
+        details: caller.cnps ? draft.details : maskCnps(draft.details),
         fingerprint,
         next: draft.next.map((found): WorkStepView => {
           const step = asCalled(found, draft, caller);
@@ -2717,6 +2723,7 @@ export class Work {
         agent: !!actor.agentId,
         allowed: () => false,
         reads: () => false,
+        cnps: false,
       });
       requireCondition(found.item, 'WORK_RESOLVED', 'Elementul nu mai așteaptă nimic.', 409);
       requireCondition(

@@ -197,11 +197,13 @@ export function d112Declaration(
       if (problems.length || !run || !seller || !structure.parameters)
         return { xml: '', inputs, problems, summary: null };
 
-      const whole = (bani: bigint, what: string) => {
+      /** Whole lei; `health` when what it names is a certificate or a work accident. */
+      const whole = (bani: bigint, what: string, health = false) => {
         if (bani % 100n !== 0n)
           problems.push({
             code: 'D112_BANI',
             message: `${what} are subdiviziuni de leu; D112 se completează în lei întregi.`,
+            ...(health ? { health: true as const } : {}),
           });
         return Number(bani / 100n);
       };
@@ -233,15 +235,15 @@ export function d112Declaration(
         employerDays: stored.employerDays,
         fundDays: stored.fundDays,
         base: {
-          income: whole(BigInt(stored.episode.base.income), `${what}: baza de calcul`),
+          income: whole(BigInt(stored.episode.base.income), `${what}: baza de calcul`, true),
           days: stored.episode.base.days,
         },
         percent: stored.code === '01' ? (stored.percent as D112SickPercent) : null,
         ...(stored.careCnpSealed ? { careCnp: sealer.open(companyId, stored.careCnpSealed) } : {}),
         ...(stored.urgencyCode ? { urgencyCode: stored.urgencyCode } : {}),
         ...(stored.infectiousCode ? { infectiousCode: stored.infectiousCode } : {}),
-        employer: whole(BigInt(stored.employer), `${what}: indemnizația angajatorului`),
-        fund: whole(BigInt(stored.fund), `${what}: indemnizația din FNUASS`),
+        employer: whole(BigInt(stored.employer), `${what}: indemnizația angajatorului`, true),
+        fund: whole(BigInt(stored.fund), `${what}: indemnizația din FNUASS`, true),
       });
       const rows = await tx
         .select({ line: payrollLines, terms: employmentTerms, employee: employees })
@@ -291,6 +293,7 @@ export function d112Declaration(
             problems.push({
               code: 'D112_SICK_CERTIFICATE',
               message: `${what}: completați în statul de plată locul de prescriere și codul de diagnostic, pe care D112 le cere.`,
+              health: true,
             });
             return [];
           }
@@ -300,6 +303,7 @@ export function d112Declaration(
             problems.push({
               code: 'D112_SICK_CERTIFICATE',
               message: `${what} acoperă o spitalizare: locul de prescriere este spitalul.`,
+              health: true,
             });
           return [certificateOf(stored, stored.place, stored.diagnosisSealed, what)];
         });
@@ -316,6 +320,7 @@ export function d112Declaration(
           problems.push({
             code: 'D112_SICK_ITEMS',
             message: `Salariatul ${name} are indemnizații de concediu medical fără certificatele din care statul de plată le-a calculat: D112 declară concediul medical doar pe certificate.`,
+            health: true,
           });
         const suspended = (pay.sick ?? []).reduce((days, stored) => days + stored.days, 0);
         const pensioner = pay.minimumExemption === 'pensioner';
@@ -406,8 +411,9 @@ export function d112Declaration(
                   employer: whole(
                     paid('employer', accidentRecords),
                     `${name}: accidentul de muncă`,
+                    true,
                   ),
-                  fund: whole(paid('fund', accidentRecords), `${name}: accidentul de muncă`),
+                  fund: whole(paid('fund', accidentRecords), `${name}: accidentul de muncă`, true),
                 },
               }
             : {}),
@@ -476,7 +482,7 @@ export function d112Declaration(
       problems.push(
         ...checkD112(model)
           .filter((check) => check.severity === 'error')
-          .map(({ code, message }) => ({ code, message })),
+          .map(({ code, message, health }) => ({ code, message, ...(health ? { health } : {}) })),
       );
       return {
         xml: problems.length ? '' : writeD112(model),

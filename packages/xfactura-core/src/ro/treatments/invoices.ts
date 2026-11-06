@@ -13,6 +13,7 @@ import {
   type Loaded,
   type OpenItemSpec,
   type PartyStatus,
+  type PostedEntry,
   type ReadPlan,
   type TaxEntrySpec,
   type Treatment,
@@ -27,7 +28,7 @@ import {
   parseMoney,
   parseScaled,
 } from '../../money';
-import { selectRate } from '../fx';
+import { selectRate, type AdjustmentRate } from '../fx';
 import { carryingRelease, INDEXED_LEASE_METHOD } from '../financing';
 import { creditPartner } from './settlement';
 import {
@@ -1854,7 +1855,8 @@ export const creditInput = z
      * point, in the original's year. */
     deduction: z.enum(['full', 'none', 'limited', 'prorata']).default('full'),
     /** Instead of `account`: each VAT category of the credit note split over the accounts the
-     * original used, as positive amounts in lei, each part with the original's deduction. */
+     * original used, as positive amounts in the credit note's currency (lei for one in lei), each
+     * part with the original's deduction. */
     allocations: z
       .array(
         z
@@ -1880,14 +1882,136 @@ export const creditInput = z
   });
 export type CreditInput = z.infer<typeof creditInput>;
 
+/** The clauses of a credit note in a currency: its VAT at its invoice's rate, its books at the
+ * rate of its own date, its partner's item released at its carrying amount. */
+export const CREDIT_FX_CLAUSES = {
+  vat: 'ANAF/Cod-fiscal-consolidat:art.282(9)',
+  books: 'OMFP1802/2014:pct.319',
+  difference: 'OMFP1802/2014:pct.322',
+} as const;
+
+/** The credit note's tax point: its own date (art. 282 alin. (9)), or the one it states (BT-7),
+ * even if it repeats the original supply's date (BT-72). */
+const creditTaxPoint = (body: Pick<InvoiceDocument, 'issueDate' | 'taxPointDate'>) =>
+  date(body.taxPointDate ?? body.issueDate);
+
+/** The rate one of the base operation's lines or entries recorded, as the kernel loaded it; else
+ * the rules' rate of the base operation's date, under the recorded id and value (a BNR revision
+ * since then leaves the base operation's rate as it was). */
+function baseOperationRate(
+  recorded: { rateId: string; rate: string } | undefined,
+  loaded: Loaded,
+  rules: RuleContext,
+  currency: string,
+  at: LocalDate,
+  purpose: 'accounting' | 'vat',
+): FxRate | Issue {
+  const known = recorded
+    ? (loaded.fxRates.get(currency) ?? []).find((rate) => rate.id === recorded.rateId)
+    : undefined;
+  if (known) return known;
+  const selected = selectRate(loaded, rules, currency, at, purpose);
+  return recorded && !('code' in selected)
+    ? { ...selected, id: recorded.rateId, rate: recorded.rate }
+    : selected;
+}
+
+/**
+ * The rate an adjustment of an operation in a currency converts its VAT base and VAT at, by the
+ * rules (`ro.fx.adjustment.vat`): the rate its base operation's base was determined at, as that
+ * operation's VAT entries record it (Codul fiscal art. 282 alin. (9); norme pct. 25 alin. (2)),
+ * else the VAT rate of its own tax point. `original` is the base operation: its tax point and the
+ * tax entries it booked. The base operation's dates must be among the rates loaded.
+ */
+export function adjustmentVatRate(
+  loaded: Loaded,
+  rules: RuleContext,
+  currency: string,
+  taxPoint: LocalDate,
+  original: { taxPoint: LocalDate; entries: readonly TaxEntrySpec[] },
+): FxRate | Issue {
+  const reading = rules.param<AdjustmentRate>(
+    'ro.fx.adjustment.vat',
+    'vat_chargeability_date',
+    taxPoint,
+  );
+  if (reading === 'event') return selectRate(loaded, rules, currency, taxPoint, 'vat');
+  return baseOperationRate(
+    original.entries.find((entry) => entry.currency?.code === currency)?.currency,
+    loaded,
+    rules,
+    currency,
+    original.taxPoint,
+    'vat',
+  );
+}
+
+/**
+ * The rates of a credit note in a currency. `accounting` is the accounting rate of its date, at
+ * which a refund beyond what its invoice still holds opens (OMFP 1802/2014 pct. 319). `vat`
+ * converts its VAT base and VAT (`adjustmentVatRate`): its invoice's. `books` converts its revenue
+ * or expense (`ro.fx.adjustment.books`): the accounting rate of its date, or its invoice's, as the
+ * invoice's receivable or payable line records it.
+ */
+function creditRates(
+  credit: Invoice,
+  original: Invoice,
+  originEntry: PostedEntry | undefined,
+  itemId: string,
+  originalEntries: readonly TaxEntrySpec[],
+  loaded: Loaded,
+  rules: RuleContext,
+): { accounting: FxRate; vat: FxRate; books: FxRate; vatReading: AdjustmentRate } | Issue {
+  const currency = credit.body.currency;
+  const accounting = selectRate(loaded, rules, currency, date(credit.body.issueDate), 'accounting');
+  if ('code' in accounting) return accounting;
+  const vat = adjustmentVatRate(loaded, rules, currency, creditTaxPoint(credit.body), {
+    taxPoint: taxPointOf(original.body),
+    entries: originalEntries,
+  });
+  if ('code' in vat) return vat;
+  const booksReading = rules.param<AdjustmentRate>(
+    'ro.fx.adjustment.books',
+    'accounting_transaction_date',
+    date(credit.body.issueDate),
+  );
+  const books =
+    booksReading === 'event'
+      ? accounting
+      : baseOperationRate(
+          originEntry?.lines.find((line) => line.openItem === itemId && line.currency)?.currency,
+          loaded,
+          rules,
+          currency,
+          date(original.body.issueDate),
+          'accounting',
+        );
+  if ('code' in books) return books;
+  const vatReading = rules.param<AdjustmentRate>(
+    'ro.fx.adjustment.vat',
+    'vat_chargeability_date',
+    creditTaxPoint(credit.body),
+  );
+  return { accounting, vat, books, vatReading };
+}
+
 /**
  * Recognizes a credit note (381, or a negative 380) against its original invoice: the original
  * accounts and VAT rates are reversed for the credited amounts in the credit note's own period,
  * and the original receivable or payable is reduced. Each VAT category of the credit note must be
  * one of the original's; a credit note on several categories splits them over accounts as the
- * original did. Crediting more than remains open is refused. An original under VAT on collection
- * has its deferral reduced first; what exceeds it adjusts the chargeable VAT on the credit note's
- * date, for the reviewer to confirm (art. 282 alin. (10), norme pct. 32 alin. (2) and (5)).
+ * original did. The receivable or payable is reduced by what it still holds, never past zero; the
+ * rest is a refund of the partner (`creditPartner`). An original under VAT on collection has its
+ * deferral reduced first; what exceeds it adjusts the chargeable VAT on the credit note's date,
+ * for the reviewer to confirm (art. 282 alin. (10), norme pct. 32 alin. (2) and (5)).
+ *
+ * A credit note in a currency is in its invoice's. Its VAT base and VAT are converted at the rate
+ * of its invoice's base, as the invoice's VAT entries record it (art. 282 alin. (9), norme pct. 25
+ * alin. (2)), its VAT in lei the amount it states (BT-111), compared with that rate; its revenue or
+ * expense at the accounting rate of its own date (OMFP 1802/2014 pct. 319); the receivable or
+ * payable leaves at its carrying amount (the invoice's rate, or the last month-end
+ * revaluation's), and a refund opens in the currency at the credit note's rate: what that leaves
+ * is a realized exchange difference, on 6651 or 7651 (pct. 322).
  */
 export const creditRecognition: Treatment<CreditInput> = {
   id: 'invoices.credit',
@@ -1906,12 +2030,33 @@ export const creditRecognition: Treatment<CreditInput> = {
     profile: true,
     ...(input.stock ? { stock: invoiceStockQuery(input.stock) } : {}),
   }),
-  // The original's entries, for the VAT it still defers under VAT on collection.
+  // The original's entries, for the VAT it still defers under VAT on collection and the rates a
+  // credit note in a currency takes from it; and that note's rates: of its date and tax point,
+  // and of its invoice's dates, for a rate the invoice's entries do not record.
   followUp(input, loaded) {
     const entries = [...loaded.openItems.values()]
       .filter((item) => item.documentId === input.originalDocumentId)
       .flatMap((item) => item.history ?? []);
-    return entries.length ? { entries: [...new Set(entries)] } : null;
+    const plan: ReadPlan = entries.length ? { entries: [...new Set(entries)] } : {};
+    const credit = invoiceDocumentSchema.safeParse(loaded.documents.get(input.documentId)?.body);
+    const original = invoiceDocumentSchema.safeParse(
+      loaded.documents.get(input.originalDocumentId)?.body,
+    );
+    if (
+      credit.success &&
+      credit.data.currency !== LEDGER_CURRENCY &&
+      isSupportedCurrency(credit.data.currency)
+    )
+      plan.fx = [
+        ...new Set([
+          credit.data.issueDate,
+          creditTaxPoint(credit.data),
+          ...(original.success ? [original.data.issueDate, taxPointOf(original.data)] : []),
+        ]),
+      ]
+        .sort()
+        .map((until) => ({ currency: credit.data.currency, until: date(until) }));
+    return plan.entries || plan.fx ? plan : null;
   },
   evaluate(input, loaded, rules) {
     const credit = invoiceOf(loaded, input.documentId, true);
@@ -1922,8 +2067,29 @@ export const creditRecognition: Treatment<CreditInput> = {
         issues: ['code' in credit ? credit : [], 'code' in original ? original : []].flat(),
       };
     const issues: Issue[] = [];
-    if (credit.body.currency !== LEDGER_CURRENCY || original.body.currency !== LEDGER_CURRENCY)
-      issues.push(block('CURRENCY', 'Notele de credit în valută cer un tratament separat.'));
+    const currency = credit.body.currency;
+    const foreign = currency !== LEDGER_CURRENCY;
+    if (currency !== original.body.currency)
+      issues.push(
+        block(
+          'CURRENCY',
+          `Nota de credit este în ${currency}, iar factura inițială în ${original.body.currency}: ea corectează factura în moneda acesteia.`,
+          'originalDocumentId',
+        ),
+      );
+    else if (!isSupportedCurrency(currency))
+      issues.push(block('CURRENCY', `Moneda ${currency} nu este acceptată.`));
+    if (
+      foreign &&
+      (credit.body.vatCurrency !== LEDGER_CURRENCY || credit.body.vatAccountingTotal === undefined)
+    )
+      issues.push(
+        block(
+          'VAT_CURRENCY',
+          'Nota de credit în valută trebuie să indice TVA în lei (BT-6, BT-111).',
+        ),
+      );
+    if (issues.some((issue) => issue.code === 'CURRENCY')) return { effect: null, issues };
     if (
       credit.direction !== original.direction ||
       credit.record.partyId !== original.record.partyId
@@ -1947,19 +2113,21 @@ export const creditRecognition: Treatment<CreditInput> = {
       );
     // The credit note's VAT is chargeable on its own date, the event's (art. 282 alin. (9)), even
     // if it repeats the original supply's date (BT-72); its rates are the original's, read on the
-    // original's tax point.
-    const taxPoint = date(credit.body.taxPointDate ?? credit.body.issueDate);
+    // original's tax point, and so is its exchange rate.
+    const taxPoint = creditTaxPoint(credit.body);
     const taxPeriod = vatPeriodOf(loaded, taxPoint);
     const originalTaxPoint = taxPointOf(original.body);
     const originalVat = vatCategories(original, loaded, rules, originalTaxPoint);
     issues.push(...originalVat.issues);
     const originalKeys = originalVat.categories.map((item) => item.key);
+    // Amounts in the credit note's currency (lei for one in lei).
+    const minor = (value: string) => parseMoney(value, currency);
     const categories = credit.body.taxes.map((tax) => ({
       key: categoryKey(tax.category, tax.rate),
       category: tax.category,
       rate: tax.rate,
-      base: ron(tax.base),
-      tax: ron(tax.tax),
+      minorBase: minor(tax.base),
+      minorTax: minor(tax.tax),
     }));
     if (
       categories.some((item) => !originalKeys.includes(item.key)) ||
@@ -1975,7 +2143,7 @@ export const creditRecognition: Treatment<CreditInput> = {
       ...categories.map((item) => ({
         account: input.account!,
         vat: item.key,
-        amount: formatMoney(item.base, LEDGER_CURRENCY),
+        amount: formatMoney(item.minorBase, currency),
         deduction: input.deduction,
       })),
     ];
@@ -1983,15 +2151,15 @@ export const creditRecognition: Treatment<CreditInput> = {
       for (const item of categories) {
         const allocated = input.allocations
           .filter((part) => part.vat === item.key)
-          .reduce((sum, part) => sum + ron(part.amount), 0n);
+          .reduce((sum, part) => sum + minor(part.amount), 0n);
         if (
-          allocated !== item.base ||
+          allocated !== item.minorBase ||
           input.allocations.some((part) => !categories.some((c) => c.key === part.vat))
         )
           issues.push(
             block(
               'ALLOCATION',
-              `Baza categoriei ${item.key} este ${formatMoney(item.base, LEDGER_CURRENCY)} lei; repartizarea însumează ${formatMoney(allocated, LEDGER_CURRENCY)}.`,
+              `Baza categoriei ${item.key} este ${formatMoney(item.minorBase, currency)} ${foreign ? currency : 'lei'}; repartizarea însumează ${formatMoney(allocated, currency)}.`,
               'allocations',
             ),
           );
@@ -2007,25 +2175,109 @@ export const creditRecognition: Treatment<CreditInput> = {
           'originalDocumentId',
         ),
       );
+    else if (item.currency !== currency)
+      issues.push(
+        block(
+          'ORIGINAL_OPEN_ITEM',
+          `Creanța sau datoria facturii inițiale este în ${item.currency}, nu în ${currency}.`,
+          'originalDocumentId',
+        ),
+      );
     // An original under VAT on collection: what it still defers (art. 282 alin. (10)).
     const deferral = item ? deferredInvoice(item, loaded) : null;
     if (deferral && 'code' in deferral) issues.push(deferral);
+    // The system takes no invoice in a currency (`CASH_VAT_CURRENCY` at recognition), so none of
+    // their credit notes either.
+    if (deferral && !('code' in deferral) && foreign)
+      issues.push(
+        block(
+          'CASH_VAT_CURRENCY',
+          'Facturile în valută în sistemul TVA la încasare nu sunt încă tratate, nici notele lor de credit.',
+        ),
+      );
+    if (input.stock && foreign)
+      issues.push(
+        block(
+          'STOCK_CREDIT_CURRENCY',
+          'Mișcarea în gestiune a unei note de credit în valută nu este acoperită: înregistrați nota fără stoc și returul separat.',
+          'stock',
+        ),
+      );
+    // The original's own tax entries, by key: an exempt category's code (its basis) is the
+    // original's, and so is the rate its base was converted at.
+    const originalEntries = new Map(
+      [...loaded.entries.values()]
+        .flatMap((entry) => entry.taxEntries)
+        .filter((entry) => entry.documentId === original.record.id)
+        .map((entry) => [entry.key, entry]),
+    );
+    const rates =
+      foreign && item && !issues.some((issue) => issue.severity === 'block')
+        ? creditRates(
+            credit,
+            original,
+            loaded.entries.get(item.originEntryId),
+            item.id,
+            [...originalEntries.values()],
+            loaded,
+            rules,
+          )
+        : null;
+    if (rates && 'code' in rates) issues.push(rates);
     if (issues.some((issue) => issue.severity === 'block')) return { effect: null, issues };
+    const fx = rates && !('code' in rates) ? rates : null;
     const deferring = deferral && !('code' in deferral) ? deferral : null;
 
     const purchase = credit.direction === 'purchase';
-    const gross = ron(credit.body.totals.gross);
     const partyId = credit.record.partyId!;
-    const partNet = parts.map((part) => ron(part.amount));
+    const quote = (rate: FxRate) => ({ rate: rate.rate, multiplier: rate.multiplier });
+    const grossMinor = minor(credit.body.totals.gross);
+    // In lei: each part's net at the books' rate; each category's base at the VAT rate and its
+    // VAT as the credit note states it in lei (BT-111), split in proportion to its own amounts.
+    const partMinor = parts.map((part) => minor(part.amount));
+    let netBani: bigint;
+    let categoryBase: bigint[];
+    let categoryTax: bigint[];
+    if (fx) {
+      netBani = convertMinor(minor(credit.body.totals.net), currency, quote(fx.books));
+      const tax = ron(credit.body.vatAccountingTotal!);
+      const expected = convertMinor(minor(credit.body.totals.tax), currency, quote(fx.vat));
+      if (tax !== expected)
+        issues.push({
+          ...warn(
+            'VAT_FX',
+            fx.vatReading === 'base_operation'
+              ? `TVA în lei din nota de credit (${formatMoney(tax, LEDGER_CURRENCY)}) diferă de TVA la cursul ${fx.vat.rate} din ${fx.vat.date} cu care s-a determinat baza facturii ${original.body.number} (${formatMoney(expected, LEDGER_CURRENCY)}): ajustarea bazei de impozitare se face la cursul operațiunii de bază (art. 282 alin. (9) din Codul fiscal, norme pct. 25 alin. (2)). Confirmați suma.`
+              : `TVA în lei din nota de credit (${formatMoney(tax, LEDGER_CURRENCY)}) diferă de TVA la cursul BNR ${fx.vat.rate} din ${fx.vat.date}, al datei notei (${formatMoney(expected, LEDGER_CURRENCY)}). Confirmați suma.`,
+          ),
+          details: { rate: fx.vat.rate, rateId: fx.vat.id, clause: CREDIT_FX_CLAUSES.vat },
+        });
+      categoryBase = share(
+        convertMinor(minor(credit.body.totals.net), currency, quote(fx.vat)),
+        categories.map((category) => category.minorBase),
+      );
+      categoryTax = share(
+        tax,
+        categories.map((category) => category.minorTax),
+      );
+    } else {
+      netBani = partMinor.reduce((sum, value) => sum + value, 0n);
+      categoryBase = categories.map((category) => category.minorBase);
+      categoryTax = categories.map((category) => category.minorTax);
+    }
+    const partNet = fx ? share(netBani, partMinor) : partMinor;
+    const gross = fx
+      ? netBani + categoryTax.reduce((sum, value) => sum + value, 0n)
+      : ron(credit.body.totals.gross);
     // Each category's VAT split over its parts; a part reverses the deduction it had.
     const partTax = parts.map(() => 0n);
-    for (const category of categories) {
+    const partTaxMinor = parts.map(() => 0n);
+    categories.forEach((category, c) => {
       const members = parts.flatMap((part, p) => (part.vat === category.key ? [p] : []));
-      share(
-        category.tax,
-        members.map((p) => partNet[p]!),
-      ).forEach((value, i) => (partTax[members[i]!] = value));
-    }
+      const weights = members.map((p) => partMinor[p]!);
+      share(categoryTax[c]!, weights).forEach((value, i) => (partTax[members[i]!] = value));
+      share(category.minorTax, weights).forEach((value, i) => (partTaxMinor[members[i]!] = value));
+    });
     const limited =
       purchase && parts.some((part) => part.deduction === 'limited')
         ? parseScaled(
@@ -2065,23 +2317,30 @@ export const creditRecognition: Treatment<CreditInput> = {
         };
       percent = provisional.fact.percent;
     }
-    const deducted = parts.map((part, p) =>
+    const portion = (amount: bigint, part: (typeof parts)[number]) =>
       !purchase || part.deduction === 'none'
         ? 0n
         : part.deduction === 'full'
-          ? partTax[p]!
+          ? amount
           : part.deduction === 'prorata'
-            ? prorataShare(partTax[p]!, percent)
-            : divRound(partTax[p]! * limited, 1_000_000n, 'halfAwayFromZero'),
-    );
-    // The original's own tax entries, by key: an exempt category's code (its basis) is the
-    // original's.
-    const originalEntries = new Map(
-      [...loaded.entries.values()]
-        .flatMap((entry) => entry.taxEntries)
-        .filter((entry) => entry.documentId === original.record.id)
-        .map((entry) => [entry.key, entry]),
-    );
+            ? prorataShare(amount, percent)
+            : divRound(amount * limited, 1_000_000n, 'halfAwayFromZero');
+    const deducted = parts.map((part, p) => portion(partTax[p]!, part));
+    const deductedMinor = parts.map((part, p) => portion(partTaxMinor[p]!, part));
+    // A line of a credit note in a currency records its currency amount (negative, as its lei)
+    // and the rate it was converted at.
+    const line = (spec: LineSpec, amount: bigint, rate: FxRate | undefined): LineSpec =>
+      fx && rate && amount !== 0n
+        ? {
+            ...spec,
+            currency: {
+              code: currency,
+              minor: spec.bani < 0n ? -amount : amount,
+              rateId: rate.id,
+              rate: rate.rate,
+            },
+          }
+        : spec;
     // Red storno: the original sides with negative amounts, so turnover stays correct. The
     // original's receivable or payable is reduced by what it still holds; beyond it (the invoice
     // collected or paid already), the customer is owed a refund (462) or the supplier owes one
@@ -2093,34 +2352,45 @@ export const creditRecognition: Treatment<CreditInput> = {
       loaded,
       purchase,
       bani: gross,
-      minor: gross,
+      minor: grossMinor,
+      ...(fx ? { rate: fx.accounting } : {}),
       partyId,
     });
+    const amountOf = (lei: bigint, inCurrency: bigint) =>
+      foreign
+        ? `${formatMoney(inCurrency, currency)} ${currency}`
+        : `${formatMoney(lei, LEDGER_CURRENCY)} lei`;
     if (partner.refund)
       issues.push(
         warn(
           'CREDIT_REFUND',
-          `Factura ${original.body.number} mai are deschiși ${formatMoney(gross - partner.refund.bani, LEDGER_CURRENCY)} lei: restul notei de credit, ${formatMoney(partner.refund.bani, LEDGER_CURRENCY)} lei, ${purchase ? 'îl datorează furnizorul (461 „Debitori diverși”)' : 'se datorează clientului (462 „Creditori diverși”)'}, de restituit sau de compensat (OMFP nr. 1.802/2014, funcțiunile conturilor ${purchase ? '461' : '462'}). Confirmați.`,
+          `Factura ${original.body.number} mai are deschiși ${amountOf(gross - partner.refund.bani, grossMinor - partner.refund.minor)}: restul notei de credit, ${amountOf(partner.refund.bani, partner.refund.minor)}, ${purchase ? 'îl datorează furnizorul (461 „Debitori diverși”)' : 'se datorează clientului (462 „Creditori diverși”)'}, de restituit sau de compensat (OMFP nr. 1.802/2014, funcțiunile conturilor ${purchase ? '461' : '462'}). Confirmați.`,
         ),
       );
     if (!purchase) lines.push(...partner.lines);
     const partLines: number[] = [];
     parts.forEach((part, p) => {
       partLines[p] = lines.length;
-      lines.push({
-        account: part.account,
-        side: purchase ? 'D' : 'C',
-        bani: -(partNet[p]! + (purchase ? partTax[p]! - deducted[p]! : 0n)),
-      });
+      const kept = purchase ? partTax[p]! - deducted[p]! : 0n;
+      const keptMinor = purchase ? partTaxMinor[p]! - deductedMinor[p]! : 0n;
+      lines.push(
+        line(
+          { account: part.account, side: purchase ? 'D' : 'C', bani: -(partNet[p]! + kept) },
+          partMinor[p]! + keptMinor,
+          fx?.books,
+        ),
+      );
     });
     const cashVat: { code: string; deferred: string; chargeable: string }[] = [];
-    for (const category of categories) {
+    for (const [c, category] of categories.entries()) {
       const exempt = isExemptCategory(category.category);
       const outside = purchase && category.category === 'O';
-      if (category.tax === 0n && !exempt && !outside) continue;
+      if (categoryTax[c] === 0n && !exempt && !outside) continue;
       const members = parts.flatMap((part, p) => (part.vat === category.key ? [p] : []));
       const deductedTax = members.reduce((sum, p) => sum + deducted[p]!, 0n);
-      const ledger = purchase ? deductedTax : category.tax;
+      const deductedTaxMinor = members.reduce((sum, p) => sum + deductedMinor[p]!, 0n);
+      const ledger = purchase ? deductedTax : categoryTax[c]!;
+      const ledgerMinor = purchase ? deductedTaxMinor : category.minorTax;
       const originKey = originalKeys.length === 1 ? 'vat' : `vat:${category.key}`;
       const originCode = originalEntries.get(originKey)?.code;
       // A purchase outside the scope of VAT reduces its base where the original recorded one.
@@ -2148,14 +2418,21 @@ export const creditRecognition: Treatment<CreditInput> = {
             }
           : {};
       const key = categories.length === 1 ? 'vat' : `vat:${category.key}`;
-      // Booked on `account` with the reduction `amounts` (positive), as a red storno.
+      // Booked on `account` with the reduction `amounts` (positive), as a red storno; in a
+      // currency, with its amounts in the currency at the VAT rate.
       const book = (
         account: string,
         amounts: CashVatAmounts,
         extra: Partial<TaxEntrySpec> = {},
       ): TaxEntrySpec => {
         if (amounts.ledger !== 0n)
-          lines.push({ account, side: purchase ? 'D' : 'C', bani: -amounts.ledger });
+          lines.push(
+            line(
+              { account, side: purchase ? 'D' : 'C', bani: -amounts.ledger },
+              ledgerMinor,
+              fx?.vat,
+            ),
+          );
         const entry = vatEntry(
           credit,
           {
@@ -2167,6 +2444,17 @@ export const creditRecognition: Treatment<CreditInput> = {
             taxPeriod,
             ...(amounts.ledger !== 0n ? { line: lines.length - 1 } : {}),
             originTaxEntry: `${original.record.id}:${originKey}`,
+            ...(fx
+              ? {
+                  currency: {
+                    code: currency,
+                    baseMinor: -category.minorBase,
+                    taxMinor: -category.minorTax,
+                    rateId: fx.vat.id,
+                    rate: fx.vat.rate,
+                  },
+                }
+              : {}),
             ...extra,
           },
           code,
@@ -2182,8 +2470,8 @@ export const creditRecognition: Treatment<CreditInput> = {
         };
       };
       const reduction = {
-        base: category.base,
-        tax: category.tax,
+        base: categoryBase[c]!,
+        tax: categoryTax[c]!,
         deductible: deductedTax,
         ledger,
       };
@@ -2245,6 +2533,21 @@ export const creditRecognition: Treatment<CreditInput> = {
         );
     }
     if (purchase) lines.push(...partner.lines);
+    // In a currency, the partner's item leaves at its carrying amount and the refund opens at
+    // the credit note's rate, while its other lines are at the books' and the VAT rate: what the
+    // partner's lines release beyond them is a realized exchange difference (OMFP 1802/2014 pct.
+    // 322), a loss when a sale gives up more than it reverses, a gain when a purchase is relieved
+    // of more.
+    const difference = partner.excess;
+    if (difference !== 0n) {
+      const loss = purchase ? difference < 0n : difference > 0n;
+      lines.push({
+        account: loss ? '6651' : '7651',
+        side: loss ? 'D' : 'C',
+        bani: difference < 0n ? -difference : difference,
+        memo: 'Diferență de curs realizată',
+      });
+    }
     // The goods it moves in the stock register (G1): back to the supplier, or from the customer.
     let stock: StockResult | null = null;
     if (input.stock) {
@@ -2309,15 +2612,39 @@ export const creditRecognition: Treatment<CreditInput> = {
       schedules: [],
       ...(stock?.book ? stock.book.effectPart() : {}),
       explanation: {
-        summary: `${credit.body.number} reduce ${original.body.number} cu ${credit.body.totals.gross} lei, la cota inițială.`,
+        summary: fx
+          ? `${credit.body.number} reduce ${original.body.number} cu ${credit.body.totals.gross} ${currency}, la cota inițială: ${purchase ? 'cheltuiala' : 'venitul'} la cursul ${fx.books.rate} (${fx.books.date}), TVA ${formatMoney(
+              categoryTax.reduce((sum, value) => sum + value, 0n),
+              LEDGER_CURRENCY,
+            )} lei la cursul ${fx.vat.rate}${fx.vatReading === 'base_operation' ? ' al facturii inițiale (art. 282 alin. (9))' : ''}, ${purchase ? 'datoria' : 'creanța'} la valoarea ei contabilă.`
+          : `${credit.body.number} reduce ${original.body.number} cu ${credit.body.totals.gross} lei, la cota inițială.`,
         details: {
           originalDocumentId: original.record.id,
           taxPoint,
+          ...(fx
+            ? {
+                fx: {
+                  currency,
+                  books: { rate: fx.books.rate, rateId: fx.books.id },
+                  vat: { rate: fx.vat.rate, rateId: fx.vat.id },
+                  accounting: { rate: fx.accounting.rate, rateId: fx.accounting.id },
+                  difference: formatMoney(difference, LEDGER_CURRENCY),
+                  clauses: [
+                    CREDIT_FX_CLAUSES.vat,
+                    CREDIT_FX_CLAUSES.books,
+                    CREDIT_FX_CLAUSES.difference,
+                  ],
+                },
+              }
+            : {}),
           ...(partner.refund
             ? {
                 refund: {
                   account: partner.refund.account,
                   amount: formatMoney(partner.refund.bani, LEDGER_CURRENCY),
+                  ...(foreign
+                    ? { currency, currencyAmount: formatMoney(partner.refund.minor, currency) }
+                    : {}),
                 },
               }
             : {}),

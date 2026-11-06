@@ -11,6 +11,7 @@ import {
 import type { DeterminationContext, Known } from '../../determinations/determine';
 import { determineVatDistance, type DistanceSale } from '../../oss/determine';
 import type { OssDeclarations } from '../../oss/parameters';
+import { d406UnionSchemeTax, type D406UnionSchemeReading } from '../../saft/tax-codes';
 import { euConsumerInput, euConsumerRecognition } from '../../oss/treatment';
 import { invoiceKinds } from '../../treatments/invoices';
 import type { CaseOutcome, ReviewCase, ReviewSpec } from '../types';
@@ -111,7 +112,10 @@ function consumerSale(country: string, net: string, rate: string, tax: string): 
 function booked(
   register: ParameterRegister,
   sale: { country: string; net: string; rate: string; tax: string },
-): CaseOutcome & { base: bigint } {
+): CaseOutcome & {
+  base: bigint;
+  entries: { country: string; rate: string; baseBani: bigint; taxBani: bigint }[];
+} {
   const rules = rulesOf(register);
   const evaluation = euConsumerRecognition.evaluate(
     euConsumerInput.parse({
@@ -129,7 +133,12 @@ function booked(
   );
   const issues = evaluation.issues.map((issue) => `${issue.severity} ${issue.code}`);
   if (!evaluation.effect)
-    return { summary: `Blocat: ${issues.join(', ')}`, lines: parameterLines(rules), base: 0n };
+    return {
+      summary: `Blocat: ${issues.join(', ')}`,
+      lines: parameterLines(rules),
+      base: 0n,
+      entries: [],
+    };
   return {
     summary: `Propus: ${evaluation.effect.lines.map((line) => `${line.side === 'D' ? 'Dr' : 'Cr'} ${line.account} ${lei(line.bani)}`).join(' / ')}`,
     lines: [
@@ -140,6 +149,12 @@ function booked(
       ...parameterLines(rules),
     ],
     base: evaluation.effect.taxEntries.reduce((sum, entry) => sum + entry.baseBani, 0n),
+    entries: evaluation.effect.taxEntries.map((entry) => ({
+      country: String(entry.attributes.country),
+      rate: String(entry.attributes.rate),
+      baseBani: entry.baseBani,
+      taxBani: entry.taxBani,
+    })),
   };
 }
 
@@ -173,11 +188,7 @@ function placementCase(
     run: (register) => ({
       engine: run(register),
       alternative: run(
-        withValue(register, 'ro.vat.oss.declarations', {
-          d300: 'R3',
-          d394: 'none',
-          d406: '310340',
-        }),
+        withValue(register, 'ro.vat.oss.declarations', { d300: 'R3', d394: 'none' }),
       ),
     }),
   };
@@ -491,5 +502,120 @@ export const ossReturnSpec: ReviewSpec = {
   gaps: [
     'Articolul 61 din Regulamentul de punere în aplicare (UE) nr. 282/2011 (în registru) confirmă mecanismul: cifrele unei declarații depuse, din trimestrul III 2021 încolo, se modifică numai prin ajustări într-o declarație ulterioară, în trei ani de la termenul declarației inițiale; dacă o notă de credit este o astfel de modificare sau o reducere a trimestrului în care se emite nu spune; notele explicative ale Comisiei privind comerțul electronic (2020) nu sunt în registrul surselor.',
     'Textul român (art. 315 alin. (12)) spune „din ziua următoare”; motorul citește următoarea zi de publicare a BCE.',
+  ],
+};
+
+// ---------------------------------------------------------------------------------------------
+// How D406 reports the Union scheme's sales (ANAF's SAF-T definitions, sheet Livrari and
+// TaxCodeDetails; its answers v1.2, MF.TT.12 and Răspuns 6)
+
+function d406Lines(
+  register: ParameterRegister,
+  sales: { country: string; net: string; rate: string; tax: string }[],
+  sign: 1n | -1n,
+): CaseOutcome {
+  const rules = rulesOf(register);
+  const reading = rules.param<D406UnionSchemeReading>(
+    'ro.d406.oss',
+    'reporting_period_start',
+    '2026-07-01' as LocalDate,
+  );
+  const table = new Set<string>();
+  const lines: string[] = [];
+  for (const sale of sales) {
+    const outcome = booked(register, sale);
+    if (!outcome.entries.length) return { summary: outcome.summary, lines: outcome.lines };
+    for (const entry of outcome.entries) {
+      const tax = d406UnionSchemeTax(reading, { state: entry.country, rate: entry.rate });
+      const percentage = tax.percentage ?? '0';
+      table.add(`${tax.taxCode} ${percentage}% ${tax.country ?? 'RO'}`);
+      lines.push(
+        `704 (${entry.country}): TaxCode ${tax.taxCode}, TaxPercentage ${percentage}, TaxBase ${lei(sign * entry.baseBani)}, TaxAmount ${lei(tax.vat ? sign * entry.taxBani : 0n)} lei`,
+      );
+    }
+  }
+  return {
+    summary: `TaxTable: ${[...table].join('; ')}`,
+    lines: [...lines, ...parameterLines(rules)],
+  };
+}
+function d406Case(
+  title: string,
+  facts: string,
+  sales: { country: string; net: string; rate: string; tax: string }[],
+  sign: 1n | -1n = 1n,
+): ReviewCase {
+  return {
+    title,
+    facts,
+    run: (register) => ({
+      engine: d406Lines(register, sales, sign),
+      alternative: d406Lines(
+        withValue(register, 'ro.d406.oss', { code: '310325', country: 'RO' }),
+        sales,
+        sign,
+      ),
+    }),
+  };
+}
+
+export const d406OssSpec: ReviewSpec = {
+  key: 'ro.d406.oss',
+  kind: 'interpretation',
+  act: 'ANAF/D406',
+  minutes: 15,
+  readings: {
+    engine:
+      'Vânzările declarate în regimul special Uniune se raportează în D406 cu codul 310340 („Livrări de bunuri expediate/ transportate din RO sau servicii prestate din RO”, corespondent D398 secțiunea 1), cu cota statului de consum, „în funcție de Cota TVA din statul membru în care sa fac livrările”, pe linie și în tabela de taxe, câte o intrare pe stat și cotă, cu țara statului de consum (Country), și cu TVA datorată acolo.',
+    alternative:
+      'Se raportează cu codul 310325 („Livrari de bunuri/ prestari de servicii care nu sunt raportabile in decontul de TVA din Romania si care se raporteaza in decontul de TVA din alte tari”), cota 0%, fără TVA și cu țara RO, cum a răspuns ANAF pentru vânzări la distanță declarate în Bulgaria și Ungaria.',
+  },
+  question:
+    'Cu ce cod de taxă, cotă și țară (TaxCodeDetails/Country) se raportează în D406 vânzările la distanță și serviciile electronice către consumatori din alte state membre declarate în regimul special Uniune (D398)?',
+  context: [
+    'ANAF/D406:Livrari.310325',
+    'ANAF/SAFT_FAQ_2022:R6.distanta',
+    `${CODE}:art.315(7)-(10)`,
+  ],
+  cases: [
+    d406Case(
+      'Curs online vândut unui consumator din Germania',
+      'Firmă înregistrată în OSS; factura de 100,00 EUR + TVA Germania 19% (19,00 EUR) din 10.08.2026, curs BNR 5,0700; D406 trimestrial pentru T3 2026.',
+      [{ country: 'DE', net: '100.00', rate: '19', tax: '19.00' }],
+    ),
+    d406Case(
+      'Trei state în același trimestru',
+      'Aceeași firmă, în T3 2026: Germania 100,00 EUR + 19%, Franța 1.000,00 EUR + 20%, Italia 500,00 EUR + 22%.',
+      [
+        { country: 'DE', net: '100.00', rate: '19', tax: '19.00' },
+        { country: 'FR', net: '1000.00', rate: '20', tax: '200.00' },
+        { country: 'IT', net: '500.00', rate: '22', tax: '110.00' },
+      ],
+    ),
+    d406Case(
+      'Aceeași cotă în două state',
+      'Consumatori din Cipru și din Germania, ambele la 19%: 200,00 EUR + 38,00 EUR fiecare.',
+      [
+        { country: 'CY', net: '200.00', rate: '19', tax: '38.00' },
+        { country: 'DE', net: '200.00', rate: '19', tax: '38.00' },
+      ],
+    ),
+    d406Case(
+      'Consumator din Grecia',
+      'Abonament electronic vândut unui consumator din Grecia (prefixul de TVA EL, codul ISO GR): 100,00 EUR + TVA 24% (24,00 EUR).',
+      [{ country: 'GR', net: '100.00', rate: '24', tax: '24.00' }],
+    ),
+    d406Case(
+      'Nota de credit din trimestrul următor',
+      'Factura unui curs vândut în Franța (1.000,00 EUR + 20%) este stornată integral în T4 2026, prin notă de credit în roșu la cota ei: D406 al lui T4 o raportează cu sumele negative.',
+      [{ country: 'FR', net: '1000.00', rate: '20', tax: '200.00' }],
+      -1n,
+    ),
+  ],
+  gaps: [
+    'Validatorul D406 al ANAF (J2.2.8, 16.02.2026) acceptă ambele lecturi: nu verifică cota de pe linia 310340 față de tabela de taxe, nici țara intrării (DE sau RO).',
+    'Țara intrării 310340 poate fi și RO, valoarea implicită a MF.TT.12, cu cota statului de consum; parametrul o admite (country: RO), fără un text care să o ceară.',
+    'Răspunsul 6 privește o firmă înregistrată în scopuri de TVA în Bulgaria și Ungaria, care declară acolo; regimul special Uniune se declară în România, prin D398, căruia nomenclatorul îi leagă codul 310340.',
+    'Din 05.06.2025, nomenclatorul de țări al schemei are codurile EU și IM pentru partenerii înrolați în OSS și IOSS (codurile lor de identificare); consumatorul rămâne un client 04 cu codul din registre (MF.C.3), iar regimul de import (IOSS) nu este acoperit de aplicație.',
   ],
 };

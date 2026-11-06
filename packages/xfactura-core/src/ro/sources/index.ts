@@ -15,6 +15,7 @@ import { stockClauses, stockSources } from './stock';
 import { tradeClauses, tradeSources } from './trade';
 import { retailClauses, retailSources } from './retail';
 import { productionClauses, productionSources } from './production';
+import { creditClauses } from './credit';
 
 /**
  * Where the engine's Romanian rules come from. A source is a legal act or an official
@@ -2567,6 +2568,7 @@ export const clauses: readonly Clause[] = [
   ...tradeClauses,
   ...retailClauses,
   ...productionClauses,
+  ...creditClauses,
 ];
 
 const sourceById = new Map(legalSources.map((source) => [source.id, source]));

@@ -690,21 +690,26 @@ export class Reports {
         .where(and(eq(lines.companyId, actor.companyId), lte(entries.date, date)))
         .groupBy(lines.account)
         .orderBy(asc(lines.account));
-      const items = await tx
-        .select({ account: openItems.controlAccount, party: parties.name, bani: net })
-        .from(lines)
-        .innerJoin(entries, join)
-        .innerJoin(
-          openItems,
-          and(eq(openItems.companyId, lines.companyId), eq(openItems.id, lines.openItemId)),
-        )
-        .innerJoin(
-          parties,
-          and(eq(parties.companyId, openItems.companyId), eq(parties.id, openItems.partyId)),
-        )
-        .where(and(eq(lines.companyId, actor.companyId), lte(entries.date, date)))
-        .groupBy(openItems.id)
-        .orderBy(asc(openItems.controlAccount), asc(parties.name));
+      // An agent whose reads do not cover pay sees a personnel account's balance, not each
+      // person's item on it (as `ledger.inventoryRegister`).
+      const pay = (await this.commands.readable(tx, actor))(payClasses);
+      const items = (
+        await tx
+          .select({ account: openItems.controlAccount, party: parties.name, bani: net })
+          .from(lines)
+          .innerJoin(entries, join)
+          .innerJoin(
+            openItems,
+            and(eq(openItems.companyId, lines.companyId), eq(openItems.id, lines.openItemId)),
+          )
+          .innerJoin(
+            parties,
+            and(eq(parties.companyId, openItems.companyId), eq(parties.id, openItems.partyId)),
+          )
+          .where(and(eq(lines.companyId, actor.companyId), lte(entries.date, date)))
+          .groupBy(openItems.id)
+          .orderBy(asc(openItems.controlAccount), asc(parties.name))
+      ).filter((row) => pay || !personnelAccount(row.account));
       const disposals = new Map(
         (
           await tx

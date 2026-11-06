@@ -80,9 +80,6 @@ export interface ClosureBooks {
    * (`travel`), a dealer's items bought or sold under the margin scheme (`goods`), purchases
    * under the agricultural flat rate (`flat_rate`). */
   schemes?: readonly { month: string; scheme: 'travel' | 'goods' | 'flat_rate' }[];
-  /** Months with sales declared in the Union scheme (EXP-OSS, V4), by tax point: their SAF-T
-   * code (310340) has the consumer state's rate, which the D406 writer does not write. */
-  ossMonths?: readonly string[];
   /** Months with sponsorship expenses (6582). */
   sponsorshipMonths: readonly string[];
   /** Months with payroll taxes booked (444, 431x, 436) and no employment contract running. */
@@ -875,29 +872,8 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
           return;
         }
         if (form.state === 'known' && !individualForms.includes(form.value as EntityForm)) {
-          // Sales in the Union scheme (V4) are D398's, and in D406 under 310340 at the consumer
-          // state's rate, which is not the one rate the TaxTable gives a code: the writer does
-          // not produce a D406 holding them (D406_TAX_CODE), so the period is not covered.
-          const quarter = /^(\d{4})-Q([1-4])$/.exec(due.period);
-          const covered = quarter
-            ? [0, 1, 2].map(
-                (offset) =>
-                  `${quarter[1]}-${String(Number(quarter[2]) * 3 - 2 + offset).padStart(2, '0')}`,
-              )
-            : [due.period];
-          const oss = covered.filter((item) => (books.ossMonths ?? []).includes(item));
-          if (oss.length) {
-            const trigger = emit.unsupported({
-              trigger: 'OSS_D406',
-              message: `Vânzări în regimul special Uniune (OSS) în ${oss.join(', ')}: în D406 se raportează cu codul 310340, la cota statului de consum, pe care fișierul nu o scrie încă; D406 al perioadei nu se întocmește din aplicație.`,
-              missingCapabilities: ['D406_OSS_TAX_CODE'],
-              evidenceIds: [],
-              resolution:
-                'D406 al perioadei întocmit în afara aplicației, atribuit explicit, până când fișierul scrie cotele statelor de consum.',
-            });
-            emit.obligation({ ...item, ...due, state: 'unsupported', blockers: [trigger] });
-            return;
-          }
+          // Sales in the Union scheme (V4) are D398's, and D406 reports them too, under 310340
+          // at each consumer state's rate (`ro.d406.oss`): a period with them is covered.
           emit.obligation({ ...item, ...due });
           return;
         }
