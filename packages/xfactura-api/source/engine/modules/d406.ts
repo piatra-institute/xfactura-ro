@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, lte, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { readInvoice, type Invoice, type Party } from 'xfactura-core/einvoice';
 import { hashOf } from 'xfactura-core/hash';
@@ -19,11 +19,14 @@ import {
   calculateD406,
   checkD406,
   d406ConvertedAmount,
+  d406InvoiceTaxBase,
+  d406LineParts,
   d406Namespace,
   d406PartyId,
   writeD406,
   type D406,
   type D406Address,
+  type D406ConversionReading,
   type D406Currency,
   type D406Invoice,
   type D406Journal,
@@ -48,6 +51,7 @@ import {
 } from 'xfactura-core/ro/saft/tax-codes';
 import { ossCode } from 'xfactura-core/ro/oss';
 import { invoiceKinds } from 'xfactura-core/ro/treatments/invoices';
+import { creditRefundAccounts } from 'xfactura-core/ro/treatments/settlement';
 import { regimeCodes } from 'xfactura-core/ro/treatments/vat-registration';
 import { vatPeriodEnd } from 'xfactura-core/ro/treatments/vat-settlement';
 import { withheldOf, type Withheld } from 'xfactura-core/ro/withholding';
@@ -123,7 +127,8 @@ const annual = (period: string) => /^\d{4}$/.test(period);
  * The trade partners' accounts (OMFP 1802/2014): customers on 4111, 418 (facturi de întocmit)
  * and 419 (clienți creditori); suppliers on 401, 404 (furnizori de imobilizări), 408 (facturi
  * nesosite) and 409x (furnizori debitori). Their lines name the partner. The other accounts kept
- * by partner (461, 462, 455x, 542) are reported without one, a choice left to the expert.
+ * by partner (461, 462, 455x, 542) are reported without one, a choice left to the expert, except
+ * a refund a credit note opened there (`refunds` in `booksOf`), which continues its invoice's.
  */
 const partnerAccounts: Readonly<Record<string, 'customer' | 'supplier'>> = {
   '4111': 'customer',
@@ -365,8 +370,60 @@ async function booksOf(tx: Transaction, companyId: string, period: string) {
     .where(until)
     .groupBy(lines.account)
     .orderBy(asc(lines.account));
-  const partnerOpenings = (
-    await tx
+  // The refunds credit notes opened until the period's end beyond their originals' balances (462
+  // owed to a customer, 461 owed by a supplier: `invoices.credit`, `invoices.euConsumer`), in
+  // whichever period: each is its partner's line, as the receivable or payable it continues,
+  // until it is paid back, collected or offset.
+  const refunds = new Map(
+    (
+      await tx
+        .select({
+          id: openItems.id,
+          account: openItems.controlAccount,
+          documentId: proposals.documentId,
+          input: proposalVersions.input,
+        })
+        .from(openItems)
+        .innerJoin(
+          entries,
+          and(eq(entries.companyId, openItems.companyId), eq(entries.id, openItems.originEntryId)),
+        )
+        .innerJoin(
+          proposals,
+          and(eq(proposals.companyId, entries.companyId), eq(proposals.id, entries.proposalId)),
+        )
+        .innerJoin(
+          proposalVersions,
+          and(
+            eq(proposalVersions.companyId, entries.companyId),
+            eq(proposalVersions.proposalId, entries.proposalId),
+            eq(proposalVersions.version, entries.version),
+          ),
+        )
+        .where(
+          and(
+            eq(openItems.companyId, companyId),
+            inArray(openItems.controlAccount, [
+              creditRefundAccounts.sale,
+              creditRefundAccounts.purchase,
+            ]),
+            inArray(proposals.treatmentId, ['invoices.credit', 'invoices.euConsumer']),
+            lte(entries.date, end),
+          ),
+        )
+    ).map((row) => [
+      row.id,
+      {
+        role:
+          row.account === creditRefundAccounts.sale ? ('customer' as const) : ('supplier' as const),
+        // The credit note: the posted version's document first, as `recognized` reads it.
+        documentId:
+          ((JSON.parse(row.input) as { documentId?: string }).documentId ?? row.documentId) || null,
+      },
+    ]),
+  );
+  const openingsOf = async (scope: SQL | undefined) =>
+    tx
       .select({
         partyId: openItems.partyId,
         account: lines.account,
@@ -378,9 +435,30 @@ async function booksOf(tx: Transaction, companyId: string, period: string) {
         openItems,
         and(eq(openItems.companyId, lines.companyId), eq(openItems.id, lines.openItemId)),
       )
-      .where(and(until, before))
-      .groupBy(openItems.partyId, lines.account)
-  ).filter((row) => partnerOf(row.account) && row.opening !== 0n);
+      .where(and(until, before, scope))
+      .groupBy(openItems.partyId, lines.account);
+  const partnerOpenings = [
+    ...(await openingsOf(undefined)).flatMap((row) => {
+      const role = partnerOf(row.account);
+      return role && row.opening !== 0n ? [{ ...row, role }] : [];
+    }),
+    // A refund still open at the period's start: its partner's balance on 462 or 461.
+    ...(refunds.size
+      ? (await openingsOf(inArray(lines.openItemId, [...refunds.keys()]))).flatMap((row) =>
+          row.opening !== 0n
+            ? [
+                {
+                  ...row,
+                  role:
+                    syntheticOf(row.account) === creditRefundAccounts.sale
+                      ? ('customer' as const)
+                      : ('supplier' as const),
+                },
+              ]
+            : [],
+        )
+      : []),
+  ];
   const inPeriod = and(
     eq(entries.companyId, companyId),
     gte(entries.date, start),
@@ -456,6 +534,31 @@ async function booksOf(tx: Transaction, companyId: string, period: string) {
       : []
     ).map((item) => [item.id, item]),
   );
+  // The rate each item in a currency was recorded at, by its origin entry's line on it: a line
+  // that releases an item carried at no single rate (in proportion to its balance) is written at
+  // it, the lei it leaves in lei only (`ro.d406.conversion`, `d406LineParts`).
+  const itemRates = new Map<string, string>();
+  if (itemIds.length)
+    for (const row of await tx
+      .select({ itemId: lines.openItemId, rate: lines.fxRate })
+      .from(lines)
+      .innerJoin(
+        openItems,
+        and(
+          eq(openItems.companyId, lines.companyId),
+          eq(openItems.id, lines.openItemId),
+          eq(openItems.originEntryId, lines.entryId),
+        ),
+      )
+      .where(
+        and(
+          eq(lines.companyId, companyId),
+          inArray(lines.openItemId, itemIds),
+          sql`${lines.currency} is not null and ${lines.currencyMinor} != 0`,
+        ),
+      )
+      .orderBy(asc(lines.lineNo)))
+      if (row.itemId && row.rate && !itemRates.has(row.itemId)) itemRates.set(row.itemId, row.rate);
   // The ledger as of the period's end: an entry posted on or before it changes the count of
   // lines or the last sequence. Posted entries and account names never change.
   const [mark] = await tx
@@ -556,32 +659,25 @@ async function booksOf(tx: Transaction, companyId: string, period: string) {
         : [],
     ),
   );
-  const creditEntries = new Set(
-    treatments.flatMap((row) =>
-      row.treatmentId === 'invoices.credit' || row.treatmentId === 'invoices.euConsumer'
-        ? [row.entryId]
-        : [],
-    ),
-  );
   const partyIds = [
     ...new Set([
       ...partnerOpenings.map((row) => row.partyId),
       ...[...items.values()]
-        // A refund a credit note of the period opened (461, 462) is its partner's too.
-        .filter(
-          (item) =>
-            partnerOf(item.controlAccount) ||
-            (/^46[12]/.test(item.controlAccount) && creditEntries.has(item.originEntryId)),
-        )
+        // A refund a credit note opened (461, 462) is its partner's too.
+        .filter((item) => partnerOf(item.controlAccount) || refunds.has(item.id))
         .map((item) => item.partyId),
     ]),
   ].sort();
+  // The credit notes of the refunds the period's lines move: the document a refund paid back
+  // settles, and the address of a partner without recorded details.
+  const refundDocuments = [...items.keys()].flatMap((id) => refunds.get(id)?.documentId ?? []);
   const read = await loadState(tx, companyId, {
     profile: true,
     documents: [
       ...new Set([
         ...recognized.values(),
         ...[...items.values()].flatMap((item) => item.documentId ?? []),
+        ...refundDocuments,
       ]),
     ],
     parties: partyIds,
@@ -693,6 +789,9 @@ async function booksOf(tx: Transaction, companyId: string, period: string) {
     withholdings,
     movementOf,
     items,
+    itemRates,
+    refunds,
+    refundDocuments,
     loaded: state.loaded,
     bankReferences,
     treasury,
@@ -942,7 +1041,8 @@ export function d406Declaration(
       const addresses = new Map<string, D406Address>();
       for (const [partyId, row] of books.details)
         addresses.set(partyId, addressOf((JSON.parse(row.details) as Party).address));
-      for (const documentId of books.recognized.values()) {
+      // A refund's credit note gives its partner's address too, in the months it is paid back.
+      for (const documentId of [...books.recognized.values(), ...books.refundDocuments]) {
         const document = loaded.documents.get(documentId);
         if (!document?.partyId || addresses.has(document.partyId) || !parties.has(document.partyId))
           continue;
@@ -954,18 +1054,11 @@ export function d406Declaration(
         if (party?.address.city) addresses.set(document.partyId, addressOf(party.address));
       }
 
-      // A refund a credit note of the period opened beyond its original's balance (462 owed to a
-      // customer, 461 owed by a supplier: `invoices.credit`, `invoices.euConsumer`) is the
-      // partner's line, as the receivable or payable it continues.
-      const refundRole = (line: { openItemId: string | null }) => {
-        const item = line.openItemId ? books.items.get(line.openItemId) : undefined;
-        const documentId = item ? books.recognized.get(item.originEntryId) : undefined;
-        const kind = documentId ? loaded.documents.get(documentId)?.kind : undefined;
-        const account = item ? syntheticOf(item.controlAccount) : undefined;
-        if (account === '462' && kind === invoiceKinds.saleCredit) return 'customer' as const;
-        if (account === '461' && kind === invoiceKinds.purchaseCredit) return 'supplier' as const;
-        return undefined;
-      };
+      // A refund a credit note opened beyond its original's balance (462 owed to a customer, 461
+      // owed by a supplier: `invoices.credit`, `invoices.euConsumer`), in this period or an
+      // earlier one, is the partner's line, as the receivable or payable it continues.
+      const refundRole = (line: { openItemId: string | null }) =>
+        line.openItemId ? books.refunds.get(line.openItemId)?.role : undefined;
       const roleOf = (line: { account: string; openItemId: string | null }) =>
         partnerOf(line.account) ?? refundRole(line);
       const partnerKey = (partyId: string, account: string) => `${partyId}|${account}`;
@@ -974,10 +1067,7 @@ export function d406Declaration(
         { partyId: string; account: string; opening: bigint; role: 'customer' | 'supplier' }
       >();
       for (const row of books.partnerOpenings)
-        partners.set(partnerKey(row.partyId, row.account), {
-          ...row,
-          role: partnerOf(row.account)!,
-        });
+        partners.set(partnerKey(row.partyId, row.account), row);
       for (const line of books.periodLines) {
         const item = line.openItemId ? books.items.get(line.openItemId) : undefined;
         const role = roleOf(line);
@@ -1055,6 +1145,29 @@ export function d406Declaration(
           unionScheme = null;
         }
         return unionScheme;
+      };
+      // How the file writes amounts in a currency (`ro.d406.conversion`): a line whose lei no
+      // rate gives, and an invoice line's TaxBase; read once, a gap a problem only of a file that
+      // needs it.
+      context ??= await rules(tx, companyId);
+      let conversionGap: string | undefined;
+      let conversion: D406ConversionReading | undefined;
+      try {
+        conversion = context.param<D406ConversionReading>(
+          'ro.d406.conversion',
+          'reporting_period_start',
+          books.start,
+        );
+      } catch (error) {
+        if (!(error instanceof RuleGapError)) throw error;
+        conversionGap = error.message;
+      }
+      // Without the reading the file is not written (the gap is its problem): the lines are
+      // still built, whole, to report the other problems.
+      const conversionReading = (): D406ConversionReading => {
+        if (conversion) return conversion;
+        problem('RULE_GAP', conversionGap!);
+        return { unrated: 'lei', taxBase: 'line' };
       };
       /** An entry's VAT as TaxInformation, with the tax entry it came from. */
       const taxesOf = Map.groupBy(
@@ -1253,6 +1366,26 @@ export function d406Declaration(
       };
       const isBase = (line: (typeof books.periodLines)[number]) =>
         !/^442/.test(line.account) && !isCounterparty(line);
+
+      // A line's lei and currency side as the file writes them, each part its currency amount at
+      // its rate (S.AM.4): whole, or, for a line whose lei no rate gives (it releases a receivable
+      // or payable carried at no single rate in proportion to its balance), as
+      // `ro.d406.conversion` reads it: the currency at the rate its item was recorded at and the
+      // lei that leaves in lei only, or the line in lei. The ledger is unchanged.
+      const writtenParts = (
+        line: { bani: bigint; openItemId: string | null },
+        currency: D406Currency | undefined,
+      ): { amount: string; currency?: D406Currency }[] =>
+        !currency ||
+        !/^\d{1,14}(\.\d{1,4})?$/.test(currency.rate) ||
+        d406ConvertedAmount(currency) === line.bani
+          ? [{ amount: lei(line.bani), ...(currency ? { currency } : {}) }]
+          : d406LineParts(
+              conversionReading(),
+              lei(line.bani),
+              currency,
+              line.openItemId ? books.itemRates.get(line.openItemId) : undefined,
+            );
 
       // Journals: one per journal code, each entry a transaction, its VAT on its base's line.
       const linesOf = Map.groupBy(books.periodLines, (line) => line.entryId);
@@ -1475,7 +1608,7 @@ export function d406Declaration(
               );
             }
         }
-        const transactionLines = own.map((line, index): D406Line => {
+        const transactionLines = own.flatMap((line, index): D406Line[] => {
           const currency = currencyOf(line, index);
           const named = partner(line);
           const item = line.openItemId ? books.items.get(line.openItemId) : undefined;
@@ -1509,25 +1642,39 @@ export function d406Declaration(
                         : {}),
                     }))
                   : [];
-          return {
-            id: `${header.number}.${line.lineNo}`,
+          const description = clip(
+            line.memo ??
+              (item && (named.customer || named.supplier)
+                ? parties.get(item.partyId)?.name
+                : undefined) ??
+              accountNames.get(line.account) ??
+              line.account,
+            256,
+          );
+          // A line releasing an item carried at no single rate: at the item's rate, the rest of
+          // its lei in lei only; the tax stays on the first part, at its own rate.
+          return writtenParts(line, currency).map((part, k) => ({
+            id: k ? `${header.number}.${line.lineNo}.${k + 1}` : `${header.number}.${line.lineNo}`,
             account: line.account,
             side: line.side === 'D' ? 'debit' : 'credit',
-            amount: lei(line.bani),
-            ...(currency ? { currency } : {}),
+            amount: part.amount,
+            ...(part.currency ? { currency: part.currency } : {}),
             ...named,
             document,
-            description: clip(
-              line.memo ??
-                (item && (named.customer || named.supplier)
-                  ? parties.get(item.partyId)?.name
-                  : undefined) ??
-                accountNames.get(line.account) ??
-                line.account,
-              256,
-            ),
-            ...(tax.length ? { tax } : {}),
-          };
+            description,
+            ...(k === 0 && tax.length
+              ? {
+                  tax: tax.map((entry) =>
+                    entry.currencyAmount !== undefined &&
+                    !entry.rate &&
+                    currency &&
+                    part.currency?.rate !== currency.rate
+                      ? { ...entry, rate: currency.rate }
+                      : entry,
+                  ),
+                }
+              : {}),
+          }));
         });
         const id = String(header.number);
         transactionIds.set(header.id, id);
@@ -1767,6 +1914,10 @@ export function d406Declaration(
               members.includes(index) ? parts[members.indexOf(index)]! : 0n,
             );
           };
+          // Each line's share of the tax entry's base: the VAT base in lei at the rate of the tax,
+          // its exigibility's or, for a credit note, its invoice's (Codul fiscal art. 282 alin.
+          // (9), 290), which a line in a currency may not be at (`ro.d406.conversion`).
+          const base = spread(tax.baseBani, lineLei);
           if (withCurrency && foreign) {
             const minor = spread(tax.taxMinor ?? 0n, amounts);
             // A credit note's VAT keeps its invoice's rate (Codul fiscal art. 282 alin. (9)).
@@ -1780,13 +1931,14 @@ export function d406Declaration(
                   }),
                 )
               : minor.map(converted);
-            return { code, ...rate, tax, members, minor, bani, ...(own ? { own } : {}) };
+            return { code, ...rate, tax, members, base, minor, bani, ...(own ? { own } : {}) };
           }
           return {
             code,
             ...rate,
             tax,
             members,
+            base,
             minor: undefined,
             bani: spread(tax.taxBani, lineLei),
           };
@@ -1860,7 +2012,16 @@ export function d406Declaration(
                   ...(share.percentage !== undefined
                     ? { percentage: share.percentage, country: share.country }
                     : {}),
-                  base: lei(lineLei[index]!),
+                  // In a currency, the TaxBase is the VAT's base in lei at the tax's rate, as
+                  // ANAF's consistency tests read it against its VAT (S.AM.4, S.TI.4).
+                  base: lei(
+                    foreign
+                      ? d406InvoiceTaxBase(conversionReading(), {
+                          line: lineLei[index]!,
+                          tax: share.base[index]!,
+                        })
+                      : lineLei[index]!,
+                  ),
                   amount: lei(share.bani[index]!),
                   ...(share.minor
                     ? {
@@ -1884,34 +2045,45 @@ export function d406Declaration(
           (line) => line.openItemId && roleOf(line),
         );
         if (!movement || !settled.length || !transactionIds.has(header.id)) continue;
+        const collection = movement.amountMinor > 0n;
+        // A payment line names who paid whom: always from the Customer to the Supplier, so a
+        // collection names its payer as CustomerID, a payment its payee as SupplierID, the other
+        // 0, a refund too: a customer paid back is the SupplierID, a supplier paying back the
+        // CustomerID (ANAF's answers v1.2, Răspuns 21, 2.c).
+        const payer = (line: (typeof settled)[number]) => {
+          const id = ids.get(books.items.get(line.openItemId!)!.partyId);
+          return id ? (collection ? { customer: id } : { supplier: id }) : {};
+        };
         payments.push({
           reference: documentNumber(header.id, header.number),
           date: movement.bookingDate,
           mechanism: kinds.get(movement.ledgerAccount) === 'cash' ? '10' : '42',
           description: clip(header.description, 256),
-          direction: movement.amountMinor > 0n ? 'collection' : 'payment',
+          direction: collection ? 'collection' : 'payment',
           transaction: transactionIds.get(header.id)!,
-          lines: settled.map((line) => {
+          lines: settled.flatMap((line) => {
             const item = books.items.get(line.openItemId!)!;
-            const settledDocument = item.documentId
-              ? loaded.documents.get(item.documentId)
-              : undefined;
-            return {
+            // A refund paid back or collected settles its credit note.
+            const settledId = item.documentId ?? books.refunds.get(item.id)?.documentId;
+            const settledDocument = settledId ? loaded.documents.get(settledId) : undefined;
+            // The partner's line as the ledger section writes it, its parts included.
+            return writtenParts(
+              line,
+              line.currency && line.currencyMinor
+                ? {
+                    code: line.currency,
+                    amount: formatMoney(line.currencyMinor, line.currency),
+                    rate: line.fxRate ?? '',
+                  }
+                : undefined,
+            ).map((part) => ({
               account: line.account,
-              ...partner(line),
+              ...payer(line),
               ...(settledDocument?.number ? { document: settledDocument.number } : {}),
               description: clip(parties.get(item.partyId)?.name ?? line.account, 256),
-              amount: lei(line.bani),
-              ...(line.currency && line.currencyMinor
-                ? {
-                    currency: {
-                      code: line.currency,
-                      amount: formatMoney(line.currencyMinor, line.currency),
-                      rate: line.fxRate ?? '',
-                    },
-                  }
-                : {}),
-            };
+              amount: part.amount,
+              ...(part.currency ? { currency: part.currency } : {}),
+            }));
           }),
         });
       }

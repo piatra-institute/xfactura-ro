@@ -55,8 +55,10 @@ export type D406StockProduct = {
   description: string;
   /** NC8, or 0 where none applies. */
   commodityCode: string;
-  /** ValuationMethod: FIFO, LIFO or Cost mediu. */
-  valuation: 'FIFO' | 'LIFO' | 'Cost mediu';
+  /** ValuationMethod: FIFO, LIFO or CMP, the weighted average (ANAF's guide, sec. 2.9: "metoda
+   * de evaluare (FIFO, LIFO, CMP)"; the structure's "Cost mediu" exceeds the 9 characters of
+   * SAFcodeType, which ANAF's validator refuses). */
+  valuation: 'FIFO' | 'LIFO' | 'CMP';
   unit: string;
 };
 

@@ -9,7 +9,7 @@ import {
   euroDocument,
 } from '../src/ro/reviews/specs/credit';
 import { checkD406, d406PartyId, writeD406, type D406, type D406Line } from '../src/ro/saft/d406';
-import { creditInput, creditRecognition } from '../src/ro/treatments/invoices';
+import { creditInput, creditRecognition, creditVatInLei } from '../src/ro/treatments/invoices';
 import { RuleContext, type ParameterRegister } from '../src/rules';
 
 // The world of src/ro/reviews/specs/credit.ts: EXP-1 of 10.03.2026, 1,000.00 + 210.00 EUR, VAT
@@ -174,6 +174,7 @@ describe('invoices.credit in a currency', () => {
     const lei = note('2026-03-20', '100.00', '104.51');
     expect(run({ ...lei, currency: 'RON', vatCurrency: undefined })).toEqual(['CURRENCY']);
     expect(run({ ...lei, vatAccountingTotal: undefined })).toEqual(['VAT_CURRENCY']);
+    // Goods are no longer refused: a warehouse the books do not know is.
     expect(
       run(undefined, {
         stock: {
@@ -181,7 +182,7 @@ describe('invoices.credit in a currency', () => {
           lines: [{ line: '1', itemId: '00000000-0000-4000-8000-0000000000a8', quantity: '1' }],
         },
       }),
-    ).toEqual(['STOCK_CREDIT_CURRENCY']);
+    ).toContain('STOCK_WAREHOUSE_UNKNOWN');
     // An invoice deferring its VAT (`cashVat`, no exigibility) cannot be in a currency: the
     // recognition refuses it, and so does its credit note.
     expect(
@@ -197,6 +198,154 @@ describe('invoices.credit in a currency', () => {
         });
       }),
     ).toEqual(['CASH_VAT_CURRENCY']);
+  });
+});
+
+// EXP-1's 1,000.00 EUR were 10 units of goods (371) in depot D1, under the weighted average:
+//   bought at 4.9765, they entered at 4,976.50 lei, 497.65 each;
+//   sold from a pool that held them at 30.00 lei each, they left at 300.00 lei (607).
+// CN-1 of 20.03 credits one unit, 100.00 + 21.00 EUR:
+//   from the customer, it comes back at what the sale took it out at, 30.00 (Cr 371 / Dr 607 in
+//   red), whatever the rates; the revenue, VAT and receivable as without goods (0.85 gained);
+//   to the supplier, it leaves at what its receipt brought it in at, 497.65 lei, not 100.00 ×
+//   4.9850 = 498.50: with the VAT at 4.9765 (104.51) and the payable at its carrying 602.16 there
+//   is no exchange difference; after March's revaluation at 4.9900 the payable leaves at 121.00 ×
+//   4.9900 = 603.79, and 603.79 − 497.65 − 104.51 = 1.63 is gained.
+describe('invoices.credit in a currency, with goods', () => {
+  const WAREHOUSE = '00000000-0000-4000-8000-0000000000a9';
+  const ITEM = '00000000-0000-4000-8000-0000000000a8';
+  const LAYER = '00000000-0000-4000-8000-0000000000a7';
+  const policies = [
+    ['policy.stock.valuation', 'average'],
+    ['policy.stock.inventory', 'permanent'],
+    ['policy.stock.negative', 'refuse'],
+  ].map(([axis, value]) => ({ axis: axis!, value: value!, effectiveFrom: '2026-01-01' as never }));
+  function withGoods(purchase: boolean, options: { revalued?: boolean } = {}) {
+    const credit = note('2026-03-20', '100.00', '104.51', purchase);
+    const loaded = creditLoaded(register, credit, { purchase, ...options });
+    const entries = loaded.entries as Map<string, PostedEntry>;
+    const entry = entries.get(creditIds.entry)!;
+    const lines = purchase
+      ? entry.lines.map((line) => (line.account === '628' ? { ...line, account: '371' } : line))
+      : [
+          ...entry.lines,
+          { account: '371', side: 'C' as const, bani: 30_000n },
+          { account: '607', side: 'D' as const, bani: 30_000n },
+        ];
+    const move = purchase
+      ? { quantity: 10_000n, bani: 497_650n, line: 0 }
+      : { quantity: -10_000n, bani: -30_000n, line: lines.length - 2 };
+    entries.set(creditIds.entry, {
+      ...entry,
+      lines,
+      stockMoves: [{ item: ITEM, warehouse: WAREHOUSE, account: '371', layer: LAYER, ...move }],
+    });
+    // The pool as it stands: the 10 bought, or 5 left after the sale.
+    const held = purchase
+      ? { quantity: 10_000n, bani: 497_650n }
+      : { quantity: 5_000n, bani: 15_000n };
+    return {
+      credit,
+      loaded: {
+        ...loaded,
+        profile: [...loaded.profile, ...policies],
+        stock: new Map([
+          [
+            `${ITEM}|${WAREHOUSE}`,
+            {
+              item: ITEM,
+              warehouse: WAREHOUSE,
+              moves: purchase ? 1 : 2,
+              layers: [
+                {
+                  id: LAYER,
+                  item: ITEM,
+                  warehouse: WAREHOUSE,
+                  account: '371',
+                  method: 'average' as const,
+                  mayGoNegative: false,
+                  ...held,
+                  date: (purchase ? '2026-03-10' : '2026-03-02') as never,
+                  originEntryId: purchase ? creditIds.entry : creditIds.revaluation,
+                  seq: 1,
+                  days: [],
+                },
+              ],
+            },
+          ],
+        ]),
+        stockItems: new Map([
+          [
+            ITEM,
+            {
+              id: ITEM,
+              code: 'CAF-1',
+              name: 'Cafea',
+              unit: 'H87',
+              nc8: null,
+              account: '371',
+              vatCategory: 'standard',
+            },
+          ],
+        ]),
+        warehouses: new Map([
+          [WAREHOUSE, { id: WAREHOUSE, code: 'D1', name: 'Depozit', keeper: 'Ionescu Maria' }],
+        ]),
+      },
+    };
+  }
+  const evaluate = (purchase: boolean, options: { revalued?: boolean } = {}) => {
+    const { loaded } = withGoods(purchase, options);
+    return creditRecognition.evaluate(
+      creditInput.parse({
+        documentId: creditIds.credit,
+        originalDocumentId: creditIds.original,
+        account: purchase ? '371' : '704',
+        stock: { warehouseId: WAREHOUSE, lines: [{ line: '1', itemId: ITEM, quantity: '1' }] },
+      }),
+      loaded,
+      new RuleContext(register, 'preview'),
+    );
+  };
+  const moves = (evaluation: Evaluation) =>
+    evaluation.effect?.stockMoves?.map(
+      (move) => `${move.quantity} ${formatMoney(move.bani, 'RON')} ${move.line}`,
+    );
+
+  test('from the customer: back at the cost the sale took it out at, in lei', () => {
+    const evaluation = evaluate(false);
+    expect(codes(evaluation)).toEqual([]);
+    expect(lines(evaluation.effect)).toEqual([
+      'D 4111 -602.16 [-121.00 @ 4.9765]',
+      'C 704 -498.50 [-100.00 @ 4.9850]',
+      'C 4427 -104.51 [-21.00 @ 4.9765]',
+      'C 371 -30.00',
+      'D 607 -30.00',
+      'C 7651 0.85',
+    ]);
+    expect(moves(evaluation)).toEqual(['1000 30.00 3']);
+  });
+
+  test('to the supplier: out at the cost its receipt entered at, the payable at its carrying amount', () => {
+    const evaluation = evaluate(true);
+    expect(codes(evaluation)).toEqual([]);
+    expect(lines(evaluation.effect)).toEqual([
+      'D 371 -497.65',
+      'D 4426 -104.51 [-21.00 @ 4.9765]',
+      'C 401 -602.16 [-121.00 @ 4.9765]',
+    ]);
+    expect(moves(evaluation)).toEqual(['-1000 -497.65 0']);
+    const revalued = evaluate(true, { revalued: true });
+    expect(lines(revalued.effect)).toEqual([
+      'D 371 -497.65',
+      'D 4426 -104.51 [-21.00 @ 4.9765]',
+      'C 401 -603.79 [-121.00 @ 4.9900]',
+      'C 7651 1.63',
+    ]);
+    expect(revalued.effect?.explanation.details).toMatchObject({
+      fx: { difference: '1.63' },
+      stock: { atCost: true },
+    });
   });
 });
 
@@ -320,5 +469,52 @@ describe('D406: a credit note’s VAT at its invoice’s rate', () => {
       '<nsSAFT:TaxAmount><nsSAFT:Amount>-209.01</nsSAFT:Amount><nsSAFT:CurrencyCode>EUR</nsSAFT:CurrencyCode><nsSAFT:CurrencyAmount>-42.00</nsSAFT:CurrencyAmount><nsSAFT:ExchangeRate>4.9765</nsSAFT:ExchangeRate></nsSAFT:TaxAmount>',
     );
     expect(checkD406(model('0')).map((check) => check.code)).toContain('D406_RATE');
+  });
+});
+
+// What `sales.issue` writes as an issued credit note's VAT in lei (BT-111): its VAT in euro at the
+// rate EXP-1's VAT entry records, 4.9765, as `invoices.credit` expects it, never at the note's own.
+describe('the VAT in lei of a credit note in a currency (`creditVatInLei`)', () => {
+  const original = (loaded: ReturnType<typeof creditLoaded>) => ({
+    taxPoint: '2026-03-10' as never,
+    entries: loaded.entries.get(creditIds.entry)!.taxEntries,
+  });
+
+  test('its VAT at its invoice’s rate, in March and after the revaluation; the event’s otherwise', () => {
+    const rules = new RuleContext(register, 'preview');
+    const march = creditLoaded(register, note('2026-03-20', '100.00', '104.51'));
+    // 21.00 × 4.9765 = 104.5065 → 104.51, not 21.00 × 4.9850 = 104.685 → 104.69.
+    const first = creditVatInLei(
+      march,
+      rules,
+      { currency: 'EUR', taxPoint: '2026-03-20' as never, taxMinor: 2100n },
+      original(march),
+    );
+    expect('code' in first ? first : [first.bani, first.rate.rate]).toEqual([10451n, '4.9765']);
+    // 42.00 × 4.9765 = 209.013 → 209.01, in April, the receivable revalued in between.
+    const april = creditLoaded(register, note('2026-04-08', '200.00', '209.01'), {
+      revalued: true,
+    });
+    const second = creditVatInLei(
+      april,
+      rules,
+      { currency: 'EUR', taxPoint: '2026-04-08' as never, taxMinor: 4200n },
+      original(april),
+    );
+    expect('code' in second ? second : second.bani).toBe(20901n);
+    // It is what the recognition books, without a difference to acknowledge.
+    expect(
+      creditEvaluation(register, note('2026-04-08', '200.00', '209.01'), {
+        revalued: true,
+      }).evaluation.issues.map((issue) => issue.code),
+    ).toEqual([]);
+    // The other reading of `ro.fx.adjustment.vat`: the note's own date's rate.
+    const event = creditVatInLei(
+      march,
+      new RuleContext(withValue('ro.fx.adjustment.vat', 'event'), 'preview'),
+      { currency: 'EUR', taxPoint: '2026-03-20' as never, taxMinor: 2100n },
+      original(march),
+    );
+    expect('code' in event ? event : event.bani).toBe(10469n);
   });
 });

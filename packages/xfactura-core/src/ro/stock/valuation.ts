@@ -13,7 +13,9 @@ import {
 } from '../../kernel';
 import { formatMoney } from '../../money';
 import { questionIssue } from '../../questions/kinds';
+import type { RuleContext } from '../../rules';
 import type { LocalDate } from '../../time';
+import { expenseFor, type StockAccounts, type StockReturns } from './parameters';
 
 /*
  * The stock register's valuation (OMFP nr. 1.802/2014, the output methods): what a quantity
@@ -39,9 +41,13 @@ const block = (code: string, message: string, details?: JsonValue): Issue => ({
   ...(details === undefined ? {} : { details }),
 });
 
+/** The prefix of a warehouse's own method axis (`policy.stock.retail.<warehouseId>`). */
+export const warehouseRetailPrefix = 'policy.stock.retail.';
+
 /** The axis of a warehouse's own method, at cost or at retail price, in place of the company's
  * `policy.stock.retail` for that warehouse. */
-export const warehouseRetailAxis = (warehouseId: string) => `policy.stock.retail.${warehouseId}`;
+export const warehouseRetailAxis = (warehouseId: string) =>
+  `${warehouseRetailPrefix}${warehouseId}`;
 
 /**
  * Whether a warehouse's goods are kept at cost or at their retail price on a date (OMFP nr.
@@ -478,10 +484,16 @@ export class StockBook {
   }
 
   /**
-   * Goods given back to their supplier at the value its credit note states (`bani`, signed as the
-   * line: negative), out of `lots` (FIFO, LIFO: those the original invoice created) or the item's
-   * pool. Without a quantity, the value corrects the cost of what is still held. A lot or pool
-   * emptied with a value left over gives the rest to `expense`, on two new lines.
+   * Goods given back on `target.date` to their supplier at their purchase price (`bani`, signed as
+   * the line: negative, the credited value), out of `lots` (FIFO, LIFO: those the original invoice
+   * created) or the item's pool, never more than each held on that date and on every later day
+   * (`STOCK_RETURN_CONSUMED`), a pool `policy.stock.negative` allows below zero excepted, which
+   * then gives the price. A pool under the weighted average after each receipt gives the price,
+   * the difference against the date's average left on the stock that stays, or with `average`
+   * (`ro.stock.returns`) that average; a lot or pool the return empties on the date gives what it
+   * held then; one whose value on the date the price exceeds gives its average. The difference
+   * goes to `expense`, on two new lines. Without a quantity, the value corrects the cost of what
+   * is still held.
    */
   giveBack(
     target: StockTarget,
@@ -490,63 +502,199 @@ export class StockBook {
     policy: StockPolicy,
     lots: readonly string[] | null,
     expense?: string,
+    average = false,
   ): Issue[] {
     const layers = this.position(target.item, target.warehouse);
     if (!layers)
       return [block('STOCK_POSITION', 'Poziția de stoc nu a fost citită.', { item: target.item })];
-    const sources = (
-      lots
-        ? layers.filter((layer) => lots.includes(layer.id))
-        : layers.filter(
-            (layer) => layer.method === policy.method && layer.account === target.account,
-          )
-    ).filter((layer) => layer.quantity > 0n);
-    const held = sources.reduce((sum, layer) => sum + layer.quantity, 0n);
-    if (!sources.length || held < target.quantity)
+    const candidates = lots
+      ? layers.filter((layer) => lots.includes(layer.id))
+      : layers.filter(
+          (layer) => layer.method === policy.method && layer.account === target.account,
+        );
+    if (target.quantity === 0n) return this.creditPrice(target, bani, line, candidates);
+    // What each can give on the date: the least it holds from then on.
+    const room = (layer: WorkingLayer) => {
+      if (layer.date > target.date) return 0n;
+      const least = onDate(layer, target.date).least;
+      return least > 0n ? least : 0n;
+    };
+    const available = candidates.reduce((sum, layer) => sum + room(layer), 0n);
+    const pool = lots ? undefined : candidates[0];
+    const beyond = available < target.quantity && pool?.mayGoNegative === true;
+    if (!candidates.length || (available < target.quantity && !beyond))
       return [
         block(
-          target.quantity === 0n ? 'STOCK_REVALUE_EMPTY' : 'STOCK_RETURN_CONSUMED',
-          target.quantity === 0n
-            ? 'Reducerea privește bunuri care nu mai sunt în gestiune: înregistrați-o în 609 (reduceri comerciale primite care nu corectează costul stocurilor).'
-            : 'Bunurile returnate furnizorului nu mai sunt în lotul recepționat cu factura inițială.',
+          'STOCK_RETURN_CONSUMED',
+          `Bunurile returnate furnizorului nu mai erau în ${lots ? 'lotul recepționat cu factura inițială' : 'gestiune'} la ${target.date}: ${formatQuantity(available)} disponibil, ${formatQuantity(target.quantity)} returnat.`,
+          {
+            item: target.item,
+            warehouse: target.warehouse,
+            available: formatQuantity(available),
+            requested: formatQuantity(target.quantity),
+          },
+        ),
+      ];
+    // How much each source gives, in order, its share of the price by quantity.
+    const takes: { layer: WorkingLayer; quantity: bigint }[] = [];
+    let remaining = target.quantity;
+    for (const layer of pool ? [pool] : candidates) {
+      if (remaining === 0n) break;
+      const free = pool ? remaining : room(layer);
+      if (free === 0n) continue;
+      const taken = remaining < free ? remaining : free;
+      takes.push({ layer, quantity: taken });
+      remaining -= taken;
+    }
+    let given = 0n;
+    const issues: Issue[] = [];
+    takes.forEach((take, index) => {
+      const share =
+        index === takes.length - 1 ? bani - given : prorate(bani, take.quantity, target.quantity);
+      given += share;
+      const held = onDate(take.layer, target.date);
+      const give = beyond
+        ? -share
+        : returnedValue(held, take.quantity, -share, average && take.layer.method === 'average');
+      this.move(take.layer, -take.quantity, share, line);
+      const correction = -share - give;
+      if (correction === 0n) return;
+      if (!expense) return void issues.push(correctionMissing());
+      this.correct(
+        take.layer,
+        correction,
+        expense,
+        held.quantity === take.quantity
+          ? 'Diferența lotului returnat'
+          : 'Diferența față de costul mediu',
+      );
+    });
+    return issues;
+  }
+
+  /** A price credited on goods still held (no quantity): over what each lot or the pool holds. */
+  private creditPrice(
+    target: StockTarget,
+    bani: bigint,
+    line: number,
+    candidates: readonly WorkingLayer[],
+  ): Issue[] {
+    const sources = candidates.filter((layer) => layer.quantity > 0n);
+    if (!sources.length)
+      return [
+        block(
+          'STOCK_REVALUE_EMPTY',
+          'Reducerea privește bunuri care nu mai sunt în gestiune: înregistrați-o în 609 (reduceri comerciale primite care nu corectează costul stocurilor).',
           { item: target.item },
         ),
       ];
-    // How much each source gives: the quantity in order, or, for a price, by what each holds.
-    const takes: { layer: WorkingLayer; quantity: bigint; weight: bigint }[] = [];
-    let remaining = target.quantity;
-    for (const layer of sources) {
-      if (target.quantity === 0n) {
-        takes.push({ layer, quantity: 0n, weight: layer.quantity });
-        continue;
-      }
-      if (remaining === 0n) break;
-      const taken = remaining < layer.quantity ? remaining : layer.quantity;
-      takes.push({ layer, quantity: taken, weight: taken });
-      remaining -= taken;
-    }
-    const weights = takes.map((take) => take.weight);
-    const total = weights.reduce((sum, weight) => sum + weight, 0n);
+    const total = sources.reduce((sum, layer) => sum + layer.quantity, 0n);
     let given = 0n;
-    takes.forEach((take, index) => {
-      const share = index === takes.length - 1 ? bani - given : prorate(bani, take.weight, total);
+    sources.forEach((layer, index) => {
+      const share =
+        index === sources.length - 1 ? bani - given : prorate(bani, layer.quantity, total);
       given += share;
-      this.move(take.layer, -take.quantity, share, line);
-      if (take.layer.quantity === 0n && take.layer.bani !== 0n && expense) {
-        const rest = take.layer.bani;
-        this.lines.push(
-          { account: expense, side: 'D', bani: rest, memo: 'Diferența lotului returnat' },
-          {
-            account: take.layer.account,
-            side: 'C',
-            bani: rest,
-            memo: 'Diferența lotului returnat',
-          },
-        );
-        this.move(take.layer, 0n, -rest, this.lines.length - 1);
-      }
+      this.move(layer, 0n, share, line);
     });
     return [];
+  }
+
+  /**
+   * The value `correction` (signed: positive adds to the layer) booked against `expense` on two
+   * new lines, the move naming the stock account's: Dr stock / Cr expense, or the reverse.
+   */
+  private correct(layer: WorkingLayer, correction: bigint, expense: string, memo: string) {
+    const debit = correction > 0n;
+    const amount = debit ? correction : -correction;
+    this.lines.push(
+      { account: debit ? layer.account : expense, side: 'D', bani: amount, memo },
+      { account: debit ? expense : layer.account, side: 'C', bani: amount, memo },
+    );
+    this.move(layer, 0n, correction, this.lines.length - (debit ? 2 : 1));
+  }
+
+  /**
+   * A posted entry's moves reversed on `date` (a storno), each on its own layer and line in the
+   * order posted, so that each mirrors the move of the same number. What one takes out of a layer
+   * (a receipt's goods) the layer must hold on the date and on every later day
+   * (`STOCK_INSUFFICIENT`), a pool allowed below zero excepted; its value is as a return to the
+   * supplier's (`giveBack`): the purchase price, or a pool's date average with `average()`
+   * (`ro.stock.returns`), what a layer the storno empties on the date held then. The differences
+   * go to `expenseOf` the stock account, on lines after the mirrored ones, their moves after all
+   * the mirrored moves. Moves between warehouses (no line) are mirrored as they were.
+   */
+  reverse(
+    moves: readonly StockMoveSpec[],
+    date: LocalDate,
+    average: () => boolean,
+    expenseOf: (account: string) => string | null,
+  ): Issue[] {
+    const issues: Issue[] = [];
+    const corrections: { layer: WorkingLayer; bani: bigint; memo: string }[] = [];
+    for (const original of moves) {
+      const layer = this.position(original.item, original.warehouse)?.find(
+        (candidate) => candidate.id === original.layer,
+      );
+      if (!layer) {
+        issues.push(
+          block('STOCK_POSITION', 'Poziția de stoc nu a fost citită.', { item: original.item }),
+        );
+        continue;
+      }
+      const quantity = -original.quantity;
+      if (quantity >= 0n) {
+        this.move(layer, quantity, -original.bani, original.line);
+        continue;
+      }
+      const held = onDate(layer, date);
+      const room = layer.date > date ? 0n : held.least > 0n ? held.least : 0n;
+      const beyond = room < -quantity;
+      if (beyond && !layer.mayGoNegative) {
+        issues.push(
+          block(
+            'STOCK_INSUFFICIENT',
+            `Stornarea scoate din gestiune bunuri pe care ea nu le mai avea la ${date}: ${formatQuantity(room)} disponibil, ${formatQuantity(-quantity)} stornat.`,
+            {
+              item: original.item,
+              warehouse: original.warehouse,
+              available: formatQuantity(room),
+              requested: formatQuantity(-quantity),
+            },
+          ),
+        );
+        continue;
+      }
+      this.move(layer, quantity, -original.bani, original.line);
+      if (original.line === undefined || beyond) continue;
+      const give = returnedValue(
+        held,
+        -quantity,
+        original.bani,
+        layer.method === 'average' && average(),
+      );
+      const correction = original.bani - give;
+      if (correction === 0n) continue;
+      // Held on the layer now, so a later move of the storno on it sees it; posted after.
+      layer.bani += correction;
+      corrections.push({
+        layer,
+        bani: correction,
+        memo:
+          held.quantity === -quantity
+            ? 'Diferența lotului stornat'
+            : 'Diferența față de costul mediu',
+      });
+    }
+    for (const correction of corrections) {
+      const expense = expenseOf(correction.layer.account);
+      if (!expense) {
+        issues.push(correctionMissing());
+        continue;
+      }
+      correction.layer.bani -= correction.bani;
+      this.correct(correction.layer, correction.bani, expense, correction.memo);
+    }
+    return issues;
   }
 
   /** A value-only move on the item's pool or newest lot (a price difference on goods still
@@ -580,6 +728,56 @@ export class StockBook {
       : { schema: 'effect@1' };
   }
 }
+
+/**
+ * The stock part of a storno (`ledger.reverse`): `moves`, the reversed entry's, mirrored on `date`
+ * (`StockBook.reverse`), a receipt's goods out of a weighted-average pool as `ro.stock.returns`
+ * reads it, the differences against the stock account's expense (`ro.stock.accounts`); `lines`
+ * are the storno's, to which those go. Each parameter is read only when a move needs it.
+ */
+export function reverseStock(
+  loaded: Loaded,
+  rules: RuleContext,
+  moves: readonly StockMoveSpec[],
+  date: LocalDate,
+  lines: LineSpec[],
+): { moves: StockMoveSpec[]; issues: Issue[] } {
+  const book = new StockBook(loaded, lines, 'reversal');
+  const issues = book.reverse(
+    moves,
+    date,
+    () =>
+      rules.param<StockReturns>('ro.stock.returns', 'accounting_transaction_date', date).pool ===
+      'average',
+    (account) =>
+      expenseFor(
+        rules.param<StockAccounts>('ro.stock.accounts', 'accounting_transaction_date', date),
+        account,
+      ),
+  );
+  return { moves: book.moves, issues };
+}
+
+/**
+ * The value a layer gives up for `quantity` going back to its supplier at `price` (positive), from
+ * what it held on the date (`held`, the return not yet taken): all of it when the return empties
+ * it; its average when `average` reads so, or when the price is more than it held; else the price.
+ */
+function returnedValue(
+  held: { quantity: bigint; bani: bigint },
+  quantity: bigint,
+  price: bigint,
+  average: boolean,
+): bigint {
+  if (held.quantity <= quantity) return held.bani;
+  return average || held.bani < price ? prorate(held.bani, quantity, held.quantity) : price;
+}
+
+const correctionMissing = () =>
+  block(
+    'STOCK_CORRECTION',
+    'Diferența dintre prețul de achiziție și valoarea bunurilor în gestiune nu are un cont de cheltuieli.',
+  );
 
 function methodChanged(target: StockTarget, held: StockLayerMethod, policy: StockLayerMethod) {
   return block(

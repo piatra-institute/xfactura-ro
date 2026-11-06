@@ -61,6 +61,20 @@ const stockMethods = z
   .strict();
 export type StockMethods = z.infer<typeof stockMethods>;
 
+/**
+ * What goods going back to their supplier (a return on its credit note, a receipt's storno) leave
+ * a pool under the weighted average after each receipt at: `purchase`, their purchase price (the
+ * value they entered at, pct. 95 alin. (1)), the difference against the pool's average on the date
+ * left on the stock that stays (pct. 76 alin. (2): a difference on the cost corrects the stock
+ * still held), or `average`, the date's average (pct. 96 alin. (1)–(2): the cost of fungible stock
+ * is the method's), the difference to the stock account's expense. Either way a pool the return
+ * empties on its date gives what it held then, the rest to the expense, and FIFO and LIFO take the
+ * lot the receipt created. The periodic average takes the purchase price: a negative entry of the
+ * month, which its costing averages.
+ */
+const stockReturns = z.object({ pool: z.enum(['purchase', 'average']) }).strict();
+export type StockReturns = z.infer<typeof stockReturns>;
+
 export const stockDefinitions: ParameterDefinition[] = [
   {
     key: 'ro.stock.accounts',
@@ -79,6 +93,15 @@ export const stockDefinitions: ParameterDefinition[] = [
     value: stockMethods,
     description:
       'Metodele de evaluare a ieșirilor din gestiune pe care politicile contabile le pot alege: CMP după fiecare recepție sau periodic, FIFO, LIFO (OMFP nr. 1.802/2014 pct. 96 alin. (1)–(4)), și perioada costului mediu periodic.',
+  },
+  {
+    key: 'ro.stock.returns',
+    axis: 'accounting_transaction_date',
+    continuity: 'block',
+    scope: [],
+    value: stockReturns,
+    description:
+      'Valoarea la care bunurile restituite furnizorului (returul pe nota lui de credit, stornarea recepției) ies dintr-un stoc evaluat la CMP după fiecare recepție: la prețul de achiziție, diferența față de media zilei rămânând pe stocul care rămâne, sau la media zilei, diferența pe cheltuiala contului de stoc (OMFP nr. 1.802/2014 pct. 76 alin. (2), 95 alin. (1), 96 alin. (1)–(2)).',
   },
 ];
 
@@ -177,6 +200,21 @@ export const stockVersions: ParameterVersion[] = [
     { allowed: ['fifo', 'lifo', 'average', 'periodic'], periodMonths: 1 },
     [OMFPA('pct.95-96'), OMFP('pct.287')],
   ),
+  // The order says nothing of returns to suppliers: its only returns are a customer's, which
+  // correct the sale's accounts (pct. 330), as the engine's credit notes do by red storno. Pct. 95
+  // alin. (1) takes goods out "la valoarea lor de intrare sau valoarea la care sunt înregistrate
+  // în contabilitate": the goods of the credit note's invoice entered at their purchase price, and
+  // the function of 371 debits purchases at it (401), so the return reverses that debit and the
+  // pool's average is formed again, the difference staying on the stock still held, as a later
+  // discount corrects it (pct. 76 alin. (2)). The alternative, the date's average (pct. 96 alin.
+  // (1)–(2), pct. 285 alin. (4): fungible units are not told apart), is the expert's to weigh.
+  version('ro.stock.returns', { pool: 'purchase' }, [
+    OMFPA('pct.95-96'),
+    OMFP('pct.76'),
+    OMFP('pct.285-286'),
+    OMFP('conturi.371-378'),
+    'OMFP1802/2014:pct.330(1)',
+  ]),
 ];
 
 /** The account an exit from `stockAccount` is expensed to: the longest matching prefix. */

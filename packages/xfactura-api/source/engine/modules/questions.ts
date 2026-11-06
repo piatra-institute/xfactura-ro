@@ -17,6 +17,7 @@ import { answerMediaType } from '../db/invariants';
 import { evidence, questionAnswers, questions, questionWithdrawals } from '../db/schema';
 import type { ObjectStore } from '../adapters/object-store';
 import { roleAllows, type Access, type Actor, type Commands } from '../kernel/commands';
+import { openAnswer, sealAnswer } from '../kernel/personal';
 import { q } from '../kernel/work';
 import { profileInput, writeProfileFact } from './company';
 
@@ -153,14 +154,21 @@ type Disclosable = (classes: readonly DataClass[]) => boolean;
  * A question as a caller reads it. An answer holding data beyond the books (the kind's
  * `dataClasses`: a month's benefits per employee, its sick leave) keeps its place, without its
  * value, for a caller who may not read every class of it: a viewer, or an agent whose grant
- * covers no `health` for an answer about sick leave. Applied to stored command results too.
+ * covers no `health` for an answer about sick leave. One kept sealed (a month's absences,
+ * `sealAnswer`) is opened for a caller who may read it. Applied to stored command results too.
  */
 export function shownQuestion<View extends QuestionView>(
   question: View,
   disclosable: Disclosable,
+  open: (kind: string, value: unknown) => unknown = (_, value) => value,
 ): View {
   const classes = questionKind(question.kind)?.dataClasses ?? [];
-  if (!question.answer || disclosable(classes)) return question;
+  if (!question.answer) return question;
+  if (disclosable(classes))
+    return {
+      ...question,
+      answer: { ...question.answer, value: open(question.kind, question.answer.value) },
+    };
   return { ...question, answer: { ...question.answer, value: null, redacted: true } };
 }
 
@@ -254,7 +262,17 @@ export class Questions {
   /** A command's question as its caller reads it (`shownQuestion`), stored or new. */
   private present<View extends QuestionView>(actor: Actor) {
     return async (tx: Transaction, access: Access, question: View) =>
-      shownQuestion(question, await this.commands.disclosable(tx, actor, access.role));
+      shownQuestion(
+        question,
+        await this.commands.disclosable(tx, actor, access.role),
+        this.opener(actor.companyId),
+      );
+  }
+
+  /** Opens an answer kept sealed (`openAnswer`), for a caller who may read it. */
+  private opener(companyId: string) {
+    return (kind: string, value: unknown) =>
+      openAnswer(this.commands.sealer, companyId, kind, value);
   }
 
   private async find(tx: Transaction, companyId: string, id: string) {
@@ -399,12 +417,18 @@ export class Questions {
           createdBy: actor.actorId,
           engineAt: this.commands.clock(),
         });
+        // A month's absences are kept sealed but for the certificates' files (`sealAnswer`); the
+        // answer's own file, evidence of what the person answered, is health data.
         await tx.insert(questionAnswers).values({
           id,
           companyId: actor.companyId,
           questionId: asked.row.id,
           seq,
-          value: canonical(value),
+          value: canonical(
+            this.commands.sealer
+              ? sealAnswer(this.commands.sealer, actor.companyId, kind.id, value)
+              : value,
+          ),
           evidenceId,
           answeredBy: actor.actorId,
           agentId: null,
@@ -510,7 +534,7 @@ export class Questions {
       const disclosable = await this.commands.disclosable(tx, actor, access.role);
       return {
         items: (await load(tx, actor.companyId, page)).map((asked) =>
-          shownQuestion(view(asked), disclosable),
+          shownQuestion(view(asked), disclosable, this.opener(actor.companyId)),
         ),
         next: rows.length > input.limit ? page.at(-1)!.id : null,
       };
@@ -553,7 +577,14 @@ export class Questions {
           evidenceId: answered.answer.evidenceId,
           ...(shown
             ? {
-                absences: (JSON.parse(answered.answer.value) as { absences: unknown[] }).absences,
+                absences: (
+                  openAnswer(
+                    this.commands.sealer,
+                    actor.companyId,
+                    'payroll.absences',
+                    JSON.parse(answered.answer.value),
+                  ) as { absences: unknown[] }
+                ).absences,
               }
             : { absences: null, redacted: true as const }),
         });

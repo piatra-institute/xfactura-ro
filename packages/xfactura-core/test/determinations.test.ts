@@ -753,6 +753,38 @@ describe('obligation closure', () => {
     const retail = closure({ facts: retailFacts });
     expect(retail.unsupported).toEqual([]);
     expect(retail.needs.map((need) => need.fact)).not.toContain('policy.stock.valuation');
+    // A warehouse kept at cost by its own fact (`policy.stock.retail.<id>`) needs the cost
+    // method's policies, asked once for every such warehouse; one at retail price does not.
+    const depot = fact(
+      'policy.stock.retail.00000000-0000-4000-8000-0000000000d1',
+      'cost',
+      '2026-01-01',
+    );
+    const mixed = closure({
+      facts: [
+        ...retailFacts,
+        depot,
+        fact('policy.stock.retail.00000000-0000-4000-8000-0000000000d2', 'cost', '2026-03-01'),
+        fact('policy.stock.retail.00000000-0000-4000-8000-0000000000d3', 'retail', '2026-01-01'),
+      ],
+    });
+    expect(mixed.needs.map((need) => need.id)).toEqual([
+      'profile.fact|profile:policy.stock.valuation',
+      'profile.fact|profile:policy.stock.negative',
+    ]);
+    expect(mixed.needs[0]!.message).toContain('2 gestiuni sunt ținute la cost');
+    expect(closure({ facts: [...retailFacts, depot, ...policies.slice(0, 3)] }).needs).toEqual([]);
+    // A company at cost whose shop's warehouse keeps the retail price: not with the intermittent
+    // inventory either.
+    const shopAtRetail = closure({
+      facts: [
+        ...withGoods,
+        ...policies,
+        fact('policy.stock.retail.00000000-0000-4000-8000-0000000000d3', 'retail', '2026-01-01'),
+        fact('policy.stock.inventory', 'intermittent', '2026-02-01'),
+      ],
+    });
+    expect(shopAtRetail.unsupported.map((item) => item.trigger)).toEqual(['RETAIL_INTERMITTENT']);
     const intermittent = closure({
       facts: [...retailFacts, fact('policy.stock.inventory', 'intermittent', '2026-02-01')],
     });

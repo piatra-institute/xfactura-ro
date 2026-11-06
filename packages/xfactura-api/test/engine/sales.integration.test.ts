@@ -1,8 +1,27 @@
 import { afterAll, describe, expect, test } from 'bun:test';
+import { $ } from 'bun';
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { readInvoice, verifyInvoice } from 'xfactura-core/einvoice';
+import {
+  AnafKits,
+  DukIntegrator,
+  saftKitId,
+  type DeclarationValidator,
+} from '../../source/engine/adapters/declaration-validator';
+import type { ProposalView } from '../../source/engine/kernel/views';
 import { scenario, type Scenario } from './scenario';
-import { buyerDetails, salesCompany, sellerDetails, service, type Preview } from './fixtures/sales';
+import {
+  buyerDetails,
+  salesCompany,
+  sellerDetails,
+  service,
+  type Issued,
+  type Preview,
+} from './fixtures/sales';
 
 const open: Scenario[] = [];
 afterAll(async () => {
@@ -481,4 +500,228 @@ describe('personal data an agent reads', () => {
     ).toBe('*************');
     expect(await holds(code, s.list(agent, 'parties.list'))).toBe(false);
   });
+});
+
+// A credit note issued in euro: its VAT in lei (BT-111) computed at its invoice's rate (Codul
+// fiscal art. 282 alin. (9), norme pct. 25 alin. (2); `ro.fx.adjustment.vat`), as CIUS-RO asks it
+// stated (BT-6 = RON), and as its recognition expects it. Synthetic BNR rates; by hand:
+//   XF0001 (10 March, 4.9765): 1,000.00 + 210.00 EUR, VAT 1,045.07 lei (210.00 × 4.9765).
+//   XF0002 (20 March, 4.9850): 100.00 + 21.00 EUR, VAT 21.00 × 4.9765 = 104.5065 → 104.51 lei,
+//   not 21.00 × 4.9850 = 104.685 → 104.69 at its own date.
+//   XF0003 (8 April, 5.0100), after March's revaluation: 200.00 + 42.00 EUR, VAT 42.00 × 4.9765 =
+//   209.013 → 209.01 lei.
+describe('a credit note issued in a currency', () => {
+  const rates = `<?xml version="1.0" encoding="utf-8"?>
+<DataSet xmlns="http://www.bnr.ro/xsd"><Header><Publisher>National Bank of Romania</Publisher><PublishingDate>2026-04-08</PublishingDate><MessageType>DR</MessageType></Header>
+<Body><Subject>Reference rates</Subject><OrigCurrency>RON</OrigCurrency>
+<Cube date="2026-03-10"><Rate currency="EUR">4.9765</Rate></Cube>
+<Cube date="2026-03-20"><Rate currency="EUR">4.9850</Rate></Cube>
+<Cube date="2026-03-31"><Rate currency="EUR">4.9900</Rate></Cube>
+<Cube date="2026-04-08"><Rate currency="EUR">5.0100</Rate></Cube>
+</Body></DataSet>`;
+  const root = path.join(import.meta.dir, '../../../..');
+  const saftKit = path.join(root, '.validators/anaf-saft/duk_SAFT_an_luna/dist');
+  const officialD406 = DukIntegrator.available(saftKit) && Bun.which('java') ? test : test.skip;
+  // The e-Factura validation of scripts/validators: the UBL 2.1 schema and the EN 16931 rules
+  // (and CIUS-RO's, when installed); without them the test is skipped, never passed.
+  const efactura =
+    existsSync(path.join(root, '.validators/en16931-ubl/xslt/EN16931-UBL-validation.xslt')) &&
+    existsSync(path.join(root, '.validators/ubl-2.1/xsd')) &&
+    existsSync(path.join(root, '.validators/saxon/Saxon-HE-12.7.jar')) &&
+    Bun.which('java') !== null &&
+    Bun.which('xmllint') !== null
+      ? test
+      : test.skip;
+
+  async function euro(validator?: DeclarationValidator) {
+    const s = await scenario({
+      cui: '18547290',
+      ...(validator ? { declarationValidator: validator } : {}),
+    });
+    open.push(s);
+    const fact = async (axis: string, value: string) =>
+      s.invoke(s.owner, 'profile.record', {
+        axis,
+        value,
+        effectiveFrom: '2026-01-01',
+        evidenceId: (await s.evidence(`${axis}.pdf`)).id,
+      });
+    await fact('vat.status', 'normal_vat');
+    await fact('vat.period', 'monthly');
+    const { id: rateFile } = await s.invoke<{ id: string }>(s.owner, 'evidence.record', {
+      filename: 'bnr.xml',
+      mediaType: 'application/xml',
+      base64: Buffer.from(rates).toString('base64'),
+    });
+    await s.invoke(s.owner, 'fx.importBnr', { evidenceId: rateFile });
+    await s.invoke(s.owner, 'sales.seller.record', {
+      details: { ...sellerDetails, name: 'Exemplu Servicii SRL', vatId: 'RO18547290' },
+    });
+    await s.invoke(s.owner, 'treasury.createAccount', {
+      kind: 'bank',
+      name: 'Cont curent',
+      iban: 'RO49AAAA1B31007593840000',
+      currency: 'RON',
+      ledgerAccount: '5121',
+      openedOn: '2026-01-01',
+    });
+    const buyer = await s.party('Client Test SRL', '14399840');
+    await s.invoke(s.owner, 'parties.recordDetails', {
+      partyId: buyer.id,
+      details: buyerDetails('14399840'),
+    });
+    const series = await s.invoke<{ id: string }>(s.owner, 'sales.series.create', {
+      code: 'XF',
+      prefix: 'XF',
+      width: 4,
+      revenueAccount: '704',
+    });
+    const fields = (input: Record<string, unknown>) => ({
+      seriesId: series.id,
+      buyerId: buyer.id,
+      currency: 'EUR',
+      ...input,
+    });
+    const preview = (input: Record<string, unknown>) =>
+      s.invoke<Preview>(s.owner, 'sales.preview', fields(input));
+    /** Issues an invoice or credit note in euro and its recognition, as proposed. */
+    const issue = async (input: Record<string, unknown>) => {
+      const issued = await s.invoke<Issued>(s.owner, 'sales.issue', fields(input));
+      const proposal = await s.invoke<ProposalView>(s.owner, 'proposals.get', {
+        id: issued.recognition.proposalId,
+      });
+      const xml = new TextDecoder().decode(
+        (await s.engine.evidence.read(s.owner, issued.evidenceId)).bytes,
+      );
+      return { issued, proposal, xml };
+    };
+    const sale = await issue({
+      issueDate: '2026-03-10',
+      lines: [service('1000')],
+      vatAccountingTotal: '1045.07',
+    });
+    await s.post(await s.approve(sale.proposal));
+    const credit = (issueDate: string, price: string, extra: Record<string, unknown> = {}) => ({
+      typeCode: '381',
+      issueDate,
+      precedingDocumentIds: [sale.issued.documentId],
+      lines: [service(price)],
+      ...extra,
+    });
+    const prepare = (period: string) =>
+      s.invoke<{ state: string; steps: { detail: string | null }[] }>(
+        s.owner,
+        'declarations.prepare',
+        {
+          kind: 'D406',
+          period,
+          options: { contact: { firstName: 'Ana', lastName: 'Popescu', phone: '0236000000' } },
+        },
+      );
+    return { s, sale, credit, issue, preview, prepare };
+  }
+  const rated = (proposal: ProposalView) =>
+    proposal.effect?.lines.map(
+      (line) =>
+        `${line.side} ${line.account} ${line.amount}${line.currency ? ` [${line.currency.code} ${line.currency.amount} @ ${line.currency.rate}]` : ''}`,
+    );
+
+  test('states its VAT in lei at its invoice’s rate, which its recognition books without a difference', async () => {
+    const { s, credit, issue, preview } = await euro();
+    // Without its VAT in lei, the preview computes it: 21.00 EUR at XF0001's 4.9765.
+    const previewed = await preview(credit('2026-03-20', '100'));
+    expect(previewed.problems).toEqual([]);
+    expect(previewed.xml).toContain('<cbc:TaxAmount currencyID="RON">104.51</cbc:TaxAmount>');
+    // At the note's own rate, or any other amount, it is refused with the invoice's.
+    const other = await preview(credit('2026-03-20', '100', { vatAccountingTotal: '104.69' }));
+    expect(other.problems.map((problem) => problem.code)).toEqual(['VAT_FX']);
+    expect((other.problems[0] as { message?: string }).message).toContain('104.51');
+    expect((other.problems[0] as { message?: string }).message).toContain('art. 282 alin. (9)');
+    // A credit note in lei of an invoice in euro is refused before a number is used.
+    expect(
+      (await preview(credit('2026-03-20', '100', { currency: 'RON' }))).problems.map(
+        (problem) => problem.code,
+      ),
+    ).toEqual(['CURRENCY']);
+
+    const first = await issue(credit('2026-03-20', '100'));
+    for (const part of [
+      '<cbc:CreditNoteTypeCode>381</cbc:CreditNoteTypeCode>',
+      '<cbc:DocumentCurrencyCode>EUR</cbc:DocumentCurrencyCode>',
+      '<cbc:TaxCurrencyCode>RON</cbc:TaxCurrencyCode>',
+      '<cbc:TaxAmount currencyID="EUR">21.00</cbc:TaxAmount>',
+      '<cbc:TaxAmount currencyID="RON">104.51</cbc:TaxAmount>',
+    ])
+      expect(first.xml).toContain(part);
+    expect(first.proposal.issues.map((issue) => issue.code)).toEqual([]);
+    expect(rated(first.proposal)).toEqual([
+      'D 4111 -602.16 [EUR -121.00 @ 4.9765]',
+      'C 704 -498.50 [EUR -100.00 @ 4.9850]',
+      'C 4427 -104.51 [EUR -21.00 @ 4.9765]',
+      'C 7651 0.85',
+    ]);
+    await s.post(await s.approve(first.proposal));
+    await s.book('fx.revalue', { date: '2026-03-31' });
+    // In April, after the revaluation, still at XF0001's rate: 42.00 × 4.9765 = 209.01.
+    const second = await issue(credit('2026-04-08', '200'));
+    expect(second.xml).toContain('<cbc:TaxAmount currencyID="RON">209.01</cbc:TaxAmount>');
+    expect(second.proposal.issues.map((issue) => issue.code)).toEqual([]);
+    expect(rated(second.proposal)).toEqual([
+      'D 4111 -1207.58 [EUR -242.00 @ 4.9900]',
+      'C 704 -1002.00 [EUR -200.00 @ 5.0100]',
+      'C 4427 -209.01 [EUR -42.00 @ 4.9765]',
+      'C 7651 3.43',
+    ]);
+  });
+
+  efactura(
+    'its UBL passes the e-Factura validation: the UBL 2.1 schema and the EN 16931 rules',
+    async () => {
+      const { credit, issue } = await euro();
+      const { xml } = await issue(credit('2026-03-20', '100'));
+      const directory = await mkdtemp(path.join(tmpdir(), 'xfactura-credit-'));
+      try {
+        await writeFile(path.join(directory, 'credit.xml'), xml);
+        const report = path.join(directory, 'report.json');
+        await $`bun ${path.join(root, 'scripts/validators/validate.ts')} --json ${report} ${directory}`
+          .nothrow()
+          .quiet();
+        const { results } = JSON.parse(await readFile(report, 'utf8')) as {
+          results: { xsd: string[]; rules: Record<string, { rule: string; flag: string }[]> }[];
+        };
+        expect(results).toHaveLength(1);
+        expect([
+          ...results[0]!.xsd,
+          ...Object.values(results[0]!.rules)
+            .flat()
+            .filter((finding) => finding.flag === 'fatal')
+            .map((finding) => finding.rule),
+        ]).toEqual([]);
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+    120_000,
+  );
+
+  officialD406(
+    "its months' D406 pass ANAF's SAF-T validator",
+    async () => {
+      const { s, credit, issue, prepare } = await euro(
+        new AnafKits({ saft: new DukIntegrator(saftKit, saftKitId) }),
+      );
+      await s.post(await s.approve((await issue(credit('2026-03-20', '100'))).proposal));
+      await s.book('fx.revalue', { date: '2026-03-31' });
+      await s.post(await s.approve((await issue(credit('2026-04-08', '200'))).proposal));
+      for (const period of ['2026-03', '2026-04']) {
+        const prepared = await prepare(period);
+        expect([period, prepared.state, prepared.steps.at(-1)?.detail ?? null]).toEqual([
+          period,
+          'validated_official',
+          null,
+        ]);
+      }
+    },
+    180_000,
+  );
 });

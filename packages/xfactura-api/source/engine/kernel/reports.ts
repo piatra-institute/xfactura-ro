@@ -34,7 +34,17 @@ import {
 } from '../db/schema';
 import type { Transaction } from '../db/database';
 import type { Actor, Commands } from './commands';
-import { payClasses, personnelAccount, withoutPersons } from './personal';
+import {
+  healthClasses,
+  payClasses,
+  paymentWithoutPersons,
+  payPayment,
+  personnelAccount,
+  salaryPayment,
+  sickClaimWithoutHealth,
+  singlePayroll,
+  withoutPersons,
+} from './personal';
 import { lineSpec, loadState } from './state';
 
 const ron = (bani: bigint) => formatMoney(bani, 'RON');
@@ -468,10 +478,14 @@ export class Reports {
    * nature of what it settles and the amounts including VAT; monthly totals; and each treasury
    * account's opening balance, receipts, payments and closing balance per month. Amounts in a
    * foreign currency are the lei the ledger booked at the rate of the last banking day before the
-   * operation, with the currency amount in the explanation.
+   * operation, with the currency amount in the explanation. A caller who may not read pay (an
+   * agent whose reads do not cover `payroll` and `personal`, or a viewer) reads a payment of pay
+   * (`payPayment`) as `Plată salarii`, `redacted`: no partner, no statement reference, and no
+   * amount when it pays one person; the monthly totals and balances stand.
    */
   cashJournal(actor: Actor, input: z.infer<typeof cashJournalInput>) {
-    return this.commands.read(actor, 'pfa.journal', async (tx) => {
+    return this.commands.read(actor, 'pfa.journal', async (tx, access) => {
+      const pay = (await this.commands.disclosable(tx, actor, access.role))(payClasses);
       requireCondition(
         await singleEntryIn(tx, actor.companyId, input.year),
         'SINGLE_ENTRY_ONLY',
@@ -501,6 +515,23 @@ export class Reports {
       const justifying = await justifyingDocuments(tx, actor.companyId, headers);
       const byId = new Map(ledger.entries.map((entry) => [entry.id, entry]));
       const issues: { code: string; message: string; entryId: string }[] = [];
+      // The payments of pay among the year's entries, with how many people each pays: a line's
+      // person is its open item's partner.
+      const salaries = new Map(
+        pay
+          ? []
+          : ledger.entries.flatMap((entry) => {
+              const paid = payPayment(
+                entry.lines.map((item) => ({
+                  account: item.account,
+                  partyId: item.openItem
+                    ? (ledger.items.get(item.openItem)?.partyId ?? item.openItem)
+                    : null,
+                })),
+              );
+              return paid ? [[entry.id, paid] as const] : [];
+            }),
+      );
       const view = rows.map((row, index) => {
         const entry = byId.get(row.entryId)!;
         const line = entry.lines.find((item) => item.lineNo === row.lineNo)!;
@@ -518,6 +549,7 @@ export class Reports {
             ),
           ),
         ];
+        const described = salaries.has(row.entryId) ? salaryPayment : entry.description;
         const natures = row.parts.map((part) => {
           const known = natureOf(part.nature);
           if (!known)
@@ -526,8 +558,8 @@ export class Reports {
                 part.nature === 'unattributed' ? 'PFA_NATURE_UNATTRIBUTED' : 'PFA_NATURE_MISSING',
               message:
                 part.nature === 'unattributed'
-                  ? `${entry.description}: factura decontată nu are o compoziție din care să se citească natura.`
-                  : `${entry.description}: contul ${part.account} nu are o natură în catalog (ro.pit.natures).`,
+                  ? `${described}: factura decontată nu are o compoziție din care să se citească natura.`
+                  : `${described}: contul ${part.account} nu are o natură în catalog (ro.pit.natures).`,
               entryId: row.entryId,
             });
           return {
@@ -575,6 +607,22 @@ export class Reports {
           entryId: row.entryId,
         };
       });
+      const shown = view.map((row) => {
+        const salary = salaries.get(row.entryId);
+        if (!salary) return row;
+        const hidden = salary.persons < 2;
+        const amount = (value: string | null) => (hidden || value === null ? null : value);
+        const { currency: _currency, ...rest } = row;
+        return {
+          ...rest,
+          document: row.document && { ...row.document, number: null },
+          explanation: salaryPayment,
+          receipts: { cash: amount(row.receipts.cash), bank: amount(row.receipts.bank) },
+          payments: { cash: amount(row.payments.cash), bank: amount(row.payments.bank) },
+          natures: row.natures.map((nature) => ({ ...nature, amount: amount(nature.amount) })),
+          redacted: true as const,
+        };
+      });
       const months = monthlyTotals(rows).map((totals) => ({
         month: totals.month,
         receipts: { cash: ron(totals.receipts.cash), bank: ron(totals.receipts.bank) },
@@ -614,7 +662,7 @@ export class Reports {
       });
       return {
         year: input.year,
-        rows: input.month ? view.filter((row) => row.month === input.month) : view,
+        rows: input.month ? shown.filter((row) => row.month === input.month) : shown,
         months: input.month ? months.filter((totals) => totals.month === input.month) : months,
         accounts,
         issues,
@@ -632,7 +680,7 @@ export class Reports {
    * books' until a count's differences are recorded.
    */
   singleEntryInventory(actor: Actor, input: z.infer<typeof singleInventoryInput>) {
-    return this.commands.read(actor, 'pfa.inventory', async (tx) => {
+    return this.commands.read(actor, 'pfa.inventory', async (tx, access) => {
       const sources = await tx
         .select({
           sourceId: incomeSources.sourceId,
@@ -690,9 +738,9 @@ export class Reports {
         .where(and(eq(lines.companyId, actor.companyId), lte(entries.date, date)))
         .groupBy(lines.account)
         .orderBy(asc(lines.account));
-      // An agent whose reads do not cover pay sees a personnel account's balance, not each
-      // person's item on it (as `ledger.inventoryRegister`).
-      const pay = (await this.commands.readable(tx, actor))(payClasses);
+      // A caller who may not read pay sees a personnel account's balance, not each person's item
+      // on it (as `ledger.inventoryRegister`).
+      const pay = (await this.commands.disclosable(tx, actor, access.role))(payClasses);
       const items = (
         await tx
           .select({ account: openItems.controlAccount, party: parties.name, bani: net })
@@ -957,12 +1005,21 @@ export class Reports {
     });
   }
 
-  /** Registrul-jurnal: entries in recording order, with their lines. An agent whose reads do not
-   * cover `payroll` and `personal` sees the lines on personnel accounts summed per entry, account
-   * and side, without the person (`withoutPersons`): a payroll entry's are each employee's pay. */
+  /**
+   * Registrul-jurnal: entries in recording order, with their lines. A caller who may not read pay
+   * (an agent whose reads do not cover `payroll` and `personal`, or a viewer) sees the lines on
+   * personnel accounts summed per entry, account and side, without the person
+   * (`withoutPersons`): a payroll entry's are each employee's pay. A payment of pay
+   * (`payPayment`) is `Plată salarii`, `redacted`: no memo, no statement reference, and no amount
+   * on its pay and money lines when it pays one person (`paymentWithoutPersons`). A payroll of
+   * one person shows a caller who may not read health data its sick pay claimed (4382) folded
+   * into 641 (`sickClaimWithoutHealth`).
+   */
   journal(actor: Actor, input: z.infer<typeof journalInput>) {
-    return this.commands.read(actor, 'ledger.journal', async (tx) => {
-      const pay = (await this.commands.readable(tx, actor))(payClasses);
+    return this.commands.read(actor, 'ledger.journal', async (tx, access) => {
+      const disclosable = await this.commands.disclosable(tx, actor, access.role);
+      const pay = disclosable(payClasses);
+      const health = disclosable(healthClasses);
       const headers = await tx
         .select()
         .from(entries)
@@ -994,37 +1051,52 @@ export class Reports {
         : [];
       const justifying = await justifyingDocuments(tx, actor.companyId, page);
       return {
-        entries: page.map((entry) => ({
-          id: entry.id,
-          number: entry.number,
-          document: justifying.get(entry.id) ?? null,
-          seq: entry.seq,
-          date: entry.date,
-          journalCode: entry.journalCode,
-          description: entry.description,
-          proposalId: entry.proposalId,
-          binding: entry.approvalId ? ('approval' as const) : ('policy' as const),
-          lines: ((shown) => (pay ? shown : withoutPersons(shown)))(
-            rows
-              .filter((row) => row.entryId === entry.id)
-              .map((row) => {
-                const { bani, currency, ...line } = lineSpec(row);
-                return {
-                  ...line,
-                  amount: ron(bani),
-                  ...(currency
-                    ? {
-                        currency: {
-                          code: currency.code,
-                          amount: formatMoney(currency.minor, currency.code),
-                          rate: currency.rate,
-                        },
-                      }
-                    : {}),
-                };
-              }),
-          ),
-        })),
+        entries: page.map((entry) => {
+          const booked = rows
+            .filter((row) => row.entryId === entry.id)
+            .map((row) => {
+              const { bani, currency, ...line } = lineSpec(row);
+              return {
+                ...line,
+                amount: ron(bani),
+                ...(currency
+                  ? {
+                      currency: {
+                        code: currency.code,
+                        amount: formatMoney(currency.minor, currency.code),
+                        rate: currency.rate,
+                      },
+                    }
+                  : {}),
+              };
+            });
+          const salary = pay ? null : payPayment(booked);
+          const document = justifying.get(entry.id) ?? null;
+          const view = {
+            id: entry.id,
+            number: entry.number,
+            document,
+            seq: entry.seq,
+            date: entry.date,
+            journalCode: entry.journalCode,
+            description: entry.description,
+            proposalId: entry.proposalId,
+            binding: entry.approvalId ? ('approval' as const) : ('policy' as const),
+          };
+          if (salary)
+            return {
+              ...view,
+              document: document && { ...document, number: null },
+              description: salaryPayment,
+              lines: paymentWithoutPersons(booked, salary.persons),
+              redacted: true as const,
+            };
+          const lines = pay ? booked : withoutPersons(booked);
+          return {
+            ...view,
+            lines: !health && singlePayroll(booked) ? sickClaimWithoutHealth(lines) : lines,
+          };
+        }),
         next: headers.length > input.limit ? page.at(-1)!.seq : null,
       };
     });
@@ -1114,8 +1186,8 @@ export class Reports {
    * account's balance without the people it is owed to.
    */
   inventoryRegister(actor: Actor, input: z.infer<typeof inventoryInput>) {
-    return this.commands.read(actor, 'ledger.inventoryRegister', async (tx) => {
-      const pay = (await this.commands.readable(tx, actor))(payClasses);
+    return this.commands.read(actor, 'ledger.inventoryRegister', async (tx, access) => {
+      const pay = (await this.commands.disclosable(tx, actor, access.role))(payClasses);
       const balances = await tx
         .select({
           account: lines.account,

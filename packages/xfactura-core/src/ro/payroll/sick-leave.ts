@@ -128,18 +128,22 @@ const version = (
 });
 
 /**
- * Read in the consolidated OUG 158/2005 of 1 July 2026: it shows the values in force, not since
- * when, so certificates issued before 1 February 2026 (when OUG 91/2025 art. II started reducing
- * a day) are a gap until the earlier texts are sourced. The reduction ends with 2027.
+ * Read in the consolidated OUG 158/2005 of 1 July 2026, from 2026: its amendment notes date every
+ * change, and none of the articles read here changed in 2026 before 1 July (art. 17 alin. (1) and
+ * (1^1) since 1 August 2025, alin. (1^2) from 1 July 2026, `OUG158/2005-A:modificari-2026`), so the
+ * values hold for January 2026 too. Only OUG 91/2025 art. II starts later, for the certificates
+ * issued from 1 February 2026: those issued in January lose no day, the employer bearing the
+ * first five (art. 12 lit. A), as ANAF's D112 structure for 01–06/2026 declares them. The
+ * reduction ends with 2027.
  */
-const accident = {
+const accident: SickCodeRule = {
   group: 'accident',
   payer: 'employer_then_pension_house',
   taxable: true,
   cass: false,
   reduced: false,
 };
-const incapacity = (cass: boolean) => ({
+const incapacity = (cass: boolean): SickCodeRule => ({
   group: 'incapacity',
   payer: 'employer_then_fund',
   taxable: true,
@@ -147,12 +151,74 @@ const incapacity = (cass: boolean) => ({
   reduced: true,
 });
 
+// The codes whose payer, tax, CASS and reduced day the stored texts settle: OUG nr. 158/2005
+// (who bears each indemnity), OUG nr. 91/2025 art. II in its notes (the reduced day and its
+// exceptions), the D112 structure (its codes, its own list of those exceptions and what FNUASS
+// alone bears), the norms of 2018 and the Codul fiscal (art. 62 lit. c), art. 155 alin. (1) lit.
+// i)). Isolation (51) keeps its day, as the D112 structure says, although art. II alin. (4)–(5)
+// does not list it (`ro.sick.codes` review spec). Work accidents and occupational diseases
+// (02–04) follow Legea nr. 346/2002: taxed as salary income (art. 76 alin. (1)), outside the
+// CASS base and, for the state budget's part, the CAS base (art. 141 lit. a), norme pct. 41).
+// The reduced working time (10, its own formula), the temporary transfer (11, not paid by
+// FNUASS) and the supervision of a child in quarantine (92) are left out.
+const sickCodes: Record<string, SickCodeRule> = {
+  '01': incapacity(true),
+  '02': accident,
+  '03': accident,
+  '04': accident,
+  '05': incapacity(false),
+  '06': incapacity(false),
+  '12': incapacity(false),
+  '13': incapacity(false),
+  '14': incapacity(false),
+  '16': incapacity(false),
+  '51': { group: 'isolation', payer: 'fund', taxable: true, cass: false, reduced: false },
+  '07': { group: 'quarantine', payer: 'fund', taxable: true, cass: true, reduced: true },
+  '08': { group: 'maternity', payer: 'fund', taxable: false, cass: false, reduced: false },
+  '09': { group: 'child_care', payer: 'fund', taxable: false, cass: false, reduced: true },
+  '91': { group: 'child_care', payer: 'fund', taxable: false, cass: false, reduced: true },
+  '15': { group: 'maternal_risk', payer: 'fund', taxable: false, cass: false, reduced: false },
+  '17': { group: 'oncology_care', payer: 'fund', taxable: false, cass: false, reduced: false },
+};
+const sickCodeClauses = [
+  'OUG158/2005-A:art.2(1)',
+  'OUG158/2005-A:art.12',
+  'OUG158/2005-A:art.20(3)',
+  'OUG158/2005-A:art.22',
+  'OUG158/2005-A:art.25',
+  'OUG158/2005-A:art.26',
+  'OUG158/2005-A:art.30^3',
+  'OUG158/2005-A:art.31',
+  'OUG158/2005-A:nota.OUG91-2025.art.II',
+  'ANAF/D112-0726:sectiuneaD',
+  'ANAF/D112-0726:exceptii-OUG91',
+  'ANAF/Cod-fiscal-consolidat:art.62(c)',
+  'ANAF/Cod-fiscal-consolidat:art.155(1)(i)',
+  'L346/2002-A:art.34',
+  'ANAF/Cod-fiscal-consolidat:norme.art.141.pct.41',
+  'ANAF/D112-0726:accidente',
+];
+
 export const sickLeaveVersions: ParameterVersion[] = [
   version(
     'ro.sick.percent',
     { upTo7: '55', upTo14: '65', over15: '75' },
-    ['OUG158/2005-A:art.17(1)'],
-    '2026-02-01',
+    ['OUG158/2005-A:art.17(1)', 'OUG158/2005-A:modificari-2026'],
+    '2026-01-01',
+  ),
+  // Certificates issued in January 2026: none of the days is lost, the employer bears the first
+  // five and FNUASS the rest (art. 12 lit. A–B); OUG nr. 91/2025 art. II applies from 1 February.
+  version(
+    'ro.sick.days',
+    { unpaid: 0, employer: 5 },
+    [
+      'OUG158/2005-A:art.12',
+      'OUG158/2005-A:nota.OUG91-2025.art.II',
+      'OUG158/2005-A:modificari-2026',
+      'ANAF/D112-0126:sectiuneaD',
+    ],
+    '2026-01-01',
+    '2026-01-31',
   ),
   version(
     'ro.sick.days',
@@ -161,7 +227,12 @@ export const sickLeaveVersions: ParameterVersion[] = [
     '2026-02-01',
     '2027-12-31',
   ),
-  version('ro.sick.base_cap', '12', ['OUG158/2005-A:art.10(1)'], '2026-02-01'),
+  version(
+    'ro.sick.base_cap',
+    '12',
+    ['OUG158/2005-A:art.10(1)', 'OUG158/2005-A:modificari-2026', 'ANAF/D112-0126:plafon'],
+    '2026-01-01',
+  ),
   // Legea nr. 346/2002 as consolidated on 11.11.2024: the employer bears the first 3 days, the
   // state social insurance budget the rest (art. 34); 100% for a medical-surgical emergency (art.
   // 33 alin. (3)). Not reduced by a day: OUG nr. 91/2025 art. II is about the indemnities of OUG
@@ -170,59 +241,19 @@ export const sickLeaveVersions: ParameterVersion[] = [
     'ro.sick.accident',
     { employerDays: 3, emergencyPercent: '100' },
     ['L346/2002-A:art.34', 'L346/2002-A:art.33', 'L346/2002-A:art.19'],
-    '2026-02-01',
+    '2026-01-01',
   ),
-  // The codes whose payer, tax, CASS and reduced day the stored texts settle: OUG nr. 158/2005
-  // (who bears each indemnity), OUG nr. 91/2025 art. II in its notes (the reduced day and its
-  // exceptions), the D112 structure (its codes, its own list of those exceptions and what FNUASS
-  // alone bears), the norms of 2018 and the Codul fiscal (art. 62 lit. c), art. 155 alin. (1) lit.
-  // i)). Isolation (51) keeps its day, as the D112 structure says, although art. II alin. (4)–(5)
-  // does not list it (`ro.sick.codes` review spec). Work accidents and occupational diseases
-  // (02–04) follow Legea nr. 346/2002: taxed as salary income (art. 76 alin. (1)), outside the
-  // CASS base and, for the state budget's part, the CAS base (art. 141 lit. a), norme pct. 41).
-  // The reduced working time (10, its own formula), the temporary transfer (11, not paid by
-  // FNUASS) and the supervision of a child in quarantine (92) are left out.
+  // January 2026: the same codes, none reduced (OUG nr. 91/2025 art. II from 1 February).
   version(
     'ro.sick.codes',
-    {
-      '01': incapacity(true),
-      '02': accident,
-      '03': accident,
-      '04': accident,
-      '05': incapacity(false),
-      '06': incapacity(false),
-      '12': incapacity(false),
-      '13': incapacity(false),
-      '14': incapacity(false),
-      '16': incapacity(false),
-      '51': { group: 'isolation', payer: 'fund', taxable: true, cass: false, reduced: false },
-      '07': { group: 'quarantine', payer: 'fund', taxable: true, cass: true, reduced: true },
-      '08': { group: 'maternity', payer: 'fund', taxable: false, cass: false, reduced: false },
-      '09': { group: 'child_care', payer: 'fund', taxable: false, cass: false, reduced: true },
-      '91': { group: 'child_care', payer: 'fund', taxable: false, cass: false, reduced: true },
-      '15': { group: 'maternal_risk', payer: 'fund', taxable: false, cass: false, reduced: false },
-      '17': { group: 'oncology_care', payer: 'fund', taxable: false, cass: false, reduced: false },
-    },
-    [
-      'OUG158/2005-A:art.2(1)',
-      'OUG158/2005-A:art.12',
-      'OUG158/2005-A:art.20(3)',
-      'OUG158/2005-A:art.22',
-      'OUG158/2005-A:art.25',
-      'OUG158/2005-A:art.26',
-      'OUG158/2005-A:art.30^3',
-      'OUG158/2005-A:art.31',
-      'OUG158/2005-A:nota.OUG91-2025.art.II',
-      'ANAF/D112-0726:sectiuneaD',
-      'ANAF/D112-0726:exceptii-OUG91',
-      'ANAF/Cod-fiscal-consolidat:art.62(c)',
-      'ANAF/Cod-fiscal-consolidat:art.155(1)(i)',
-      'L346/2002-A:art.34',
-      'ANAF/Cod-fiscal-consolidat:norme.art.141.pct.41',
-      'ANAF/D112-0726:accidente',
-    ],
-    '2026-02-01',
+    Object.fromEntries(
+      Object.entries(sickCodes).map(([code, rule]) => [code, { ...rule, reduced: false }]),
+    ),
+    [...sickCodeClauses, 'OUG158/2005-A:modificari-2026', 'ANAF/D112-0126:sectiuneaD'],
+    '2026-01-01',
+    '2026-01-31',
   ),
+  version('ro.sick.codes', sickCodes, sickCodeClauses, '2026-02-01'),
   // The percentage of each code other than 01, read in the consolidated OUG nr. 158/2005: 100% for
   // the diseases of art. 17 alin. (2), for quarantine and isolation (art. 20 alin. (3)); 85% for
   // maternity (art. 25), child care (art. 30 alin. (1)) and the care of an oncological patient
@@ -258,8 +289,9 @@ export const sickLeaveVersions: ParameterVersion[] = [
       'OUG158/2005-A:art.31',
       'OUG158/2005-A:art.10(1)',
       'L346/2002-A:art.33',
+      'OUG158/2005-A:modificari-2026',
     ],
-    '2026-02-01',
+    '2026-01-01',
   ),
 ];
 

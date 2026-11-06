@@ -1488,10 +1488,26 @@ export class Determinations {
   }
 
   /** The closure of a range of months. */
+  /** The obligation closure over a range of months. A caller who may not read health data reads
+   * a D112 without its deadline's rule and the month it counts from, which tell why it is due then
+   * (sick leave, art. 147 alin. (11)), as the calendar shows it (`d112WithoutHealth`). */
   closure(actor: Actor, input: z.infer<typeof closureInput>) {
-    return this.commands.read(actor, 'closure.evaluate', async (tx) =>
-      closureOf(tx, actor.companyId, input, await this.rules(tx, actor.companyId), this.today()),
-    );
+    return this.commands.read(actor, 'closure.evaluate', async (tx, access) => {
+      const closure = await closureOf(
+        tx,
+        actor.companyId,
+        input,
+        await this.rules(tx, actor.companyId),
+        this.today(),
+      );
+      if ((await this.commands.disclosable(tx, actor, access.role))(['health'])) return closure;
+      return {
+        ...closure,
+        obligations: closure.obligations.map((item) =>
+          item.kind === 'D112' ? { ...item, deadline: 'D112', deadlinePeriod: null } : item,
+        ),
+      };
+    });
   }
 
   /**

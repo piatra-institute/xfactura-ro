@@ -8,14 +8,21 @@ import {
   type D406AssetCard,
   type D406AssetsPresentation,
 } from '../../saft/assets';
+import {
+  d406InvoiceTaxBase,
+  d406LineParts,
+  type D406ConversionReading,
+  type D406Currency,
+} from '../../saft/d406';
 import type { D406Start } from '../../saft/parameters';
+import { divRound, formatScaled, parseScaled } from '../../../money';
 import type { CaseOutcome, ReviewCase, ReviewSpec } from '../types';
 
 /*
  * Readings of D406 (src/ro/saft) the texts leave open: when the annual assets file is due and in
- * what order, from when a taxpayer category files, and how the assets file writes the fields
- * ANAF's documents disagree on. Every outcome is computed by the engine's own functions against
- * the register under review.
+ * what order, from when a taxpayer category files, how the assets file writes the fields ANAF's
+ * documents disagree on, and how the periodic file writes amounts in a currency. Every outcome is
+ * computed by the engine's own functions against the register under review.
  */
 
 const rules = (register: ParameterRegister) => new RuleContext(register, 'preview');
@@ -314,5 +321,147 @@ export const d406PresentationSpec: ReviewSpec = {
   gaps: [
     'Documentele ANAF se contrazic: ghidul scrie „NULL” la metoda amortizării extraordinare, răspunsurile „0”, exemplele „NA”; validatorul le primește pe toate.',
     'Imobilizările necorporale (20x) din registru se raportează ca și cele corporale; Catalogul HG nr. 2.139/2004 nu le clasifică.',
+  ],
+};
+
+// ---------------------------------------------------------------------------------------------
+// How the periodic file writes amounts in a currency (S.AM.1–S.AM.4, S.TI.4)
+
+const leiText = (cents: bigint) => formatScaled(cents, 2).replace('.', ',');
+const flipped = (reading: D406ConversionReading): D406ConversionReading => ({
+  unrated: reading.unrated === 'split' ? 'lei' : 'split',
+  taxBase: reading.taxBase === 'tax' ? 'line' : 'tax',
+});
+const conversionOf = (register: ParameterRegister) =>
+  rules(register).param<D406ConversionReading>(
+    'ro.d406.conversion',
+    'reporting_period_start',
+    '2026-03-01' as LocalDate,
+  );
+
+/** A partner's line of the ledger in a currency, as the file writes it by the reading. */
+function lineCase(
+  title: string,
+  facts: string,
+  line: { account: string; amount: string; currency: D406Currency; recorded: string },
+): ReviewCase {
+  const outcome = (reading: D406ConversionReading): CaseOutcome => {
+    const parts = d406LineParts(reading, line.amount, line.currency, line.recorded);
+    const shown = parts.map((part) =>
+      part.currency
+        ? `${line.account}: ${leiText(parseScaled(part.amount, 2))} lei = ${part.currency.amount.replace('.', ',')} ${part.currency.code} × ${part.currency.rate.replace('.', ',')}`
+        : `${line.account}: ${leiText(parseScaled(part.amount, 2))} lei, în lei (RON)`,
+    );
+    return { summary: shown.join('; '), lines: shown };
+  };
+  return {
+    title,
+    facts,
+    run(register) {
+      try {
+        const reading = conversionOf(register);
+        return { engine: outcome(reading), alternative: outcome(flipped(reading)) };
+      } catch (error) {
+        const result = blocked(error);
+        return { engine: result, alternative: result };
+      }
+    },
+  };
+}
+
+/** An invoice line in a currency: its TaxBase by the reading, against ANAF's consistency tests
+ * (the rate applied to the base gives the VAT, within a ban). */
+function baseCase(
+  title: string,
+  facts: string,
+  amounts: { line: string; tax: string; vat: string; rate: number },
+): ReviewCase {
+  const outcome = (reading: D406ConversionReading): CaseOutcome => {
+    const base = d406InvoiceTaxBase(reading, {
+      line: parseScaled(amounts.line, 2),
+      tax: parseScaled(amounts.tax, 2),
+    });
+    const expected = divRound(base * BigInt(amounts.rate * 100), 10000n, 'halfAwayFromZero');
+    const vat = parseScaled(amounts.vat, 2);
+    const off = vat > expected ? vat - expected : expected - vat;
+    return {
+      summary: `TaxBase ${leiText(base)} lei, TaxAmount ${leiText(vat)} lei: ${amounts.rate}% din bază este ${leiText(expected)}${off > 1n ? `, diferă cu ${leiText(off)}` : ''}`,
+      lines: [`InvoiceLineAmount ${leiText(parseScaled(amounts.line, 2))} lei`],
+    };
+  };
+  return {
+    title,
+    facts,
+    run(register) {
+      try {
+        const reading = conversionOf(register);
+        return { engine: outcome(reading), alternative: outcome(flipped(reading)) };
+      } catch (error) {
+        const result = blocked(error);
+        return { engine: result, alternative: result };
+      }
+    },
+  };
+}
+
+export const d406ConversionSpec: ReviewSpec = {
+  key: 'ro.d406.conversion',
+  kind: 'interpretation',
+  act: 'ANAF/D406',
+  minutes: 20,
+  readings: {
+    engine:
+      'O linie în valută ale cărei sume în lei nu sunt suma în valută la niciun curs cu patru zecimale (o creanță cu venitul și TVA la cursuri diferite, stinsă proporțional) se scrie în două: suma în valută la cursul la care s-a înregistrat creanța și diferența în lei, fiecare cu CurrencyAmount x ExchangeRate = Amount (S.AM.4); baza TVA a unei linii de factură în valută este baza în lei la cursul taxei, al exigibilității sau, la o ajustare, al operațiunii de bază (nota la S.AM.4, S.TI.4).',
+    alternative:
+      'Linia se scrie întreagă, numai în lei (CurrencyCode RON), cum se scrie principalul unui leasing stins la valoarea contabilă, iar baza TVA a liniei de factură este suma ei în lei la cursul facturii (InvoiceLineAmount).',
+  },
+  question:
+    'În D406 lunar sau trimestrial, o linie pe contul unui client în valută care stinge proporțional o creanță înregistrată la două cursuri (venitul la cursul facturii, TVA la cursul livrării) se scrie în două linii, partea în valută la cursul creanței și diferența în lei, sau o singură linie în lei? Baza TVA (TaxBase) a unei linii de factură în valută este baza la cursul taxei (al exigibilității; la o notă de credit, al facturii inițiale) sau suma liniei la cursul facturii?',
+  context: [],
+  cases: [
+    lineCase(
+      'Încasare parțială a unei creanțe fără un singur curs',
+      'EXP-M din 20.03.2026, pentru o livrare din 10.03: 1.000,00 EUR venit la 4,9850 și 210,00 EUR TVA la 4,9765, creanța 6.030,07 lei pentru 1.210,00 EUR; se încasează 605,00 EUR la 31.03, la 4,9900, înaintea reevaluării: creanța scade proporțional cu 3.015,04 lei.',
+      {
+        account: '4111',
+        amount: '3015.04',
+        currency: { code: 'EUR', amount: '605.00', rate: '4.9900' },
+        recorded: '4.9850',
+      },
+    ),
+    lineCase(
+      'Nota de credit pe aceeași creanță',
+      'CN-M1 din 31.03 creditează 100,00 + 21,00 EUR din EXP-M, la 4,9900: creanța scade proporțional cu 603,01 lei, prin stornare în roșu.',
+      {
+        account: '4111',
+        amount: '-603.01',
+        currency: { code: 'EUR', amount: '-121.00', rate: '4.9900' },
+        recorded: '4.9850',
+      },
+    ),
+    lineCase(
+      'O creanță la un singur curs',
+      'EXP-1 din 10.03.2026, 1.210,00 EUR la 4,9765: creanța 6.021,57 lei, stinsă la cursul ei.',
+      {
+        account: '4111',
+        amount: '6021.57',
+        currency: { code: 'EUR', amount: '1210.00', rate: '4.9765' },
+        recorded: '4.9765',
+      },
+    ),
+    baseCase(
+      'Nota de credit în euro: TVA la cursul facturii',
+      'CN-2 din 08.04.2026 creditează 200,00 + 42,00 EUR din EXP-1 (10.03, 4,9765); venitul la cursul notei, 5,0100: −1.002,00 lei; baza TVA la cursul facturii, −995,30 lei, TVA −209,01 lei (art. 282 alin. (9) din Codul fiscal).',
+      { line: '-1002.00', tax: '-995.30', vat: '-209.01', rate: 21 },
+    ),
+    baseCase(
+      'Factură în euro cu livrarea înaintea emiterii',
+      'V-EU din 02.04.2026 pentru o livrare din 27.03: 1.000,00 EUR, venitul la 4,9900 (4.990,00 lei), baza TVA la 4,9800 (4.980,00 lei), TVA 1.045,80 lei (art. 290).',
+      { line: '4990.00', tax: '4980.00', vat: '1045.80', rate: 21 },
+    ),
+  ],
+  gaps: [
+    'Validatorul ANAF nu verifică conversia (S.AM.1) și primește ambele lecturi; testele de consistență ANAF (cota aplicată bazei dă TVA) citesc baza.',
+    'Cursul părții în valută este cel al liniei prin care creanța s-a înregistrat; un ghid ANAF care să descrie stingerea unei creanțe fără un singur curs nu a fost găsit.',
   ],
 };

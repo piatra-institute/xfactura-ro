@@ -212,6 +212,39 @@ export const payrollAnchors: Readonly<Record<string, readonly Anchor[]>> = {
       to: 'în situația bolnavilor care beneficiază de acordarea serviciilor medicale în regim de spitalizare.',
     },
   ],
+  'OUG158/2005-A:modificari-2026': [
+    {
+      from: '(la 01-08-2025, Alineatul (1) , Articolul 17',
+      to: 'boală începute înainte de data de 1 iulie 2026 și care continuă după această dată.',
+    },
+    {
+      from: 'Articolele II și VI din ORDONANȚA DE URGENȚĂ nr. 91 din 30 decembrie 2025',
+      to: '(1) Pentru certificatele de concediu medical eliberate în perioada 1 februarie 2026-31 decembrie 2027',
+    },
+  ],
+  // The D112 structure of 01–06/2026 (30.03.2026).
+  'ANAF/D112-0126:sectiuneaD': [
+    {
+      from: 'Pentru CM eliberate/ acordate in perioada [ 01.02.2026 , 31.12.2027 ]',
+      to: 'pentru care nu se scade 1zi (prima zi).',
+    },
+    { from: '0<=D_14<=5 pt. D_9#(05,51,07)', to: 'D14=0 pentru tip asigurat C_1=2 (someri)' },
+    { from: 'D_16 = D_14+D_15', to: 'D_16<=NZL' },
+    {
+      from: 'Nomenclator 9 - Cod indemnizatie boala (certificate medicale) (D_9)',
+      to: 'Îngrijirea pacientului cu afecțiuni oncologice (L24/2022 si Ordin comun 1166/217//2022)',
+    },
+  ],
+  'ANAF/D112-0126:plafon': [
+    {
+      from: 'salMin=Sal.minim brut = 4050 (lunile 01-06), 4325 (lunile 07-12) salMin (constructii)',
+      to: 'salMin (constructii)=4582',
+    },
+    {
+      from: 'Atentie ! Suma veniturilor din ultimele 6 luni (D_17)',
+      to: 'D_17(12)=12*(1*4050+5*4050)= 291600',
+    },
+  ],
   // Legea nr. 346/2002 as consolidated on 11.11.2024.
   'L346/2002-A:art.19': [
     {

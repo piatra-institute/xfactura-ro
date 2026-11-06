@@ -6,10 +6,14 @@ import {
   validateEffect,
   type AccountInfo,
   type Effect,
+  type LineSpec,
+  type Loaded,
   type StockLayerInfo,
+  type StockMoveSpec,
 } from '../src/kernel';
 import { roRegister } from '../src/ro/register';
-import { prorate } from '../src/ro/stock';
+import { emptyLoaded } from '../src/ro/reviews/specs/world';
+import { prorate, StockBook } from '../src/ro/stock';
 import type { LocalDate } from '../src/time';
 
 const day = '2026-03-10' as LocalDate;
@@ -182,5 +186,116 @@ describe('the kernel’s stock moves (effect@2)', () => {
     ]);
     expect(prorate(12_400n, 2n, 12n)).toBe(2_067n);
     expect(prorate(-12_400n, 2n, 12n)).toBe(-2_067n);
+  });
+});
+
+// Goods going back to their supplier, on its credit note or by a receipt's storno, valued on their
+// own date (StockBook.giveBack, StockBook.reverse). By hand, a pool under the weighted average:
+//   1 March 10 in at 100.00; 10 March 10 in at 200.00 (20 at 300.00, 15.00 each); 12 March 15 out
+//   at 225.00 (5 at 75.00); 25 March 10 in at 300.00 (15 at 375.00, 25.00 each);
+//   2 of the 10 March receipt back on 15 March at 40.00 (20.00 each): at the purchase price the
+//     pool keeps 3 at 35.00; at the date's average (15.00) they leave at 30.00, the 10.00 the
+//     supplier credits beyond it to 607 (Dr 371 / Cr 607);
+//   5 back on 15 March at 100.00: the pool held exactly 5 then, at 75.00, which they take, the
+//     25.00 more to 607, whichever the reading; 10 on 15 March: refused, it held 5;
+//   the 10 March receipt reversed on 11 March: refused, the exit of the 12th took 15 of the 20;
+//     on 26 March: at its 200.00, or at the date's 25.00, 250.00, the 50.00 more against 607.
+describe('returns to the supplier on their date', () => {
+  const pool = {
+    id: 'pool',
+    item: 'item',
+    warehouse: 'w1',
+    account: '371',
+    method: 'average',
+    mayGoNegative: false,
+    quantity: 15_000n,
+    bani: 37_500n,
+    date: '2026-03-01' as LocalDate,
+    originEntryId: 'av-1',
+    seq: 1,
+    days: [
+      { date: '2026-03-01' as LocalDate, quantity: 10_000n, bani: 10_000n },
+      { date: '2026-03-10' as LocalDate, quantity: 10_000n, bani: 20_000n },
+      { date: '2026-03-12' as LocalDate, quantity: -15_000n, bani: -22_500n },
+      { date: '2026-03-25' as LocalDate, quantity: 10_000n, bani: 30_000n },
+    ],
+  } as const;
+  const loaded = (): Loaded => ({
+    ...emptyLoaded([]),
+    stock: new Map([['item|w1', { item: 'item', warehouse: 'w1', moves: 4, layers: [pool] }]]),
+  });
+  const policy = { method: 'average' as const, negative: false };
+  const shown = (book: StockBook, lines: LineSpec[], issues: { code: string }[]) => ({
+    codes: issues.map((issue) => issue.code),
+    lines: lines.map((line) => `${line.side} ${line.account} ${line.bani}`),
+    moves: book.moves.map((move) => `${move.quantity} ${move.bani} ${move.line}`),
+  });
+  const give = (date: string, quantity: bigint, bani: bigint, average = false) => {
+    const lines: LineSpec[] = [{ account: '371', side: 'D', bani: -bani }];
+    const book = new StockBook(loaded(), lines);
+    const issues = book.giveBack(
+      { item: 'item', warehouse: 'w1', account: '371', quantity, date: date as LocalDate },
+      -bani,
+      0,
+      policy,
+      null,
+      '607',
+      average,
+    );
+    return shown(book, lines, issues);
+  };
+
+  test('out of a pool: at the purchase price, or at the date’s average', () => {
+    expect(give('2026-03-15', 2_000n, 4_000n)).toEqual({
+      codes: [],
+      lines: ['D 371 -4000'],
+      moves: ['-2000 -4000 0'],
+    });
+    expect(give('2026-03-15', 2_000n, 4_000n, true)).toEqual({
+      codes: [],
+      lines: ['D 371 -4000', 'D 371 1000', 'C 607 1000'],
+      moves: ['-2000 -4000 0', '0 1000 1'],
+    });
+    // Emptied on its date: what the pool held then, the rest to the expense.
+    expect(give('2026-03-15', 5_000n, 10_000n).lines).toEqual([
+      'D 371 -10000',
+      'D 371 2500',
+      'C 607 2500',
+    ]);
+    expect(give('2026-03-15', 10_000n, 20_000n).codes).toEqual(['STOCK_RETURN_CONSUMED']);
+  });
+
+  test('a storno takes what the layer held on its date, its differences after the mirrored moves', () => {
+    const receipt: StockMoveSpec = {
+      item: 'item',
+      warehouse: 'w1',
+      account: '371',
+      layer: 'pool',
+      quantity: 10_000n,
+      bani: 20_000n,
+      line: 0,
+    };
+    const reverse = (date: string, average: boolean) => {
+      const lines: LineSpec[] = [{ account: '371', side: 'D', bani: -20_000n }];
+      const book = new StockBook(loaded(), lines);
+      const issues = book.reverse(
+        [receipt],
+        date as LocalDate,
+        () => average,
+        () => '607',
+      );
+      return shown(book, lines, issues);
+    };
+    expect(reverse('2026-03-11', false).codes).toEqual(['STOCK_INSUFFICIENT']);
+    expect(reverse('2026-03-26', false)).toEqual({
+      codes: [],
+      lines: ['D 371 -20000'],
+      moves: ['-10000 -20000 0'],
+    });
+    expect(reverse('2026-03-26', true)).toEqual({
+      codes: [],
+      lines: ['D 371 -20000', 'D 607 5000', 'C 371 5000'],
+      moves: ['-10000 -20000 0', '0 -5000 2'],
+    });
   });
 });

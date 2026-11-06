@@ -437,6 +437,20 @@ export const keyAnnotations: Readonly<Record<string, KeyAnnotation>> = {
     },
     obligations: ['D101', 'D100.profit', 'S1005', 'D406'],
   },
+  'ro.stock.returns': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-GOODS-01'],
+      basis:
+        'Companies keeping stock at the weighted average after each receipt that return goods to a supplier or reverse a receipt; no pilot company keeps stock yet.',
+    },
+    risk: {
+      kind: 'tax_amount',
+      basis:
+        'The difference against the average goes to the stock left or to the cost of goods sold, so the taxable profit of the period.',
+    },
+    obligations: ['D101', 'D100.profit', 'S1005', 'D406'],
+  },
   'ro.provisions.accounts': {
     reach: {
       estimate: 2,
@@ -731,6 +745,20 @@ export const keyAnnotations: Readonly<Record<string, KeyAnnotation>> = {
       kind: 'presentation',
       basis:
         "The validator takes either code and country; ANAF's analyses read the code, the rate and the VAT.",
+    },
+    obligations: ['D406'],
+  },
+  'ro.d406.conversion': {
+    reach: {
+      estimate: 1,
+      profiles: ['RO-SRV-03'],
+      basis:
+        'A company invoicing in euro: every D406 with an invoice whose VAT is at another rate than its revenue, or a credit note in euro.',
+    },
+    risk: {
+      kind: 'presentation',
+      basis:
+        "The validator takes either reading (S.AM.1); ANAF's consistency tests read each TaxBase against its VAT.",
     },
     obligations: ['D406'],
   },

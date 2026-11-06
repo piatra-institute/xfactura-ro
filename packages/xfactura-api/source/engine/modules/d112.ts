@@ -31,7 +31,14 @@ import {
 import { loadState } from '../kernel/state';
 import { sellerDetails } from './d300';
 import type { DeclarationKind, DeclarationProblem } from './declarations';
-import { postedRun, postedRuns, Sealer, type StoredBenefit, type StoredSick } from './payroll';
+import {
+  openSick,
+  postedRun,
+  postedRuns,
+  Sealer,
+  type StoredBenefit,
+  type StoredSick,
+} from './payroll';
 
 export const d112Options = z
   .object({
@@ -266,7 +273,9 @@ export function d112Declaration(
         .where(and(eq(payrollLines.companyId, companyId), eq(payrollLines.runId, runId!)));
       const monthEnd = `${month}-31`;
       const insured: D112Insured[] = rows.map(({ line, terms, employee }) => {
-        const pay = JSON.parse(line.input) as PayLineInput;
+        const kept = JSON.parse(line.input) as PayLineInput;
+        // The certificates are kept sealed; D112 declares them.
+        const pay = { ...kept, sick: openSick(sealer, companyId, kept.sick) };
         const result = JSON.parse(line.result) as {
           steps: Step[];
           deduction: { basic: string; young: string; children: string };

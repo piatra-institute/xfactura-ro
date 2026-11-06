@@ -9,8 +9,11 @@ import {
   type PayInput,
   type PayResult,
 } from '../src/ro/payroll';
+import { payrollRecognition } from '../src/ro/treatments/payroll';
+import { emptyLoaded } from '../src/ro/reviews/specs/world';
+import type { PayrollLineState } from '../src/kernel';
 import { ParameterRegister, RuleContext } from '../src/rules';
-import type { Month } from '../src/time';
+import type { LocalDate, Month } from '../src/time';
 
 const rules = () =>
   new RuleContext(
@@ -267,5 +270,77 @@ describe('payroll: gross to net', () => {
       ),
       { numRuns: 300 },
     );
+  });
+});
+
+describe('payroll.recognize: CAM on the employer’s total', () => {
+  const RUN = '00000000-0000-4000-8000-0000000000f1';
+  const AUTHORITY = '00000000-0000-4000-8000-0000000000a1';
+  const line = (contract: string, camBase: bigint): PayrollLineState => ({
+    contractId: `00000000-0000-4000-8000-00000000000${contract}`,
+    employeeId: `00000000-0000-4000-8000-00000000001${contract}`,
+    partyId: `00000000-0000-4000-8000-00000000002${contract}`,
+    cash: camBase,
+    vouchers: 0n,
+    cas: 0n,
+    cass: 0n,
+    casEmployer: 0n,
+    cassEmployer: 0n,
+    tax: 0n,
+    unionDues: 0n,
+    net: camBase,
+    cam: 0n,
+    camBase,
+    sickFund: 0n,
+    inKind: 0n,
+    garnishments: [],
+  });
+  /** October 2026's posting of a run whose lines have these CAM bases, in bani. */
+  const recognize = (...bases: bigint[]) => {
+    const loaded = emptyLoaded([
+      { axis: 'employer', value: 'yes', effectiveFrom: '2026-01-01' as LocalDate },
+    ]);
+    const parties = new Map([
+      [
+        AUTHORITY,
+        { id: AUTHORITY, kind: 'ro_public_institution', country: 'RO', taxId: null, name: 'ANAF' },
+      ],
+    ]);
+    const payrollRuns = new Map([
+      [
+        RUN,
+        {
+          id: RUN,
+          month: '2026-10',
+          round: 1,
+          state: 'prepared' as const,
+          issues: 0,
+          corrects: null,
+          lines: bases.map((base, index) => line(String(index + 1), base)),
+        },
+      ],
+    ]);
+    const { effect, issues } = payrollRecognition.evaluate(
+      { runId: RUN, month: '2026-10', round: 1, authorityId: AUTHORITY },
+      { ...loaded, parties, payrollRuns },
+      rules(),
+    );
+    expect(issues).toEqual([]);
+    return effect!.lines
+      .filter((entry) => entry.account === '646' || entry.account === '436')
+      .map((entry) => `${entry.side} ${entry.account} ${entry.bani}`);
+  };
+
+  test('rounded once on the total, and a nonzero amount below one leu is one leu (D112)', () => {
+    // 2.25% of 20 lei is 0.45 lei: one leu, as D112 declares it (structure, p. 5).
+    expect(recognize(2_000n)).toEqual(['D 646 100', 'C 436 100']);
+    // Two bases of 10 lei: one leu on their 20 lei, not one for each.
+    expect(recognize(1_000n, 1_000n)).toEqual(['D 646 100', 'C 436 100']);
+    // 2.25% of 4,000.20 + 4,000.20 lei = 180.009: 180 lei, half up, on the total.
+    expect(recognize(400_020n, 400_020n)).toEqual(['D 646 18000', 'C 436 18000']);
+    // 2.25% of 22.23 lei is 0.500175 lei: one leu by the half-up rounding itself.
+    expect(recognize(2_223n)).toEqual(['D 646 100', 'C 436 100']);
+    // No base, no CAM.
+    expect(recognize(0n)).toEqual([]);
   });
 });

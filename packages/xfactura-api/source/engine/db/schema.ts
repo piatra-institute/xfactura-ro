@@ -1140,6 +1140,9 @@ export const bankMovements = sqliteTable(
     primaryKey({ columns: [t.companyId, t.id] }),
     uniqueIndex('bank_movement_identity').on(t.companyId, t.treasuryAccountId, t.sourceId),
     index('bank_movement_date').on(t.companyId, t.treasuryAccountId, t.bookingDate),
+    // The accounts a payment of pay went to (`salaryMovements`): a later movement to one is a
+    // person's pay too.
+    index('bank_movement_counterparty').on(t.companyId, t.counterpartyAccount),
     foreignKey({
       columns: [t.companyId, t.treasuryAccountId],
       foreignColumns: [treasuryAccounts.companyId, treasuryAccounts.id],

@@ -1184,6 +1184,134 @@ describe('official D112 validation', () => {
     ),
   };
 
+  // January 2026 with medical leave, as the payroll engine computes it (d112.integration.test.ts):
+  // 12–23 January at 65%, none of the days lost (issued before 1 February), 5 by the employer and
+  // 5 by FNUASS; maternity all month, 85% from FNUASS; a work accident the pension house confirmed,
+  // 19–30 January at 80%, 3 days by the employer and 7 by the state social insurance budget, in B3
+  // and C3. Declared without the fields 07/2026 added (D_9b, D_14a, D_15a, D_16a, B3_7D, C2_155,
+  // C2_156), which both validators refuse in these months.
+  const firstHalfLeave = january([
+    insured({
+      cnp: '2931204170043',
+      lastName: 'Constantinescu',
+      firstName: 'Ioana',
+      from: '2022-06-01',
+      employment: {
+        baseSalary: 6000,
+        hoursWorked: 64,
+        hoursSuspended: 80,
+        daysWorked: 8,
+        unemploymentBase: 4509,
+        camBase: 3588,
+        cassBase: 4509,
+        cass: 451,
+        casBase: 4509,
+        cas: 1127,
+      },
+      income: {
+        cash: 4509,
+        deduction: { basic: 608, young: 0, children: 0 },
+        taxBase: 2323,
+        tax: 232,
+        paid: 2699,
+      },
+      sickLeave: [
+        certificate(
+          '2001',
+          '2026-01-12',
+          '2026-01-23',
+          { unpaidDays: 0, employerDays: 5, fundDays: 5, percent: '65', employer: 921, fund: 921 },
+          { place: 'ambulatory' },
+        ),
+      ],
+    }),
+    insured({
+      cnp: '2850722170021',
+      lastName: 'Georgescu',
+      firstName: 'Elena',
+      from: '2025-02-15',
+      employment: {
+        baseSalary: 6000,
+        hoursWorked: 0,
+        hoursSuspended: 144,
+        daysWorked: 0,
+        casBase: 3023,
+        cas: 756,
+      },
+      income: { deduction: { basic: 810, young: 0, children: 0 }, paid: 2267 },
+      sickLeave: [
+        certificate(
+          '2002',
+          '2026-01-01',
+          '2026-01-31',
+          { unpaidDays: 0, employerDays: 0, fundDays: 18, percent: null, employer: 0, fund: 3023 },
+          { code: '08', place: 'ambulatory', diagnosis: '806', base: { income: 24300, days: 123 } },
+        ),
+      ],
+    }),
+    insured({
+      ...fullTimeEmployee,
+      employment: {
+        baseSalary: 6000,
+        hoursWorked: 64,
+        hoursSuspended: 80,
+        daysWorked: 8,
+        unemploymentBase: 5334,
+        camBase: 3467,
+        cassBase: 2667,
+        cass: 267,
+        casBase: 2667,
+        cas: 667,
+      },
+      income: {
+        cash: 5334,
+        deduction: { basic: 284, young: 0, children: 0 },
+        taxBase: 4116,
+        tax: 412,
+        paid: 3988,
+      },
+      accidents: { cases: 1, days: 10, fundDays: 7, employer: 800, fund: 1867 },
+    }),
+  ]);
+
+  anafD112FirstHalf(
+    'DUKIntegrator accepts January 2026 with medical leave, maternity and a work accident, in J26.0.3 and in J27.0.8',
+    async () => {
+      // Maternity has a CAS base without days worked or CASS: warnings of the writer only.
+      expect(checkD112(firstHalfLeave).map((check) => `${check.severity}:${check.code}`)).toEqual([
+        'warning:D112_DAYS',
+        'warning:D112_CAS',
+      ]);
+      const calculation = calculateD112(firstHalfLeave);
+      expect(
+        Object.fromEntries(calculation.obligations.map(({ code, owed }) => [code, owed])),
+      ).toEqual({ '602': 644n, '412': 2550n, '432': 718n, '480': 159n });
+      expect(calculation.medicalLeave?.recoverable).toBe(3944n);
+      expect(calculation.accidents).toEqual({ cases: 1, days: 10, total: 2667n, fund: 1867n });
+      const xml = writeD112(firstHalfLeave);
+      expect(xml).toContain('D_9="01" D_10="3" D_14="5" D_15="5" D_16="10" D_17="36000"');
+      // The fields 07/2026 added, unknown in January to both validators.
+      const july = xml.replace(' D_14="5"', ' D_14a="5" D_14="5"');
+      expect(july).not.toBe(xml);
+      for (const kit of [d112FirstHalfDuk, undefined]) {
+        const results = await validateAnaf('D112', { xml, july }, kit);
+        expect(results.xml).toBe('ok');
+        expect(results.july).toContain("atribut necunoscut ('D_14a')");
+      }
+      // D_17 within 12 × 6 × 4050 lei in both.
+      const over = xml.replace(
+        'D_17="24300" D_18="123" D_19="197.56"',
+        'D_17="291601" D_18="123" D_19="2370.74"',
+      );
+      expect(over).not.toBe(xml);
+      for (const kit of [d112FirstHalfDuk, undefined])
+        expect((await validateAnaf('D112', { over }, kit)).over).toContain(
+          'S106: D_17 (291601) <= 12*(salmin pe ultimele 6 luni) (291600)',
+        );
+    },
+    120_000,
+  );
+
   anafD112FirstHalf(
     'DUKIntegrator accepts the January–June 2026 payrolls, in J26.0.3 and in J27.0.8',
     async () => {
@@ -1202,7 +1330,7 @@ describe('official D112 validation', () => {
         await validateAnaf('D112', { low }),
       ])
         expect(verdict.low).toContain('SP1A.3: A_13P(3500) trebuie sa fie = 3750');
-      // The register's parameters must be the structure's; medical leave is not written there.
+      // The register's parameters must be the structure's.
       expect(
         checkD112({
           ...firstHalf['january-minimum-wage']!,

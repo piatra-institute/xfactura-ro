@@ -60,6 +60,25 @@ export const saftAnchors: Readonly<Record<string, readonly Anchor[]>> = {
       to: 'Valoare implicită ”RO” pentru România',
     },
   ],
+  'ANAF/D406:S.AM.1-4': [
+    {
+      from: 'N/A - nu se mai face validarea dintre Suma în lei și Suma în valută',
+      to: 'convertită pe baza ratei de schimb valutar raportată',
+    },
+    {
+      from: 'Cursul de schimb utilizat. CurrencyAmount x ExchangeRate = Sumă',
+      to: 'indiferent de data la care sunt sau vor fi recepționate bunurile/ facturile/ serviciile/ alte documente financiare',
+    },
+  ],
+  'ANAF/D406:S.TI.4': [
+    { from: 'Baza pe care se calculează impozitul.', to: 'Aceasta poate fi o sumă' },
+  ],
+  'ANAF/SAFT_FAQ_2022:MF.C.6': [
+    {
+      from: 'Pentru cazurile în care se specifică că valoarea trebuie transmisă în valuta implicită',
+      to: 'ExchangeRate, declarate de declarant',
+    },
+  ],
   'ANAF/D406:Livrari.310325': [
     {
       from: 'Livrari de bunuri/ prestari de servicii care nu sunt raportabile in decontul de TVA din Romania si care se raporteaza in decontul de TVA din alte tari',

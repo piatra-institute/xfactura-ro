@@ -78,6 +78,46 @@ describe('sick leave for ordinary illness', () => {
     expect(result).toMatchObject({ unpaidDays: 0, employerDays: 1, fundDays: 4 });
   });
 
+  test('issued in January 2026, before OUG 91/2025 art. II: no day lost, the employer pays the first five', () => {
+    // 12–23 January: 10 working days at 65%; 5 by the employer, 5 by the fund.
+    const { result, issues } = sickIndemnity(
+      certificate('2026-01-12', '2026-01-23'),
+      base,
+      fresh,
+      rules(),
+    );
+    expect(issues).toEqual([]);
+    expect(result).toMatchObject({
+      days: 10,
+      unpaidDays: 0,
+      employerDays: 5,
+      fundDays: 5,
+      percent: '65',
+      employer: 65_300n,
+      fund: 65_300n,
+    });
+    // Issued in January, it keeps every day even when it starts in February (the D112
+    // structure's exception); one issued on 2 February loses its first.
+    const february = certificate('2026-02-02', '2026-02-06');
+    expect(
+      sickIndemnity({ ...february, issued: '2026-01-30' as LocalDate }, base, fresh, rules())
+        .result,
+    ).toMatchObject({ unpaidDays: 0, employerDays: 5 });
+    expect(sickIndemnity(february, base, fresh, rules()).result).toMatchObject({
+      unpaidDays: 1,
+      employerDays: 4,
+    });
+    // Maternity and a work accident in January, at their codes' percentages.
+    expect(
+      sickIndemnity(certificate('2026-01-01', '2026-01-31', { code: '08' }), base, fresh, rules())
+        .result,
+    ).toMatchObject({ days: 18, unpaidDays: 0, employerDays: 0, fundDays: 18, percent: '85' });
+    expect(
+      sickIndemnity(certificate('2026-01-19', '2026-01-30', { code: '03' }), base, fresh, rules())
+        .result,
+    ).toMatchObject({ days: 10, unpaidDays: 0, employerDays: 3, fundDays: 7, percent: '80' });
+  });
+
   test('a hospitalized patient loses no day', () => {
     const { result } = sickIndemnity(
       certificate('2026-09-07', '2026-09-11', { hospitalized: true }),
@@ -94,7 +134,7 @@ describe('sick leave for ordinary illness', () => {
     expect(codes(certificate('2026-09-01', '2026-09-15'))).toEqual(['SICK_TIER']);
     expect(codes(certificate('2026-09-07', '2026-09-11', { code: '10' }))).toEqual(['SICK_CODE']);
     expect(codes(certificate('2026-09-28', '2026-10-02'))).toEqual(['SICK_DATES']);
-    expect(codes(certificate('2026-01-12', '2026-01-16'))).toEqual(['RULE_GAP']);
+    expect(codes(certificate('2025-12-08', '2025-12-12'))).toEqual(['RULE_GAP']);
     expect(
       sickIndemnity(
         certificate('2026-09-07', '2026-09-11'),

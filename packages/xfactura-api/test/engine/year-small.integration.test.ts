@@ -905,7 +905,23 @@ official('a PFA in the real system, outside VAT, over FY2026', () => {
       }
       if (m >= '2026-07') {
         const d112 = filed[`D112 ${m}`] as Artifact;
+        // The agent that prepared it reads when it is due, never why: its grant covers no health
+        // data, and sick leave would bring the month forward (art. 147 alin. (11)). Every D112
+        // reads so, whatever its basis. The owner reads the basis.
         expect(summaryOf(d112)).toMatchObject({
+          insured: 1,
+          filing: {
+            period: 'quarterly',
+            deadline: 'D112',
+            counted: null,
+            basis: null,
+            event: null,
+          },
+        });
+        const kept = (await s.list<Artifact>(s.owner, 'declarations.list')).find(
+          (item) => item.id === d112.id,
+        )!;
+        expect(summaryOf(kept)).toMatchObject({
           insured: 1,
           filing: { period: 'quarterly', counted: periodOf(m), basis: 'quarterly' },
         });

@@ -1297,6 +1297,21 @@ const payrollChecks = {
           WHERE t.company_id = NEW.company_id AND t.contract_id = NEW.contract_id AND t.seq = NEW.terms_seq
             AND t.employee_id = NEW.employee_id AND m.party_id = NEW.party_id)`,
     },
+    {
+      code: 'sick_sealed',
+      rule: 'A payroll line keeps no sick leave in clear: each medical certificate it paid is sealed whole, each issue about one sealed with its mark, and no sick item is labelled with a certificate and its code.',
+      violation: `EXISTS (
+          SELECT 1 FROM json_each(NEW.input_json, '$.sick') s
+          WHERE json_type(s.value, '$.sealed') IS NOT 'text'
+            OR (SELECT count(*) FROM json_each(s.value)) <> 1)
+        OR EXISTS (
+          SELECT 1 FROM json_each(NEW.result_json, '$.issues') i
+          WHERE json_extract(i.value, '$.sealed') IS NULL
+            AND (json_extract(i.value, '$.health') = 1 OR json_extract(i.value, '$.code') GLOB 'SICK_*'))
+        OR EXISTS (
+          SELECT 1 FROM json_each(NEW.input_json, '$.items') t
+          WHERE json_extract(t.value, '$.label') GLOB 'Concediu medical *, cod *')`,
+    },
   ] satisfies Check[],
 };
 
@@ -2212,6 +2227,18 @@ const triggers: Trigger[] = [
         code: 'answer_person',
         rule: 'Only a person answers a question, never an agent.',
         violation: 'NEW.agent_id IS NOT NULL',
+      },
+      {
+        code: 'absence_sealed',
+        rule: "An answer about a month's absences keeps each absence sealed, who and which indemnity code with it; only its medical certificate's file stays in clear, which classification reads.",
+        violation: `EXISTS (
+            SELECT 1 FROM acc_questions q
+            WHERE q.company_id = NEW.company_id AND q.id = NEW.question_id AND q.kind = 'payroll.absences')
+          AND EXISTS (
+            SELECT 1 FROM json_each(NEW.value_json, '$.absences') x
+            WHERE json_type(x.value, '$.sealed') IS NOT 'text'
+              OR EXISTS (SELECT 1 FROM json_each(x.value) f
+                WHERE f.key NOT IN ('sealed', 'certificateEvidenceId')))`,
       },
       {
         code: 'answerer',

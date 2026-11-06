@@ -262,9 +262,12 @@ export type D406Invoice = {
 export type D406PaymentLine = {
   /** AccountID: the partner's, a bank fee's, … account. */
   account: string;
+  /** Who paid (CustomerID) or was paid (SupplierID), by its id among the master files' partners:
+   * a payment always goes from the Customer to the Supplier, so a customer paid back is the
+   * SupplierID and a supplier paying back the CustomerID (ANAF's answers v1.2, Răspuns 21). */
   customer?: string;
   supplier?: string;
-  /** SourceDocumentID: the invoice paid. */
+  /** SourceDocumentID: the invoice paid, or the credit note whose refund it is. */
   document?: string;
   description?: string;
   /** PaymentLineAmount, in lei. */
@@ -419,6 +422,61 @@ export function d406ConvertedAmount(currency: D406Currency): bigint {
   return divRound(divRound(product, 100n, 'halfAwayFromZero'), 100n, 'halfAwayFromZero');
 }
 
+/**
+ * The parts a line in a currency is written in, so that each states "CurrencyAmount x
+ * ExchangeRate = Amount" (the definitions' S.AM.4; ANAF's answers v1.2, MF.C.6): the line whole
+ * when its lei are its currency amount at the rate, else that conversion and the lei it leaves, a
+ * part in lei only. A receivable carried at no single rate (its VAT in lei at the VAT rate, BT-111)
+ * and released in proportion has such lines; ExchangeRate has at most four decimals (S.AM.4,
+ * SAFexchangerateType), so no rate states their lei exactly.
+ */
+export function d406CurrencyParts(
+  amount: string,
+  currency: D406Currency,
+): { amount: string; currency?: D406Currency }[] {
+  const converted = d406ConvertedAmount(currency);
+  const total = lei(amount);
+  return converted === total
+    ? [{ amount, currency }]
+    : [{ amount: text(converted), currency }, { amount: text(total - converted) }];
+}
+
+/**
+ * How the periodic file writes amounts in a currency (`ro.d406.conversion`, extracted from the
+ * definitions' S.AM.1–S.AM.4 and S.TI.4 and ANAF's answers v1.2, MF.C.6):
+ * - `unrated`, a line whose lei no rate gives (a receivable or payable carried at no single rate,
+ *   released in proportion): `split`, its currency at the rate its item was recorded at and the
+ *   lei that leaves in lei only (`d406CurrencyParts`); or `lei`, the line in lei alone, as a
+ *   lease's principal released at its carrying amount is written;
+ * - `taxBase`, an invoice line's TaxBase in a currency: `tax`, the VAT base in lei at the rate of
+ *   the tax, its exigibility's or, for an adjustment, its base operation's, as its tax entry holds
+ *   it (S.AM.4: "Cursul de schimb utilizat pentru determinarea in RON a bazei impozabile a taxei
+ *   este cursul din data exigibilitatii taxei"); or `line`, the line's amount in lei at the
+ *   invoice's rate.
+ */
+export type D406ConversionReading = { unrated: 'split' | 'lei'; taxBase: 'tax' | 'line' };
+
+/** A line's parts by the reading: whole when its lei are its currency at its rate. `recorded`
+ * is the rate its item was recorded at, for a split. */
+export function d406LineParts(
+  reading: D406ConversionReading,
+  amount: string,
+  currency: D406Currency | undefined,
+  recorded?: string,
+): { amount: string; currency?: D406Currency }[] {
+  if (!currency || d406ConvertedAmount(currency) === lei(amount))
+    return [{ amount, ...(currency ? { currency } : {}) }];
+  if (reading.unrated === 'lei') return [{ amount }];
+  return d406CurrencyParts(amount, recorded ? { ...currency, rate: recorded } : currency);
+}
+
+/** An invoice line's TaxBase in lei by the reading: its share of its tax entry's base, or its own
+ * amount at the invoice's rate. */
+export const d406InvoiceTaxBase = (
+  reading: D406ConversionReading,
+  amounts: { line: bigint; tax: bigint },
+) => (reading.taxBase === 'tax' ? amounts.tax : amounts.line);
+
 type Problem = { code: string; path: string; message: string };
 
 const lineAmounts = (model: D406) => [
@@ -555,12 +613,24 @@ function inputProblems(model: D406): Problem[] {
       if (invoice.account !== undefined) account(`${kind}.${i}.account`, invoice.account);
       invoice.lines.forEach((line, l) => account(`${kind}.${i}.lines.${l}.account`, line.account));
     });
+  // A payment line names who paid whom, from the Customer to the Supplier: a customer paid back
+  // is its SupplierID, a supplier paying back its CustomerID (ANAF's answers v1.2, Răspuns 21,
+  // 2.c). Either is a partner of the master files.
+  const partners = new Set([...customers, ...suppliers]);
   model.payments.forEach((payment, p) =>
     payment.lines.forEach((line, l) => {
       const path = `payments.${p}.lines.${l}`;
       account(`${path}.account`, line.account);
-      party(`${path}.customer`, line.customer, customers, 'Clientul');
-      party(`${path}.supplier`, line.supplier, suppliers, 'Furnizorul');
+      for (const [key, id] of [
+        ['customer', line.customer],
+        ['supplier', line.supplier],
+      ] as const)
+        if (id !== undefined && !partners.has(id))
+          problems.push({
+            code: 'D406_PARTY_UNKNOWN',
+            path: `${path}.${key}`,
+            message: `Partenerul ${id} nu figurează în lista clienților sau a furnizorilor.`,
+          });
     }),
   );
   return problems;

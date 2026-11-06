@@ -24,7 +24,9 @@ type Journal = {
     date: string;
     journalCode: string;
     description: string;
-    lines: { account: string; side: 'D' | 'C'; amount: string }[];
+    /** A line's amount is null in a payment of one person's pay, to a reader who may not read
+     * pay. */
+    lines: { account: string; side: 'D' | 'C'; amount: string | null }[];
   }[];
 };
 type VatJournal = {
@@ -125,7 +127,8 @@ export default function Registers() {
           <ul>
             {entry.lines.map((line, index) => (
               <li key={index}>
-                {line.side === 'D' ? 'Debit' : 'Credit'} {line.account} · {formatMoney(line.amount)}
+                {line.side === 'D' ? 'Debit' : 'Credit'} {line.account} ·{' '}
+                {line.amount === null ? 'sumă ascunsă (date salariale)' : formatMoney(line.amount)}
               </li>
             ))}
           </ul>

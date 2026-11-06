@@ -15,6 +15,9 @@ import {
   calculateD406,
   checkD406,
   d406ConvertedAmount,
+  d406CurrencyParts,
+  d406InvoiceTaxBase,
+  d406LineParts,
   d406Namespace,
   d406PartyId,
   d406Period,
@@ -24,6 +27,8 @@ import {
   type D406Line,
   type D406Transaction,
 } from '../src/ro/saft/d406';
+import { roRegister } from '../src/ro/register';
+import { RuleContext } from '../src/rules';
 import {
   d406BaseRateCode,
   d406CashVatReleaseCode,
@@ -1318,6 +1323,145 @@ describe("D406 the Union scheme's sales, at the consumer states' rates", () => {
     // A code without a single rate that is no Member State's stays refused.
     expect(at([{ type: '300', code: '380200', base: '5070.00', amount: '0' }])).toEqual([
       'error:D406_TAX_CODE',
+    ]);
+  });
+});
+
+// A receivable carried at no single rate (EXP-M: revenue at 4.9850, VAT at 4.9765, 6,030.07 lei
+// for 1,210.00 EUR) released in proportion: 605.00 EUR for 3,015.04 lei on a line at the bank's
+// 4.9900. No rate of four decimals gives those lei (S.AM.4): 605.00 × 4.9850 = 3,015.925 →
+// 3,015.93, and −0.89 in lei.
+describe('D406 amounts in a currency (`ro.d406.conversion`)', () => {
+  const reading = new RuleContext(roRegister(), 'preview').param<{
+    unrated: 'split' | 'lei';
+    taxBase: 'tax' | 'line';
+  }>('ro.d406.conversion', 'reporting_period_start', '2026-03-01' as never);
+  const released = { code: 'EUR', amount: '605.00', rate: '4.9900' };
+
+  test('reads the split and the tax base at the tax’s rate, extracted, from the first periods', () => {
+    expect(reading).toEqual({ unrated: 'split', taxBase: 'tax' });
+    expect(
+      roRegister().versions.find((version) => version.key === 'ro.d406.conversion'),
+    ).toMatchObject({ status: 'extracted', from: '2025-07-01' });
+  });
+
+  test('a line whose lei no rate gives: the currency at its item’s rate, the rest in lei only', () => {
+    expect(d406CurrencyParts('3015.04', { ...released, rate: '4.9850' })).toEqual([
+      { amount: '3015.93', currency: { ...released, rate: '4.9850' } },
+      { amount: '-0.89' },
+    ]);
+    expect(d406LineParts(reading, '3015.04', released, '4.9850')).toEqual([
+      { amount: '3015.93', currency: { ...released, rate: '4.9850' } },
+      { amount: '-0.89' },
+    ]);
+    // A credit note's red release: −121.00 × 4.9850 = −603.185 → −603.19, and 0.18 in lei.
+    expect(
+      d406LineParts(
+        reading,
+        '-603.01',
+        { code: 'EUR', amount: '-121.00', rate: '4.9900' },
+        '4.9850',
+      ),
+    ).toEqual([
+      { amount: '-603.19', currency: { code: 'EUR', amount: '-121.00', rate: '4.9850' } },
+      { amount: '0.18' },
+    ]);
+    // The other reading: the line in lei alone. A line its rate gives stays whole either way.
+    expect(d406LineParts({ ...reading, unrated: 'lei' }, '3015.04', released, '4.9850')).toEqual([
+      { amount: '3015.04' },
+    ]);
+    const whole = { code: 'EUR', amount: '1210.00', rate: '4.9765' };
+    expect(d406LineParts(reading, '6021.57', whole, '4.9850')).toEqual([
+      { amount: '6021.57', currency: whole },
+    ]);
+    expect(d406InvoiceTaxBase(reading, { line: -100200n, tax: -99530n })).toBe(-99530n);
+    expect(
+      d406InvoiceTaxBase({ ...reading, taxBase: 'line' }, { line: -100200n, tax: -99530n }),
+    ).toBe(-100200n);
+  });
+
+  test('the parts pass the conversion check the whole line fails, and keep the balances', () => {
+    const settle = (lines: D406Line[]) =>
+      model({
+        journals: [
+          {
+            id: 'J',
+            description: 'J',
+            type: 'J',
+            transactions: [
+              sale,
+              purchase,
+              {
+                ...receipt,
+                lines: [
+                  line('R7', '5121', 'debit', '3018.95', {
+                    currency: { code: 'EUR', amount: '605.00', rate: '4.9900' },
+                  }),
+                  ...lines,
+                  line('R9', '7651', 'credit', '3.91'),
+                ],
+              },
+              payroll,
+            ],
+          },
+        ],
+        accounts: [
+          ...model().accounts.map((account) =>
+            account.code === '4111.01' ? { ...account, opening: '1000.00' } : account,
+          ),
+          { code: '7651', description: 'Venituri din diferențe de curs', opening: '0' },
+        ],
+        customers: [{ ...model().customers[0]!, opening: '1000.00' }],
+        salesInvoices: [],
+        purchaseInvoices: [],
+        payments: [],
+      });
+    const whole = settle([
+      line('R8', '4111.01', 'credit', '3015.04', { customer, currency: released }),
+    ]);
+    expect(codes(whole)).toContain('error:D406_CONVERSION');
+    const split = settle(
+      d406LineParts(reading, '3015.04', released, '4.9850').map((part, index) =>
+        line(index ? 'R8.2' : 'R8', '4111.01', 'credit', part.amount, {
+          customer,
+          ...(part.currency ? { currency: part.currency } : {}),
+        }),
+      ),
+    );
+    expect(codes(split).filter((code) => code.startsWith('error:'))).toEqual([]);
+    // The customer's balance moves by the line's 3,015.04, as in the ledger.
+    expect(calculateD406(split).customers[0]!.closing).toBe(100000n + 121000n - 301504n);
+    const xml = writeD406(split).replace(/>\s+</g, '><');
+    expect(xml).toContain(
+      '<nsSAFT:CreditAmount><nsSAFT:Amount>3015.93</nsSAFT:Amount><nsSAFT:CurrencyCode>EUR</nsSAFT:CurrencyCode><nsSAFT:CurrencyAmount>605.00</nsSAFT:CurrencyAmount><nsSAFT:ExchangeRate>4.9850</nsSAFT:ExchangeRate></nsSAFT:CreditAmount>',
+    );
+    expect(xml).toContain(
+      '<nsSAFT:CreditAmount><nsSAFT:Amount>-0.89</nsSAFT:Amount><nsSAFT:CurrencyCode>RON</nsSAFT:CurrencyCode><nsSAFT:CurrencyAmount>-0.89</nsSAFT:CurrencyAmount></nsSAFT:CreditAmount>',
+    );
+  });
+
+  test('a payment line names who paid whom: a customer paid back as its SupplierID (Răspuns 21)', () => {
+    const refund = (lines: D406['payments'][number]['lines']) =>
+      codes(
+        model({
+          payments: [
+            {
+              reference: 'OP-9',
+              date: '2026-10-20',
+              mechanism: '42',
+              description: 'Restituire CN-1',
+              direction: 'payment',
+              lines,
+            },
+          ],
+        }),
+      );
+    expect(
+      refund([{ account: '4111.01', supplier: customer, document: 'CN-1', amount: '121.00' }]),
+    ).toEqual([]);
+    const stranger = d406PartyId({ kind: 'ro', cui: '26000020' });
+    expect(refund([{ account: '4111.01', supplier: stranger, amount: '121.00' }])).toEqual([
+      'error:D406_PARTY_UNKNOWN',
     ]);
   });
 });

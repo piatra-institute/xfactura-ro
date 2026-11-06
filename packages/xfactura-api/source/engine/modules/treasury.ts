@@ -52,6 +52,8 @@ import type { ObjectStore } from '../adapters/object-store';
 import type { Actor, Commands, Ids } from '../kernel/commands';
 import { entryStands } from '../kernel/ledger';
 import type { CloseCheck, Finding } from '../kernel/periods';
+import { payClasses, salaryPayment } from '../kernel/personal';
+import { salaryMovements } from '../kernel/salaries';
 import { movementState } from '../kernel/work';
 import type { Evidence } from './evidence';
 
@@ -790,8 +792,14 @@ export class Treasury {
     });
   }
 
+  /**
+   * The reported movements, with whether each is explained. A caller who may not read pay (an
+   * agent whose reads do not cover `payroll` and `personal`, or a viewer) reads a payment of pay
+   * (`salaryMovements`) as `Plată salarii`, `redacted`: without its counterparty, account and
+   * reference, and without its amount when it pays one person; a salaries batch's total stands.
+   */
   movements(actor: Actor, input: z.infer<typeof movementQuery>) {
-    return this.commands.read(actor, 'bank.movements', async (tx) => {
+    return this.commands.read(actor, 'bank.movements', async (tx, access) => {
       const rows = await tx
         .select({
           movement: bankMovements,
@@ -815,19 +823,40 @@ export class Treasury {
           ),
         )
         .orderBy(asc(bankMovements.bookingDate), asc(bankMovements.id));
-      return rows.map(({ movement, settled: isSettled, state }) => ({
-        id: movement.id,
-        treasuryAccountId: movement.treasuryAccountId,
-        bookingDate: movement.bookingDate,
-        valueDate: movement.valueDate,
-        amount: formatMoney(movement.amountMinor, movement.currency),
-        currency: movement.currency,
-        reference: movement.reference,
-        counterparty: movement.counterparty,
-        counterpartyAccount: movement.counterpartyAccount,
-        settled: Boolean(isSettled),
-        state: state as (typeof movementStates)[number],
-      }));
+      const pay = (await this.commands.disclosable(tx, actor, access.role))(payClasses);
+      const salaries = pay
+        ? new Map<string, { persons: number }>()
+        : await salaryMovements(
+            tx,
+            actor.companyId,
+            rows.map(({ movement }) => movement),
+          );
+      return rows.map(({ movement, settled: isSettled, state }) => {
+        const view = {
+          id: movement.id,
+          treasuryAccountId: movement.treasuryAccountId,
+          bookingDate: movement.bookingDate,
+          valueDate: movement.valueDate,
+          amount: formatMoney(movement.amountMinor, movement.currency) as string | null,
+          currency: movement.currency,
+          reference: movement.reference as string | null,
+          counterparty: movement.counterparty,
+          counterpartyAccount: movement.counterpartyAccount,
+          settled: Boolean(isSettled),
+          state: state as (typeof movementStates)[number],
+        };
+        const salary = salaries.get(movement.id);
+        return salary
+          ? {
+              ...view,
+              amount: salary.persons > 1 ? view.amount : null,
+              reference: null,
+              counterparty: salaryPayment,
+              counterpartyAccount: null,
+              redacted: true as const,
+            }
+          : view;
+      });
     });
   }
 }

@@ -742,6 +742,9 @@ export const interestWithholding: Treatment<InterestWithholdingInput> = {
           currency: LEDGER_CURRENCY,
           normalSide: 'C',
           mayReverse: false,
+          // Paid when the interest is paid, under a civil contract (art. 97 alin. (2): „la
+          // momentul plății dobânzii”), the day the tax account reads (`withholding_date`).
+          dueDate: input.date,
         },
       ],
       taxEntries: [],

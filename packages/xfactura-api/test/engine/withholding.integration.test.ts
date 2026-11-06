@@ -166,8 +166,10 @@ describe('rent paid to an individual', () => {
       gross: '2500.00',
       authorityId: anaf.id,
     });
-    // 2,500 − 20% = 2,000 net, 10% of it: 200 lei.
+    // 2,500 − 20% = 2,000 net, 10% of it: 200 lei, due by 25 May with April's D100 (art. 84^1
+    // alin. (6), `ro.deadline.D100.withholding`).
     expect(lines(withheld)).toEqual(['D 462 200.00', 'C 446 200.00']);
+    expect(withheld.effect!.openItems.map((entry) => entry.dueDate)).toEqual(['2026-05-25']);
     expect(codes(withheld)).toEqual(['RENT_CASS']);
     expect(withheldOf(withheld)).toEqual({
       type: '628',
@@ -280,8 +282,10 @@ describe('intellectual property paid to an individual', () => {
       ...input,
       royalties: { contributionsByContract: false, realSystem: false, collectiveShare: false },
     });
-    // 10,000 − 40% = 6,000 net, 10%: 600 lei.
+    // 10,000 − 40% = 6,000 net, 10%: 600 lei, due by 25 June with May's D112 (art. 72 alin. (5),
+    // art. 132 alin. (2)).
     expect(lines(withheld)).toEqual(['D 462 600.00', 'C 446 600.00']);
+    expect(withheld.effect!.openItems.map((entry) => entry.dueDate)).toEqual(['2026-06-25']);
     expect(codes(withheld)).toEqual(['IP_D112']);
     await s.post(await s.approve(withheld));
     // Not in D100 nor D205: the month has nothing for D100.
@@ -633,6 +637,9 @@ describe('a software licence from a non-resident', () => {
       basis: { answers: [payee] },
     });
     expect(lines(domestic)).toEqual(['D 401 640.00', 'C 446 640.00']);
+    // Withheld on 20 March: due by 25 April with March's D100 (art. 224 alin. (5)), a Saturday,
+    // so on Monday 27 April.
+    expect(domestic.effect!.openItems.map((entry) => entry.dueDate)).toEqual(['2026-04-27']);
     expect(codes(domestic)).toEqual(['WHT_CERTIFICATE', 'WHT_DIRECTIVE_INTEREST']);
     expect(withheldOf(domestic)).toMatchObject({
       type: '633',

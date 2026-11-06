@@ -35,6 +35,10 @@ export const effectView = z.object({
       taxSettlement: z.object({ tax: z.string(), period: z.string() }).optional(),
       analytics: z.record(z.string(), z.string()).optional(),
       memo: z.string().optional(),
+      /** For a caller who may not read health data, on a payroll of one person: the accounts
+       * this line's amount includes beside its own (`['4382']`, the sick pay the fund bears,
+       * folded into 641 whether or not there was any). */
+      includes: z.array(z.string()).optional(),
     }),
   ),
   openItems: z.array(

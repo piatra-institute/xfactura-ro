@@ -40,7 +40,20 @@ import {
   type Role,
 } from '../db/schema';
 import { appendAudit, type Access, type Actor, type Commands } from './commands';
-import { maskCnps, payClasses, personnelAccount, withoutPersons } from './personal';
+import {
+  healthClasses,
+  maskCnps,
+  openAnswer,
+  payClasses,
+  payPayment,
+  personnelAccount,
+  salaryPayment,
+  sickClaimWithoutHealth,
+  singlePayroll,
+  withoutPersons,
+  type Seal,
+} from './personal';
+import { salarySubjects } from './salaries';
 import {
   requireActiveApprover,
   requireSegregated,
@@ -118,6 +131,8 @@ export async function basisAnswers(
   tx: Transaction,
   companyId: string,
   basis: Basis | null,
+  /** Opens the answers kept sealed (a month's absences) for the treatment that reads them. */
+  seal?: Seal,
 ): Promise<{ readSet: ReadSetEntry[]; answers: Map<string, AnswerRecord> }> {
   const answers = new Map<string, AnswerRecord>();
   if (!basis?.answers.length) return { readSet: [], answers };
@@ -158,7 +173,7 @@ export async function basisAnswers(
       kind: row.kind,
       subject: { kind: row.subjectKind, id: row.subjectId },
       params: JSON.parse(row.params) as JsonValue,
-      value: JSON.parse(row.value) as JsonValue,
+      value: openAnswer(seal, companyId, row.kind, JSON.parse(row.value)) as JsonValue,
       evidenceId: row.evidenceId,
       // The engine's time of the answer, never the database's: no treatment decides on wall
       // time. An answer recorded before the engine kept it counts as the earliest.
@@ -515,7 +530,7 @@ export class Proposals {
     if (followUp) state = mergeStates(state, await loadState(tx, companyId, followUp));
     // The answers the basis cites, as the person gave them: a treatment that needs a fact reads
     // only those, and a later answer makes the version stale.
-    const cited = await basisAnswers(tx, companyId, basis);
+    const cited = await basisAnswers(tx, companyId, basis, this.commands.sealer);
     const loaded: Loaded = { ...state.loaded, answers: cited.answers };
     let readSet = state.readSet;
     const mode = await this.mode(tx, companyId);
@@ -628,13 +643,16 @@ export class Proposals {
         ...(basisInput === undefined ? {} : { basis: basisOf(basisInput) }),
       },
       'write',
-      async (tx) => {
+      async (tx, access) => {
         // Copies of one document (a PDF read, then e-Factura) share their group's root as
         // subject, so that one of them only is ever recognized.
         const declared = treatment.subject(input);
         const subjectKey = declared.startsWith('document:')
           ? `document:${await rootOf(tx, actor.companyId, declared.slice('document:'.length))}`
           : declared;
+        const pay = await this.payReader(tx, actor, access.role);
+        if (!pay)
+          await this.requirePay(subjectKey, salarySubjects(tx, actor.companyId, [subjectKey]));
         // The proposal holding this subject, open or posted, if any: a withdrawal frees the
         // subject, and so does the reversal of its posted entry (a correction is a reversal and
         // a new proposal).
@@ -710,6 +728,8 @@ export class Proposals {
           input,
           basis,
         );
+        if (!pay && evaluated.effect && payPayment(evaluated.effect.lines))
+          await this.requirePay(subjectKey, Promise.resolve(new Set([subjectKey])));
         await tx.insert(proposalVersions).values({
           companyId: actor.companyId,
           proposalId,
@@ -759,6 +779,26 @@ export class Proposals {
         return this.view(tx, actor.companyId, proposalId);
       },
       this.present(actor),
+    );
+  }
+
+  /** Whether this caller may read pay (`Commands.disclosable` on `payroll` and `personal`). */
+  private async payReader(tx: Transaction, actor: Actor, role: Role) {
+    return (await this.commands.disclosable(tx, actor, role))(payClasses);
+  }
+
+  /**
+   * A payment of pay is proposed by someone who may read it: a caller who may not (an agent whose
+   * reads do not cover `payroll` and `personal`) is refused with the reason, before anything is
+   * recorded, and the worklist leaves the movement to a person (`bank.unexplained`'s `needs`).
+   */
+  private async requirePay(subjectKey: string, salaries: Promise<Set<string>>) {
+    requireCondition(
+      !(await salaries).has(subjectKey),
+      'PAY_DATA',
+      'Mișcarea plătește salarii (date salariale): o explică un proprietar, un revizor sau un agent a cărui permisiune acoperă datele salariale (payroll, personal).',
+      403,
+      { missing: [...payClasses], reason: 'grant' },
     );
   }
 
@@ -1450,12 +1490,17 @@ export class Proposals {
    * `proposals.revise` starts from. The input and the basis go only to a caller who may read
    * every data class of the treatment, as `events.since` decides (`Commands.readable`): a person,
    * or an agent whose grant's reads cover them; otherwise both are null and the view `redacted`.
-   * The effect shows no one's pay to an agent whose reads do not cover `payroll` and `personal`
-   * (`withoutPersons`: the lines on personnel accounts summed, without the person, and their open
-   * items left out), and no CNP (a B2C buyer's in a tax entry's attributes) to a caller who may
-   * not read personal data in clear (`Commands.disclosable`); an answer of the basis whose kind's
-   * classes the caller may not read (sick leave: `health`) without its value. Every view that
-   * leaves the engine goes through it: the reads', and what a command returns (`present`).
+   * The effect shows no one's pay to a caller who may not read `payroll` and `personal`
+   * (`Commands.disclosable`: an agent whose reads do not cover them, or a viewer): the lines on
+   * personnel accounts summed, without the person, and their open items left out
+   * (`withoutPersons`); a payment of pay (`payPayment`, or a movement `salarySubjects` finds) is
+   * withheld whole, its effect and input null and its issues saying only that they concern
+   * salaries. A payroll of one person shows a caller who may not read health data its sick pay
+   * claimed (4382) folded into 641 (`sickClaimWithoutHealth`). No CNP (a B2C buyer's in a tax
+   * entry's attributes) to a caller who may not read personal data in clear; an answer of the
+   * basis whose kind's classes the caller may not read (sick leave: `health`) without its value,
+   * and opened from its seal for one who may. Every view that leaves the engine goes through it:
+   * the reads', and what a command returns (`present`).
    */
   private async disclosed(
     tx: Transaction,
@@ -1466,28 +1511,65 @@ export class Proposals {
   ): Promise<ProposalView[]> {
     if (!views.length) return views;
     const readable = await this.commands.readable(tx, actor);
-    const pay = readable(payClasses);
     const disclosable = await this.commands.disclosable(tx, actor, role);
+    const pay = disclosable(payClasses);
     const cnps = disclosable(['personal']);
+    const health = disclosable(healthClasses);
     // An answer the basis cites holding data the caller may not read (a month's sick leave,
-    // `health`) keeps its place without its value, as `questions.list` shows it.
+    // `health`) keeps its place without its value, as `questions.list` shows it; one it may read
+    // is opened from its seal.
     const basisOf = (basis: ProposalView['basis']): ProposalView['basis'] =>
       basis && {
         ...basis,
         answers: basis.answers.map((answer) =>
           answer.kind && !disclosable(questionKind(answer.kind)?.dataClasses ?? [])
             ? { ...answer, value: null, redacted: true as const }
-            : answer,
+            : answer.kind
+              ? {
+                  ...answer,
+                  value: openAnswer(
+                    this.commands.sealer,
+                    actor.companyId,
+                    answer.kind,
+                    answer.value,
+                  ),
+                }
+              : answer,
         ),
       };
+    const salaries = pay
+      ? new Set<string>()
+      : await salarySubjects(
+          tx,
+          actor.companyId,
+          views.map((view) => view.subject),
+        );
+    const paysPay = (view: ProposalView) =>
+      !pay && (salaries.has(view.subject) || !!(view.effect && payPayment(view.effect.lines)));
     const shown = (view: ProposalView): ProposalView => {
+      if (paysPay(view))
+        return {
+          ...view,
+          effect: null,
+          issues: view.issues.map((issue) => ({
+            code: issue.code,
+            severity: issue.severity,
+            message: `O problemă a unei plăți de salarii (${salaryPayment}): o vede cine poate citi datele salariale.`,
+            ...(issue.path === undefined ? {} : { path: issue.path }),
+          })),
+          basis: basisOf(view.basis),
+          redacted: true,
+        };
       let effect = view.effect;
+      const single = !!effect && singlePayroll(effect.lines);
       if (effect && !pay)
         effect = {
           ...effect,
           lines: withoutPersons(effect.lines),
           openItems: effect.openItems.filter((item) => !personnelAccount(item.controlAccount)),
         };
+      if (effect && single && !health)
+        effect = { ...effect, lines: sickClaimWithoutHealth(effect.lines) };
       const basis = basisOf(view.basis);
       return cnps
         ? { ...view, effect, basis }
@@ -1515,7 +1597,7 @@ export class Proposals {
     return views.map((view): ProposalView => {
       // The data classes of the treatment's own operation; an unknown treatment's are unknown.
       const classes = this.commands.dataClassesOf(`${view.treatment}.propose`);
-      if (actor.agentId && !(classes && readable(classes)))
+      if ((actor.agentId && !(classes && readable(classes))) || paysPay(view))
         return {
           ...shown(view),
           basis: null,

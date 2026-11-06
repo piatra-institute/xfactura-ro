@@ -413,7 +413,7 @@ export async function prepareStock(
             ? ('FIFO' as const)
             : method === 'lifo'
               ? ('LIFO' as const)
-              : ('Cost mediu' as const),
+              : ('CMP' as const),
         unit: item.unit,
       };
     }),

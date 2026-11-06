@@ -310,6 +310,7 @@ import {
 import {
   calendarInput,
   closureNeeds,
+  d112WithoutHealth,
   obligationsCalendar,
   obligationView,
 } from './modules/obligations';
@@ -713,6 +714,7 @@ export class Engine {
       clock: this.clock,
       ...(options.ids ? { ids: options.ids } : {}),
       identities: new PartyIdentities(secret),
+      sealer: new Sealer(secret),
     });
     // A policy names treatments; what the engine knows of each is read when one is created.
     this.policies = new PostingPolicies(this.commands, (id) =>
@@ -2923,17 +2925,20 @@ export class Engine {
         approval: 'none',
         input: calendarInput,
         output: page(obligationView),
+        // A caller who may not read health data reads D112's due dates without why
+        // (`d112WithoutHealth`).
         run: (actor, _, input) =>
-          this.commands.read(actor, 'obligations.calendar', async (tx) => ({
-            items: await obligationsCalendar(
+          this.commands.read(actor, 'obligations.calendar', async (tx, access) => {
+            const health = (await this.commands.disclosable(tx, actor, access.role))(['health']);
+            const items = await obligationsCalendar(
               tx,
               actor.companyId,
               input,
               await this.proposals.ruleContext(tx, actor.companyId),
               input.today ?? new Date(this.clock()).toISOString().slice(0, 10),
-            ),
-            next: null,
-          })),
+            );
+            return { items: health ? items : items.map(d112WithoutHealth), next: null };
+          }),
       }),
       define({
         id: 'determinations.evaluate',

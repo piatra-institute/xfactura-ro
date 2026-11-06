@@ -9,6 +9,7 @@ import { actionDecisions, actionExecutions, actionRequests, type Role } from '..
 import type { Access, Actor, Commands, Permission } from './commands';
 import { requireActiveApprover, requireSegregated, segregationOn } from './controls';
 import { maskCnps, payClasses, previewWithoutPersons } from './personal';
+import { previewWithoutPay } from './salaries';
 
 /**
  * A reviewed action without journal lines (closing or reopening a month, …). A request stores a
@@ -311,21 +312,30 @@ export class Actions {
   }
 
   /** A view as this caller sees it, wherever it leaves the engine (`actions.get`, `.list`, and
-   * what `*.request`, `actions.approve`, `.reject` and `.execute` return, stored or new): an
-   * agent whose reads do not cover `payroll` and `personal` sees no one's pay in a preview (the
-   * year close's snapshot sums the personnel accounts' open items, `previewWithoutPersons`), and
-   * a caller who may not read personal data in clear no CNP (a finding quoting a record). The
-   * preview hash is the one approved, whatever is shown. */
+   * what `*.request`, `actions.approve`, `.reject` and `.execute` return, stored or new): a
+   * caller who may not read pay (an agent whose reads do not cover `payroll` and `personal`, or
+   * a viewer) sees no one's pay in a preview (the year close's snapshot sums the personnel
+   * accounts' open items and its findings name no employee, `previewWithoutPersons`; a batch's
+   * members and a template's backtest show a payment of pay without the person,
+   * `previewWithoutPay`), and a caller who may not read personal data in clear no CNP (a finding
+   * quoting a record). The preview hash is the one approved, whatever is shown. */
   private async shown(
     tx: Transaction,
     actor: Actor,
     role: Role,
     view: ActionView,
   ): Promise<ActionView> {
-    const pay = (await this.commands.readable(tx, actor))(payClasses);
-    const cnps = (await this.commands.disclosable(tx, actor, role))(['personal']);
+    const disclosable = await this.commands.disclosable(tx, actor, role);
+    const pay = disclosable(payClasses);
+    const cnps = disclosable(['personal']);
     let preview = view.preview;
-    if (!pay) preview = previewWithoutPersons(view.operation, preview) as JsonValue;
+    if (!pay)
+      preview = (await previewWithoutPay(
+        tx,
+        actor.companyId,
+        view.operation,
+        previewWithoutPersons(view.operation, preview),
+      )) as JsonValue;
     if (!cnps) preview = maskCnps(preview);
     return pay && cnps ? view : { ...view, preview };
   }

@@ -27,6 +27,7 @@ import {
   type BookPartner,
   type ClosingSnapshot,
   type InventoryComparison,
+  type InventoryDifference,
   type InventoryList,
   type ProfitNote,
 } from 'xfactura-core/ro/yearend';
@@ -59,10 +60,15 @@ import {
 import type { ActionHandler } from '../kernel/actions';
 import type { Actor, Commands } from '../kernel/commands';
 import { entryStands, holdsSubject, linesUnder } from '../kernel/ledger';
-import { differencesWithoutPersons, payClasses } from '../kernel/personal';
+import {
+  differencesWithoutPersons,
+  payClasses,
+  personnelAccount,
+  personnelConfirmations,
+} from '../kernel/personal';
 import type { CloseCheck, Finding } from '../kernel/periods';
 import { loadState } from '../kernel/state';
-import type { WorkStep, YearEndWorkItem } from '../kernel/work';
+import type { WorkStep, Withheld, YearEndWorkItem } from '../kernel/work';
 import { standing } from './questions';
 
 /*
@@ -620,6 +626,8 @@ export interface ReviewItem {
   message: string;
   details: { [key: string]: JsonValue };
   next: WorkStep[];
+  /** What a caller who may not read these classes reads instead (`Withheld`). */
+  withheld?: Withheld;
 }
 
 const employmentIn = async (tx: Transaction, companyId: string, year: Year) => {
@@ -656,6 +664,13 @@ async function answerOf<T>(
     open: null,
     questionId: found.answered.row.id,
   };
+}
+
+/** What a partner's confirmation that is missing or differs asks (pct. 28). */
+function partnerMessage(item: Extract<InventoryDifference, { kind: 'partner' }>) {
+  return item.status === 'no_reply'
+    ? `${item.name} nu a confirmat soldul de ${money(item.book, item.currency)} ${item.currency} din ${item.account} (pct. 28): cereți din nou confirmarea.`
+    : `${item.name} confirmă ${item.confirmed === null ? '—' : money(item.confirmed, item.currency)} ${item.currency} în ${item.account}, registrele arată ${money(item.book, item.currency)}${item.status === 'disputed' ? ' (contestat)' : ''}: diferența se lămurește cu documentele, nu se înregistrează din listă.`;
 }
 
 /** Everything the year's last day must hold before the year closes. */
@@ -796,18 +811,41 @@ export async function yearEndReview(
         details: differenceView(item) as { [key: string]: JsonValue },
         next: [agent('bank.import'), agent('bank.recordStatement')],
       });
-    else if (item.kind === 'partner')
+    else if (item.kind === 'partner' && !personnelAccount(item.account))
       push({
         check: 'inventory.partners',
         about: `${item.partyId ?? item.name}/${item.account}/${item.currency}`,
         severity: 'warn',
-        message:
-          item.status === 'no_reply'
-            ? `${item.name} nu a confirmat soldul de ${money(item.book, item.currency)} ${item.currency} din ${item.account} (pct. 28): cereți din nou confirmarea.`
-            : `${item.name} confirmă ${item.confirmed === null ? '—' : money(item.confirmed, item.currency)} ${item.currency} în ${item.account}, registrele arată ${money(item.book, item.currency)}${item.status === 'disputed' ? ' (contestat)' : ''}: diferența se lămurește cu documentele, nu se înregistrează din listă.`,
+        message: partnerMessage(item),
         details: differenceView(item) as { [key: string]: JsonValue },
         next: [agent('inventory.compare', { date: end })],
       });
+  // The personnel's balances (an advance on 425, pay not collected): one item per account and
+  // currency, its id naming no one; whom it is about only for a reader of pay.
+  const personnel = comparison.differences.filter(
+    (item) => item.kind === 'partner' && personnelAccount(item.account),
+  ) as Extract<InventoryDifference, { kind: 'partner' }>[];
+  for (const [key, group] of Map.groupBy(personnel, (item) => `${item.account}/${item.currency}`)) {
+    const { account, currency } = group[0]!;
+    const withheld = personnelConfirmations(account, currency, group.length);
+    push({
+      check: 'inventory.partners',
+      about: `personnel/${key}`,
+      severity: 'warn',
+      message: group.map(partnerMessage).join(' '),
+      details: {
+        account,
+        currency,
+        partners: group.map((item) => differenceView(item)),
+      },
+      next: [{ ...agent('inventory.compare', { date: end }), needs: payClasses }],
+      withheld: {
+        classes: payClasses,
+        message: withheld,
+        details: { account, currency, partners: group.length, redacted: true },
+      },
+    });
+  }
 
   if (single) return items;
 
@@ -1321,12 +1359,14 @@ export function yearCloseHandler(
           items: open,
         });
       // The review's items, each as it stands: what blocks blocks the close; a partner that did
-      // not confirm its balance is a warning the approver sees.
+      // not confirm its balance is a warning the approver sees. The personnel's confirmations
+      // name no one: the preview is read by whoever reads the request (`yearend.review` names
+      // them to a reader of pay).
       for (const item of await yearEndReview(tx, companyId, year, await rules(tx, companyId)))
         findings.push({
           code: `YEAR_END_${item.check.replace(/\W+/g, '_').toUpperCase()}`,
           severity: item.severity,
-          message: item.message,
+          message: item.withheld?.message ?? item.message,
         });
       const closing = await closingSnapshot(tx, companyId, year);
       return {
@@ -1468,24 +1508,54 @@ export class YearEnd {
     private readonly rules: (tx: Transaction, companyId: string) => Promise<RuleContext>,
   ) {}
 
-  /** The year's inventory lists against the books on their date. */
+  /** The year's inventory lists against the books on their date. A caller who may not read pay
+   * (an agent whose reads do not cover `payroll` and `personal`, or a viewer) reads the
+   * personnel's confirmations (class 42: an advance on 425) as one difference per account and
+   * currency, how many people without who or how much (`redacted`). */
   compare(actor: Actor, input: z.infer<typeof compareInput>) {
-    return this.commands.read(actor, 'inventory.compare', async (tx) => {
+    return this.commands.read(actor, 'inventory.compare', async (tx, access) => {
       const { lists, comparison } = await inventoryComparison(tx, actor.companyId, input.date);
+      const pay = (await this.commands.disclosable(tx, actor, access.role))(payClasses);
+      const personnel = (item: InventoryDifference) =>
+        !pay && item.kind === 'partner' && personnelAccount(item.account);
+      const summed = [
+        ...Map.groupBy(
+          comparison.differences.filter(personnel) as Extract<
+            InventoryDifference,
+            { kind: 'partner' }
+          >[],
+          (item) => `${item.account}/${item.currency}`,
+        ).values(),
+      ].map((group) => ({
+        kind: 'partner' as const,
+        partyId: null,
+        name: null,
+        account: group[0]!.account,
+        currency: group[0]!.currency,
+        book: null,
+        confirmed: null,
+        status: null,
+        persons: group.length,
+        redacted: true as const,
+      }));
       return {
         date: input.date,
         lists,
         sections: comparison.sections,
-        differences: comparison.differences.map(differenceView),
+        differences: [
+          ...comparison.differences.filter((item) => !personnel(item)).map(differenceView),
+          ...summed,
+        ],
         gaps: comparison.gaps,
         unsupported: comparison.unsupported.map(({ code, message }) => ({ code, message })),
       };
     });
   }
 
-  /** What the year-end still waits on, for a financial year. */
+  /** What the year-end still waits on, for a financial year. An item a caller may not read (the
+   * personnel's confirmations, for one who may not read pay) is its withheld form (`redacted`). */
   review(actor: Actor, input: z.infer<typeof yearInput>) {
-    return this.commands.read(actor, 'yearend.review', async (tx) => {
+    return this.commands.read(actor, 'yearend.review', async (tx, access) => {
       const year = await yearById(tx, actor.companyId, input.financialYearId);
       const items = await yearEndReview(
         tx,
@@ -1493,20 +1563,25 @@ export class YearEnd {
         year,
         await this.rules(tx, actor.companyId),
       );
+      const disclosable = await this.commands.disclosable(tx, actor, access.role);
       return {
         year,
         closed: !!(await yearLock(tx, actor.companyId, year.id)),
-        items: items.map(({ next: _, ...item }) => item),
+        items: items.map(({ next: _, withheld, ...item }) =>
+          withheld && !disclosable(withheld.classes)
+            ? { ...item, message: withheld.message, details: withheld.details, redacted: true }
+            : item,
+        ),
         next: null,
       };
     });
   }
 
-  /** The opening of a year against its previous year's close. An agent whose reads do not cover
-   * `payroll` and `personal` sees the personnel accounts' items summed (`differencesWithoutPersons`):
-   * an employee's unpaid pay is one of them. */
+  /** The opening of a year against its previous year's close. A caller who may not read pay (an
+   * agent whose reads do not cover `payroll` and `personal`, or a viewer) sees the personnel
+   * accounts' items summed (`differencesWithoutPersons`): an employee's unpaid pay is one of them. */
   opening(actor: Actor, input: z.infer<typeof openingInput>) {
-    return this.commands.read(actor, 'years.opening', async (tx) => {
+    return this.commands.read(actor, 'years.opening', async (tx, access) => {
       const year = await yearById(tx, actor.companyId, input.financialYearId);
       const check = await openingCheck(tx, actor.companyId, year);
       if (!check)
@@ -1533,7 +1608,7 @@ export class YearEnd {
         closed: true,
         snapshotHash: check.snapshotHash,
         matches: check.differences.length === 0 && check.openings.length === 0,
-        differences: ((await this.commands.readable(tx, actor))(payClasses)
+        differences: ((await this.commands.disclosable(tx, actor, access.role))(payClasses)
           ? check.differences
           : differencesWithoutPersons(check.differences)) as unknown as JsonValue[],
         openings: check.openings,
@@ -1737,6 +1812,14 @@ export async function yearEndWork(
         message: item.message,
         details: { check: item.check, ...item.details },
         next: item.next,
+        ...(item.withheld
+          ? {
+              withheld: {
+                ...item.withheld,
+                details: { check: item.check, ...item.withheld.details },
+              },
+            }
+          : {}),
       });
     if (
       !items.some((item) => item.severity === 'block') &&

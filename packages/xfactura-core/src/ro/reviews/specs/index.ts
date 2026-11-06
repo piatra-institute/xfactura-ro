@@ -25,7 +25,12 @@ import {
   voucherLimitsSpec,
 } from './payroll';
 import { legalReserveSpec, lossCarryforwardSpec, socialLimitSpec, sponsorshipSpec } from './profit';
-import { d406AssetsDeadlineSpec, d406PresentationSpec, d406StartSpec } from './saft';
+import {
+  d406AssetsDeadlineSpec,
+  d406ConversionSpec,
+  d406PresentationSpec,
+  d406StartSpec,
+} from './saft';
 import { reverseChargeSpec, simplifiedInvoiceSpec } from './receipts';
 import { flatRateSpec, goodsMarginSpec, travelMarginSpec } from './schemes';
 import {
@@ -38,7 +43,7 @@ import {
 import { accountsSpec, advanceSpec, distributionSpec } from './taxaccount';
 import { vatDeductionLimitedSpec, vatRateSpec, vatReducedRateSpec } from './vat';
 import { impairmentAccountsSpec, inventoryAccountsSpec, provisionAccountsSpec } from './yearend';
-import { stockAccountsSpec, stockMethodsSpec } from './stock';
+import { stockAccountsSpec, stockMethodsSpec, stockReturnsSpec } from './stock';
 import { importSpec, transportSpec, viesSpec } from './trade';
 import { efacturaB2cSpec, retailCoefficientSpec, retailZReportSpec } from './retail';
 import {
@@ -81,6 +86,7 @@ export const reviewSpecs: readonly ReviewSpec[] = [
   d406AssetsDeadlineSpec,
   d406StartSpec,
   d406PresentationSpec,
+  d406ConversionSpec,
   specialPayableSpec,
   lateRegistrationSpec,
   registrationAnnualizedSpec,
@@ -115,6 +121,7 @@ export const reviewSpecs: readonly ReviewSpec[] = [
   ossReturnSpec,
   stockAccountsSpec,
   stockMethodsSpec,
+  stockReturnsSpec,
   viesSpec,
   transportSpec,
   importSpec,

@@ -19,6 +19,7 @@ import { RuleGapError, type RuleContext } from '../../rules';
 import { addDays, isLocalDate, type LocalDate } from '../../time';
 import { interestAccountCodes } from '../financing';
 import { whtCode, type Withheld } from '../withholding/codes';
+import { taxDue } from './due';
 import type { NonresidentBeneficiary, NonresidentIncome } from '../withholding/parameters';
 
 /*
@@ -417,6 +418,15 @@ export const payeeWithholding: Treatment<PayeeWithholdingInput> = {
           currency: LEDGER_CURRENCY,
           normalSide: 'C',
           mayReverse: false,
+          // Due by the 25th of the month after it was withheld (art. 84^1 alin. (6), art. 72
+          // alin. (5)), the deadline of the return that declares it: D100 for rent, D112 for
+          // intellectual property (art. 132 alin. (2)), as the tax account reads it.
+          ...taxDue(
+            kind === 'rent' ? 'D100.withholding' : 'D112',
+            input.date.slice(0, 7),
+            input.date.slice(0, 7),
+            rules,
+          ),
         },
       ],
       taxEntries: [],
@@ -888,6 +898,14 @@ export const nonresidentWithholding: Treatment<NonresidentWithholdingInput> = {
                 currency: LEDGER_CURRENCY,
                 normalSide: 'C',
                 mayReverse: false,
+                // Due by the 25th of the month after it was withheld (art. 224 alin. (5)), with
+                // the month's D100.
+                ...taxDue(
+                  'D100.withholding',
+                  input.date.slice(0, 7),
+                  input.date.slice(0, 7),
+                  rules,
+                ),
               },
             ],
           };

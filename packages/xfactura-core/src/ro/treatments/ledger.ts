@@ -8,6 +8,7 @@ import {
   type OpenItemKind,
   type OpenItemSpec,
   type Side,
+  type StockMoveSpec,
   type TaxEntrySpec,
   type Treatment,
   profileAt,
@@ -16,6 +17,7 @@ import {
 import { isSupportedCurrency, LEDGER_CURRENCY, parseMoney } from '../../money';
 import { isLocalDate, type LocalDate } from '../../time';
 import { controlKindOf } from '../chart';
+import { reverseStock } from '../stock/valuation';
 
 const date = z
   .string()
@@ -329,10 +331,10 @@ export const reversal: Treatment<ReversalInput> = {
     openItems: [{ touchedBy: input.entryId }],
     profile: true,
     // The stock positions its moves touched: a reversal returns their goods, or takes them out
-    // again, so it reads what each layer holds now.
-    stock: { touchedBy: input.entryId },
+    // again, so it reads what each layer holds now and held on each day since (`dated`).
+    stock: { touchedBy: input.entryId, dated: true },
   }),
-  evaluate(input, loaded) {
+  evaluate(input, loaded, rules) {
     const issues: Issue[] = [];
     const entry = loaded.entries.get(input.entryId);
     if (!loaded.evidence.has(input.evidenceId))
@@ -410,12 +412,14 @@ export const reversal: Treatment<ReversalInput> = {
     }));
     // Its stock moves are mirrored too, on the same layers and lines, in red or black alike: a
     // receipt reversed takes its goods out of the lot again, an exit returns them to the lots it
-    // consumed. A move between warehouses (a memo entry, without lines) is reversed as one.
-    const moves = (entry.stockMoves ?? []).map((move) => ({
-      ...move,
-      quantity: -move.quantity,
-      bani: -move.bani,
-    }));
+    // consumed. A move between warehouses (a memo entry, without lines) is reversed as one. Goods
+    // taken out are valued on the storno's date, as a return to the supplier (core ro/stock).
+    let moves: StockMoveSpec[] = [];
+    if (entry.stockMoves?.length) {
+      const stock = reverseStock(loaded, rules, entry.stockMoves, input.date, lines);
+      issues.push(...stock.issues);
+      moves = stock.moves;
+    }
     const effect: Effect = {
       schema: moves.length ? 'effect@2' : 'effect@1',
       date: input.date,

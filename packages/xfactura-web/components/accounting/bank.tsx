@@ -15,9 +15,10 @@ type Movement = {
   id: string;
   treasuryAccountId: string;
   bookingDate: string;
-  amount: string;
+  /** Null for one person's pay, to a reader who may not read pay (`Plată salarii`). */
+  amount: string | null;
   currency: string;
-  reference: string;
+  reference: string | null;
   counterparty: string | null;
   settled: boolean;
 };
@@ -118,7 +119,7 @@ export default function Bank() {
         <p className="acc-empty">Toate mișcările importate sunt explicate.</p>
       ) : null}
       {unsettled.map((movement) => {
-        const received = !movement.amount.startsWith('-');
+        const received = !(movement.amount ?? '-').startsWith('-');
         const candidates = (positions ?? []).filter(
           (position) =>
             position.currency === movement.currency &&
@@ -135,7 +136,11 @@ export default function Bank() {
                   {movement.bookingDate} · {movement.counterparty ?? movement.reference}
                 </p>
               </div>
-              <strong>{formatMoney(movement.amount, movement.currency)}</strong>
+              <strong>
+                {movement.amount === null
+                  ? 'Sumă ascunsă (date salariale)'
+                  : formatMoney(movement.amount, movement.currency)}
+              </strong>
             </div>
             {can('bank.settle.propose') ? (
               <form

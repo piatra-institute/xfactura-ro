@@ -1,6 +1,8 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import * as stockAgent from 'xfactura-core/ro/stock/agent';
 import type { ProposalView } from '../../source/engine/kernel/views';
+import type { WorkItem } from '../../source/engine/kernel/work';
+import { invoiceXml, type XmlInput } from './fixtures/invoice';
 import { scenario, type Scenario } from './scenario';
 
 // The stock register (G1) from the books' side. Amounts by hand:
@@ -600,5 +602,323 @@ describe('valuation on the dates the moves carry', () => {
     const costed = await s.book('stock.periodCost', { month: '2026-03' });
     expect(lines(costed)).toEqual(['D 6028 50.00', 'C 3028 50.00']);
     expect(await findings('2026-03')).not.toContain('STOCK_PERIOD_COST_MISSING');
+  });
+});
+
+// A shop at retail price (G2) whose depot is kept by item at cost by its own fact
+// (`policy.stock.retail.<warehouseId>`): the cost method's policies were asked by each treatment
+// on the depot (POLICY_MISSING), never by the closure, which read the company's default alone.
+describe('a company at retail price keeping a warehouse at cost', () => {
+  test('the closure asks once for the cost policies, and the worklist lists the need', async () => {
+    const s = await scenario({ clock: () => Date.parse('2026-11-10T10:00:00Z') });
+    open.push(s);
+    const record = async (axis: string, value: string) =>
+      s.invoke(s.owner, 'profile.record', {
+        axis,
+        value,
+        effectiveFrom: '2026-01-01',
+        evidenceId: (await s.evidence(`${axis}.pdf`)).id,
+      });
+    for (const [axis, value] of Object.entries({
+      'vat.status': 'normal_vat',
+      'vat.period': 'monthly',
+      'activity.goods': 'yes',
+      'regime.excluded': 'none',
+      'policy.stock.retail': 'retail',
+      'policy.stock.inventory': 'permanent',
+    }))
+      await record(axis, value);
+    const needs = async () =>
+      (
+        await s.invoke<{ needs: { id: string; message: string }[] }>(s.owner, 'closure.evaluate', {
+          from: '2026-01',
+          to: '2026-12',
+        })
+      ).needs.filter((need) => need.id.includes('policy.stock'));
+    // At retail price only: nothing to ask of the stock register.
+    expect(await needs()).toEqual([]);
+    const depot = await s.invoke<Warehouse>(s.owner, 'stock.warehouses.create', {
+      code: 'D1',
+      name: 'Depozit',
+      keeper: 'Ionescu Maria',
+    });
+    const shop = await s.invoke<Warehouse>(s.owner, 'stock.warehouses.create', {
+      code: 'M1',
+      name: 'Magazin',
+      keeper: 'Popa Ion',
+    });
+    await record(`policy.stock.retail.${depot.id}`, 'cost');
+    await record(`policy.stock.retail.${shop.id}`, 'retail');
+    // The depot at cost: the output method and the negative stock's policy, once each.
+    const asked = await needs();
+    expect(asked.map((need) => need.id)).toEqual([
+      'profile.fact|profile:policy.stock.valuation',
+      'profile.fact|profile:policy.stock.negative',
+    ]);
+    expect(asked[0]!.message).toContain('o gestiune este ținută la cost');
+    const work = (
+      await s.invoke<{ items: WorkItem[] }>(s.owner, 'work.list', {
+        kinds: ['closure.need'],
+        limit: 200,
+      })
+    ).items;
+    expect(
+      work.find((item) => item.subject.id === 'profile.fact|profile:policy.stock.valuation'),
+    ).toMatchObject({
+      severity: 'warn',
+      details: { fact: 'policy.stock.valuation' },
+      next: [
+        {
+          operation: 'questions.ask',
+          inputHint: {
+            kind: 'profile.fact',
+            subject: { kind: 'profile', id: 'policy.stock.valuation' },
+          },
+        },
+      ],
+    });
+    // The depot's receipt asked the same, by itself.
+    const coffee = await s.invoke<Item>(s.owner, 'stock.items.create', {
+      code: 'CAF-1',
+      name: 'Cafea',
+      unit: 'H87',
+      account: '371',
+    });
+    const supplier = await s.party('Furnizor SRL', '14399840');
+    const receipt = async (reference: string) => ({
+      date: '2026-03-02',
+      warehouseId: depot.id,
+      supplierId: supplier.id,
+      reference,
+      evidenceId: (await s.evidence(`${reference}.pdf`)).id,
+      lines: [{ itemId: coffee.id, quantity: '10', value: '100.00' }],
+    });
+    const early = await s.propose('stock.receive', await receipt('AV-0'));
+    expect(early.issues.map((issue) => issue.code)).toEqual(['POLICY_MISSING', 'POLICY_MISSING']);
+    await s.invoke(s.owner, 'proposals.withdraw', {
+      proposalId: early.id,
+      reason: 'Politicile gestiunii la cost lipsesc',
+    });
+    await record('policy.stock.valuation', 'fifo');
+    await record('policy.stock.negative', 'refuse');
+    expect(await needs()).toEqual([]);
+    expect((await s.book('stock.receive', await receipt('AV-1'))).status).toBe('posted');
+  });
+});
+
+// Goods going back to their supplier, on its credit note or by a storno of their receipt, were
+// valued on the register as it stands: one dated when the goods had already left was accepted
+// once a later move brought the position back up, so it drove the position below zero on its
+// date, and a pool's difference fell on the goods a later receipt brought in. They now take what
+// the position held on their date (OMFP 1802/2014 pct. 95 alin. (1); `ro.stock.returns`).
+describe('returns to the supplier and a receipt’s storno, on their date', () => {
+  /** Paper (3028) bought on invoices or delivery notes, and consumed on slips. */
+  async function paper(method: 'fifo' | 'average') {
+    const { s, item, warehouse } = await stockCompany(method);
+    const sheet = await item('HRT-1', 'Hârtie', '3028', 'XBX');
+    const depot = await warehouse('D1', 'Depozit');
+    const supplier = await s.party('Furnizor SRL', '87654321');
+    const imported = async (input: XmlInput) => {
+      const { id: evidenceId } = await s.invoke<{ id: string }>(s.owner, 'evidence.record', {
+        filename: `${input.number}.xml`,
+        mediaType: 'application/xml',
+        base64: Buffer.from(invoiceXml(input)).toString('base64'),
+      });
+      return s.invoke<{ id: string }>(s.owner, 'invoices.import', { evidenceId });
+    };
+    const stock = (quantity: string) => ({
+      warehouseId: depot.id,
+      lines: [{ line: '1', itemId: sheet.id, quantity }],
+    });
+    /** An invoice of `quantity` boxes for `net` lei at 21%, received into the depot. */
+    const bought = async (number: string, date: string, quantity: string, net: string) => {
+      const document = await imported({ number, date, ...amounts(net) });
+      await s.book('invoices.recognize', {
+        documentId: document.id,
+        account: '3028',
+        stock: stock(quantity),
+      });
+      return document;
+    };
+    /** The supplier's credit note on `original`, `quantity` boxes back for `net` lei. */
+    const credited = async (
+      original: { id: string; number: string },
+      number: string,
+      date: string,
+      quantity: string,
+      net: string,
+    ) =>
+      s.propose('invoices.credit', {
+        documentId: (
+          await imported({
+            number,
+            date,
+            credit: true,
+            originalNumber: original.number,
+            ...amounts(net),
+          })
+        ).id,
+        originalDocumentId: original.id,
+        account: '3028',
+        stock: stock(quantity),
+      });
+    const receive = async (reference: string, date: string, quantity: string, value: string) =>
+      s.book('stock.receive', {
+        date,
+        warehouseId: depot.id,
+        supplierId: supplier.id,
+        reference,
+        evidenceId: (await s.evidence(`${reference}.pdf`)).id,
+        lines: [{ itemId: sheet.id, quantity, value }],
+      });
+    const consume = async (reference: string, date: string, quantity: string) =>
+      s.book('stock.consume', {
+        date,
+        warehouseId: depot.id,
+        reference,
+        evidenceId: (await s.evidence(`${reference}.pdf`)).id,
+        lines: [{ itemId: sheet.id, quantity }],
+      });
+    /** A red storno of `entryId` on `date`, or `previous` revised to that date. */
+    const reverse = async (entryId: string, date: string, previous?: ProposalView) => {
+      const input = {
+        entryId,
+        date,
+        reason: 'Recepție înregistrată din greșeală.',
+        evidenceId: (await s.evidence(`storno-${entryId}-${date}.pdf`)).id,
+        method: 'red',
+      };
+      return previous
+        ? s.revise('ledger.reverse', previous, input)
+        : s.propose('ledger.reverse', input);
+    };
+    const card = async () =>
+      (
+        await s.invoke<{ closing: { quantity: string; value: string } }>(s.owner, 'stock.card', {
+          itemId: sheet.id,
+          warehouseId: depot.id,
+        })
+      ).closing;
+    return { s, bought, credited, receive, consume, reverse, card };
+  }
+  const amounts = (net: string) => {
+    const bani = BigInt(net.replace('.', ''));
+    const tax = (bani * 21n + 50n) / 100n;
+    const text = (value: bigint) => `${value / 100n}.${String(value % 100n).padStart(2, '0')}`;
+    return { net, tax: text(tax), gross: text(bani + tax), lines: [{ rate: '21', net }] };
+  };
+  const codes = (proposal: ProposalView) => proposal.issues.map((issue) => issue.code);
+  const moves = (proposal: ProposalView) =>
+    proposal.effect?.stockMoves?.map((move) => `${move.quantity} ${move.amount}`);
+
+  // The weighted average: F-1 of 2 March, 10 boxes at 100.00; F-2 of 5 March, 10 at 200.00 (20
+  // at 300.00); 10 consumed on 6 March at 15.00, 150.00 (10 at 150.00 left); F-3 of 20 March, 10
+  // at 300.00 (20 at 450.00). F-2's 10 go back on its credit note of 7 March, 200.00 + 42.00: on
+  // that day the pool held exactly them, at 150.00, which they take, and the 50.00 the supplier
+  // credits beyond it lowers 6028; F-3's boxes keep their 300.00. Before, the pool gave its
+  // 200.00 today and kept 10 at 250.00.
+  test('a return to the supplier empties the pool on its date: F-3’s boxes keep their cost', async () => {
+    const { s, bought, credited, consume, card } = await paper('average');
+    await bought('F-1', '2026-03-02', '10', '100.00');
+    const second = await bought('F-2', '2026-03-05', '10', '200.00');
+    expect(lines(await consume('BC-1', '2026-03-06', '10'))).toEqual([
+      'D 6028 150.00',
+      'C 3028 150.00',
+    ]);
+    await bought('F-3', '2026-03-20', '10', '300.00');
+    const back = await credited(
+      { id: second.id, number: 'F-2' },
+      'NC-2',
+      '2026-03-07',
+      '10',
+      '200.00',
+    );
+    expect(codes(back)).toEqual([]);
+    expect(lines(back)).toEqual([
+      'D 3028 -200.00',
+      'D 4426 -42.00',
+      'C 401 -242.00',
+      'D 3028 50.00',
+      'C 6028 50.00',
+    ]);
+    expect(moves(back)).toEqual(['-10.000 -200.00', '0.000 50.00']);
+    await s.post(await s.approve(back));
+    expect(await card()).toEqual({ quantity: '10.000', value: '300.00' });
+  });
+
+  // FIFO: F-1 of 2 March, 10 boxes at 100.00, all consumed on 3 March, the slip reversed on 25
+  // March. F-1's credit note of 4 March for 2 boxes, 20.00 + 4.20: on the 4th the lot held none,
+  // whatever it holds since (before: accepted, the lot at −2 from the 4th to the 25th); its note of
+  // 26 March takes them out of the lot, at 20.00.
+  test('a return dated when its lot was empty is refused, though the lot was restored later', async () => {
+    const { bought, credited, consume, reverse, s } = await paper('fifo');
+    const first = await bought('F-1', '2026-03-02', '10', '100.00');
+    const slip = await consume('BC-1', '2026-03-03', '10');
+    await s.post(await s.approve(await reverse(slip.entry!.id, '2026-03-25')));
+    const early = await credited(
+      { id: first.id, number: 'F-1' },
+      'NC-1',
+      '2026-03-04',
+      '2',
+      '20.00',
+    );
+    expect(codes(early)).toEqual(['STOCK_RETURN_CONSUMED']);
+    expect(early.issues[0]!.details).toMatchObject({ available: '0.000', requested: '2.000' });
+    const later = await credited(
+      { id: first.id, number: 'F-1' },
+      'NC-2',
+      '2026-03-26',
+      '2',
+      '20.00',
+    );
+    expect(codes(later)).toEqual([]);
+    expect(lines(later)).toEqual(['D 3028 -20.00', 'D 4426 -4.20', 'C 401 -24.20']);
+    expect(moves(later)).toEqual(['-2.000 -20.00']);
+  });
+
+  // The weighted average: AV-1 of 1 March, 10 at 100.00; AV-2 of 5 March, 10 at 200.00; 15
+  // consumed on 6 March at 15.00, 225.00 (5 at 75.00); AV-3 of 20 March, 10 at 300.00 (15 at
+  // 375.00). AV-2 reversed on 7 March: the pool held 5 then, not its 10 (before: accepted, 5 at
+  // 175.00 left, −5 on the 7th). Reversed on 21 March, at its 200.00: 5 at 175.00 left.
+  test('a receipt’s storno dated when its goods had left is refused', async () => {
+    const { s, receive, consume, reverse, card } = await paper('average');
+    await receive('AV-1', '2026-03-01', '10', '100.00');
+    const wrong = await receive('AV-2', '2026-03-05', '10', '200.00');
+    expect(lines(await consume('BC-1', '2026-03-06', '15'))).toEqual([
+      'D 6028 225.00',
+      'C 3028 225.00',
+    ]);
+    await receive('AV-3', '2026-03-20', '10', '300.00');
+    const early = await reverse(wrong.entry!.id, '2026-03-07');
+    expect(codes(early)).toEqual(['STOCK_INSUFFICIENT']);
+    expect(early.issues[0]!.details).toMatchObject({ available: '5.000', requested: '10.000' });
+    const later = await reverse(wrong.entry!.id, '2026-03-21', early);
+    expect(codes(later)).toEqual([]);
+    expect(lines(later)).toEqual(['D 3028 -200.00', 'C 408 -200.00']);
+    await s.post(await s.approve(later));
+    expect(await card()).toEqual({ quantity: '5.000', value: '175.00' });
+  });
+
+  // FIFO: AV-1 of 1 March, 10 at 100.00 (lot 1); AV-2 of 2 March, 10 at 120.00 (lot 2); 15
+  // consumed on 3 March, lot 1 whole and 5 of lot 2 (160.00). AV-2 reversed on 4 March: its lot
+  // held 5. The slip reversed on 5 March restores the lot: reversed on 6 March, AV-2 takes its own
+  // lot out, at 120.00, and lot 1 is left.
+  test('FIFO: a receipt’s storno takes its own lot, as it was on the storno’s date', async () => {
+    const { s, receive, consume, reverse, card } = await paper('fifo');
+    await receive('AV-1', '2026-03-01', '10', '100.00');
+    const wrong = await receive('AV-2', '2026-03-02', '10', '120.00');
+    const slip = await consume('BC-1', '2026-03-03', '15');
+    expect(lines(slip)).toEqual(['D 6028 160.00', 'C 3028 160.00']);
+    const early = await reverse(wrong.entry!.id, '2026-03-04');
+    expect(codes(early)).toEqual(['STOCK_INSUFFICIENT']);
+    await s.post(await s.approve(await reverse(slip.entry!.id, '2026-03-05')));
+    // Still refused on the 4th: the slip's storno came after it.
+    const again = await reverse(wrong.entry!.id, '2026-03-04', early);
+    expect(codes(again)).toEqual(['STOCK_INSUFFICIENT']);
+    const later = await reverse(wrong.entry!.id, '2026-03-06', again);
+    expect(codes(later)).toEqual([]);
+    expect(moves(later)).toEqual(['-10.000 -120.00']);
+    await s.post(await s.approve(later));
+    expect(await card()).toEqual({ quantity: '10.000', value: '100.00' });
   });
 });

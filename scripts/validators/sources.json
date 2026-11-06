@@ -70,7 +70,7 @@
     },
     {
       "name": "anaf",
-      "description": "ANAF D112 validator J27.0.8 and PDF generator (reporting months from 07/2026, structure of 07.09.2026; J27.0.8 of 03.11.2026 changes rule S85.1)",
+      "description": "ANAF D112 validator J27.0.8 and PDF generator (reporting months from 07/2026, structure of 07.09.2026; J27.0.8 of 03.11.2026 changes rule S85.1), the newest kit ANAF's D112 page links on 06.11.2026; it validates 01–06/2026 with those months' fields",
       "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/D112_03112026.zip",
       "sha256": "da375ffa481bae8a67f4c55cd078b2c3c6efebed6fba55d784191b09f0c1f3fb",
       "extract": ["D112/D112Validator.jar", "D112/D112Pdf.jar"],
@@ -129,7 +129,7 @@
     },
     {
       "name": "anaf-d112-0126",
-      "description": "ANAF D112 validator J26.0.3 and PDF generator (22.04.2026): reporting months 01–06/2026, structure D112_A7.2.6 v7 of 30.03.2026 (structura_D112_0126_300326: salMin 4050, Suma300 300 lei, NZL 18, 20, 22, 20, 20, 21), before J27 added the fields of 07/2026; ANAF's page now links J27 for these months too, which the general kit's J27.0.8 validates alike",
+      "description": "ANAF D112 validator J26.0.3 and PDF generator (22.04.2026): reporting months 01–06/2026, structure D112_A7.2.6 v7 of 30.03.2026 (structura_D112_0126_300326: salMin 4050, Suma300 300 lei, NZL 18, 20, 22, 20, 20, 21), before J27 added the fields of 07/2026; ANAF's page now links J27.0.1 (D112_05082026.zip) for these months, and the general kit's J27.0.8 validates them alike (both refuse the fields of 07/2026 there)",
       "url": "https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/D112Validator_22042026.zip",
       "sha256": "9e0c82bf9b5fe0b60db1550825403151be76c877edcf00a2b7b93f714342d83f",
       "extract": ["D112Validator.jar", "D112Pdf.jar"],

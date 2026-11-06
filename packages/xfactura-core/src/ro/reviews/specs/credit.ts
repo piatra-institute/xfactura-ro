@@ -395,6 +395,6 @@ export const adjustmentBooksSpec: ReviewSpec = {
     'OMFP nr. 1.802/2014 nu spune la ce curs se stornează venitul sau cheltuiala unei note de credit în valută: pct. 319 vorbește de tranzacții, iar pct. 330 de corectarea conturilor la retururi, fără curs.',
     'Reducerile de preț acordate după facturare pot fi înregistrate pe 709 sau 609; motorul stornează pe contul pe care îl indică persoana (contul facturii inițiale).',
     'În D406, impozitul (TaxAmount) al liniei de bază a notei are cursul TVA (al facturii), iar linia cursul notei: fiecare sumă are cursul ei (Amount = CurrencyAmount × ExchangeRate, întrebările și răspunsurile SAF-T v1.2, MF.C.6).',
-    'Mișcarea în gestiune a unei note de credit în valută nu este acoperită (STOCK_CREDIT_CURRENCY).',
+    'Bunurile pe care le mișcă o notă de credit în valută se mișcă în lei, la cost, nu la un curs: returul clientului la costul ieșirii inițiale, returul la furnizor la costul cu care a intrat recepția; diferența față de datoria eliberată la valoarea contabilă intră în diferența de curs.',
   ],
 };

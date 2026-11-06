@@ -91,6 +91,17 @@ export const obligationView = z.object({
 });
 type ObligationView = z.infer<typeof obligationView>;
 
+/**
+ * A D112 as a caller who may not read health data reads it in the calendar: its due date and
+ * status, never why it is due then. A quarterly employer's month is due monthly when an employee
+ * was on sick leave or a contract ended in it or later in the quarter (art. 147 alin. (11)): the
+ * deadline's rule (`D112` or `D112.quarterly`), its parameter versions and the readings of it
+ * would tell it, so every D112 is named by its return alone, without them.
+ */
+export function d112WithoutHealth(item: ObligationView): ObligationView {
+  return item.kind === 'D112' ? { ...item, deadline: 'D112', versions: [], conflict: null } : item;
+}
+
 const pad = (value: number) => String(value).padStart(2, '0');
 const lastDay = (year: number, monthNumber: number) =>
   new Date(Date.UTC(year, monthNumber, 0)).toISOString().slice(0, 10) as LocalDate;

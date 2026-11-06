@@ -1,4 +1,12 @@
 import { afterAll, describe, expect, test } from 'bun:test';
+import path from 'node:path';
+import { sourceXml, type XmlElement } from 'xfactura-core/xml';
+import {
+  AnafKits,
+  DukIntegrator,
+  saftKitId,
+  type DeclarationValidator,
+} from '../../source/engine/adapters/declaration-validator';
 import type { ProposalView } from '../../source/engine/kernel/views';
 import { lockTaxPeriod } from './fixtures/locks';
 import { invoiceXml, type XmlInput } from './fixtures/invoice';
@@ -936,6 +944,109 @@ describe('credit notes', () => {
     });
   });
 
+  // Goods (G1, FIFO): 10 bags of coffee received on 2 March at 300.00 lei (30.00 each). V-EU2 of 1
+  // April at 4.9900 sells 4: 400.00 + 84.00 EUR, VAT 419.16 lei (84.00 × 4.99), revenue 1,996.00,
+  // the receivable 2,415.16; the bags leave at 120.00. CN-EU2 of 17 April at 5.0050 takes one
+  // back, 100.00 + 21.00 EUR: VAT 104.79 lei at V-EU2's 4.9900, revenue 500.50, the receivable at
+  // its 121.00 × 4.99 = 603.79; the bag comes back at the 30.00 the sale took it out at, in lei
+  // and at no rate; 500.50 + 104.79 − 603.79 = 1.50 gained.
+  test('in euro, the goods a customer brings back return at the cost the sale took them out at', async () => {
+    const s = await company();
+    await importRates(s);
+    for (const [axis, value] of [
+      ['policy.stock.valuation', 'fifo'],
+      ['policy.stock.inventory', 'permanent'],
+      ['policy.stock.negative', 'refuse'],
+    ] as const)
+      await s.invoke(s.owner, 'profile.record', {
+        axis,
+        value,
+        effectiveFrom: '2026-01-01',
+        evidenceId: (await s.evidence(`${axis}.pdf`)).id,
+      });
+    const coffee = await s.invoke<{ id: string }>(s.owner, 'stock.items.create', {
+      code: 'CAF-1',
+      name: 'Cafea boabe',
+      unit: 'H87',
+      account: '371',
+    });
+    const depot = await s.invoke<{ id: string }>(s.owner, 'stock.warehouses.create', {
+      code: 'D1',
+      name: 'Depozit',
+      keeper: 'Ionescu Maria',
+    });
+    await s.book('stock.receive', {
+      date: '2026-03-02',
+      warehouseId: depot.id,
+      supplierId: (await s.party('Furnizor Cafea SRL', '14399840')).id,
+      reference: 'AV-1',
+      evidenceId: (await s.evidence('aviz.pdf')).id,
+      lines: [{ itemId: coffee.id, quantity: '10', value: '300.00' }],
+    });
+    const stock = (quantity: string) => ({
+      warehouseId: depot.id,
+      lines: [{ line: '1', itemId: coffee.id, quantity }],
+    });
+    const original = await importEuro(
+      s,
+      {
+        number: 'V-EU2',
+        direction: 'sale',
+        date: '2026-04-01',
+        net: '400.00',
+        tax: '84.00',
+        gross: '484.00',
+      },
+      '419.16',
+    );
+    const sold = await s.book('invoices.recognize', {
+      documentId: original.id,
+      account: '707',
+      stock: stock('4'),
+    });
+    expect(rated(sold)).toEqual([
+      'D 4111 2415.16 [EUR 484.00 @ 4.9900]',
+      'C 707 1996.00 [EUR 400.00 @ 4.9900]',
+      'C 4427 419.16 [EUR 84.00 @ 4.9900]',
+      'C 371 120.00',
+      'D 607 120.00',
+    ]);
+    const credit = await importEuro(
+      s,
+      {
+        number: 'CN-EU2',
+        direction: 'sale',
+        credit: true,
+        originalNumber: 'V-EU2',
+        date: '2026-04-17',
+        net: '100.00',
+        tax: '21.00',
+        gross: '121.00',
+      },
+      '104.79',
+    );
+    const proposal = await s.propose('invoices.credit', {
+      documentId: credit.id,
+      originalDocumentId: original.id,
+      account: '707',
+      stock: stock('1'),
+    });
+    expect(codes(proposal)).toEqual([]);
+    expect(rated(proposal)).toEqual([
+      'D 4111 -603.79 [EUR -121.00 @ 4.9900]',
+      'C 707 -500.50 [EUR -100.00 @ 5.0050]',
+      'C 4427 -104.79 [EUR -21.00 @ 4.9900]',
+      'C 371 -30.00',
+      'D 607 -30.00',
+      'C 7651 1.50',
+    ]);
+    expect(proposal.effect?.stockMoves?.map((move) => `${move.quantity} ${move.amount}`)).toEqual([
+      '1.000 30.00',
+    ]);
+    await s.post(await s.approve(proposal));
+    expect(await balance(s, '371')).toEqual({ debit: '210.00', credit: '0.00' });
+  });
+
   test('under VAT on collection an invoice in euro is still refused, and so none of its credit notes is booked', async () => {
     const s = await company();
     await importRates(s);
@@ -1127,4 +1238,218 @@ describe('VAT journals', () => {
       { code: 'S-21', base: '100.00', vat: '21.00', deductible: '21.00' },
     ]);
   });
+});
+
+// A sale to a French consumer below the threshold (art. 278^1: Romanian VAT, `invoices.euConsumer`
+// at the place of origin) and its credit note on the receivable revalued in between. By hand:
+//   EB-1 (10 March, 4.9765): 1,000.00 + 210.00 EUR; the receivable 1,210.00 × 4.9765 = 6,021.57;
+//   VAT base 4,976.50, VAT 21% of it 1,045.07; revenue 6,021.57 − 1,045.07 = 4,976.50.
+//   Revalued on 31 March at 4.9900: 6,037.90 (16.33 gained).
+//   CN-EB1 (8 April, 5.0100): 200.00 + 42.00 EUR; its VAT base keeps EB-1's rate (art. 282 alin.
+//   (9)): 200.00 × 4.9765 = 995.30, VAT 209.01; the receivable it reverses at its own rate,
+//   242.00 × 5.0100 = 1,212.42, its revenue 1,212.42 − 209.01 = 1,003.41; the receivable leaves at
+//   4.9900, 1,207.58: 4.84 gained.
+describe('a consumer’s credit note at the place of origin, in D406', () => {
+  const rates = `<?xml version="1.0" encoding="utf-8"?>
+<DataSet xmlns="http://www.bnr.ro/xsd"><Header><Publisher>National Bank of Romania</Publisher><PublishingDate>2026-04-08</PublishingDate><MessageType>DR</MessageType></Header>
+<Body><Subject>Reference rates</Subject><OrigCurrency>RON</OrigCurrency>
+<Cube date="2026-03-10"><Rate currency="EUR">4.9765</Rate></Cube>
+<Cube date="2026-03-31"><Rate currency="EUR">4.9900</Rate></Cube>
+<Cube date="2026-04-08"><Rate currency="EUR">5.0100</Rate></Cube>
+</Body></DataSet>`;
+  const saftKit = path.join(
+    import.meta.dir,
+    '../../../..',
+    '.validators/anaf-saft/duk_SAFT_an_luna/dist',
+  );
+  const official = DukIntegrator.available(saftKit) && Bun.which('java') ? test : test.skip;
+
+  async function consumer(validator?: DeclarationValidator) {
+    const s = await scenario({
+      cui: '18547290',
+      ...(validator ? { declarationValidator: validator } : {}),
+    });
+    open.push(s);
+    const fact = async (axis: string, value: string) =>
+      s.invoke(s.owner, 'profile.record', {
+        axis,
+        value,
+        effectiveFrom: '2026-01-01',
+        evidenceId: (await s.evidence(`${axis}.pdf`)).id,
+      });
+    await fact('vat.status', 'normal_vat');
+    await fact('vat.period', 'monthly');
+    await fact('vat.distance', 'origin');
+    const file = async (filename: string, text: string) =>
+      (
+        await s.invoke<{ id: string }>(s.owner, 'evidence.record', {
+          filename,
+          mediaType: 'application/xml',
+          base64: Buffer.from(text).toString('base64'),
+        })
+      ).id;
+    await s.invoke(s.owner, 'fx.importBnr', { evidenceId: await file('bnr.xml', rates) });
+    await s.invoke(s.owner, 'sales.seller.record', {
+      details: {
+        name: 'Exemplu Servicii SRL',
+        vatId: 'RO18547290',
+        address: { lines: ['Str. Lungă 10'], city: 'Galați', subdivision: 'RO-GL', country: 'RO' },
+      },
+    });
+    await s.invoke(s.owner, 'treasury.createAccount', {
+      kind: 'bank',
+      name: 'Cont curent',
+      iban: 'RO49AAAA1B31007593840000',
+      currency: 'RON',
+      ledgerAccount: '5121',
+      openedOn: '2026-01-01',
+    });
+    const book = async (input: XmlInput, extra: Record<string, unknown>) => {
+      const imported = await s.invoke<{ id: string; partyId: string }>(s.owner, 'invoices.import', {
+        evidenceId: await file(
+          `${input.number}.xml`,
+          invoiceXml({
+            company: '18547290',
+            direction: 'sale',
+            counterparty: '0000000000000',
+            country: 'FR',
+            currency: 'EUR',
+            ...input,
+          }),
+        ),
+      });
+      const proposal = await s.propose('invoices.euConsumer', {
+        documentId: imported.id,
+        account: '704',
+        supply: 'electronic',
+        ...extra,
+      });
+      expect(proposal.issues.filter((issue) => issue.severity === 'block')).toEqual([]);
+      return {
+        imported,
+        posted: await s.post(
+          await s.approve(
+            proposal,
+            s.reviewer,
+            proposal.issues.filter((issue) => issue.severity === 'ack').map((issue) => issue.code),
+          ),
+        ),
+      };
+    };
+    const sale = await book(
+      {
+        number: 'EB-1',
+        date: '2026-03-10',
+        net: '1000.00',
+        tax: '210.00',
+        gross: '1210.00',
+      },
+      {
+        location: [
+          { kind: 'billing_address', country: 'FR' },
+          { kind: 'ip', country: 'FR' },
+        ],
+      },
+    );
+    await s.invoke(s.owner, 'parties.recordDetails', {
+      partyId: sale.imported.partyId,
+      details: {
+        name: 'Jeanne Martin',
+        legalId: '0000000000000',
+        address: { lines: ['12 rue de la Paix'], city: 'Paris', country: 'FR' },
+      },
+    });
+    const revalued = await s.book('fx.revalue', { date: '2026-03-31' });
+    const credit = await book(
+      {
+        number: 'CN-EB1',
+        credit: true,
+        originalNumber: 'EB-1',
+        date: '2026-04-08',
+        net: '200.00',
+        tax: '42.00',
+        gross: '242.00',
+      },
+      { originalDocumentId: sale.imported.id },
+    );
+    const prepare = (period: string) =>
+      s.invoke<{ state: string; evidenceId: string; steps: { detail: string | null }[] }>(
+        s.owner,
+        'declarations.prepare',
+        {
+          kind: 'D406',
+          period,
+          options: { contact: { firstName: 'Ana', lastName: 'Popescu', phone: '0236000000' } },
+        },
+      );
+    return { s, sale: sale.posted, revalued, credit: credit.posted, prepare };
+  }
+  const all = (node: XmlElement, local: string): XmlElement[] =>
+    node.children.flatMap((child) => (child.local === local ? [child] : all(child, local)));
+  const text = (node: XmlElement, local: string) =>
+    node.children.find((child) => child.local === local)?.text.trim();
+  /** Each VAT of the lines: TaxCode, TaxBase and TaxAmount, and whether the base at the code's 21%
+   * gives the VAT within a ban, as ANAF's consistency tests 20–22 check (`D406_VAT`). */
+  const vat = (lines: XmlElement[]) =>
+    lines.flatMap((line) =>
+      all(line, 'TaxInformation')
+        .filter((tax) => text(tax, 'TaxType') === '300')
+        .map((tax) => {
+          const base = text(tax, 'TaxBase')!;
+          const amount = text(all(tax, 'TaxAmount')[0]!, 'Amount')!;
+          const off = Math.abs(Math.round(Number(base) * 21) - Math.round(Number(amount) * 100));
+          return `${text(tax, 'TaxCode')} ${base} ${amount}${off > 1 ? ` (21% din bază: ${(Math.round(Number(base) * 21) / 100).toFixed(2)})` : ''}`;
+        }),
+    );
+
+  test('its VAT base keeps the sale’s rate in the ledger and in its invoice, which the base gives the VAT of', async () => {
+    const { s, sale, revalued, credit, prepare } = await consumer();
+    expect(rated(sale)).toEqual([
+      'D 4111 6021.57 [EUR 1210.00 @ 4.9765]',
+      'C 704 4976.50',
+      'C 4427 1045.07',
+    ]);
+    expect(rated(revalued)).toEqual(['D 4111 16.33 [EUR 0.00 @ 4.9900]', 'C 7651 16.33']);
+    expect(rated(credit)).toEqual([
+      'D 4111 -1207.58 [EUR -242.00 @ 4.9900]',
+      'C 704 -1003.41',
+      'C 4427 -209.01',
+      'C 7651 4.84',
+    ]);
+    expect(credit.effect!.taxEntries[0]).toMatchObject({ base: '-995.30', amount: '-209.01' });
+    const april = sourceXml(
+      (await s.engine.evidence.read(s.owner, (await prepare('2026-04')).evidenceId)).bytes,
+    );
+    // The ledger's revenue line and the invoice's line: the VAT base at EB-1's rate, 21% of it
+    // the VAT, not the line's lei at the receivable's rate (−200.00 × 4.9900 = −998.00).
+    const transaction = all(april, 'Transaction').find((node) =>
+      all(node, 'SourceDocumentID').some((id) => id.text.trim() === 'CN-EB1'),
+    )!;
+    expect(vat(all(transaction, 'TransactionLine'))).toEqual(['310346 -995.30 -209.01']);
+    const invoice = all(april, 'Invoice').find((node) => text(node, 'InvoiceNo') === 'CN-EB1')!;
+    expect(vat(all(invoice, 'InvoiceLine'))).toEqual(['310346 -995.30 -209.01']);
+    expect(
+      all(invoice, 'InvoiceLine').map(
+        (line) => text(all(line, 'InvoiceLineAmount')[0]!, 'Amount') ?? null,
+      ),
+    ).toEqual(['-998.00']);
+  });
+
+  official(
+    "its months pass ANAF's SAF-T validator",
+    async () => {
+      const { prepare } = await consumer(
+        new AnafKits({ saft: new DukIntegrator(saftKit, saftKitId) }),
+      );
+      for (const period of ['2026-03', '2026-04']) {
+        const prepared = await prepare(period);
+        expect([period, prepared.state, prepared.steps.at(-1)?.detail ?? null]).toEqual([
+          period,
+          'validated_official',
+          null,
+        ]);
+      }
+    },
+    180_000,
+  );
 });

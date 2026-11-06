@@ -15,7 +15,12 @@ import {
 import { documentIdentity, normalizedTaxId } from 'xfactura-core/documents/schemas';
 import { accountCodePattern, profileAt } from 'xfactura-core/kernel';
 import { cashVatMention, mentionsCashVat } from 'xfactura-core/ro/cash-vat';
-import { invoiceKinds, taxPointOf } from 'xfactura-core/ro/treatments/invoices';
+import {
+  creditTaxPoint,
+  creditVatInLei,
+  invoiceKinds,
+  taxPointOf,
+} from 'xfactura-core/ro/treatments/invoices';
 import { exemptionBases, exemptionBasisIds, isExemptCategory } from 'xfactura-core/ro/exempt';
 import { marginIssue, marginIssueProblems, marginRecognition } from './schemes';
 import {
@@ -27,7 +32,8 @@ import {
 import { b2cInvoice, zReportKind, type B2cRule } from 'xfactura-core/ro/retail';
 import { RuleGapError } from 'xfactura-core/rules';
 import type { LocalDate } from 'xfactura-core/time';
-import { parseInvoiceXml } from 'xfactura-core/ubl/invoice-document';
+import { formatMoney, parseMoney } from 'xfactura-core/money';
+import { parseInvoiceXml, type InvoiceDocument } from 'xfactura-core/ubl/invoice-document';
 import type { Transaction } from '../db/database';
 import {
   companies,
@@ -852,6 +858,20 @@ export class Sales {
               .map((row) => ({ number: row.number ?? '', issueDate: row.docDate as LocalDate })),
           ),
         });
+        // A credit note is in its invoice's currency; in a currency it states its VAT in lei
+        // (BT-6 = RON, BT-111, as CIUS-RO asks) at the rate its invoice's base was determined at,
+        // as its recognition expects it (`creditVatInLei`): computed when not given, another
+        // amount refused.
+        if (
+          input.typeCode === '381' &&
+          preceding.length === 1 &&
+          (input.currency !== 'RON' || (preceding[0]!.currency ?? 'RON') !== 'RON')
+        ) {
+          const vat = await this.creditVat(tx, companyId, input, invoice, preceding[0]!);
+          if ('code' in vat) problem(vat.code, vat.message);
+          else if (input.vatAccountingTotal === undefined)
+            invoice = { ...invoice, vatAccountingTotal: vat.amount };
+        }
         problems.push(...checkInvoice(invoice).map(({ code, message }) => ({ code, message })));
         problems.push(
           ...(await this.reverseCharge(tx, companyId, input, invoice, taxPoint, status, buyer)),
@@ -872,6 +892,76 @@ export class Sales {
       buyerVersion: buyer?.version ?? 0,
       cnpSealed,
     };
+  }
+
+  /**
+   * The VAT in lei of a credit note in a currency: its VAT at the rate its invoice's base was
+   * determined at, as the invoice's VAT entries record it (Codul fiscal art. 282 alin. (9), norme
+   * pct. 25 alin. (2); `ro.fx.adjustment.vat`), read as `invoices.credit` reads it: the entries of
+   * the invoice's receivable, the rates of both tax points. The amount stated, if any, must be it
+   * (`VAT_FX`); a note in another currency than its invoice's is refused (`CURRENCY`).
+   */
+  private async creditVat(
+    tx: Transaction,
+    companyId: string,
+    input: IssueInput,
+    invoice: Invoice,
+    original: typeof documents.$inferSelect,
+  ): Promise<{ amount: string } | Problem> {
+    if ((original.currency ?? 'RON') !== input.currency)
+      return {
+        code: 'CURRENCY',
+        message: `Nota de credit este în ${input.currency}, iar factura ${original.number ?? ''} în ${original.currency ?? 'RON'}: ea corectează factura în moneda acesteia.`,
+      };
+    const body = JSON.parse(original.body) as InvoiceDocument;
+    const taxPoint = creditTaxPoint({
+      issueDate: input.issueDate,
+      taxPointDate: input.taxPointDate ?? null,
+    });
+    const originalTaxPoint = taxPointOf(body);
+    const { loaded: items } = await loadState(tx, companyId, {
+      openItems: [{ documentId: original.id, history: true }],
+    });
+    const item = [...items.openItems.values()].find((open) => open.documentId === original.id);
+    const { loaded } = await loadState(tx, companyId, {
+      profile: true,
+      ...(item?.history?.length ? { entries: [...item.history] } : {}),
+      fx: [...new Set([taxPoint, originalTaxPoint])]
+        .sort()
+        .map((until) => ({ currency: input.currency, until })),
+    });
+    try {
+      const rules = await this.proposals.ruleContext(tx, companyId);
+      const vat = creditVatInLei(
+        loaded,
+        rules,
+        {
+          currency: input.currency,
+          taxPoint,
+          taxMinor: parseMoney(invoice.totals.tax, input.currency),
+        },
+        {
+          taxPoint: originalTaxPoint,
+          entries: [...loaded.entries.values()]
+            .flatMap((entry) => entry.taxEntries)
+            .filter((entry) => entry.documentId === original.id),
+        },
+      );
+      if ('code' in vat) return { code: vat.code, message: vat.message };
+      const amount = formatMoney(vat.bani, 'RON');
+      if (
+        input.vatAccountingTotal !== undefined &&
+        parseMoney(input.vatAccountingTotal, 'RON') !== vat.bani
+      )
+        return {
+          code: 'VAT_FX',
+          message: `TVA în lei a notei de credit (${input.vatAccountingTotal}) diferă de TVA la cursul ${vat.rate.rate} din ${vat.rate.date} cu care s-a determinat baza facturii ${original.number ?? ''} (${amount}): ajustarea bazei de impozitare se face la cursul operațiunii de bază (art. 282 alin. (9) din Codul fiscal, norme pct. 25 alin. (2)). Lăsați TVA în lei necompletată pentru a o calcula aplicația.`,
+        };
+      return { amount };
+    } catch (error) {
+      if (!(error instanceof RuleGapError)) throw error;
+      return { code: 'RULE_GAP', message: error.message };
+    }
   }
 
   /**

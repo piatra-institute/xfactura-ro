@@ -14,7 +14,7 @@ import {
 import { allocate } from '../../money';
 import type { RuleContext } from '../../rules';
 import type { LocalDate } from '../../time';
-import { expenseFor } from './parameters';
+import { expenseFor, type StockReturns } from './parameters';
 import { itemOf, productAccounts, stockAccountsAt, warehouseOf } from './treatments';
 import { prorate, StockBook, stockPolicyAt } from './valuation';
 
@@ -493,8 +493,16 @@ export function issueInvoiceStock(args: {
 /**
  * Goods returned to the supplier on its credit note (or a price credited on goods still held):
  * the credit note's stock part leaves the lots the original invoice created (FIFO, LIFO) or the
- * item's pool, at the credited value; a line with no quantity corrects the cost of what is still
- * held (OMFP 1802/2014 pct. 76). A discount on goods no longer held goes to 609 instead.
+ * item's pool, at the credited value, no more than each held on the note's date (`giveBack`); a
+ * line with no quantity corrects the cost of what is still held (OMFP 1802/2014 pct. 76). A
+ * discount on goods no longer held goes to 609 instead. Out of a pool under the weighted average
+ * after each receipt, as `ro.stock.returns` reads it.
+ *
+ * A credit note in a currency (`atCost`, the original's entry) takes its goods out at the cost
+ * their receipt entered at, in lei (the original's moves of the item in the warehouse), not at a
+ * rate: each stock part's line becomes that cost, without a currency amount, and `shift` is what
+ * that changes in the parts' lines (signed as the lines), which the partner's exchange difference
+ * takes.
  */
 export function returnInvoiceStock(args: {
   stock: InvoiceStock;
@@ -506,17 +514,46 @@ export function returnInvoiceStock(args: {
   lines: LineSpec[];
   /** The entry that posted the original invoice. */
   originEntryId: string | undefined;
-}): StockResult {
+  atCost?: PostedEntry;
+}): StockResult & { shift: bigint } {
   const { stock, loaded, date, lines } = args;
   const issues: Issue[] = [];
   const warehouse = warehouseOf(loaded, stock.warehouseId, 'stock.warehouseId');
   if ('severity' in warehouse) issues.push(warehouse);
   const policy = stockPolicyAt(loaded, date, [stock.warehouseId]);
   if (Array.isArray(policy)) issues.push(...policy);
-  if (issues.length || Array.isArray(policy)) return failed(issues);
+  if (issues.length || Array.isArray(policy)) return { ...failed(issues), shift: 0n };
   const mapped = splitParts(stock, args.invoiceLines, args.parts, lines, loaded, issues);
-  if (issues.length) return failed(issues);
+  if (args.atCost) {
+    // A line of a stock part's category no item names would be a charge credited with the
+    // goods, whose cost in lei the note does not give.
+    const charged = [
+      ...new Set(
+        args.invoiceLines
+          .filter((line) => !mapped.some((entry) => entry.row.line === line.id))
+          .map((line) => line.key),
+      ),
+    ].filter((key) => {
+      const members = args.parts.filter((part) => part.vat === key);
+      return members.length > 0 && members.every((part) => isStockAccount(part.account));
+    });
+    if (charged.length)
+      issues.push(
+        block(
+          'STOCK_CREDIT_CHARGES',
+          `Liniile fără articol din ${charged.join(', ')} ale unei note de credit în valută nu sunt acoperite: costul lor în lei, intrat cu bunurile, nu se cunoaște.`,
+          'stock.lines',
+        ),
+      );
+  }
+  if (issues.length) return { ...failed(issues), shift: 0n };
   const accounts = stockAccountsAt(args.rules, date);
+  // Out of a pool under the weighted average after each receipt: at the purchase price, or at the
+  // date's average (`ro.stock.returns`).
+  const average =
+    policy.method === 'average' &&
+    args.rules.param<StockReturns>('ro.stock.returns', 'accounting_transaction_date', date).pool ===
+      'average';
   const book = new StockBook(loaded, lines, 'return');
   const rows: JsonValue[] = [];
   for (const entry of mapped) {
@@ -531,6 +568,26 @@ export function returnInvoiceStock(args: {
       continue;
     }
     const quantity = parseQuantity(entry.row.quantity)!;
+    if (args.atCost && quantity > 0n) {
+      const received = (args.atCost.stockMoves ?? []).filter(
+        (move) =>
+          move.item === entry.item.id && move.warehouse === stock.warehouseId && move.quantity > 0n,
+      );
+      const units = received.reduce((sum, move) => sum + move.quantity, 0n);
+      if (units === 0n) {
+        issues.push(
+          block(
+            'STOCK_RETURN_RECEIPT',
+            `Factura inițială nu a recepționat ${entry.item.code} în gestiunea ${warehouse.code}: costul cu care bunurile au intrat nu se cunoaște.`,
+            `stock.lines.${entry.index}`,
+          ),
+        );
+        continue;
+      }
+      // The cost the receipt entered them at: the original's lei, at its own rate.
+      const cost = received.reduce((sum, move) => sum + move.bani, 0n);
+      entry.value = -prorate(cost, quantity, units);
+    }
     const partLine = args.parts[entry.part]!.line!;
     const lots =
       policy.method === 'fifo' || policy.method === 'lifo'
@@ -551,15 +608,39 @@ export function returnInvoiceStock(args: {
       policy,
       lots?.map((lot) => lot.id) ?? null,
       expenseFor(accounts, entry.item.account) ?? undefined,
+      average,
     );
     issues.push(...out);
     rows.push({ line: entry.row.line, item: entry.item.code, quantity: entry.row.quantity });
   }
+  // In a currency, each stock part's line is what its goods left at, in lei.
+  let shift = 0n;
+  if (args.atCost)
+    args.parts.forEach((part, p) => {
+      const members = mapped.filter((entry) => entry.part === p);
+      if (
+        part.line === undefined ||
+        !members.some((entry) => parseQuantity(entry.row.quantity)! > 0n)
+      )
+        return;
+      const { currency: _currency, ...line } = lines[part.line]!;
+      const signed = members.reduce((sum, entry) => sum + entry.value, 0n);
+      const bani = line.side === 'D' ? signed : -signed;
+      shift += line.side === 'D' ? bani - line.bani : line.bani - bani;
+      lines[part.line] = { ...line, bani };
+    });
   return {
     issues,
     openItems: [],
     book: issues.some((issue) => issue.severity === 'block') ? null : book,
-    details: { warehouseId: stock.warehouseId, method: policy.method, lines: rows },
+    details: {
+      warehouseId: stock.warehouseId,
+      method: policy.method,
+      ...(average ? { returns: 'average' } : {}),
+      ...(args.atCost ? { atCost: true } : {}),
+      lines: rows,
+    },
+    shift,
   };
 }
 

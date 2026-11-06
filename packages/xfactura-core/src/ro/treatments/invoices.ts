@@ -1892,7 +1892,7 @@ export const CREDIT_FX_CLAUSES = {
 
 /** The credit note's tax point: its own date (art. 282 alin. (9)), or the one it states (BT-7),
  * even if it repeats the original supply's date (BT-72). */
-const creditTaxPoint = (body: Pick<InvoiceDocument, 'issueDate' | 'taxPointDate'>) =>
+export const creditTaxPoint = (body: Pick<InvoiceDocument, 'issueDate' | 'taxPointDate'>) =>
   date(body.taxPointDate ?? body.issueDate);
 
 /** The rate one of the base operation's lines or entries recorded, as the kernel loaded it; else
@@ -1944,6 +1944,30 @@ export function adjustmentVatRate(
     original.taxPoint,
     'vat',
   );
+}
+
+/**
+ * The VAT in lei (BT-111) of a credit note in a currency, as `invoices.credit` expects it: its VAT
+ * in the currency at the rate of `adjustmentVatRate`, the one its invoice's base was determined at
+ * (Codul fiscal art. 282 alin. (9), norme pct. 25 alin. (2); `ro.fx.adjustment.vat`). `sales.issue`
+ * writes it so on the credit notes the company issues. The loaded rates must cover the note's tax
+ * point and its invoice's (`creditTaxPoint`, `taxPointOf`), and the invoice's tax entries be given.
+ */
+export function creditVatInLei(
+  loaded: Loaded,
+  rules: RuleContext,
+  credit: { currency: string; taxPoint: LocalDate; taxMinor: bigint },
+  original: { taxPoint: LocalDate; entries: readonly TaxEntrySpec[] },
+): { bani: bigint; rate: FxRate } | Issue {
+  const rate = adjustmentVatRate(loaded, rules, credit.currency, credit.taxPoint, original);
+  if ('code' in rate) return rate;
+  return {
+    bani: convertMinor(credit.taxMinor, credit.currency, {
+      rate: rate.rate,
+      multiplier: rate.multiplier,
+    }),
+    rate,
+  };
 }
 
 /**
@@ -2193,14 +2217,6 @@ export const creditRecognition: Treatment<CreditInput> = {
         block(
           'CASH_VAT_CURRENCY',
           'Facturile în valută în sistemul TVA la încasare nu sunt încă tratate, nici notele lor de credit.',
-        ),
-      );
-    if (input.stock && foreign)
-      issues.push(
-        block(
-          'STOCK_CREDIT_CURRENCY',
-          'Mișcarea în gestiune a unei note de credit în valută nu este acoperită: înregistrați nota fără stoc și returul separat.',
-          'stock',
         ),
       );
     // The original's own tax entries, by key: an exempt category's code (its basis) is the
@@ -2533,23 +2549,12 @@ export const creditRecognition: Treatment<CreditInput> = {
         );
     }
     if (purchase) lines.push(...partner.lines);
-    // In a currency, the partner's item leaves at its carrying amount and the refund opens at
-    // the credit note's rate, while its other lines are at the books' and the VAT rate: what the
-    // partner's lines release beyond them is a realized exchange difference (OMFP 1802/2014 pct.
-    // 322), a loss when a sale gives up more than it reverses, a gain when a purchase is relieved
-    // of more.
-    const difference = partner.excess;
-    if (difference !== 0n) {
-      const loss = purchase ? difference < 0n : difference > 0n;
-      lines.push({
-        account: loss ? '6651' : '7651',
-        side: loss ? 'D' : 'C',
-        bani: difference < 0n ? -difference : difference,
-        memo: 'Diferență de curs realizată',
-      });
-    }
     // The goods it moves in the stock register (G1): back to the supplier, or from the customer.
+    // In a currency they move in lei at cost, not at a rate: from the customer at what the sale
+    // took them out at, to the supplier at what its invoice's receipt brought them in at, which
+    // the stock parts' lines then hold (`shift`).
     let stock: StockResult | null = null;
+    let shift = 0n;
     if (input.stock) {
       const invoiceLines: StockInvoiceLine[] = credit.body.lines.map((row) => ({
         id: row.id,
@@ -2558,14 +2563,17 @@ export const creditRecognition: Treatment<CreditInput> = {
       }));
       const originEntry = loaded.entries.get(item!.originEntryId);
       const creditDate = date(credit.body.issueDate);
-      if (!purchase && (!originEntry || returnFromPriorYear(loaded, originEntry, creditDate)))
+      if (
+        (!purchase || foreign) &&
+        (!originEntry || (!purchase && returnFromPriorYear(loaded, originEntry, creditDate)))
+      )
         stock = {
           issues: [
             block(
               originEntry ? 'STOCK_RETURN_PRIOR_YEAR' : 'STOCK_RETURN_ORIGINAL',
               originEntry
                 ? 'Returul unei vânzări din exercițiul precedent se corectează la data bilanțului prin 418 și 408 (OMFP 1802/2014 pct. 330), ceea ce gestiunea nu acoperă.'
-                : 'Înregistrarea vânzării inițiale nu este disponibilă.',
+                : `Înregistrarea ${purchase ? 'achiziției' : 'vânzării'} inițiale nu este disponibilă.`,
               'stock',
             ),
           ],
@@ -2573,32 +2581,50 @@ export const creditRecognition: Treatment<CreditInput> = {
           book: null,
           details: null,
         };
-      else
-        stock = purchase
-          ? returnInvoiceStock({
-              stock: input.stock,
-              loaded,
-              rules,
-              date: creditDate,
-              invoiceLines,
-              parts: parts.map((part, p) => ({
-                account: part.account,
-                vat: part.vat,
-                line: partLines[p],
-              })),
-              lines,
-              originEntryId: item!.originEntryId,
-            })
-          : issueInvoiceStock({
-              stock: input.stock,
-              loaded,
-              rules,
-              date: creditDate,
-              invoiceLines,
-              lines,
-              original: originEntry!,
-            });
+      else if (purchase) {
+        const returned = returnInvoiceStock({
+          stock: input.stock,
+          loaded,
+          rules,
+          date: creditDate,
+          invoiceLines,
+          parts: parts.map((part, p) => ({
+            account: part.account,
+            vat: part.vat,
+            line: partLines[p],
+          })),
+          lines,
+          originEntryId: item!.originEntryId,
+          ...(fx ? { atCost: originEntry! } : {}),
+        });
+        stock = returned;
+        shift = returned.shift;
+      } else
+        stock = issueInvoiceStock({
+          stock: input.stock,
+          loaded,
+          rules,
+          date: creditDate,
+          invoiceLines,
+          lines,
+          original: originEntry!,
+        });
       issues.push(...stock.issues);
+    }
+    // In a currency, the partner's item leaves at its carrying amount and the refund opens at
+    // the credit note's rate, while its other lines are at the books' and the VAT rate, and its
+    // goods at cost: what the partner's lines release beyond them is a realized exchange
+    // difference (OMFP 1802/2014 pct. 322), a loss when a sale gives up more than it reverses, a
+    // gain when a purchase is relieved of more.
+    const difference = partner.excess + shift;
+    if (difference !== 0n) {
+      const loss = purchase ? difference < 0n : difference > 0n;
+      lines.push({
+        account: loss ? '6651' : '7651',
+        side: loss ? 'D' : 'C',
+        bani: difference < 0n ? -difference : difference,
+        memo: 'Diferență de curs realizată',
+      });
     }
     const effect: Effect = {
       schema: 'effect@1',

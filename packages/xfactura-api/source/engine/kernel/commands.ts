@@ -8,6 +8,7 @@ import type { Database, Transaction } from '../db/database';
 import type { PartyIdentities } from '../db/identity';
 import { agentGrants, audit, commands, memberships, type Role } from '../db/schema';
 import { auditRefs, refsOf } from './events';
+import type { Seal } from './personal';
 
 export type Permission = 'read' | 'write' | 'review' | 'manage';
 /** The classes a person reads only under a role that may record them (`Commands.disclosable`). */
@@ -166,15 +167,19 @@ export class Commands {
   /** Individuals' party identifiers, the keyed hash of a CNP (`db/identity.ts`), for whatever
    * records a partner from a document that names one by CNP; none without the secret. */
   readonly identities: PartyIdentities | undefined;
+  /** The seal of personal data at rest (`Seal`), under the installation's secret: what keeps a
+   * month's sick leave sealed in its answers; none without the secret. */
+  readonly sealer: Seal | undefined;
 
   constructor(
     readonly db: Database,
     private readonly policy: OperationPolicy,
-    options: { clock?: Clock; ids?: Ids; identities?: PartyIdentities } = {},
+    options: { clock?: Clock; ids?: Ids; identities?: PartyIdentities; sealer?: Seal } = {},
   ) {
     this.clock = options.clock ?? Date.now;
     this.ids = options.ids ?? randomUUID;
     this.identities = options.identities;
+    this.sealer = options.sealer;
   }
 
   authorize(

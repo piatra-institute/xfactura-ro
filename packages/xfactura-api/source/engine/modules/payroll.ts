@@ -1,4 +1,3 @@
-import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from 'node:crypto';
 import { and, asc, desc, eq, like, lte } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireCondition } from 'xfactura-core/errors';
@@ -69,8 +68,17 @@ import {
   regesRecords,
   type Role,
 } from '../db/schema';
+import { Sealer } from '../db/seal';
 import { appendAudit, type Actor, type Commands } from '../kernel/commands';
-import { healthClasses, issuesWithoutHealth } from '../kernel/personal';
+import {
+  healthClasses,
+  issuesWithoutHealth,
+  openIssues,
+  openRecords,
+  sealIssues,
+  sealRecords,
+  type Sealed,
+} from '../kernel/personal';
 import { entryStands } from '../kernel/ledger';
 import { loadState } from '../kernel/state';
 import type { YearEndWorkItem } from '../kernel/work';
@@ -331,38 +339,8 @@ export const runInput = z
   .strict();
 export const runIdInput = z.object({ runId: z.uuid() }).strict();
 
-/**
- * Personal data at rest: AES-256-GCM under a key derived from the server's secret, bound to
- * the company. Only a declaration that must carry the CNP opens it.
- */
-export class Sealer {
-  private readonly key: Buffer;
-
-  constructor(secret: string, purpose = 'payroll personal data v1') {
-    this.key = Buffer.from(hkdfSync('sha256', secret, 'xfactura', purpose, 32));
-  }
-
-  seal(companyId: string, text: string) {
-    const iv = randomBytes(12);
-    const cipher = createCipheriv('aes-256-gcm', this.key, iv).setAAD(Buffer.from(companyId));
-    const body = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
-    return ['v1', iv, body, cipher.getAuthTag()]
-      .map((part) => (typeof part === 'string' ? part : part.toString('base64url')))
-      .join('.');
-  }
-
-  open(companyId: string, sealed: string) {
-    const [version, iv, body, tag] = sealed.split('.');
-    requireCondition(version === 'v1' && iv && body && tag, 'SEALED', 'Date sigilate necunoscute.');
-    const decipher = createDecipheriv('aes-256-gcm', this.key, Buffer.from(iv, 'base64url'))
-      .setAAD(Buffer.from(companyId))
-      .setAuthTag(Buffer.from(tag, 'base64url'));
-    return Buffer.concat([
-      decipher.update(Buffer.from(body, 'base64url')),
-      decipher.final(),
-    ]).toString('utf8');
-  }
-}
+/** Personal data at rest (`db/seal.ts`), kept here for the modules that seal with it. */
+export { Sealer };
 
 /** The month's posted payroll runs, by round: each posting's run, while its entry stands. */
 export async function postedRuns(tx: Transaction, companyId: string, month: string) {
@@ -458,6 +436,19 @@ export type StoredSick = {
     to: string;
   };
 };
+/**
+ * A line's medical certificates as the run paid them, opened from their seals (`sealRecords`):
+ * for the next month's computation, which continues their episodes, and for D112, which declares
+ * them. A run computed before 6 November 2026 kept them in clear until its data step sealed them.
+ */
+export function openSick(
+  sealer: Sealer,
+  companyId: string,
+  sick: readonly (StoredSick | Sealed)[] | undefined,
+): StoredSick[] {
+  return openRecords<StoredSick>(sealer, companyId, sick);
+}
+
 const lei = (bani: bigint) => formatMoney(bani, 'RON');
 const zero = {
   cash: 0n,
@@ -1121,7 +1112,9 @@ export class Payroll {
         input: canonical({
           ...(payInput ?? { activeDays: activeDays ?? null, items: items ?? null }),
           ...(leave ? { leave } : {}),
-          ...(sick ? { sick: sick.record } : {}),
+          // Each certificate sealed whole (`sealRecords`): opened only to continue its episode
+          // next month and to write D112 (`openSick`).
+          ...(sick ? { sick: sealRecords(this.sealer, actor.companyId, sick.record) } : {}),
           ...(benefitResults.length ? { benefits: benefitRecord(benefitResults) } : {}),
           // The documents the benefits' values come from: payroll and personal files
           // (`evidenceClasses`).
@@ -1147,7 +1140,7 @@ export class Payroll {
                     }
                   : {}),
               }
-            : { issues: computed.issues },
+            : { issues: sealIssues(this.sealer, actor.companyId, computed.issues) },
         ),
         cash: amounts.cash,
         vouchers: amounts.vouchers,
@@ -1251,7 +1244,7 @@ export class Payroll {
           ),
         );
       const stored = line ? (JSON.parse(line.input) as { sick?: StoredSick[] }) : {};
-      for (const item of stored.sick ?? [])
+      for (const item of openSick(this.sealer, companyId, stored.sick))
         episodes.set(key(item.series, item.number), {
           ...item.episode,
           base: { income: BigInt(item.episode.base.income), days: item.episode.base.days },
@@ -1366,7 +1359,8 @@ export class Payroll {
         continue;
       }
       suspendedDays += result.days;
-      const label = `Concediu medical ${given.series} ${given.number}, cod ${given.code}`;
+      // The item names no certificate and no code: those are kept sealed with the certificate.
+      const label = 'Concediu medical';
       // The code decides the bases: CASS only for 01 and 07 here, no tax on what art. 62 lit. c)
       // leaves out (`ro.sick.codes`).
       const kinds = sickKinds(result.rule);
@@ -2175,18 +2169,29 @@ export class Payroll {
     });
   }
 
-  /** A run as this caller reads it: a reader who may not read health data (a viewer) sees its
-   * medical certificates' issues as `healthIssue`, without the certificate and its code. */
+  /** A run as this caller reads it: its medical certificates' issues, kept sealed, opened for a
+   * reader of health data; another (a viewer) sees each as `healthIssue`, without the
+   * certificate and its code. */
   private async shown(
     tx: Transaction,
     actor: Actor,
     role: Role,
     run: Awaited<ReturnType<Payroll['view']>>,
   ) {
-    if ((await this.commands.disclosable(tx, actor, role))(healthClasses)) return run;
+    if ((await this.commands.disclosable(tx, actor, role))(healthClasses))
+      return {
+        ...run,
+        lines: run.lines.map((line) => ({
+          ...line,
+          issues: openIssues(this.sealer, actor.companyId, line.issues),
+        })),
+      };
     return {
       ...run,
-      lines: run.lines.map((line) => ({ ...line, issues: issuesWithoutHealth(line.issues) })),
+      lines: run.lines.map((line) => ({
+        ...line,
+        issues: issuesWithoutHealth(line.issues as PayIssue[]),
+      })),
     };
   }
 
@@ -2240,7 +2245,7 @@ export class Payroll {
       issues: run.issues,
       lines: rows.map(({ line, name }) => {
         const result = JSON.parse(line.result) as {
-          issues?: (PayIssue & { health?: true })[];
+          issues?: ((PayIssue & { health?: true }) | Sealed<{ health: true }>)[];
           steps?: { code: string; amount: string }[];
           garnishments?: { orderId: string; partyId: string; amount: string }[];
         };

@@ -10,6 +10,7 @@ import { RuleContext, RuleGapError, type ParameterRegister } from '../../../rule
 import type { LocalDate } from '../../../time';
 import { stockCount, stockCountInput } from '../../stock/inventory';
 import { periodCostInput, stockPeriodCost } from '../../stock/treatments';
+import { reversal, reversalInput } from '../../treatments/ledger';
 import { inventoryListSchema } from '../../yearend/documents';
 import type { CaseOutcome, ReviewCase, ReviewSpec } from '../types';
 import { emptyLoaded, lei } from './world';
@@ -366,5 +367,135 @@ export const stockMethodsSpec: ReviewSpec = {
   gaps: [
     'Durata medie de stocare a companiei nu este cunoscută aplicației; luna este o alegere a politicilor.',
     'Schimbarea metodei în cursul exercițiului (pct. 287) nu este acoperită: ieșirile sunt refuzate (STOCK_METHOD_CHANGED).',
+  ],
+};
+
+// ---------------------------------------------------------------------------------------------
+// Goods back to their supplier out of a weighted-average pool (pct. 95 alin. (1), 96 alin. (2))
+
+const RECEIPT = '00000000-0000-4000-8000-00000000c007';
+
+/**
+ * A storno of the paper received on 10 March (10 boxes at 200,00 lei, Dr 3028 / Cr 408) on `date`,
+ * the pool's days as given, under the weighted average after each receipt.
+ */
+function returnCase(
+  title: string,
+  facts_: string,
+  date: string,
+  days: { date: string; quantity: bigint; bani: bigint }[],
+): ReviewCase {
+  const quantity = days.reduce((sum, day) => sum + day.quantity, 0n);
+  const bani = days.reduce((sum, day) => sum + day.bani, 0n);
+  const evaluate = (register: ParameterRegister) =>
+    run(register, (rules) => {
+      const loaded = shop('average', [
+        {
+          ...layer('pool', PAPER, '3028', 'average', quantity, bani),
+          days: days.map((day) => ({ ...day, date: day.date as LocalDate })),
+        },
+      ]);
+      return reversal.evaluate(
+        reversalInput.parse({
+          entryId: RECEIPT,
+          date,
+          reason: 'Recepție restituită furnizorului.',
+          evidenceId: DECISION,
+          method: 'red',
+        }),
+        {
+          ...loaded,
+          entries: new Map([
+            [
+              RECEIPT,
+              {
+                id: RECEIPT,
+                number: 2,
+                date: '2026-03-10' as LocalDate,
+                journalCode: 'DIVERSE',
+                description: 'NIR 2',
+                lines: [
+                  { account: '3028', side: 'D', bani: 20_000n },
+                  { account: '408', side: 'C', bani: 20_000n },
+                ],
+                taxEntries: [],
+                stockMoves: [
+                  {
+                    item: PAPER,
+                    warehouse: DEPOT,
+                    account: '3028',
+                    layer: 'pool',
+                    quantity: 10_000n,
+                    bani: 20_000n,
+                    line: 0,
+                  },
+                ],
+              },
+            ],
+          ]),
+        },
+        rules,
+      );
+    });
+  return {
+    title,
+    facts: facts_,
+    run: (register) => ({
+      engine: evaluate(register),
+      alternative: evaluate(withValue(register, 'ro.stock.returns', { pool: 'average' })),
+    }),
+  };
+}
+
+export const stockReturnsSpec: ReviewSpec = {
+  key: 'ro.stock.returns',
+  kind: 'interpretation',
+  act: OMFP,
+  minutes: 10,
+  readings: {
+    engine:
+      'Bunurile restituite furnizorului (pe nota lui de credit, sau prin stornarea recepției) ies din stocul evaluat la CMP la prețul lor de achiziție, valoarea cu care au intrat (pct. 95 alin. (1)), ca stornare a debitului 3xx = 401: media se reface pe stocul rămas, care preia diferența față de media zilei, așa cum o reducere ulterioară corectează stocurile încă deținute (pct. 76 alin. (2)); stocul golit în acea zi dă ce avea, restul pe cheltuială.',
+    alternative:
+      'Bunurile fungibile nu se deosebesc între ele (pct. 285 alin. (4)) și costul lor este cel al metodei (pct. 96 alin. (1)–(2)): ies la media zilei, iar diferența față de prețul de achiziție creditat de furnizor trece pe cheltuiala contului de stoc (601–608).',
+  },
+  question:
+    'Un retur la furnizor sau stornarea unei recepții, dintr-un stoc evaluat la costul mediu ponderat după fiecare recepție, iese din gestiune la prețul de achiziție (media refăcută pe stocul rămas) sau la costul mediu al zilei, cu diferența pe cheltuieli (OMFP nr. 1.802/2014 pct. 95 alin. (1), 96 alin. (2))?',
+  context: [`${OMFP}:pct.287`, `${OMFP}:conturi.30`],
+  cases: [
+    returnCase(
+      'Stornare după o ieșire și o recepție ulterioară',
+      'Hârtie: 1 martie 10 cutii la 100,00 lei, 10 martie 10 la 200,00 lei, 12 martie 15 consumate (225,00 lei), 25 martie 10 la 300,00 lei: 15 cutii la 375,00 lei (25,00 lei/cutie); recepția din 10 martie stornată pe 26 martie.',
+      '2026-03-26',
+      [
+        { date: '2026-03-01', quantity: 10_000n, bani: 10_000n },
+        { date: '2026-03-10', quantity: 10_000n, bani: 20_000n },
+        { date: '2026-03-12', quantity: -15_000n, bani: -22_500n },
+        { date: '2026-03-25', quantity: 10_000n, bani: 30_000n },
+      ],
+    ),
+    returnCase(
+      'Stornare înaintea oricărei ieșiri',
+      'Hârtie: 1 martie 10 cutii la 100,00 lei, 10 martie 10 la 200,00 lei (20 la 300,00 lei, 15,00 lei/cutie); recepția din 10 martie stornată pe 11 martie, nimic consumat între timp.',
+      '2026-03-11',
+      [
+        { date: '2026-03-01', quantity: 10_000n, bani: 10_000n },
+        { date: '2026-03-10', quantity: 10_000n, bani: 20_000n },
+      ],
+    ),
+    returnCase(
+      'Stocul golit de stornare',
+      'Hârtie: 1 martie 10 cutii la 100,00 lei, 10 martie 10 la 200,00 lei, 12 martie 10 consumate (150,00 lei): 10 cutii la 150,00 lei; recepția din 10 martie stornată pe 13 martie.',
+      '2026-03-13',
+      [
+        { date: '2026-03-01', quantity: 10_000n, bani: 10_000n },
+        { date: '2026-03-10', quantity: 10_000n, bani: 20_000n },
+        { date: '2026-03-12', quantity: -10_000n, bani: -15_000n },
+      ],
+    ),
+  ],
+  gaps: [
+    'OMFP nr. 1.802/2014 nu tratează returul la furnizor: singurele retururi pe care le numește sunt ale clienților (pct. 330), care corectează conturile vânzării.',
+    'FIFO și LIFO scot lotul recepției, iar CMP calculat lunar ia prețul de achiziție (o intrare negativă a lunii, pe care costul lunar o mediază), oricare ar fi lectura.',
+    'Ieșirile evaluate înaintea returului, la o medie care cuprindea bunurile returnate, nu se recalculează: diferența rămâne pe stoc sau pe cheltuială, după lectură.',
   ],
 };

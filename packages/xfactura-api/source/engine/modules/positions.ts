@@ -15,18 +15,19 @@ export const positionQuery = z
   })
   .strict();
 
-/** Open items (receivables, payables, advances, …) with their balances and documents. An agent
- * whose reads do not cover `payroll` and `personal` gets none on personnel accounts (class 42):
- * each is one person's pay, withholding or debt. */
+/** Open items (receivables, payables, advances, …) with their balances and documents. A caller
+ * who may not read pay (`Commands.disclosable` on `payroll` and `personal`: an agent whose reads
+ * do not cover them, or a viewer) gets none on personnel accounts (class 42): each is one
+ * person's pay, withholding or debt. */
 export class Positions {
   constructor(private readonly commands: Commands) {}
 
   list(actor: Actor, input: z.infer<typeof positionQuery>) {
-    return this.commands.read(actor, 'openItems.list', async (tx) => {
+    return this.commands.read(actor, 'openItems.list', async (tx, access) => {
       const where: SQL[] = [];
       if (input.partyId) where.push(eq(openItems.partyId, input.partyId));
       if (input.kind) where.push(eq(openItems.kind, input.kind));
-      const pay = (await this.commands.readable(tx, actor))(payClasses);
+      const pay = (await this.commands.disclosable(tx, actor, access.role))(payClasses);
       const items = (await loadOpenItems(tx, actor.companyId, where)).filter(
         (item) =>
           (!input.openOnly || item.balanceBani !== 0n || item.balanceMinor !== 0n) &&

@@ -250,7 +250,7 @@ describe('D112 namespace and catalogues', () => {
       expect(() => d112Namespace(period)).toThrow('ianuarie–decembrie 2026');
   });
 
-  test('January–June 2026: salMin 4050 and Suma300, the register’s parameters the structure’s, no medical leave', () => {
+  test('January–June 2026: salMin 4050 and Suma300, the register’s parameters the structure’s', () => {
     // 21 working days in June, 168 hours.
     const worker = employee({ employment: { daysWorked: 21, hoursWorked: 168 } });
     const june = (extra: Partial<D112> = {}) =>
@@ -264,11 +264,6 @@ describe('D112 namespace and catalogues', () => {
       'error:D112_PARAMETERS',
     ]);
     expect(codes(model(undefined, { parameters: { minimumWage: 4325, relief: 200 } }))).toEqual([]);
-    const sick = [worker].map((person) => ({
-      ...person,
-      accidents: { cases: 1, days: 1, fundDays: 0, employer: 0, fund: 0 },
-    }));
-    expect(codes(june({ insured: sick }))).toContain('error:D112_SICK_PERIOD');
   });
 
   test('lists the codes the structure allows for the covered fields', () => {
@@ -1013,6 +1008,93 @@ describe('D112 medical leave', () => {
     );
     expect(d).toContain('D_9b="0" D_10="1" D_14a="2" D_14="2"');
     expect(d).toContain('D_20="312" D_20a="0" D_21="0" D_21a="0"');
+  });
+
+  test('January–June 2026: section D, B3 and C2 without the fields 07/2026 added, D_14 and D_15 the days each payer bears', () => {
+    // 12–23 January 2026: 10 working days at 65%, none unpaid (issued before 1 February), 5 by
+    // the employer (921 lei) and 5 by FNUASS (921 lei); 8 of the 18 days worked.
+    const january = certificate({
+      number: '2001',
+      issued: '2026-01-12',
+      from: '2026-01-12',
+      to: '2026-01-23',
+      place: 'ambulatory',
+      unpaidDays: 0,
+      employerDays: 5,
+      fundDays: 5,
+      percent: '65',
+      employer: 921,
+      fund: 921,
+    });
+    const january2026 = model(
+      [
+        sick([january], {
+          employment: {
+            hoursWorked: 64,
+            hoursSuspended: 80,
+            daysWorked: 8,
+            unemploymentBase: 4509,
+            camBase: 3588,
+            cassBase: 4509,
+            cass: 451,
+            casBase: 4509,
+            cas: 1127,
+          },
+          income: { cash: 4509, taxBase: 2931, tax: 293, paid: 2638 },
+        }),
+      ],
+      { period: { year: 2026, month: 1 }, parameters: { minimumWage: 4050, relief: 300 } },
+    );
+    expect(codes(january2026)).toEqual([]);
+    const xml = writeD112(january2026);
+    expect(elements(xml, 'asiguratD')).toEqual([
+      '<asiguratD D_1="CCMAM" D_2="2001" D_5="12.01.2026" D_6="12.01.2026" D_7="23.01.2026"' +
+        ' D_9="01" D_10="3" D_14="5" D_15="5" D_16="10" D_17="36000" D_18="127" D_19="283.46"' +
+        ' D_20="921" D_21="921" D_23="101" D_28="65"/>',
+    ]);
+    for (const field of ['B3_7D', 'C2_155', 'C2_156', 'D_9b', 'D_14a', 'D_15a', 'D_16a'])
+      expect([field, xml.includes(` ${field}=`)]).toEqual([field, false]);
+    expect(attribute(xml, 'B3_7', 'asiguratB3')).toBe('1842');
+    expect(attribute(xml, 'C2_16', 'angajatorC2')).toBe('921');
+    expect(attribute(xml, 'C2_T6', 'angajatorC2')).toBe('921');
+    // From March, a reduced day is only left out of D_14: D_16 counts the days paid.
+    const march = model(
+      [sick([certificate({ issued: '2026-03-02', from: '2026-03-02', to: '2026-03-06' })])],
+      { period: { year: 2026, month: 3 }, parameters: { minimumWage: 4050, relief: 300 } },
+    );
+    expect(codes(march)).toEqual([]);
+    expect(elements(writeD112(march), 'asiguratD')[0]).toContain(
+      'D_9="01" D_10="1" D_14="4" D_15="0" D_16="4" D_17="36000"',
+    );
+    // A continuation has no recalculated difference before 07/2026.
+    const continued = certificate({
+      number: '1003',
+      continues: { series: 'CCMAM', number: '0998', initialFrom: '2026-03-30' },
+      issued: '2026-04-01',
+      from: '2026-04-01',
+      to: '2026-04-02',
+      unpaidDays: 0,
+      employerDays: 2,
+      employer: 312,
+    });
+    const april = writeD112(
+      model([sick([continued])], {
+        period: { year: 2026, month: 4 },
+        parameters: { minimumWage: 4050, relief: 300 },
+      }),
+    );
+    expect(elements(april, 'asiguratD')[0]).toContain('D_20="312" D_21="0" D_23="101"');
+    // A certificate issued in January loses no day, and D_17 stays within 12 × 6 × 4050 lei.
+    const one = (patch: Partial<D112SickCertificate>) =>
+      codes({
+        ...january2026,
+        insured: [{ ...january2026.insured[0]!, sickLeave: [{ ...january, ...patch }] }],
+      });
+    expect(one({ unpaidDays: 1, employerDays: 4, employer: 737 })).toEqual([
+      'error:D112_SICK_DAYS',
+    ]);
+    expect(one({ base: { income: 291600, days: 127 } })).toEqual([]);
+    expect(one({ base: { income: 291601, days: 127 } })).toEqual(['error:D112_SICK_BASE']);
   });
 
   test('rounds the daily average as the validator checks it, D_17 / D_18', () => {

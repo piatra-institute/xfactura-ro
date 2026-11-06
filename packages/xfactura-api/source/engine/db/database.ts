@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import * as schema from './schema';
 import { rekeyIndividuals } from './identity';
 import { ensureInvariants } from './invariants';
+import { sealSickLeave } from './seal';
 
 export class Database {
   readonly client;
@@ -42,8 +43,9 @@ export class Database {
 
   /**
    * Applies generated migrations and their data steps, then installs the invariants (ADR 0010).
-   * `secret` is the installation's (`ACCOUNTING_AUTH_SECRET`): a data step that keys a record
-   * with it needs it (`rekeyIndividuals`, migration 0031), and refuses without it.
+   * `secret` is the installation's (`ACCOUNTING_AUTH_SECRET`): a data step that keys or seals a
+   * record with it needs it (`rekeyIndividuals`, migration 0031; `sealSickLeave`, 0032), and
+   * refuses without it.
    */
   async migrate(options: { secret?: string } = {}) {
     await this.initialize();
@@ -59,6 +61,7 @@ export class Database {
       migrationsFolder: fileURLToPath(new URL('./migrations', import.meta.url)),
     });
     await rekeyIndividuals(this.client, options.secret);
+    await sealSickLeave(this.client, options.secret);
     await ensureInvariants(this.client);
     const violations = await this.client.execute('PRAGMA foreign_key_check');
     if (violations.rows.length) throw new Error('Foreign-key violations after migration.');

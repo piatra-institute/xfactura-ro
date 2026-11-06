@@ -95,7 +95,7 @@ The example is a draft failure result, not a general assertion that every foreig
 
 ### The closure as built (T1, 30 October 2026)
 
-The evaluator is pure, in core `src/ro/determinations/closure.ts` (`evaluateClosure`, version `ro-closure@8`, with a hash of its rule set). The engine feeds it (`modules/determinations.ts`) and exposes it as `closure.evaluate {from, to}` (at most three calendar years). Its inputs:
+The evaluator is pure, in core `src/ro/determinations/closure.ts` (`evaluateClosure`, version `ro-closure@9`, with a hash of its rule set). The engine feeds it (`modules/determinations.ts`) and exposes it as `closure.evaluate {from, to}` (at most three calendar years). Its inputs:
 
 - the recorded profile facts (superseded ones left out);
 - the **yearly determinations** of every year the range touches ([ACCOUNTING_ENGINE.md](ACCOUNTING_ENGINE.md#determinations-and-the-obligation-closure)), and which of them a person confirmed against the exact computation;

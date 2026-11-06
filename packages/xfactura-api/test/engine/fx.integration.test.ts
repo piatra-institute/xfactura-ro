@@ -6,6 +6,7 @@ import {
   saftKitId,
   type DeclarationValidator,
 } from '../../source/engine/adapters/declaration-validator';
+import { sourceXml, type XmlElement } from 'xfactura-core/xml';
 import type { ProposalView } from '../../source/engine/kernel/views';
 import { invoiceXml } from './fixtures/invoice';
 import { service, type Issued } from './fixtures/sales';
@@ -917,6 +918,519 @@ describe('credit notes in a currency: the returns', () => {
             null,
           ]);
         }
+    },
+    240_000,
+  );
+});
+
+// A receivable carried at no single rate: EXP-M, issued on 20 March for a supply of 10 March,
+// books its revenue at the issue date's 4.9850 (1,000.00 EUR = 4,985.00 lei) and its VAT at the
+// supply's 4.9765 (210.00 EUR = 1,045.07 lei): 6,030.07 lei for 1,210.00 EUR, which no rate gives
+// (1,210.00 × 4.9850 = 6,031.85). Every amount below by hand:
+//   31 March, before the revaluation: 605.00 EUR received at 4.9900 (3,018.95 lei); half the
+//     receivable leaves in proportion, 6,030.07 × 605 / 1,210 = 3,015.035 → 3,015.04; 3.91
+//     gained. In D406, at the receivable's rate: 605.00 × 4.9850 = 3,015.925 → 3,015.93, and
+//     −0.89 in lei.
+//   CN-M1 of 31 March, 100.00 + 21.00 EUR at 4.9900: VAT 21.00 × 4.9765 = 104.51, base 497.65,
+//     revenue 499.00; the receivable leaves in proportion, (6,030.07 − 3,015.04) × 121 / 605 =
+//     603.006 → 603.01; 499.00 + 104.51 − 603.01 = 0.50 gained. In D406: −121.00 × 4.9850 =
+//     −603.185 → −603.19, and 0.18 in lei.
+//   The revaluation of 31 March: 484.00 EUR at 4.9900 = 2,415.16 against 2,412.02 carried, 3.14
+//     gained; from then on the receivable is carried at 4.9900.
+//   CN-M2 of 8 April, 200.00 + 42.00 EUR at 5.0100: VAT 42.00 × 4.9765 = 209.01, base 995.30,
+//     revenue 1,002.00; the receivable 242.00 × 4.9900 = 1,207.58; 3.43 gained.
+describe('a receivable carried at no single rate', () => {
+  async function mixed(validator?: DeclarationValidator) {
+    const s = await scenario({
+      cui: '18547290',
+      ...(validator ? { declarationValidator: validator } : {}),
+    });
+    open.push(s);
+    const fact = async (axis: string, value: string) =>
+      s.invoke(s.owner, 'profile.record', {
+        axis,
+        value,
+        effectiveFrom: '2026-01-01',
+        evidenceId: (await s.evidence(`${axis}.pdf`)).id,
+      });
+    await fact('vat.status', 'normal_vat');
+    await fact('vat.period', 'monthly');
+    const file = async (filename: string, text: string) =>
+      (
+        await s.invoke<{ id: string }>(s.owner, 'evidence.record', {
+          filename,
+          mediaType: 'application/xml',
+          base64: Buffer.from(text).toString('base64'),
+        })
+      ).id;
+    await s.invoke(s.owner, 'fx.importBnr', { evidenceId: await file('bnr.xml', creditBnr) });
+    await s.invoke(s.owner, 'sales.seller.record', {
+      details: {
+        name: 'Exemplu Servicii SRL',
+        vatId: 'RO18547290',
+        address: { lines: ['Str. Lungă 10'], city: 'Galați', subdivision: 'RO-GL', country: 'RO' },
+      },
+    });
+    for (const [name, iban, currency, ledgerAccount] of [
+      ['Cont curent', 'RO49AAAA1B31007593840000', 'RON', '5121'],
+      ['Cont EUR', eurIban, 'EUR', '5124'],
+    ] as const)
+      await s.invoke(s.owner, 'treasury.createAccount', {
+        kind: 'bank',
+        name,
+        iban,
+        currency,
+        ledgerAccount,
+        openedOn: '2026-01-01',
+      });
+    const customer = await s.party('Client Unu SRL', '14399840');
+    await s.invoke(s.owner, 'parties.recordDetails', {
+      partyId: customer.id,
+      details: {
+        name: 'Client Unu SRL',
+        vatId: 'RO14399840',
+        address: { lines: ['Bd. Unirii 5'], city: 'Brașov', subdivision: 'RO-BV', country: 'RO' },
+      },
+    });
+    const imported = async (number: string, xml: string) =>
+      s.invoke<{ id: string }>(s.owner, 'invoices.import', {
+        evidenceId: await file(`${number}.xml`, xml),
+      });
+    const original = await imported(
+      'EXP-M',
+      inEuro(
+        invoiceXml({
+          company: '18547290',
+          counterparty: '14399840',
+          direction: 'sale',
+          currency: 'EUR',
+          number: 'EXP-M',
+          date: '2026-03-20',
+          deliveryDate: '2026-03-10',
+          net: '1000.00',
+          tax: '210.00',
+          gross: '1210.00',
+        }),
+        '1045.07',
+      ),
+    );
+    const sold = await s.book('invoices.recognize', { documentId: original.id, account: '704' });
+    const receivable = sold.effect!.openItems[0]!.id;
+    await s.invoke(s.owner, 'bank.import', {
+      evidenceId: await file(
+        'extras-martie.sta',
+        `:20:EUR032026
+:25:${eurIban}
+:28C:001/001
+:60F:C260301EUR0,00
+:61:2603310331C605,00NTRFEXP-M//EUR-IN-03
+:86:Incasare partiala EXP-M
+:62F:C260331EUR605,00`,
+      ),
+      financialYearId: s.year.id,
+    });
+    const [movement] = await s.list<{ id: string }>(s.owner, 'bank.movements', {
+      unsettled: true,
+    });
+    const settled = await s.book('bank.settle', {
+      movementId: movement!.id,
+      allocations: [{ openItem: receivable, amount: '605.00' }],
+    });
+    const credit = async (number: string, date: string, net: string, tax: string) => {
+      const document = await imported(
+        number,
+        inEuro(
+          invoiceXml({
+            company: '18547290',
+            counterparty: '14399840',
+            direction: 'sale',
+            credit: true,
+            currency: 'EUR',
+            number,
+            originalNumber: 'EXP-M',
+            date,
+            net,
+            tax,
+            gross: (Number(net) + Number(tax)).toFixed(2),
+          }),
+          (Math.round(Number(tax) * 4.9765 * 100) / 100).toFixed(2),
+        ),
+      );
+      return s.book('invoices.credit', {
+        documentId: document.id,
+        originalDocumentId: original.id,
+        account: '704',
+      });
+    };
+    const first = await credit('CN-M1', '2026-03-31', '100.00', '21.00');
+    const revalued = await s.book('fx.revalue', { date: '2026-03-31' });
+    const second = await credit('CN-M2', '2026-04-08', '200.00', '42.00');
+    const prepare = (period: string) =>
+      s.invoke<Artifact>(s.owner, 'declarations.prepare', {
+        kind: 'D406',
+        period,
+        options: returnOptions.D406,
+      });
+    return { s, sold, settled, first, revalued, second, prepare };
+  }
+  /** Each line of a D406 transaction or payment: its account, side, lei and currency side. */
+  const amounts = (node: XmlElement) =>
+    node.children
+      .filter((child) => child.local === 'TransactionLine' || child.local === 'PaymentLine')
+      .map((line) => {
+        const amount = line.children.find((child) =>
+          ['DebitAmount', 'CreditAmount', 'PaymentLineAmount'].includes(child.local),
+        )!;
+        const field = (name: string) =>
+          amount.children.find((child) => child.local === name)?.text.trim();
+        const account = line.children.find((child) => child.local === 'AccountID')!.text.trim();
+        const side =
+          amount.local === 'PaymentLineAmount'
+            ? line.children.find((child) => child.local === 'DebitCreditIndicator')!.text.trim()
+            : amount.local[0];
+        return `${account} ${side} ${field('Amount')} ${field('CurrencyCode')} ${field('CurrencyAmount')}${field('ExchangeRate') ? ` @ ${field('ExchangeRate')}` : ''}`;
+      });
+  const all = (node: XmlElement, local: string): XmlElement[] =>
+    node.children.flatMap((child) => (child.local === local ? [child] : all(child, local)));
+  const of = async (s: Scenario, artifact: Artifact) =>
+    sourceXml((await s.engine.evidence.read(s.owner, artifact.evidenceId)).bytes);
+  /** The transaction whose lines cite a document. */
+  const transaction = (file: XmlElement, document: string) =>
+    all(file, 'Transaction').find((node) =>
+      all(node, 'SourceDocumentID').some((id) => id.text.trim() === document),
+    )!;
+
+  test('its proportional releases keep their lei: D406 writes each at the receivable’s rate and the rest in lei', async () => {
+    const { s, sold, settled, first, revalued, second, prepare } = await mixed();
+    // The books, as the treatments release such a receivable: in proportion to its balance.
+    expect(rated(sold)).toEqual([
+      'D 4111 6030.07 [EUR 1210.00 @ 4.9850]',
+      'C 704 4985.00 [EUR 1000.00 @ 4.9850]',
+      'C 4427 1045.07 [EUR 210.00 @ 4.9765]',
+    ]);
+    expect(rated(settled)).toEqual([
+      'D 5124 3018.95 [EUR 605.00 @ 4.9900]',
+      'C 4111 3015.04 [EUR 605.00 @ 4.9900]',
+      'C 7651 3.91',
+    ]);
+    expect(rated(first)).toEqual([
+      'D 4111 -603.01 [EUR -121.00 @ 4.9900]',
+      'C 704 -499.00 [EUR -100.00 @ 4.9900]',
+      'C 4427 -104.51 [EUR -21.00 @ 4.9765]',
+      'C 7651 0.50',
+    ]);
+    // The euro account's 605.00 EUR are 3,018.95 lei at 4.9900 already.
+    expect(rated(revalued)).toEqual(['D 4111 3.14 [EUR 0.00 @ 4.9900]', 'C 7651 3.14']);
+    expect(rated(second)).toEqual([
+      'D 4111 -1207.58 [EUR -242.00 @ 4.9900]',
+      'C 704 -1002.00 [EUR -200.00 @ 5.0100]',
+      'C 4427 -209.01 [EUR -42.00 @ 4.9765]',
+      'C 7651 3.43',
+    ]);
+
+    // March's D406: each such line at the rate the receivable was recorded at, 4.9850, and what
+    // its lei leave in lei only (CurrencyAmount × ExchangeRate = Amount, S.AM.4).
+    const march = await of(s, await prepare('2026-03'));
+    expect(amounts(transaction(march, 'EXP-M'))).toEqual([
+      '4111 D 6031.85 EUR 1210.00 @ 4.9850',
+      '4111 D -1.78 RON -1.78',
+      '704 C 4985.00 EUR 1000.00 @ 4.9850',
+      '4427 C 1045.07 EUR 210.00 @ 4.9765',
+    ]);
+    expect(amounts(transaction(march, 'EUR-IN-03'))).toEqual([
+      '5124 D 3018.95 EUR 605.00 @ 4.9900',
+      '4111 C 3015.93 EUR 605.00 @ 4.9850',
+      '4111 C -0.89 RON -0.89',
+      '7651 C 3.91 RON 3.91',
+    ]);
+    expect(amounts(transaction(march, 'CN-M1'))).toEqual([
+      '4111 D -603.19 EUR -121.00 @ 4.9850',
+      '4111 D 0.18 RON 0.18',
+      '704 C -499.00 EUR -100.00 @ 4.9900',
+      '4427 C -104.51 EUR -21.00 @ 4.9765',
+      '7651 C 0.50 RON 0.50',
+    ]);
+    // The payment mirrors the receivable's lines.
+    expect(all(march, 'Payment').map(amounts)).toEqual([
+      ['4111 D 3015.93 EUR 605.00 @ 4.9850', '4111 D -0.89 RON -0.89'],
+    ]);
+    // After the revaluation the receivable is carried at 4.9900: April's credit note needs no
+    // split.
+    const april = await of(s, await prepare('2026-04'));
+    expect(amounts(transaction(april, 'CN-M2'))).toEqual([
+      '4111 D -1207.58 EUR -242.00 @ 4.9900',
+      '704 C -1002.00 EUR -200.00 @ 5.0100',
+      '4427 C -209.01 EUR -42.00 @ 4.9765',
+      '7651 C 3.43 RON 3.43',
+    ]);
+  });
+
+  officialReturns(
+    "its months pass ANAF's SAF-T validator",
+    async () => {
+      const { prepare } = await mixed(
+        new AnafKits({
+          general: new DukIntegrator(generalKit),
+          saft: new DukIntegrator(saftKit, saftKitId),
+        }),
+      );
+      for (const period of ['2026-03', '2026-04']) {
+        const artifact = await prepare(period);
+        expect([period, artifact.state, artifact.steps.at(-1)?.detail ?? null]).toEqual([
+          period,
+          'validated_official',
+          null,
+        ]);
+      }
+    },
+    240_000,
+  );
+});
+
+// Credit notes in euro that move goods (G1), FIFO, in depot D1; the company 18547290, its
+// partner 14399840. Every amount by hand, at the rates of `creditBnr`:
+//   P-1 of 10 March, bought: 10 bags of coffee, 500.00 + 105.00 EUR (VAT 522.53 lei at 4.9765):
+//     D 371 2,488.25 / D 4426 522.53 / C 401 3,010.78, the lot 10 at 2,488.25 (248.825 each);
+//   V-1 of 10 March, sold: 4 bags, 400.00 + 84.00 EUR (VAT 418.03 lei = 84.00 × 4.9765 =
+//     418.026): D 4111 2,408.63 / C 707 1,990.60 / C 4427 418.03, the 4 out of the lot at
+//     2,488.25 × 4 ÷ 10 = 995.30 (C 371 / D 607);
+//   31 March: the receivable and the payable revalued at 4.9900;
+//   CN-V1 of 8 April, the customer's bag back, 100.00 + 21.00 EUR (VAT 104.51 lei at V-1's 4.9765):
+//     the receivable at its carrying 121.00 × 4.99 = 603.79, the revenue at 5.0100, 501.00, and
+//     the bag in at what the sale took it out at, 995.30 ÷ 4 = 248.825 → 248.83, in lei and at no
+//     rate (C 371 / D 607 in red); 501.00 + 104.51 − 603.79 = 1.72 gained (7651);
+//   CN-P1 of 8 April, 2 bags back to the supplier, 100.00 + 21.00 EUR (VAT 104.51 lei at P-1's
+//     4.9765): the payable at 603.79, the bags out of P-1's lot at what they entered at, 2,488.25 ×
+//     2 ÷ 10 = 497.65, not 100.00 × 5.0100 = 501.00; 603.79 − 497.65 − 104.51 = 1.63 gained;
+//   the register at April's end: P-1's lot 4 at 995.30 and the bag returned, 1 at 248.83, as 371
+//     holds: 2,488.25 − 995.30 + 248.83 − 497.65 = 1,244.13.
+describe('credit notes in a currency that move goods', () => {
+  const cui = '18547290';
+  const partner = '14399840';
+  async function shop(validator?: DeclarationValidator) {
+    const s = await scenario({
+      cui,
+      clock: () => Date.parse('2026-05-12T10:00:00Z'),
+      ...(validator ? { declarationValidator: validator } : {}),
+    });
+    open.push(s);
+    for (const [axis, value] of Object.entries({
+      'vat.status': 'normal_vat',
+      'vat.period': 'monthly',
+      'policy.stock.valuation': 'fifo',
+      'policy.stock.inventory': 'permanent',
+      'policy.stock.negative': 'refuse',
+    }))
+      await s.invoke(s.owner, 'profile.record', {
+        axis,
+        value,
+        effectiveFrom: '2026-01-01',
+        evidenceId: (await s.evidence(`${axis}.pdf`)).id,
+      });
+    const file = async (filename: string, text: string) =>
+      s.invoke<{ id: string }>(s.owner, 'evidence.record', {
+        filename,
+        mediaType: 'application/xml',
+        base64: Buffer.from(text).toString('base64'),
+      });
+    await s.invoke(s.owner, 'fx.importBnr', {
+      evidenceId: (await file('nbrfxrates.xml', creditBnr)).id,
+    });
+    await s.invoke(s.owner, 'sales.seller.record', {
+      details: {
+        name: 'Exemplu Magazin SRL',
+        vatId: `RO${cui}`,
+        address: { lines: ['Str. Lungă 10'], city: 'Galați', subdivision: 'RO-GL', country: 'RO' },
+      },
+    });
+    await s.invoke(s.owner, 'treasury.createAccount', {
+      kind: 'bank',
+      name: 'Cont curent',
+      iban: 'RO49AAAA1B31007593840000',
+      currency: 'RON',
+      ledgerAccount: '5121',
+      openedOn: '2026-01-01',
+    });
+    const coffee = await s.invoke<{ id: string }>(s.owner, 'stock.items.create', {
+      code: 'CAF-1',
+      name: 'Cafea boabe 1 kg',
+      unit: 'H87',
+      account: '371',
+      nc8: '09012100',
+      vatCategory: 'standard',
+    });
+    const depot = await s.invoke<{ id: string }>(s.owner, 'stock.warehouses.create', {
+      code: 'D1',
+      name: 'Depozit',
+      keeper: 'Ionescu Maria',
+    });
+    const stock = (quantity: string) => ({
+      warehouseId: depot.id,
+      lines: [{ line: '1', itemId: coffee.id, quantity }],
+    });
+    const euro = async (
+      input: { number: string; date: string; net: string; tax: string; gross: string },
+      ronVat: string,
+      options: { sale?: boolean; original?: string } = {},
+    ) =>
+      s.invoke<{ id: string }>(s.owner, 'invoices.import', {
+        evidenceId: (
+          await file(
+            `${input.number}.xml`,
+            inEuro(
+              invoiceXml({
+                ...input,
+                company: cui,
+                counterparty: partner,
+                currency: 'EUR',
+                ...(options.sale ? { direction: 'sale' as const } : {}),
+                ...(options.original ? { credit: true, originalNumber: options.original } : {}),
+                lines: [{ rate: '21', net: input.net, name: 'Cafea boabe' }],
+              }),
+              ronVat,
+            ),
+          )
+        ).id,
+      });
+    const bought = await euro(
+      { number: 'P-1', date: '2026-03-10', net: '500.00', tax: '105.00', gross: '605.00' },
+      '522.53',
+    );
+    const sold = await euro(
+      { number: 'V-1', date: '2026-03-10', net: '400.00', tax: '84.00', gross: '484.00' },
+      '418.03',
+      { sale: true },
+    );
+    const purchase = await s.book('invoices.recognize', {
+      documentId: bought.id,
+      account: '371',
+      stock: stock('10'),
+    });
+    const sale = await s.book('invoices.recognize', {
+      documentId: sold.id,
+      account: '707',
+      stock: stock('4'),
+    });
+    await s.book('fx.revalue', { date: '2026-03-31' });
+    const back = await euro(
+      { number: 'CN-V1', date: '2026-04-08', net: '100.00', tax: '21.00', gross: '121.00' },
+      '104.51',
+      { sale: true, original: 'V-1' },
+    );
+    const returned = await euro(
+      { number: 'CN-P1', date: '2026-04-08', net: '100.00', tax: '21.00', gross: '121.00' },
+      '104.51',
+      { original: 'P-1' },
+    );
+    const customerNote = () =>
+      s.propose('invoices.credit', {
+        documentId: back.id,
+        originalDocumentId: sold.id,
+        account: '707',
+        stock: stock('1'),
+      });
+    const supplierNote = () =>
+      s.propose('invoices.credit', {
+        documentId: returned.id,
+        originalDocumentId: bought.id,
+        account: '371',
+        stock: stock('2'),
+      });
+    const prepare = (period: string) =>
+      s.invoke<Artifact>(s.owner, 'declarations.prepare', {
+        kind: 'D406',
+        period,
+        options: returnOptions.D406,
+      });
+    return { s, purchase, sale, customerNote, supplierNote, prepare };
+  }
+  const moved = (proposal: ProposalView) =>
+    proposal.effect?.stockMoves?.map((move) => `${move.quantity} ${move.amount}`);
+
+  test('goods back from the customer at the sale’s cost, and to the supplier at the receipt’s, in lei', async () => {
+    const { s, purchase, sale, customerNote, supplierNote } = await shop();
+    expect(rated(purchase)).toEqual([
+      'D 371 2488.25 [EUR 500.00 @ 4.9765]',
+      'D 4426 522.53 [EUR 105.00 @ 4.9765]',
+      'C 401 3010.78 [EUR 605.00 @ 4.9765]',
+    ]);
+    expect(rated(sale)).toEqual([
+      'D 4111 2408.63 [EUR 484.00 @ 4.9765]',
+      'C 707 1990.60 [EUR 400.00 @ 4.9765]',
+      'C 4427 418.03 [EUR 84.00 @ 4.9765]',
+      'C 371 995.30',
+      'D 607 995.30',
+    ]);
+    const customer = await customerNote();
+    expect(codes(customer)).toEqual([]);
+    expect(rated(customer)).toEqual([
+      'D 4111 -603.79 [EUR -121.00 @ 4.9900]',
+      'C 707 -501.00 [EUR -100.00 @ 5.0100]',
+      'C 4427 -104.51 [EUR -21.00 @ 4.9765]',
+      'C 371 -248.83',
+      'D 607 -248.83',
+      'C 7651 1.72',
+    ]);
+    expect(moved(customer)).toEqual(['1.000 248.83']);
+    await s.post(await s.approve(customer));
+    const supplier = await supplierNote();
+    expect(codes(supplier)).toEqual([]);
+    expect(rated(supplier)).toEqual([
+      'D 371 -497.65',
+      'D 4426 -104.51 [EUR -21.00 @ 4.9765]',
+      'C 401 -603.79 [EUR -121.00 @ 4.9900]',
+      'C 7651 1.63',
+    ]);
+    expect(moved(supplier)).toEqual(['-2.000 -497.65']);
+    expect(taxes(supplier)).toEqual(['S-21 -497.65/-104.51/-104.51 2026-04']);
+    await s.post(await s.approve(supplier));
+    const register = await s.invoke<{
+      positions: { code: string; quantity: string; value: string }[];
+      accounts: { account: string; register: string; ledger: string; outside: string }[];
+    }>(s.owner, 'stock.register', { layers: true });
+    expect(register.accounts).toEqual([
+      { account: '371', register: '1244.13', ledger: '1244.13', outside: '0.00' },
+    ]);
+  });
+
+  test('the stock file of April: the customer’s return (40) and the return to the supplier (50)', async () => {
+    const { s, customerNote, supplierNote, prepare } = await shop();
+    await s.post(await s.approve(await customerNote()));
+    await s.post(await s.approve(await supplierNote()));
+    const april = await prepare('2026-04-C');
+    expect(april.state).toBe('prepared');
+    const { base64 } = await s.invoke<{ base64: string }>(s.owner, 'evidence.get', {
+      id: april.evidenceId,
+    });
+    const root = sourceXml(new Uint8Array(Buffer.from(base64, 'base64')));
+    const text = (name: string) =>
+      root.children
+        .flatMap(function find(node: XmlElement): XmlElement[] {
+          return [...(node.local === name ? [node] : []), ...node.children.flatMap(find)];
+        })
+        .map((node) => node.text.trim());
+    expect(text('MovementType')).toEqual(['40', '50', '40', '50']);
+    expect(text('BookValue')).toEqual(['248.83', '-497.65']);
+    // P-1's lot and the bag returned, in the order of their lots' ids.
+    expect(text('ClosingStockValue').sort()).toEqual(['248.83', '995.30']);
+  });
+
+  officialReturns(
+    "April's stock file passes ANAF's SAF-T validator",
+    async () => {
+      const { s, customerNote, supplierNote, prepare } = await shop(
+        new AnafKits({ saft: new DukIntegrator(saftKit, saftKitId) }),
+      );
+      await s.post(await s.approve(await customerNote()));
+      await s.post(await s.approve(await supplierNote()));
+      for (const period of ['2026-03-C', '2026-04-C']) {
+        const artifact = await prepare(period);
+        expect([period, artifact.state, artifact.steps.at(-1)?.detail ?? null]).toEqual([
+          period,
+          'validated_official',
+          null,
+        ]);
+      }
     },
     240_000,
   );

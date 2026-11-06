@@ -2031,3 +2031,245 @@ describe('D406 and the Union scheme (OSS)', () => {
     120_000,
   );
 });
+
+describe('D406 and the refunds a credit note opens', () => {
+  /** An MT940 statement of the lei account for a month, its movements in order. */
+  const statementOf = (
+    month: string,
+    opening: string,
+    closing: string,
+    movements: { day: string; amount: string; reference: string; text: string }[],
+  ) =>
+    [
+      `:20:REFUND${month}`,
+      `:25:${iban}`,
+      `:28C:0${month}/001`,
+      `:60F:C26${month}01RON${opening.replace('.', ',')}`,
+      ...movements.flatMap((item) => [
+        `:61:26${month}${item.day}${month}${item.day}${item.amount.startsWith('-') ? 'D' : 'C'}${item.amount.replace(/^-/, '').replace('.', ',')}NTRF${item.reference}`,
+        `:86:${item.text}`,
+      ]),
+      `:62F:C26${month}${month === '04' ? '30' : '31'}RON${closing.replace('.', ',')}`,
+    ].join('\n');
+
+  /**
+   * A monthly payer in lei, by hand:
+   *   March: XF0001 (10.03) 1.000 + 210 = 1.210,00 lei, collected on 15.03; F-200 (05.03) from
+   *   the supplier 26000020, 500 + 105 = 605,00 lei on 628, paid on 16.03. CN-1 (25.03) credits
+   *   100 + 21 of XF0001: nothing is left open, so 121,00 lei are owed to the customer on 462;
+   *   CN-F200 (26.03) credits 50 + 10,50 of F-200: 60,50 lei are owed by the supplier on 461.
+   *   April: a bank fee of 5,00 lei and F-201 (20.04) from the supplier 26000039, 100 + 21 =
+   *   121,00 lei on 628, unpaid; the refunds still open.
+   *   May: 121,00 lei paid back to the customer (12.05), 60,50 lei received from the supplier
+   *   (13.05), and XF0002 (20.05) to the customer, 200 + 42 = 242,00 lei, unpaid.
+   */
+  async function refunds(validator?: DeclarationValidator) {
+    const books = await company('monthly', validator);
+    const { s, sell, document, buy, file } = books;
+    const bank = async (name: string, text: string) => {
+      await s.invoke(s.owner, 'bank.import', {
+        evidenceId: await file(name, text),
+        financialYearId: s.year.id,
+      });
+      return s.list<{ id: string; amount: string; bookingDate: string }>(
+        s.owner,
+        'bank.movements',
+        { unsettled: true },
+      );
+    };
+    const sale = await sell('2026-03-10', [service('1000')]);
+    const purchase = await buy(
+      {
+        number: 'F-200',
+        counterparty: '26000020',
+        date: '2026-03-05',
+        net: '500.00',
+        tax: '105.00',
+        gross: '605.00',
+      },
+      '628',
+    );
+    const march = await bank(
+      'extras-martie.sta',
+      statementOf('03', '20000.00', '20605.00', [
+        { day: '15', amount: '1210.00', reference: 'XF0001//BANK-IN-03', text: 'Incasare XF0001' },
+        { day: '16', amount: '-605.00', reference: 'F-200//BANK-PAY-03', text: 'Plata F-200' },
+      ]),
+    );
+    await s.book('bank.settle', {
+      movementId: march.find((item) => item.amount === '1210.00')!.id,
+      allocations: [{ openItem: sale.posted.effect!.openItems[0]!.id, amount: '1210.00' }],
+    });
+    await s.book('bank.settle', {
+      movementId: march.find((item) => item.amount === '-605.00')!.id,
+      allocations: [{ openItem: purchase.posted.effect!.openItems[0]!.id, amount: '605.00' }],
+    });
+    const credited = async (input: XmlInput, originalDocumentId: string, account: string) => {
+      const credit = await document(input);
+      const proposal = await s.propose('invoices.credit', {
+        documentId: credit.id,
+        originalDocumentId,
+        account,
+      });
+      expect(proposal.issues.map((issue) => issue.code)).toEqual(['CREDIT_REFUND']);
+      return s.post(await s.approve(proposal, s.reviewer, ['CREDIT_REFUND']));
+    };
+    const owed = await credited(
+      {
+        direction: 'sale',
+        credit: true,
+        number: 'CN-1',
+        originalNumber: 'XF0001',
+        counterparty: '14399840',
+        date: '2026-03-25',
+        net: '100.00',
+        tax: '21.00',
+        gross: '121.00',
+      },
+      sale.issued.documentId,
+      '704',
+    );
+    const owing = await credited(
+      {
+        credit: true,
+        number: 'CN-F200',
+        originalNumber: 'F-200',
+        counterparty: '26000020',
+        date: '2026-03-26',
+        net: '50.00',
+        tax: '10.50',
+        gross: '60.50',
+      },
+      purchase.documentId,
+      '628',
+    );
+    const april = await bank(
+      'extras-aprilie.sta',
+      statementOf('04', '20605.00', '20600.00', [
+        { day: '30', amount: '-5.00', reference: 'NONREF//BANK-FEE-04', text: 'Comision bancar' },
+      ]),
+    );
+    await s.book('bank.settle', {
+      movementId: april[0]!.id,
+      lines: [{ account: '627', amount: '5.00' }],
+    });
+    await buy({ number: 'F-201', counterparty: '26000039', date: '2026-04-20' }, '628');
+    const may = await bank(
+      'extras-mai.sta',
+      statementOf('05', '20600.00', '20539.50', [
+        {
+          day: '12',
+          amount: '-121.00',
+          reference: 'CN-1//BANK-REFUND-05',
+          text: 'Restituire CN-1',
+        },
+        {
+          day: '13',
+          amount: '60.50',
+          reference: 'CN-F200//BANK-BACK-05',
+          text: 'Restituire CN-F200',
+        },
+      ]),
+    );
+    await s.book('bank.settle', {
+      movementId: may.find((item) => item.amount === '-121.00')!.id,
+      allocations: [{ openItem: owed.effect!.openItems[0]!.id, amount: '121.00' }],
+    });
+    await s.book('bank.settle', {
+      movementId: may.find((item) => item.amount === '60.50')!.id,
+      allocations: [{ openItem: owing.effect!.openItems[0]!.id, amount: '60.50' }],
+    });
+    await sell('2026-05-20', [service('200')]);
+    return books;
+  }
+  /** A partner's entries in the master files: its account, opening and closing balances. */
+  const partners = (file: XmlElement, kind: 'Customer' | 'Supplier') =>
+    children(file, kind).map(
+      (node) =>
+        `${value(node, `${kind}ID`)} ${value(node, 'AccountID')} ${balance(node, 'Opening')} ${balance(node, 'Closing')}`,
+    );
+  /** Each line of a transaction: its account, customer and supplier. */
+  const named = (lines: XmlElement[]) =>
+    lines.map(
+      (line) =>
+        `${value(line, 'AccountID')} ${value(line, 'CustomerID')} ${value(line, 'SupplierID')}`,
+    );
+  const own = `00${cui}`;
+
+  test('a refund opened in March is the partner’s line in the later months too: in the master files, the ledger and the payments', async () => {
+    const { s, prepare } = await refunds();
+    const march = await fileOf(s, await prepare('2026-03'));
+    // March: the refunds open, each the partner's on its account.
+    expect(partners(march, 'Customer')).toEqual(['0014399840 4111 0 0', '0014399840 462 0 -12100']);
+    expect(partners(march, 'Supplier')).toEqual(['0026000020 401 0 0', '0026000020 461 0 6050']);
+    expect(named(transactionLines(march, 'CN-1'))).toEqual([
+      `462 0014399840 0`,
+      `704 ${own} ${own}`,
+      `4427 ${own} ${own}`,
+    ]);
+
+    // April: nothing moves them, and the master files still list them, open.
+    const april = await fileOf(s, await prepare('2026-04'));
+    expect(partners(april, 'Customer')).toEqual(['0014399840 462 -12100 -12100']);
+    expect(partners(april, 'Supplier')).toEqual([
+      '0026000020 461 6050 6050',
+      '0026000039 401 0 -12100',
+    ]);
+
+    // May: paid back and received, each line its partner's, from the opening to zero.
+    const may = await fileOf(s, await prepare('2026-05'));
+    expect(partners(may, 'Customer')).toEqual([
+      '0014399840 4111 0 24200',
+      '0014399840 462 -12100 0',
+    ]);
+    expect(partners(may, 'Supplier')).toEqual([
+      '0026000020 461 6050 0',
+      '0026000039 401 -12100 -12100',
+    ]);
+    expect(named(transactionLines(may, 'BANK-REFUND-05'))).toEqual([
+      `5121 ${own} ${own}`,
+      `462 0014399840 0`,
+    ]);
+    expect(named(transactionLines(may, 'BANK-BACK-05'))).toEqual([
+      `5121 ${own} ${own}`,
+      `461 0 0026000020`,
+    ]);
+    const header = (reference: string) =>
+      children(may, 'Transaction')
+        .filter((node) =>
+          children(node, 'TransactionLine').some(
+            (line) => value(line, 'SourceDocumentID') === reference,
+          ),
+        )
+        .map((node) => `${value(node, 'CustomerID')} ${value(node, 'SupplierID')}`);
+    expect(header('BANK-REFUND-05')).toEqual(['0014399840 0']);
+    expect(header('BANK-BACK-05')).toEqual(['0 0026000020']);
+    // The payments: the refund paid back and the one received, each naming its credit note and
+    // who paid whom, from the Customer to the Supplier: the customer paid back is the SupplierID,
+    // the supplier paying back the CustomerID (ANAF's answers v1.2, Răspuns 21, 2.c).
+    expect(
+      children(may, 'Payment').map((payment) =>
+        children(payment, 'PaymentLine').map(
+          (line) =>
+            `${value(line, 'SourceDocumentID')} ${value(line, 'AccountID')} ${value(line, 'CustomerID')} ${value(line, 'SupplierID')} ${value(line, 'DebitCreditIndicator')} ${value(children(line, 'PaymentLineAmount')[0]!, 'Amount')}`,
+        ),
+      ),
+    ).toEqual([['CN-1 462 0 0014399840 C 121.00'], ['CN-F200 461 0026000020 0 D 60.50']]);
+  });
+
+  official(
+    "the months of a refund opened in March and paid in May pass ANAF's SAF-T validator",
+    async () => {
+      const { prepare } = await refunds(kits());
+      for (const period of ['2026-03', '2026-04', '2026-05']) {
+        const prepared = await prepare(period);
+        expect([period, prepared.state, prepared.steps.at(-1)?.detail ?? null]).toEqual([
+          period,
+          'validated_official',
+          null,
+        ]);
+      }
+    },
+    180_000,
+  );
+});

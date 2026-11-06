@@ -5,6 +5,7 @@ import { canonical, derivedId } from 'xfactura-core/hash';
 import type { Effect, StockMoveSpec } from 'xfactura-core/kernel';
 import type { LocalDate } from 'xfactura-core/time';
 import { PartyIdentities } from '../../source/engine/db/identity';
+import { Sealer } from '../../source/engine/db/seal';
 import {
   answerMediaType,
   guardedTables,
@@ -943,14 +944,14 @@ async function bankRecords(world: World) {
 
 /** A question asked in the owner's name about a vehicle: `answer` and `withdraw` it, `ask`
  * another about the same vehicle, `dispose` of a subject. */
-async function questionRecords(world: World, vehicle = 'B123ABC') {
+async function questionRecords(world: World, vehicle = 'B123ABC', kind = 'vehicle.use') {
   const id = randomUUID();
   const ask = (questionId = randomUUID()) =>
     world.db.write((tx) =>
       tx.insert(questions).values({
         id: questionId,
         companyId: world.company,
-        kind: 'vehicle.use',
+        kind,
         subjectKind: 'vehicle',
         subjectId: vehicle,
         params: '{}',
@@ -1593,6 +1594,35 @@ const attacks: Attack[] = [
     code: 'answer_evidence',
     name: 'an answer citing a file that is not an answer kept as evidence',
     run: async (world) => (await questionRecords(world)).answer(1, {}, 'application/pdf'),
+  },
+  {
+    trigger: 'inv_question_answer_guard',
+    code: 'absence_sealed',
+    name: "an answer about a month's absences keeping who was on sick leave, and its code, in clear",
+    run: async (world) =>
+      (await questionRecords(world, world.company, 'payroll.absences')).answer(1, {
+        value: canonical({
+          absences: [
+            {
+              employeeId: randomUUID(),
+              kind: 'medical',
+              from: '2026-10-05',
+              to: '2026-10-09',
+              code: '01',
+              certificateEvidenceId: randomUUID(),
+            },
+          ],
+        }),
+      }),
+  },
+  {
+    trigger: 'inv_question_answer_guard',
+    code: 'absence_sealed',
+    name: 'a sealed absence beside which its employee is kept in clear',
+    run: async (world) =>
+      (await questionRecords(world, world.company, 'payroll.absences')).answer(1, {
+        value: canonical({ absences: [{ employeeId: randomUUID(), sealed: 'v1.a.b.c' }] }),
+      }),
   },
   {
     trigger: 'inv_question_withdrawal_guard',
@@ -3445,6 +3475,54 @@ const attacks: Attack[] = [
     run: async (world) => (await payrollRecords(world)).line({ partyId: randomUUID() }),
   },
   {
+    trigger: 'inv_payroll_line_guard',
+    code: 'sick_sealed',
+    name: 'a payslip keeping the medical certificate it paid in clear',
+    run: async (world) =>
+      (await payrollRecords(world)).line({
+        input: canonical({ sick: [{ series: 'CCMAM', number: '9', code: '01', days: 5 }] }),
+      }),
+  },
+  {
+    trigger: 'inv_payroll_line_guard',
+    code: 'sick_sealed',
+    name: 'a sealed certificate beside which its code is kept in clear',
+    run: async (world) =>
+      (await payrollRecords(world)).line({
+        input: canonical({ sick: [{ sealed: 'v1.a.b.c', code: '08' }] }),
+      }),
+  },
+  {
+    trigger: 'inv_payroll_line_guard',
+    code: 'sick_sealed',
+    name: "a payslip's issue about a certificate kept in clear",
+    run: async (world) =>
+      (await payrollRecords(world)).line({
+        result: canonical({
+          issues: [
+            { code: 'SICK_ACCIDENT_UNCONFIRMED', message: 'Certificatul CCMAM 7', health: true },
+          ],
+        }),
+      }),
+  },
+  {
+    trigger: 'inv_payroll_line_guard',
+    code: 'sick_sealed',
+    name: 'a sick item labelled with its certificate and code',
+    run: async (world) =>
+      (await payrollRecords(world)).line({
+        input: canonical({
+          items: [
+            {
+              kind: 'sick_fund',
+              amount: '100',
+              label: 'Concediu medical CCMAM 9, cod 01 (FNUASS)',
+            },
+          ],
+        }),
+      }),
+  },
+  {
     trigger: entry,
     code: 'stale_read',
     name: 'posting after the payroll run the proposal read was recomputed',
@@ -4434,6 +4512,96 @@ describe('database invariants', () => {
         ),
       ),
     ).toBe('party_identity');
+  });
+
+  // A payroll line kept each medical certificate in clear (its number, indemnity code and dates),
+  // its issues named them, and an answer about a month's absences said who was ill and with which
+  // code. Migration 0032's data step seals them, under the installation's secret.
+  test('the data step seals the sick leave the books kept in clear, and needs the secret to', async () => {
+    const world = await fresh();
+    const certificate = {
+      series: 'CCMAM',
+      number: '9',
+      code: '01',
+      issued: '2026-10-05',
+      from: '2026-10-05',
+      to: '2026-10-09',
+      days: 5,
+    };
+    const employeeId = randomUUID();
+    const file = randomUUID();
+    const absences = {
+      absences: [
+        { employeeId, kind: 'medical', from: '2026-10-05', to: '2026-10-09', code: '01' },
+        { employeeId, kind: 'unpaid', from: '2026-10-20', to: '2026-10-20' },
+      ].map((item, index) => (index ? item : { ...item, certificateEvidenceId: file })),
+    };
+    // The books as they were: the guards that now refuse these did not exist.
+    await world.db.client.execute('DROP TRIGGER inv_payroll_line_guard');
+    await world.db.client.execute('DROP TRIGGER inv_question_answer_guard');
+    const records = await payrollRecords(world);
+    await records.line({
+      input: canonical({
+        sick: [certificate],
+        items: [
+          { kind: 'salary', amount: '400000', label: 'Salariu de bază' },
+          {
+            kind: 'sick_fund',
+            amount: '50000',
+            label: 'Concediu medical CCMAM 9, cod 01 (FNUASS)',
+          },
+        ],
+      }),
+      result: canonical({
+        issues: [{ code: 'SICK_BASE', message: 'Certificatul CCMAM 9: baza.', health: true }],
+      }),
+    });
+    const answerId = await (
+      await questionRecords(world, world.company, 'payroll.absences')
+    ).answer(1, { value: canonical(absences) });
+    await expect(world.db.migrate()).rejects.toThrow(/ACCOUNTING_AUTH_SECRET/);
+    const secret = 'synthetic-installation-secret-of-32-characters';
+    await world.db.migrate({ secret });
+    const sealer = new Sealer(secret);
+    const [line] = await world.db.orm
+      .select({ input: payrollLines.input, result: payrollLines.result })
+      .from(payrollLines)
+      .where(eq(payrollLines.companyId, world.company));
+    const input = JSON.parse(line!.input) as {
+      sick: { sealed: string }[];
+      items: { label: string }[];
+    };
+    expect(input.sick.map((item) => Object.keys(item))).toEqual([['sealed']]);
+    expect(JSON.parse(sealer.open(world.company, input.sick[0]!.sealed))).toEqual(certificate);
+    expect(input.items.map((item) => item.label)).toEqual([
+      'Salariu de bază',
+      'Concediu medical (FNUASS)',
+    ]);
+    const result = JSON.parse(line!.result) as { issues: { health: true; sealed: string }[] };
+    expect(Object.keys(result.issues[0]!).sort()).toEqual(['health', 'sealed']);
+    expect(JSON.parse(sealer.open(world.company, result.issues[0]!.sealed))).toEqual({
+      code: 'SICK_BASE',
+      message: 'Certificatul CCMAM 9: baza.',
+    });
+    const [answer] = await world.db.orm
+      .select({ value: questionAnswers.value })
+      .from(questionAnswers)
+      .where(eq(questionAnswers.id, answerId));
+    const kept = JSON.parse(answer!.value) as { absences: Record<string, string>[] };
+    // Each absence sealed whole; the certificate's file, which classification reads, in clear.
+    expect(kept.absences.map((item) => Object.keys(item).sort())).toEqual([
+      ['certificateEvidenceId', 'sealed'],
+      ['sealed'],
+    ]);
+    expect(kept.absences[0]!.certificateEvidenceId).toBe(file);
+    expect(
+      kept.absences.map((item) => JSON.parse(sealer.open(world.company, item.sealed!))),
+    ).toEqual(absences.absences);
+    // Once sealed, nothing is left to do, and the guards are back.
+    await world.db.migrate();
+    expect(await refusal(records.line({ input: canonical({ sick: [certificate] }) }))).toBe(
+      'sick_sealed',
+    );
   });
 
   test('installation is idempotent and restores a dropped invariant', async () => {

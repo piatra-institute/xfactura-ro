@@ -89,7 +89,7 @@ async function employer(validator?: DukIntegrator) {
         phone: '0236000000',
       },
     });
-  return { s, hire, payroll, prepare };
+  return { s, anaf, hire, payroll, prepare };
 }
 
 describe('D112 from the books', () => {
@@ -144,15 +144,18 @@ describe('D112 from the books', () => {
     expect(xml).toContain('B1_6="72" B1_7="104"');
     expect(xml).toContain('C2_T6="261" C2_10="261" C2_140="261"');
     expect(xml).not.toContain('<asiguratA ');
-    // The payroll keeps the diagnosis sealed; only the declaration opens it.
+    // The payroll keeps each certificate sealed whole, its diagnosis sealed within; only the
+    // declaration opens them.
     const inputs = await s.engine.db.read((tx) =>
       tx
         .select({ input: payrollLines.input })
         .from(payrollLines)
         .where(eq(payrollLines.companyId, s.company.id)),
     );
-    expect(inputs.map((row) => row.input).join()).toContain('"diagnosisSealed":"v1.');
-    expect(inputs.map((row) => row.input).join()).not.toContain('"diagnosis"');
+    const kept = inputs.map((row) => row.input).join();
+    expect(kept).toContain('"sick":[{"sealed":"v1.');
+    expect(kept).not.toContain('"diagnosis');
+    expect(kept).not.toContain('CCMAM');
   });
 
   test('refuses sick pay without certificates, and certificates D112 cannot describe', async () => {
@@ -230,6 +233,144 @@ describe('D112 from the books', () => {
         'validated_official',
         null,
       ]);
+    },
+    120_000,
+  );
+});
+
+describe('D112 for January 2026, in the structure of 01–06/2026', () => {
+  const firstHalf = path.join(import.meta.dir, '../../../..', '.validators/anaf-d112-0126/dist');
+  const both =
+    DukIntegrator.available(dist) && DukIntegrator.available(firstHalf) && Bun.which('java')
+      ? test
+      : test.skip;
+
+  /** Ill 12–23 January (code 01), on maternity leave all month (08), and after a work accident
+   * the pension house confirmed 19–30 January (03), each on a base from a stage certificate. */
+  const january = async (validator?: DukIntegrator) => {
+    const scene = await employer(validator);
+    const sick = await scene.hire(['Popescu', 'Ana'], cnp('290050117002'), { baseSalary: '6000' });
+    const mother = await scene.hire(['Ionescu', 'Maria'], cnp('291030117002'), {
+      baseSalary: '6000',
+    });
+    const injured = await scene.hire(['Georgescu', 'Ion'], cnp('185072217002'), {
+      baseSalary: '6000',
+    });
+    const certificate = (number: string, code: string, from: string, to: string) => ({
+      series: 'CCMAM',
+      number,
+      code,
+      issued: from,
+      from,
+      to,
+      place: 'ambulatory',
+      diagnosis: '101',
+    });
+    const run = await scene.s.invoke<{
+      id: string;
+      issues: number;
+      lines: { name: string; cash: string; cas: string; cass: string; tax: string }[];
+    }>(scene.s.owner, 'payroll.runs.prepare', {
+      month: '2026-01',
+      entries: [
+        {
+          contractId: sick.contractId,
+          sickLeave: [certificate('2001', '01', '2026-01-12', '2026-01-23')],
+          sickBase: { income: '36000', days: 127 },
+        },
+        {
+          contractId: mother.contractId,
+          activeDays: 0,
+          sickLeave: [
+            { ...certificate('2002', '08', '2026-01-01', '2026-01-31'), diagnosis: '806' },
+          ],
+          sickBase: { income: '24300', days: 123 },
+        },
+        {
+          contractId: injured.contractId,
+          sickLeave: [
+            {
+              ...certificate('2003', '03', '2026-01-19', '2026-01-30'),
+              place: 'hospital',
+              diagnosis: 'S52',
+              accidentConfirmed: true,
+            },
+          ],
+          sickBase: { income: '6000', days: 18 },
+        },
+      ],
+    });
+    const recognized = await scene.s.propose('payroll.recognize', {
+      runId: run.id,
+      month: '2026-01',
+      round: 1,
+      authorityId: scene.anaf.id,
+    });
+    await scene.s.post(await scene.s.approve(recognized));
+    const prepared = await scene.s.invoke<Artifact & { xmlHash: string }>(
+      scene.s.owner,
+      'declarations.prepare',
+      {
+        kind: 'D112',
+        period: '2026-01',
+        options: {
+          declarant: { lastName: 'Popescu', firstName: 'Ana', role: 'Administrator' },
+          caen: '6201',
+          phone: '0236000000',
+        },
+      },
+    );
+    const xml = prepared.xmlHash
+      ? (await scene.s.objects.get(scene.s.company.id, prepared.xmlHash)).toString()
+      : '';
+    return { ...scene, run, recognized, prepared, xml };
+  };
+
+  test('computes the month from the register of January 2026 and declares it without the fields 07/2026 added', async () => {
+    const { run, recognized, prepared, xml } = await january();
+    expect(run.issues).toBe(0);
+    // Popescu: 283.46 lei a day × 65% (12 days), none lost (issued before 1 February): 5 days by
+    // the employer (921 lei) and 5 by FNUASS (921 lei); 8 of the 18 days worked, 6,000 × 8 / 18.
+    // Ionescu: 197.56 lei a day × 85% × 18 days = 3,023 lei, all from FNUASS, untaxed.
+    // Georgescu: 333.33 lei a day × 80%: 3 days by the employer (800 lei), 7 by the state social
+    // insurance budget (1,867 lei).
+    expect(run.lines.map((line) => [line.name, line.cash])).toEqual([
+      ['Georgescu Ion', '5334.00'],
+      ['Ionescu Maria', '3023.00'],
+      ['Popescu Ana', '4509.00'],
+    ]);
+    expect(
+      recognized.effect?.lines.map((line) => `${line.side} ${line.account} ${line.amount}`),
+    ).toEqual(expect.arrayContaining(['D 4382 5811.00']));
+    expect(prepared.state).toBe('prepared');
+    expect(xml.match(/<asiguratD [^>]*\/>/g)?.sort()).toEqual([
+      '<asiguratD D_1="CCMAM" D_2="2001" D_5="12.01.2026" D_6="12.01.2026" D_7="23.01.2026"' +
+        ' D_9="01" D_10="3" D_14="5" D_15="5" D_16="10" D_17="36000" D_18="127" D_19="283.46"' +
+        ' D_20="921" D_21="921" D_23="101" D_28="65"/>',
+      '<asiguratD D_1="CCMAM" D_2="2002" D_5="01.01.2026" D_6="01.01.2026" D_7="31.01.2026"' +
+        ' D_9="08" D_10="3" D_14="0" D_15="18" D_16="18" D_17="24300" D_18="123" D_19="197.56"' +
+        ' D_20="0" D_21="3023" D_23="806"/>',
+    ]);
+    for (const field of ['D_9b', 'D_14a', 'D_15a', 'D_16a', 'B3_7D', 'C2_155', 'C2_156'])
+      expect([field, xml.includes(` ${field}=`)]).toEqual([field, false]);
+    expect(xml).toContain('C2_31="1" C2_32="18" C2_34="18" C2_36="3023"');
+    expect(xml).toContain('C2_T6="3944"');
+    expect(xml).toMatch(/B3_8="10" B3_9="1867" B3_10="800" B3_11="2667"/);
+    expect(xml).toContain('C3_11="1" C3_12="10" C3_13="2667" C3_14="1867"');
+    expect(xml).toContain('C1_7="1867"');
+  }, 120_000);
+
+  both(
+    "passes ANAF's J26.0.3, published for 01–06/2026, and the general kit's J27.0.8",
+    async () => {
+      const { prepared, xml } = await january(new DukIntegrator(dist));
+      expect([prepared.state, prepared.steps.at(-1)?.detail ?? null]).toEqual([
+        'validated_official',
+        null,
+      ]);
+      expect(
+        await new DukIntegrator(firstHalf).validate('D112', new TextEncoder().encode(xml)),
+      ).toEqual({ ok: true, messages: [] });
     },
     120_000,
   );

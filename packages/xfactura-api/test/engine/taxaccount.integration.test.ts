@@ -256,7 +256,11 @@ describe('payments to the single account', () => {
     await s.post(await s.approve(withheld, s.reviewer, ['WHT_CERTIFICATE']));
 
     // Each 446 item is its own obligation of the single account, due on 25.11 (art. 84^1 alin.
-    // (6), art. 224 alin. (5)).
+    // (6), art. 224 alin. (5)): the date the treatments gave the items, which the worklist reads.
+    expect([rentTax, withheld].map((proposal) => proposal.effect!.openItems[0]!.dueDate)).toEqual([
+      '2026-11-25',
+      '2026-11-25',
+    ]);
     const position = await s.invoke<{
       items: { type: string; due: string | null; singleAccount: boolean; balance: string }[];
     }>(s.owner, 'taxaccount.position', { date: '2026-11-24' });
@@ -300,6 +304,85 @@ describe('payments to the single account', () => {
       date: '2026-11-30',
     });
     expect(after.items).toEqual([]);
+  });
+
+  test('every tax withheld at source on 446 carries the due date the tax account reads', async () => {
+    const { s, anaf } = await company([
+      { day: '25', side: 'D', amount: '1.00', ref: 'TAX-NONE', text: 'Plata' },
+    ]);
+    const person = await s.invoke<{ id: string }>(s.owner, 'parties.create', {
+      kind: 'ro_individual',
+      country: 'RO',
+      name: 'Popescu Ana',
+    });
+    const withhold = async (
+      kind: 'rent' | 'royalties',
+      account: string,
+      amount: string,
+      extra: Record<string, unknown> = {},
+    ) => {
+      const owed = await s.book('payees.recognize', {
+        kind,
+        partyId: person.id,
+        evidenceId: (await s.evidence(`contract-${kind}.pdf`)).id,
+        date: '2026-10-01',
+        period: '2026-10',
+        amount,
+        account,
+      });
+      return s.post(
+        await s.approve(
+          await s.propose('payees.withhold', {
+            openItem: owed.effect!.openItems[0]!.id,
+            date: '2026-10-20',
+            gross: amount,
+            authorityId: anaf,
+            ...extra,
+          }),
+        ),
+      );
+    };
+    // Rent and intellectual property withheld on 20.10: by 25.11, with October's D100 and D112.
+    const rent = await withhold('rent', '612', '2500.00');
+    const royalties = await withhold('royalties', '628', '10000.00', {
+      royalties: { contributionsByContract: false, realSystem: false, collectiveShare: false },
+    });
+    // Interest on a loan from the same person, paid on 16.10: due that day (art. 97 alin. (2)).
+    const accrued = await s.book(
+      'ledger.general',
+      journal(
+        (await s.evidence('contract-imprumut.pdf')).id,
+        [
+          { account: '666', side: 'D', amount: '1000.00' },
+          { account: '1687', side: 'C', amount: '1000.00', newItem: 'dobanda' },
+        ],
+        { date: '2026-10-15', newItems: [{ ref: 'dobanda', partyId: person.id }] },
+      ),
+    );
+    const interest = await s.book('loans.withhold', {
+      openItem: accrued.effect!.openItems[0]!.id,
+      date: '2026-10-16',
+      gross: '1000.00',
+      authorityId: anaf,
+    });
+    const items = [rent, royalties, interest].map((proposal) => proposal.effect!.openItems[0]!);
+    expect(items.map((item) => [item.controlAccount, item.dueDate])).toEqual([
+      ['446', '2026-11-25'],
+      ['446', '2026-11-25'],
+      ['446', '2026-10-16'],
+    ]);
+    const position = await s.invoke<{
+      items: { type: string; due: string | null; balance: string }[];
+    }>(s.owner, 'taxaccount.position', { date: '2026-11-24' });
+    expect(
+      position.items
+        .map((item) => [item.type, item.due, item.balance])
+        .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+    ).toEqual([
+      ['interest_tax', '2026-10-16', '100.00'],
+      ['ip_tax', '2026-11-25', '600.00'],
+      ['rent_tax', '2026-11-25', '200.00'],
+    ]);
   });
 
   test('state aid to repay changes the order: the payment is not distributed', async () => {

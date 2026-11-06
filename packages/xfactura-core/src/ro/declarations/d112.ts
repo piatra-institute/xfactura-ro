@@ -20,8 +20,11 @@ import { minimumExemptions, type MinimumExemption } from '../payroll/calculate';
  * `ro.payroll.minimum_wage_relief`) are given with the model and must be the structure's. ANAF's
  * validator (DUKIntegrator, D112Validator J27.0.8 of 03.11.2026) applies the 07/2026 table to
  * months after 12/2026 too, for which none is published; J26.0.3 of 22.04.2026 validates 01–06/2026
- * as ANAF published it for them. Medical leave and work accidents in 01–06/2026 are refused: their
- * fields there (without D_9a–D_21a, B3_7D, C2_155–C2_156) are not written.
+ * as ANAF published it for them. In 01–06/2026 the medical-leave fields 07/2026 added are not
+ * written (D_9a, D_9b, D_14a, D_15a, D_16a, D_20a, D_21a, B3_7D, C2_155, C2_156): both validators
+ * refuse them there as unknown attributes. D_14 and D_15 are then the days each payer bears, the
+ * day OUG 91/2025 leaves unpaid only left out of them (structure of 30.03.2026, p. 3), and the
+ * sections, codes and bases are the same as from 07/2026; D_17's ceiling is 12 × 6 × 4050.
  * Where the XSD of 14.08.2026 and the validator differ, this module follows the validator: the
  * XSD types A_1, A_sal1 and A_sal2 as 1–30, lacks obligations 458 and 459, and allows asigExc only
  * 0–1.
@@ -198,8 +201,9 @@ export type D112SickCertificate = {
   diagnosis: string;
   /** D_9b (p. 59), and D_14a less D_14 (p. 60): the episode's first working day, left unpaid
    * under OUG 91/2025 art. II for certificates issued from 1 February 2026 to 31 December 2027
-   * (p. 5). D_9a, patients of the national health programmes, is not written: the payroll does
-   * not know them. */
+   * (p. 5). In 01–06/2026, without those fields, it is only left out of D_14 and D_15 (structure
+   * of 30.03.2026, p. 3). D_9a, patients of the national health programmes, is not written: the
+   * payroll does not know them. */
   unpaidDays: number;
   /** D_14 (p. 60): the working days the employer pays; D_15a, D_15: those FNUASS pays. D_16a and
    * D_16 add them up. */
@@ -510,8 +514,9 @@ type Structure = {
   /** The text granting the relief. */
   reliefText: string;
   workingDays: Readonly<Record<number, number>>;
-  /** The medical-leave fields 07/2026 added are written. */
-  sickLeave: boolean;
+  /** The medical-leave fields 07/2026 added are written: D_9a–D_9b, D_14a, D_15a, D_16a, D_20a,
+   * D_21a, B3_7D, C2_155–C2_156. */
+  julyFields: boolean;
 };
 const structures: readonly Structure[] = [
   // structura_D112_0126_300326: salMin 4050, Suma300 (OUG 156/2024 as OUG 89/2025 kept it).
@@ -523,7 +528,7 @@ const structures: readonly Structure[] = [
     relief: 300n,
     reliefText: 'OUG nr. 156/2024',
     workingDays: { 1: 18, 2: 20, 3: 22, 4: 20, 5: 20, 6: 21 },
-    sickLeave: false,
+    julyFields: false,
   },
   // structura_D112_0726_070926: salMin 4325, Suma200 (OUG 89/2025).
   {
@@ -534,7 +539,7 @@ const structures: readonly Structure[] = [
     relief: 200n,
     reliefText: 'OUG nr. 89/2025',
     workingDays: { 7: 23, 8: 21, 9: 22, 10: 22, 11: 20, 12: 21 },
-    sickLeave: true,
+    julyFields: true,
   },
 ];
 
@@ -967,10 +972,11 @@ function fundCode(fund: string): string {
  * (angajatorA), counts (B), income in normal working conditions (C1), medical leave (C2) and CAM
  * (C4), then each insured person with section A, or B and D with medical leave, E1 or E2, and E3,
  * attributes in the XSD's order. Every field the structure computes is computed; the others are
- * the model's.
+ * the model's. The medical-leave fields 07/2026 added are written only from that month.
  */
 export function writeD112(model: D112): string {
   const calculation = calculateD112(model);
+  const { julyFields } = structureOf(model.period)!;
   const { employer, declarant } = model;
   const office = employer.registeredOffice;
   const fiscal = employer.fiscalDomicile;
@@ -1045,7 +1051,7 @@ export function writeD112(model: D112): string {
           // C1_7: what the employer recovers from the pension houses, C3_suma.
           C1_7: calculation.accidents ? text(calculation.accidents.fund) : undefined,
         }),
-        calculation.medicalLeave && medicalLeaveElement(calculation.medicalLeave),
+        calculation.medicalLeave && medicalLeaveElement(calculation.medicalLeave, julyFields),
         // angajatorC3 (p. 22–23): rd. 1, temporary incapacity after a work accident or an
         // occupational disease; the other rows (transfer, reduced time, courses) are not built.
         calculation.accidents &&
@@ -1074,13 +1080,16 @@ export function writeD112(model: D112): string {
           C4_ct: text(calculation.cam.amount),
         }),
       ),
-      model.insured.map((insured, index) => insuredElement(insured, calculation.insured[index]!)),
+      model.insured.map((insured, index) =>
+        insuredElement(insured, calculation.insured[index]!, julyFields),
+      ),
     ),
   );
 }
 
-/** angajatorC2 (p. 15–22): every row, those of the other indemnity codes at zero. */
-function medicalLeaveElement(leave: D112MedicalLeave) {
+/** angajatorC2 (p. 15–22): every row, those of the other indemnity codes at zero; Rd.1.5 only
+ * from 07/2026. */
+function medicalLeaveElement(leave: D112MedicalLeave, julyFields: boolean) {
   const row = (prefix: string, values: D112MedicalLeaveRow) => ({
     [`${prefix}1`]: text(values.cases),
     [`${prefix}2`]: text(values.days),
@@ -1104,8 +1113,9 @@ function medicalLeaveElement(leave: D112MedicalLeave) {
     ...row('C2_12', leave.byPercent['55']),
     ...row('C2_13', leave.byPercent['65']),
     ...row('C2_14', leave.byPercent['75']),
-    // Rd.1.5: the differences recalculated for continuations (D_20a, D_21a), none here.
-    ...zero('C2_155', 'C2_156'),
+    // Rd.1.5 (from 07/2026): the differences recalculated for continuations (D_20a, D_21a), none
+    // here.
+    ...(julyFields ? zero('C2_155', 'C2_156') : {}),
     // Rd.2 and 2.2: prevention, of it quarantine. Rd.3–5: maternity, child and patient care,
     // maternal risk, borne by FNUASS alone: cases, days, FNUASS's days and amount.
     ...row('C2_2', leave.prevention),
@@ -1121,7 +1131,11 @@ function medicalLeaveElement(leave: D112MedicalLeave) {
   });
 }
 
-function insuredElement(insured: D112Insured, calculation: D112InsuredCalculation) {
+function insuredElement(
+  insured: D112Insured,
+  calculation: D112InsuredCalculation,
+  julyFields: boolean,
+) {
   const { employment: work, income, minimum } = insured;
   const optional = (value: bigint | number) => (value ? text(value) : undefined);
   const main = income.mainJob;
@@ -1147,7 +1161,7 @@ function insuredElement(insured: D112Insured, calculation: D112InsuredCalculatio
       Timp_E3: text(calculation.tax),
     },
     sick
-      ? sectionB(insured, calculation, sick)
+      ? sectionB(insured, calculation, sick, julyFields)
       : element('asiguratA', {
           A_1: work.type,
           A_sal1: text(work.baseSalary),
@@ -1175,7 +1189,7 @@ function insuredElement(insured: D112Insured, calculation: D112InsuredCalculatio
         }),
     sick &&
       (insured.sickLeave ?? []).map((certificate, index) =>
-        certificateElement(certificate, sick.certificates[index]!),
+        certificateElement(certificate, sick.certificates[index]!, julyFields),
       ),
     main
       ? element('asiguratE1', {
@@ -1235,6 +1249,7 @@ function sectionB(
   insured: D112Insured,
   calculation: D112InsuredCalculation,
   sick: D112SickCalculation,
+  julyFields: boolean,
 ) {
   const work = insured.employment;
   const relief = big(work.relief);
@@ -1281,7 +1296,8 @@ function sectionB(
       B2_7C: '0',
     }),
     // B3 (p. 46–48): B3_1 = B3_6 = ΣD_16, B3_7 = B3_12 + B3_13. B3_4, B3_8–B3_11: work
-    // accidents; B3_5: unpaid childcare leave; B3_7D: last month's recalculated difference, none.
+    // accidents; B3_5: unpaid childcare leave; B3_7D (from 07/2026): last month's recalculated
+    // difference, none.
     // A work accident: B3_8 its working days (B3_1 = B3_6 + B3_8), B3_4 and B3_9 the state
     // budget's days and amount, B3_10 the employer's, B3_11 their sum.
     element('asiguratB3', {
@@ -1292,7 +1308,7 @@ function sectionB(
       B3_5: '0',
       B3_6: String(sick.days),
       B3_7: text(sick.base),
-      B3_7D: '0',
+      B3_7D: julyFields ? '0' : undefined,
       B3_7S: '0',
       B3_7C: withRelief(sick.base),
       B3_8: String(sick.accident.days),
@@ -1329,12 +1345,15 @@ function sectionB(
 /** Bani as lei with two decimals. */
 const decimal = (bani: bigint) => `${bani / 100n}.${String(bani % 100n).padStart(2, '0')}`;
 
-/** asiguratD (p. 56–62) of one code 01 certificate. */
+/** asiguratD (p. 56–62) of one certificate; in 01–06/2026 without the fields 07/2026 added, D_14
+ * and D_15 the days each payer bears (structure of 30.03.2026, p. 3 and p. 52–56). */
 function certificateElement(
   certificate: D112SickCertificate,
   calculation: D112CertificateCalculation,
+  julyFields: boolean,
 ) {
   const { continues } = certificate;
+  const july = (value: string | undefined) => (julyFields ? value : undefined);
   return element('asiguratD', {
     Data_CMI: continues && structureDate(continues.initialFrom),
     D_1: certificate.series,
@@ -1348,27 +1367,28 @@ function certificateElement(
     D_8a: certificate.code === '17' ? certificate.careCnp : undefined,
     D_9: certificate.code,
     // D_9a, patients of the national health programmes, is not known to the payroll.
-    D_9b: flag(certificate.unpaidDays > 0),
+    D_9b: july(flag(certificate.unpaidDays > 0)),
     D_10: String(d112PrescriptionPlaces.indexOf(certificate.place) + 1),
     D_11: certificate.code === '06' ? certificate.urgencyCode : undefined,
     D_12:
       certificate.code === '05' || certificate.code === '51'
         ? certificate.infectiousCode
         : undefined,
-    D_14a: String(calculation.employerDays),
+    D_14a: july(String(calculation.employerDays)),
     D_14: String(certificate.employerDays),
-    D_15a: String(certificate.fundDays),
+    D_15a: july(String(certificate.fundDays)),
     D_15: String(certificate.fundDays),
-    D_16a: String(calculation.days),
+    D_16a: july(String(calculation.days)),
     D_16: String(calculation.paidDays),
     D_17: text(certificate.base.income),
     D_18: String(certificate.base.days),
     D_19: decimal(calculation.dailyAverage),
     D_20: text(certificate.employer),
-    // D_20a, D_21a: required for a continuation of code 01, the recalculated difference.
-    D_20a: continues && certificate.code === '01' ? '0' : undefined,
+    // D_20a, D_21a (from 07/2026): required for a continuation of code 01, the recalculated
+    // difference.
+    D_20a: july(continues && certificate.code === '01' ? '0' : undefined),
     D_21: text(certificate.fund),
-    D_21a: continues && certificate.code === '01' ? '0' : undefined,
+    D_21a: july(continues && certificate.code === '01' ? '0' : undefined),
     // D_23 (p. 61): RM for maternal risk.
     D_23: certificate.code === '15' ? 'RM' : certificate.diagnosis,
     D_28: certificate.code === '01' ? (certificate.percent ?? undefined) : undefined,
@@ -1469,18 +1489,6 @@ export function checkD112(model: D112): D112Check[] {
       'D112_PARAMETERS',
       'parameters',
       `Salariul minim (${model.parameters.minimumWage} lei) și suma neimpozabilă (${model.parameters.relief} lei) din registrul de reguli diferă de cele ale structurii ANAF pentru ${structure.label} (${structure.minimumWage} lei, ${structure.relief} lei).`,
-    );
-  if (
-    structure &&
-    !structure.sickLeave &&
-    model.insured.some((insured) => insured.sickLeave?.length || insured.accidents?.cases)
-  )
-    add(
-      'error',
-      'D112_SICK_PERIOD',
-      'insured',
-      `Concediile medicale și accidentele de muncă din ${structure.label} nu sunt acoperite: câmpurile lor în structura acelor luni nu se scriu.`,
-      true,
     );
 
   // d_rec and tip_rec.
@@ -1778,7 +1786,9 @@ export function checkD112(model: D112): D112Check[] {
 }
 
 /** D_17's ceiling for an initial certificate: 12 minimum wages of the reporting month for each of
- * the six months of the base (p. 4, the validator's S106 on 12 × 6 × 4325 in 07–12/2026). */
+ * the six months of the base (p. 4, the validator's S106 on 12 × 6 × 4325 in 07–12/2026; the
+ * structure of 30.03.2026, p. 2, and S106 of both validators on 12 × 6 × 4050 = 291,600 lei in
+ * 01–06/2026). */
 const sickBaseCeiling = (minimumWage: bigint) => 12n * 6n * minimumWage;
 
 /** The percentage of C2's rows for a certificate of `days` calendar days (p. 16–20). */
@@ -1968,6 +1978,14 @@ function sickLeaveChecks(
         'D112_SICK_DAYS',
         `${at}.unpaidDays`,
         'Se diminuează cel mult o zi lucrătoare pe episod (OUG nr. 91/2025).',
+      );
+    // OUG 91/2025 art. II reduces the certificates issued from 1 February 2026 (the structure of
+    // 30.03.2026, p. 3: not those issued in January and starting in February).
+    if (certificate.unpaidDays && certificate.issued < '2026-02-01')
+      error(
+        'D112_SICK_DAYS',
+        `${at}.unpaidDays`,
+        'Certificatele eliberate înainte de 1 februarie 2026 nu se diminuează cu o zi (OUG nr. 91/2025 art. II).',
       );
     if (certificate.employerDays > 5)
       error(

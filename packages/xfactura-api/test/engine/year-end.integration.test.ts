@@ -167,6 +167,52 @@ describe('year-end', () => {
     expect(lines(reserve)).toEqual(['D 129 150.00', 'C 1061 150.00']);
   });
 
+  test('the legal reserve reads the result the closing booked, even beside the previous year’s moved out on 31 December', async () => {
+    const { s, note } = await year();
+    await s.book('year.closeResult', { yearEnd: '2026-12-31', evidenceId: await note() });
+    await s.invoke(s.owner, 'years.create', {
+      kind: 'financial',
+      label: '2027',
+      from: '2027-01-01',
+      to: '2027-12-31',
+    });
+    await s.book(
+      'ledger.general',
+      journal(
+        (await s.evidence('incasare-2027.pdf')).id,
+        [
+          { account: '5121', side: 'D', amount: '3000.00' },
+          { account: '704', side: 'C', amount: '3000.00' },
+        ],
+        { date: '2027-06-30' },
+      ),
+    );
+    // 2026's statements approved late, on 31 December 2027: its 8,000 leaves 121 that day, before
+    // 2027's closing brings 3,000 into it.
+    const transfer = await s.book('year.transferResult', {
+      yearEnd: '2026-12-31',
+      date: '2027-12-31',
+      evidenceId: (await s.evidence('hotarare-aga-2027.pdf')).id,
+    });
+    expect(lines(transfer)).toEqual(['D 121 8000.00', 'C 1171 8000.00']);
+    await s.book('year.closeResult', { yearEnd: '2027-12-31', evidenceId: await note() });
+    // 121 moved by 5,000 on the debit on 31 December; the year's result is the closing's 3,000.
+    const short = await s.propose('year.legalReserve', {
+      yearEnd: '2027-12-31',
+      amount: '100.00',
+      evidenceId: await note(),
+    });
+    expect(short.issues.map((issue) => issue.code)).toEqual(['LEGAL_RESERVE']);
+    expect(short.issues[0]!.message).toContain('150.00 lei');
+    const reserve = await s.revise('year.legalReserve', short, {
+      yearEnd: '2027-12-31',
+      amount: '150.00',
+      evidenceId: await note(),
+    });
+    expect(reserve.issues).toEqual([]);
+    expect(lines(reserve)).toEqual(['D 129 150.00', 'C 1061 150.00']);
+  });
+
   test('refuses a date that does not end the financial year, and a reserve without a closed profit', async () => {
     const { s, note } = await year();
     expect(

@@ -10,6 +10,7 @@ import { provisionalProrata } from '../exempt/facts';
 import { d406Begun, type D406StartAt } from '../saft/applicability';
 import { ossClosureRules } from '../oss/closure';
 import { tradeClosureRules } from '../trade/closure';
+import { warehouseRetailPrefix } from '../stock/valuation';
 import {
   confirmQuestion,
   factQuestion,
@@ -30,7 +31,7 @@ import {
  * gap, never a pass. Each item records the rule and the slots, with their basis, it came from.
  */
 
-export const CLOSURE_VERSION = 'ro-closure@8';
+export const CLOSURE_VERSION = 'ro-closure@9';
 
 export type ClosureStatus = 'ELIGIBLE' | 'NEEDS_EVIDENCE' | 'UNSUPPORTED';
 
@@ -1808,15 +1809,28 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
         // Goods kept in the stock register (G1) at cost, covered once its written policies are
         // recorded (OMFP 1802/2014 pct. 96, 289–291); or at their retail price (G2, pct. 286
         // alin. (8)), on the perpetual inventory only (pct. 291 alin. (5)), its Z reports and
-        // monthly discharges checked at each month's close.
+        // monthly discharges checked at each month's close. The method is each warehouse's
+        // (core ro/stock `retailMethodAt`): its own fact, else the company's, so a company at
+        // retail price that keeps warehouses at cost needs the cost policies for them, asked once
+        // here rather than by each treatment, and one at cost may keep a warehouse at retail price.
         const retail = recordedAt(facts, 'policy.stock.retail', last) === 'retail';
+        const own = [
+          ...new Set(
+            facts.map((item) => item.axis).filter((axis) => axis.startsWith(warehouseRetailPrefix)),
+          ),
+        ].map((axis) => recordedAt(facts, axis, last));
+        const atCost = own.filter((value) => value === 'cost').length;
+        const cost = !retail || atCost > 0;
+        const atRetail = retail || own.includes('retail');
         const method = recordedAt(facts, 'policy.stock.valuation', last);
         const inventory = recordedAt(facts, 'policy.stock.inventory', last);
-        if (!method && !retail)
+        if (!method && cost)
           factNeed(
             emit,
             'policy.stock.valuation',
-            'Nu este înregistrată metoda de evaluare a ieșirilor din gestiune (policy.stock.valuation: FIFO, LIFO, CMP după fiecare recepție sau lunar).',
+            retail
+              ? `Firma ține mărfurile la preț cu amănuntul, dar ${atCost === 1 ? 'o gestiune este ținută' : `${atCost} gestiuni sunt ținute`} la cost (policy.stock.retail.<gestiune>), pe articole: nu este înregistrată metoda de evaluare a ieșirilor din ${atCost === 1 ? 'ea' : 'ele'} (policy.stock.valuation: FIFO, LIFO, CMP după fiecare recepție sau lunar).`
+              : 'Nu este înregistrată metoda de evaluare a ieșirilor din gestiune (policy.stock.valuation: FIFO, LIFO, CMP după fiecare recepție sau lunar).',
           );
         if (!inventory)
           factNeed(
@@ -1824,13 +1838,13 @@ export function closureRules(input: ClosureInput): ClosureRule[] {
             'policy.stock.inventory',
             'Nu este înregistrată metoda de evidență a stocurilor (policy.stock.inventory: inventar permanent sau intermitent).',
           );
-        if (!retail && !recordedAt(facts, 'policy.stock.negative', last))
+        if (cost && !recordedAt(facts, 'policy.stock.negative', last))
           factNeed(
             emit,
             'policy.stock.negative',
             'Nu este înregistrat dacă politicile contabile admit stocuri negative (policy.stock.negative).',
           );
-        if (retail && inventory === 'intermittent')
+        if (atRetail && inventory === 'intermittent')
           emit.unsupported({
             trigger: 'RETAIL_INTERMITTENT',
             message:

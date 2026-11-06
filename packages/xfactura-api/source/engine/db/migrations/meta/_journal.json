@@ -225,6 +225,13 @@
       "when": 1793906961070,
       "tag": "0031_personal_data",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1793937553341,
+      "tag": "0032_sealed_sick_leave",
+      "breakpoints": true
     }
   ]
 }

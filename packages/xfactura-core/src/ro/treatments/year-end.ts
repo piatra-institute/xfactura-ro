@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   financialYearOf,
+  itemLinesKey,
   turnoverKey,
   type AccountTurnover,
   type Effect,
@@ -41,10 +42,14 @@ export const resultClosingInput = z
   .strict();
 export type ResultClosingInput = z.infer<typeof resultClosingInput>;
 
+/** The tag of the 121 line a year's closing books its result on, which the legal reserve reads. */
+export const resultTag = (yearEnd: string) => `year-result:${yearEnd}`;
+
 /**
  * The year's result: every expense (6xx) and revenue (7xx) account brought to zero against 121 on
- * the year's last day, in the closing journal, so the next year opens with none of them. A
- * later entry of the year in classes 6 or 7 makes it stale.
+ * the year's last day, in the closing journal, so the next year opens with none of them; the 121
+ * line carries the year's tag (`resultTag`). A later entry of the year in classes 6 or 7 makes it
+ * stale.
  */
 export const resultClosing: Treatment<ResultClosingInput> = {
   id: 'year.closeResult',
@@ -98,6 +103,7 @@ export const resultClosing: Treatment<ResultClosingInput> = {
         account: '121',
         side: result > 0n ? 'C' : 'D',
         bani: result > 0n ? result : -result,
+        analytics: { item: resultTag(input.yearEnd) },
       });
     const effect: Effect = {
       schema: 'effect@1',
@@ -133,28 +139,22 @@ export const legalReserveInput = z
   .strict();
 export type LegalReserveInput = z.infer<typeof legalReserveInput>;
 
-const reserveQueries = (yearEnd: string) => ({
-  balances: {
-    prefixes: ['1012', '1061'],
-    from: always,
-    to: yearEnd as LocalDate,
-  } satisfies TurnoverQuery,
-  // The year's own result: what its closing (INCHIDERE, on the year's last day) brought into 121.
-  // The year's other 121 entries are the previous year's result, moved out once its statements
-  // were approved (`year.transferResult`, dated after that year's end, within this one).
-  result: {
-    prefixes: ['121'],
-    from: yearEnd as LocalDate,
-    to: yearEnd as LocalDate,
-  } satisfies TurnoverQuery,
+const reserveBalances = (yearEnd: string): TurnoverQuery => ({
+  prefixes: ['1012', '1061'],
+  from: always,
+  to: yearEnd as LocalDate,
 });
+// The year's own result: the 121 line its closing booked (`year.closeResult`, tagged with the
+// year), not what 121 moved on the year's last day: the previous year's result leaves 121 within
+// this year once its statements are approved (`year.transferResult`), on 31 December too.
+const resultLines = { prefixes: ['121'] };
 
 /**
  * The legal reserve set aside from the year's profit on its last day (Dr 129 / Cr 1061): at least
  * 5% of the profit each year until the reserve reaches a fifth of the share capital (Legea nr.
  * 31/1990 art. 183 alin. (1)). The law does not say whether the profit is before or after income
- * tax, so the amount is the company's; a share below 5% of the year's result (what its closing
- * brought into 121) asks the reviewer to confirm it.
+ * tax, so the amount is the company's; a share below 5% of the year's result (the 121 line its
+ * closing booked) asks the reviewer to confirm it.
  */
 export const legalReserve: Treatment<LegalReserveInput> = {
   id: 'year.legalReserve',
@@ -166,13 +166,13 @@ export const legalReserve: Treatment<LegalReserveInput> = {
   summary: "Legal reserve set up from the year's profit (art. 183 of Law 31/1990).",
   toolset: 'close',
   subject: (input) => `legal-reserve:${input.yearEnd}`,
-  plan: (input) => {
-    const { balances, result } = reserveQueries(input.yearEnd);
-    return { evidence: [input.evidenceId], turnover: [balances, result] };
-  },
+  plan: (input) => ({
+    evidence: [input.evidenceId],
+    turnover: [reserveBalances(input.yearEnd)],
+    itemLines: resultLines,
+  }),
   evaluate(input, loaded) {
     const issues: Issue[] = [];
-    const { balances, result } = reserveQueries(input.yearEnd);
     const year = financialYearOf(loaded, input.yearEnd as LocalDate);
     if (!year || year.to !== input.yearEnd)
       issues.push(
@@ -180,7 +180,9 @@ export const legalReserve: Treatment<LegalReserveInput> = {
       );
     if (!loaded.evidence.has(input.evidenceId))
       issues.push(block('EVIDENCE', 'Documentul justificativ nu este disponibil.', 'evidenceId'));
-    const profit = net(loaded.turnover.get(turnoverKey(result)) ?? [], '121');
+    const profit = (loaded.itemLines.get(itemLinesKey(resultLines)) ?? [])
+      .filter((row) => row.item === resultTag(input.yearEnd))
+      .reduce((sum, row) => sum + row.credit - row.debit, 0n);
     if (profit <= 0n)
       issues.push(
         block(
@@ -192,7 +194,7 @@ export const legalReserve: Treatment<LegalReserveInput> = {
     if (amount <= 0n) issues.push(block('AMOUNT', 'Suma rezervei este zero.', 'amount'));
     if (issues.length) return { effect: null, issues };
 
-    const rows = loaded.turnover.get(turnoverKey(balances)) ?? [];
+    const rows = loaded.turnover.get(turnoverKey(reserveBalances(input.yearEnd))) ?? [];
     const capital = net(rows, '1012');
     const reserve = net(rows, '1061');
     const cap = divRound(capital, 5n, 'ceiling');

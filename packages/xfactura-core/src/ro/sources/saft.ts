@@ -198,6 +198,31 @@ export const saftClauses: readonly Clause[] = [
       'Vânzările la distanță neimpozabile în România, raportate în deconturile de TVA din Bulgaria și Ungaria cu codurile de TVA de acolo, se raportează în General Ledger Entries cu codul 310325.',
   },
   {
+    id: 'ANAF/D406:S.AM.1-4',
+    source: 'ANAF/D406',
+    locator:
+      'RO_SAFT_SchemaDefCod_16.02.2026.xlsx, foaia 5. Structures, rândurile S.AM.1–S.AM.4 (5.2 AmountStructure)',
+    status: 'located',
+    summary:
+      'Amount este suma în lei, cu două zecimale, iar suma în lei nu se mai validează față de suma în valută convertită la cursul raportat; ExchangeRate, opțional, este cursul utilizat, cu cel mult patru zecimale: CurrencyAmount x ExchangeRate = Sumă; cursul la care se determină în lei baza impozabilă a taxei este cel din data exigibilității taxei.',
+  },
+  {
+    id: 'ANAF/D406:S.TI.4',
+    source: 'ANAF/D406',
+    locator:
+      'RO_SAFT_SchemaDefCod_16.02.2026.xlsx, foaia 5. Structures, rândul S.TI.4 (5.15 TaxInformationStructure, TaxBase)',
+    status: 'located',
+    summary: 'TaxBase este baza pe care se calculează impozitul.',
+  },
+  {
+    id: 'ANAF/SAFT_FAQ_2022:MF.C.6',
+    source: 'ANAF/SAFT_FAQ_2022',
+    locator: 'răspunsul la MF.C.6 OpeningDebitBalance, în tabelul întrebărilor pe elemente',
+    status: 'located',
+    summary:
+      'Informațiile se transmit în lei; unde valoarea se cere în moneda implicită a antetului, ea se obține prin conversie: Amount (lei) = CurrencyAmount x ExchangeRate, cum le declară declarantul.',
+  },
+  {
     id: 'ANAF/SAFT_Ghid_2021:2.12',
     source: 'ANAF/SAFT_Ghid_2021',
     locator: 'secțiunea 2.12 „Subsecțiunea Assets (Active)”, notele',

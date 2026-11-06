@@ -29,6 +29,28 @@ const outsideDetails: readonly string[] = ['validation_failed', 'accepted', 'rej
 const healthDetail =
   'Ascuns: mesajul validatorului sau al ANAF poate cita date de sănătate (coduri de diagnostic) din D112.';
 
+/**
+ * A D112's summary (its `prepared` step) as a caller who may not read health data reads it: when
+ * the month is due, not why. A quarterly employer's month filed monthly because of sick leave or
+ * a contract that ended (`basis: event`, art. 147 alin. (11)) would tell it, and so would its
+ * deadline's rule: every D112's filing names the return's deadline alone (`D112`), as the
+ * calendar does (`d112WithoutHealth`).
+ */
+function summaryWithoutHealth(detail: string) {
+  let summary: { filing?: { period?: unknown; month?: unknown } | null } | null;
+  try {
+    summary = JSON.parse(detail) as typeof summary;
+  } catch {
+    return detail;
+  }
+  if (!summary?.filing) return detail;
+  const { period, month } = summary.filing;
+  return JSON.stringify({
+    ...summary,
+    filing: { period, month, deadline: 'D112', counted: null, basis: null, event: null },
+  });
+}
+
 /** What a problem about sick leave says to a caller who may not read health data. */
 const healthProblem =
   'Concediul medical al unui salariat (date de sănătate pe care această identitate nu le poate citi) împiedică declarația: un proprietar sau un revizor vede problema pregătind-o.';
@@ -761,9 +783,11 @@ export class Declarations {
         detail:
           withheld && step.detail && outsideDetails.includes(step.state)
             ? healthDetail
-            : mask && step.detail
-              ? maskCnpText(step.detail, true)
-              : step.detail,
+            : withheld && step.detail && step.state === 'prepared' && row.kind === 'D112'
+              ? maskCnpText(summaryWithoutHealth(step.detail), true)
+              : mask && step.detail
+                ? maskCnpText(step.detail, true)
+                : step.detail,
         evidenceId: step.evidenceId,
         at: step.createdAt,
       })),

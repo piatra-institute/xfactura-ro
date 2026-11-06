@@ -5,8 +5,8 @@ import { parseLocalDate as date } from '../../time';
 /*
  * The D406 parameters beyond its deadlines (src/ro/obligations): from when each category of
  * taxpayer files it, how the annual assets file reads the fields ANAF's documents disagree on,
- * and how the periodic file reports the sales declared in the Union scheme. All `extracted`, for
- * the expert contabil to review.
+ * how the periodic file reports the sales declared in the Union scheme and writes amounts in a
+ * currency. All `extracted`, for the expert contabil to review.
  */
 
 const isoDate = z.iso.date();
@@ -46,6 +46,15 @@ export const d406OssSchema = z
   })
   .strict();
 
+/** How the periodic file writes amounts in a currency (core `saft/d406`,
+ * `D406ConversionReading`): a line whose lei no rate gives, and an invoice line's TaxBase. */
+export const d406ConversionSchema = z
+  .object({
+    unrated: z.enum(['split', 'lei']),
+    taxBase: z.enum(['tax', 'line']),
+  })
+  .strict();
+
 export const saftDefinitions: ParameterDefinition[] = [
   {
     key: 'ro.d406.start',
@@ -73,6 +82,15 @@ export const saftDefinitions: ParameterDefinition[] = [
     value: d406OssSchema,
     description:
       'Cum raportează D406 lunar sau trimestrial vânzările declarate în regimul special Uniune (D398): codul de taxă (310340 la cota statului de consum sau 310325 la 0%) și țara intrării 310340 din tabela de taxe (statul de consum sau RO).',
+  },
+  {
+    key: 'ro.d406.conversion',
+    axis: 'reporting_period_start',
+    continuity: 'block',
+    scope: [],
+    value: d406ConversionSchema,
+    description:
+      'Cum scrie D406 lunar sau trimestrial sumele în valută: o linie ale cărei sume în lei nu sunt suma în valută la niciun curs (o creanță sau o datorie fără un singur curs, stinsă proporțional), în valută la cursul la care s-a înregistrat creanța și diferența în lei, sau numai în lei; și baza TVA (TaxBase) a liniilor de factură în valută, la cursul taxei sau la cursul liniei.',
   },
 ];
 
@@ -128,5 +146,23 @@ export const saftVersions: ParameterVersion[] = [
       'ANAF/SAFT_Ghid_2021:2.5',
       'ANAF/SAFT_FAQ_2022:MF.TT.12',
     ],
+  },
+  {
+    // The definitions' AmountStructure: "CurrencyAmount x ExchangeRate = Sumă" with at most four
+    // decimals (S.AM.4), the lei and the currency no longer validated against each other (S.AM.1);
+    // ANAF's answer to MF.C.6 (Amount = CurrencyAmount x ExchangeRate, as the declarant states
+    // them); the taxable base in lei at the rate of the tax's exigibility (S.AM.4's note), the
+    // base the tax is computed on (S.TI.4). Splitting a line no rate states is the engine's
+    // reading: an expert question.
+    id: 'ro.d406.conversion/2025-07-01',
+    key: 'ro.d406.conversion',
+    scope: {},
+    value: { unrated: 'split', taxBase: 'tax' },
+    from: date('2025-07-01'),
+    to: null,
+    reviewedThrough: date('2026-12-31'),
+    knowledgeDate: null,
+    status: 'extracted',
+    clauses: ['ANAF/D406:S.AM.1-4', 'ANAF/D406:S.TI.4', 'ANAF/SAFT_FAQ_2022:MF.C.6'],
   },
 ];

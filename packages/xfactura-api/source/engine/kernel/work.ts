@@ -2,7 +2,7 @@ import { and, asc, eq, getTableName, inArray, sql, type Column } from 'drizzle-o
 import { z } from 'zod';
 import { requireCondition } from 'xfactura-core/errors';
 import { canonical, hashOf } from 'xfactura-core/hash';
-import type { Issue, JsonValue } from 'xfactura-core/kernel';
+import type { DataClass, Issue, JsonValue } from 'xfactura-core/kernel';
 import { documentTotals, normalizedNumber } from 'xfactura-core/documents/schemas';
 import { questionOf, type QuestionRequest } from 'xfactura-core/questions/kinds';
 import { euVatPrefixes } from 'xfactura-core/ro/geo';
@@ -40,9 +40,13 @@ import {
   evidence,
   fiscalYears,
   fxRates,
+  garnishmentReleases,
+  garnishments,
   incomeSources,
   parties,
   partyStatuses,
+  payrollLines,
+  payrollRuns,
   profileFacts,
   proposalChecks,
   proposals,
@@ -50,12 +54,14 @@ import {
   questionAnswers,
   questions,
   questionWithdrawals,
+  regesRecords,
   spvMessages,
   withdrawals,
   type Role,
 } from '../db/schema';
 import type { Actor, Commands } from './commands';
-import { maskCnps, maskCnpText } from './personal';
+import { maskCnps, maskCnpText, payClasses, salaryPayment } from './personal';
+import { salaryMovements, salarySubjects } from './salaries';
 import { pausedScopes } from './automation';
 import { auditHead } from './events';
 import { entryStands, holdsSubject } from './ledger';
@@ -120,17 +126,22 @@ export type WorkKind = (typeof workKinds)[number];
 export const workSeverities = ['block', 'warn', 'info'] as const;
 export type WorkSeverity = (typeof workSeverities)[number];
 
-/** A step that moves an item on: the operation, who may take it, and the input it starts from. */
+/** A step that moves an item on: the operation, who may take it, and the input it starts from.
+ * `needs`: the data classes taking it reads beyond its operation's (a payment of pay, a person's
+ * balance), which a caller must be allowed to read (`Commands.disclosable`). */
 export type WorkStep = {
   operation: string;
   by: 'agent' | 'human';
   inputHint: { [key: string]: JsonValue };
+  needs?: readonly DataClass[];
 };
 /** A step as the caller reads it: `allowed` when the caller may take it now (an agent, a step for
- * agents under its grant and its issuer's role; a person, under their role). */
+ * agents under its grant and its issuer's role; a person, under their role); `needs`, when the
+ * data it reads is what stops the caller: the classes it may not read. */
 export type WorkStepView = Pick<WorkStep, 'operation' | 'by'> & {
   allowed: boolean;
   inputHint: WorkStep['inputHint'];
+  needs?: DataClass[];
 };
 
 /** An item as a detector finds it, before it gets its id, fingerprint and audit position. */
@@ -147,6 +158,16 @@ export interface Draft {
   next: WorkStep[];
   /** Where the detector's list resumes after this item. */
   cursor: string;
+  /** What a caller who may not read these classes reads instead of the message and the details
+   * (a payment of pay without the person and the amount); the fingerprint is the item's own. */
+  withheld?: Withheld;
+}
+
+/** An item's message and details for a caller who may not read `classes`. */
+export interface Withheld {
+  classes: readonly DataClass[];
+  message: string;
+  details: { [key: string]: JsonValue };
 }
 
 export interface WorkContext {
@@ -167,6 +188,9 @@ interface Caller {
   /** Whether it may read personal data in clear (`Commands.disclosable`): otherwise an item's
    * message and details carry no CNP (an SPV message comparing a B2C sale quotes the buyer's). */
   cnps: boolean;
+  /** Whether it may read data of these classes (`Commands.disclosable`): a withheld item's and a
+   * step's (`Withheld`, `WorkStep.needs`). */
+  discloses: (classes: readonly DataClass[]) => boolean;
 }
 
 /** One family of work items, listed with a limit and resumable at an item's cursor. */
@@ -193,6 +217,9 @@ const stepView = z.object({
    * any step under their role. */
   allowed: z.boolean(),
   inputHint: z.record(z.string(), z.unknown()),
+  /** When what stops the caller is the data the step reads (a payment of pay, a person's
+   * balance): the classes it may not read. The item then waits on someone who may. */
+  needs: z.array(z.string()).optional(),
 });
 export const workItemView = z.object({
   /** Stable while the item waits: its kind and subject (`<kind>:<subject kind>:<subject id>`). */
@@ -594,6 +621,28 @@ function proposalsDetector(questionState: QuestionState): Detector {
           next: [human('proposals.approve', { ...named, effectHash: row.effectHash, acknowledge })],
         });
       }
+      // A proposal paying pay (`salarySubjects`) names its person in its issues and its input: a
+      // caller who may not read pay reads that it waits, and takes none of its steps.
+      const salaries = await salarySubjects(
+        tx,
+        companyId,
+        chosen.map((row) => row.subject),
+      );
+      for (const item of items) {
+        const row = chosen.find((candidate) => candidate.id === item.subject.id)!;
+        if (!salaries.has(row.subject)) continue;
+        item.withheld = {
+          classes: payClasses,
+          message: `Propunerea ${row.treatment} (${salaryPayment}) așteaptă: o vede cine poate citi datele salariale.`,
+          details: {
+            treatment: row.treatment,
+            version: row.version,
+            effectHash: row.effectHash,
+            redacted: true,
+          },
+        };
+        item.next = item.next.map((step) => ({ ...step, needs: payClasses }));
+      }
       return { items, next };
     },
   };
@@ -890,7 +939,7 @@ function obligationsDetector(calendar: ObligationsOf): Detector {
                           human('declarations.recordSubmission', { artifactId }),
                         ]
                       : [];
-        return {
+        const draft: Draft = {
           kind: 'obligation.due',
           subject: { kind: 'obligation', id: `${item.kind}|${item.period}` },
           severity: obligationSeverity(item, today),
@@ -918,6 +967,16 @@ function obligationsDetector(calendar: ObligationsOf): Detector {
           next,
           cursor: key(item).join('|'),
         };
+        // A D112's deadline rule tells why it is due then (sick leave, art. 147 alin. (11)): a
+        // caller who may not read health data reads the return's due date alone, as the
+        // calendar shows it (`d112WithoutHealth`).
+        if (item.kind === 'D112')
+          draft.withheld = {
+            classes: ['health'],
+            message: draft.message,
+            details: { ...draft.details, deadline: 'D112' },
+          };
+        return draft;
       });
       return { items, next: due.length > page.limit ? items.at(-1)!.cursor : null };
     },
@@ -1302,6 +1361,7 @@ export type YearEndWorkItem = {
   message: string;
   details: { [key: string]: JsonValue };
   next: WorkStep[];
+  withheld?: Withheld;
 };
 export type YearEndWorkOf = (
   tx: Transaction,
@@ -1332,6 +1392,7 @@ function yearEndDetector(source: YearEndWorkOf): Detector {
         details: item.details,
         next: item.next,
         cursor: cursorOf(item),
+        ...(item.withheld ? { withheld: item.withheld } : {}),
       }));
       return { items, next: found.length > page.limit ? items.at(-1)!.cursor : null };
     },
@@ -2030,32 +2091,56 @@ const bankDetector: Detector = {
       .orderBy(asc(bankMovements.id))
       .limit(page.limit + 1);
     const { page: chosen, next } = paged(rows, page.limit, (row) => row.id);
+    // A payment of pay (`salaryMovements`) is explained by someone who may read it: a caller who
+    // may not reads it as salaries, without the person, the reference and one person's amount,
+    // and may not take its step (`needs`), so that it waits on a person.
+    const salaries = await salaryMovements(tx, companyId, chosen);
     return {
-      items: chosen.map((row): Draft => ({
-        kind: 'bank.unexplained',
-        subject: { kind: 'movement', id: row.id },
-        severity: 'warn',
-        due: null,
-        period: monthOf(row.bookingDate),
-        message: `Mișcarea bancară din ${row.bookingDate} (${row.reference}) nu este explicată.`,
-        details: {
+      items: chosen.map((row): Draft => {
+        const salary = salaries.get(row.id);
+        const details = {
           treasuryAccountId: row.treasuryAccountId,
           bookingDate: row.bookingDate,
           amountMinor: String(row.amountMinor),
           currency: row.currency,
           reference: row.reference,
           counterparty: row.counterparty,
-        },
-        // A transfer to the State Treasury (an IBAN of bank code TREZ) pays the state: the tax
-        // account distributes it (tax.pay).
-        next: [
-          ...(row.counterpartyAccount?.toUpperCase().slice(4, 8) === 'TREZ'
-            ? [propose('tax.pay', { movementId: row.id })]
-            : []),
-          propose('bank.settle', { movementId: row.id }),
-        ],
-        cursor: row.id,
-      })),
+        };
+        const settle = propose('bank.settle', { movementId: row.id });
+        return {
+          kind: 'bank.unexplained',
+          subject: { kind: 'movement', id: row.id },
+          severity: 'warn',
+          due: null,
+          period: monthOf(row.bookingDate),
+          message: `Mișcarea bancară din ${row.bookingDate} (${row.reference}) nu este explicată.`,
+          details,
+          // A transfer to the State Treasury (an IBAN of bank code TREZ) pays the state: the tax
+          // account distributes it (tax.pay).
+          next: [
+            ...(row.counterpartyAccount?.toUpperCase().slice(4, 8) === 'TREZ'
+              ? [propose('tax.pay', { movementId: row.id })]
+              : []),
+            salary ? { ...settle, needs: payClasses } : settle,
+          ],
+          cursor: row.id,
+          ...(salary
+            ? {
+                withheld: {
+                  classes: payClasses,
+                  message: `${salaryPayment} din ${row.bookingDate} nu este explicată: o explică cine poate citi datele salariale (un proprietar, un revizor sau un agent a cărui permisiune acoperă payroll și personal).`,
+                  details: {
+                    ...details,
+                    amountMinor: salary.persons > 1 ? details.amountMinor : null,
+                    reference: null,
+                    counterparty: salaryPayment,
+                    redacted: true,
+                  },
+                },
+              }
+            : {}),
+        };
+      }),
       next,
     };
   },
@@ -2117,7 +2202,9 @@ const spvDetector: Detector = {
 // Evidence used nowhere: a file nobody read into the books.
 
 /** Whether a record of any kind names the evidence; the likeliest first. */
-const evidenceUsed = [
+/** What uses a file in the books: a document, a proposal, a statement, a payroll record (a run's
+ * benefits' documents among them), an answer, a disposition, …; a file nothing uses is unused. */
+export const evidenceUsed = [
   sql`exists (select 1 from ${documents} x where x.company_id = ${q(evidence.companyId)} and x.evidence_id = ${q(evidence.id)})`,
   sql`exists (select 1 from ${proposalVersions} x where x.company_id = ${q(evidence.companyId)} and x.input_json ->> '$.evidenceId' = ${q(evidence.id)})`,
   sql`exists (select 1 from ${bankStatements} x where x.company_id = ${q(evidence.companyId)} and x.evidence_id = ${q(evidence.id)})`,
@@ -2137,7 +2224,41 @@ const evidenceUsed = [
     and (x.evidence_id = ${q(evidence.id)} or instr(x.value_json, ${q(evidence.id)}) > 0))`,
   sql`exists (select 1 from ${dispositions} x where x.company_id = ${q(evidence.companyId)}
     and x.subject_kind = 'evidence' and x.subject_id = ${q(evidence.id)})`,
+  sql`exists (select 1 from ${payrollLines} x, json_each(x.input_json, '$.benefitEvidence') b
+    where x.company_id = ${q(evidence.companyId)} and b.value = ${q(evidence.id)})`,
+  sql`exists (select 1 from ${payrollRuns} x where x.company_id = ${q(evidence.companyId)} and x.correction_evidence_id = ${q(evidence.id)})`,
+  sql`exists (select 1 from ${garnishments} x where x.company_id = ${q(evidence.companyId)} and x.evidence_id = ${q(evidence.id)})`,
+  sql`exists (select 1 from ${garnishmentReleases} x where x.company_id = ${q(evidence.companyId)} and x.evidence_id = ${q(evidence.id)})`,
+  sql`exists (select 1 from ${regesRecords} x where x.company_id = ${q(evidence.companyId)} and x.evidence_id = ${q(evidence.id)})`,
 ];
+
+/**
+ * When the latest payroll run that kept its benefits in kind without the documents they were
+ * valued from was prepared (runs before 5 November 2026; null when there is none). Those
+ * documents are recorded nowhere else unless an answer cites them: every file nothing uses,
+ * recorded by then, is taken for one (`evidenceClasses`: payroll and personal), and the worklist
+ * lists it without its name to a caller who may not read them.
+ */
+export async function legacyBenefits(tx: Pick<Transaction, 'select'>, companyId: string) {
+  const [row] = await tx
+    .select({ at: sql<string | null>`max(${payrollRuns.createdAt})` })
+    .from(payrollLines)
+    .innerJoin(
+      payrollRuns,
+      and(
+        eq(payrollRuns.companyId, payrollLines.companyId),
+        eq(payrollRuns.id, payrollLines.runId),
+      ),
+    )
+    .where(
+      and(
+        eq(payrollLines.companyId, companyId),
+        sql`json_extract(${payrollLines.input}, '$.benefits') is not null`,
+        sql`json_extract(${payrollLines.input}, '$.benefitEvidence') is null`,
+      ),
+    );
+  return row?.at ?? null;
+}
 
 /** Files in the order of their content's hash, unique within a company: the same files are
  * listed alike whatever identifiers they were given. */
@@ -2163,13 +2284,30 @@ const evidenceDetector: Detector = {
       .orderBy(asc(evidence.hash))
       .limit(page.limit + 1);
     const { page: chosen, next } = paged(rows, page.limit, (row) => row.hash);
+    const legacy = chosen.length ? await legacyBenefits(tx, companyId) : null;
     return {
       items: chosen.map((row): Draft => {
         const type = row.mediaType.toLowerCase();
         const name = row.filename.toLowerCase();
         const xml = type.includes('xml') || name.endsWith('.xml');
         const csv = type.includes('csv') || name.endsWith('.csv');
+        // Possibly a run's benefit document (`legacyBenefits`): its name may name the employee.
+        const withheld: Withheld | undefined =
+          legacy && row.createdAt <= legacy
+            ? {
+                classes: payClasses,
+                message:
+                  'Un fișier nu este citit în registre; poate fi documentul unui avantaj în natură al unui salariat (date salariale), pe care îl vede cine le poate citi.',
+                details: {
+                  mediaType: row.mediaType,
+                  size: row.size,
+                  hash: row.hash,
+                  redacted: true,
+                },
+              }
+            : undefined;
         return {
+          ...(withheld ? { withheld } : {}),
           kind: 'evidence.unused',
           subject: { kind: 'evidence', id: row.id },
           severity: 'warn',
@@ -2194,7 +2332,7 @@ const evidenceDetector: Detector = {
                 ? [agent('bank.importCsv', { evidenceId: row.id })]
                 : [agent('documents.record', { evidenceId: row.id })]),
             dispose('agent', 'no_booking'),
-          ],
+          ].map((step) => (withheld ? { ...step, needs: payClasses } : step)),
           cursor: row.hash,
         };
       }),
@@ -2509,6 +2647,7 @@ export class Work {
   /** What this principal may invoke and read now, under `role`. */
   private async caller(tx: Transaction, actor: Actor, role: Role): Promise<Caller> {
     const readable = await this.commands.readable(tx, actor);
+    const discloses = await this.commands.disclosable(tx, actor, role);
     return {
       agent: !!actor.agentId,
       allowed: await this.commands.usable(tx, actor, role),
@@ -2516,7 +2655,8 @@ export class Work {
         const classes = this.commands.dataClassesOf(`${treatment}.propose`);
         return !actor.agentId || (!!classes && readable(classes));
       },
-      cnps: (await this.commands.disclosable(tx, actor, role))(['personal']),
+      cnps: discloses(['personal']),
+      discloses,
     };
   }
 
@@ -2539,6 +2679,10 @@ export class Work {
         subject: draft.subject,
         details: draft.details,
       });
+      const shown =
+        draft.withheld && !caller.discloses(draft.withheld.classes)
+          ? { message: draft.withheld.message, details: draft.withheld.details }
+          : draft;
       return {
         id,
         kind: draft.kind,
@@ -2547,21 +2691,27 @@ export class Work {
         due: draft.due,
         period: draft.period,
         // The fingerprint is the item's own, whatever the caller reads of it.
-        message: caller.cnps ? draft.message : maskCnpText(draft.message),
-        details: caller.cnps ? draft.details : maskCnps(draft.details),
+        message: caller.cnps ? shown.message : maskCnpText(shown.message),
+        details: caller.cnps ? shown.details : maskCnps(shown.details),
         fingerprint,
         next: draft.next.map((found): WorkStepView => {
           const step = asCalled(found, draft, caller);
+          const missing = (step.needs ?? []).filter((kind) => !caller.discloses([kind]));
           return {
             operation: step.operation,
             by: step.by,
             allowed:
               (step.by === 'agent' || !caller.agent) &&
-              stepNeeds(step, draft).every(caller.allowed),
+              stepNeeds(step, draft).every(caller.allowed) &&
+              !missing.length,
+            // A step whose data the caller may not read shows no input to start from.
             inputHint:
               step.operation === 'work.dispose'
                 ? { id, fingerprint, ...step.inputHint }
-                : hidden(step, draft, caller),
+                : missing.length
+                  ? (({ input: _, ...rest }) => rest)(step.inputHint)
+                  : hidden(step, draft, caller),
+            ...(missing.length ? { needs: missing } : {}),
           };
         }),
         asOfSeq,
@@ -2724,6 +2874,7 @@ export class Work {
         allowed: () => false,
         reads: () => false,
         cnps: false,
+        discloses: () => false,
       });
       requireCondition(found.item, 'WORK_RESOLVED', 'Elementul nu mai așteaptă nimic.', 409);
       requireCondition(

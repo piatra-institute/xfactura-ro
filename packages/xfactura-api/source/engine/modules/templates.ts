@@ -39,6 +39,7 @@ import { pausedScopes } from '../kernel/automation';
 import type { Actor, Commands } from '../kernel/commands';
 import { auditHead } from '../kernel/events';
 import { entryStands } from '../kernel/ledger';
+import { payClasses, payPayment } from '../kernel/personal';
 import type { Projector } from '../kernel/projectors';
 import { basisOf, type Proposals, type TemplateRef } from '../kernel/proposals';
 import { rootOf } from '../kernel/sources';
@@ -146,6 +147,8 @@ export type TrackedOutcome = Outcome & {
   /** The answers the posting relied on. */
   answers: AnswerFact[];
   templateVersion: number;
+  /** When what was posted pays pay (`payPayment`): how many people. */
+  pays: { persons: number } | null;
 };
 
 export class Templates {
@@ -859,6 +862,7 @@ export class Templates {
         posted: found?.input ?? null,
         answers: found?.answers ?? [],
         templateVersion: row.templateVersion,
+        pays: found?.pays ?? null,
       };
     });
     outcomes.sort((a, b) =>
@@ -905,20 +909,31 @@ export class Templates {
     });
   }
 
-  /** A template's track record per version and month, with the corrections of its latest. */
+  /**
+   * A template's track record per version and month, with the corrections of its latest. A caller
+   * who may not read pay (an agent whose reads do not cover `payroll` and `personal`, or a viewer)
+   * reads a posting that pays pay (`payPayment`) without its amount when it pays one person, and
+   * a correction of one without what was predicted and posted (`redacted`).
+   */
   performance(actor: Actor, input: { templateId: string }) {
-    return this.commands.read(actor, 'templates.performance', async (tx) => {
+    return this.commands.read(actor, 'templates.performance', async (tx, access) => {
       const rows = await this.versions(tx, actor.companyId, input.templateId);
       requireCondition(rows.length, 'TEMPLATE_NOT_FOUND', 'Șablonul nu este disponibil.', 404);
       const [view] = await this.views(tx, actor.companyId, [rows.at(-1)!]);
       const { outcomes, blocked } = await this.outcomes(tx, actor.companyId, input.templateId);
+      const pay = (await this.commands.disclosable(tx, actor, access.role))(payClasses);
+      const withheld = (item: TrackedOutcome) => !pay && item.pays !== null;
       const shown = (item: TrackedOutcome) => ({
         subject: item.subject,
         proposalId: item.proposalId,
         outcome: item.outcome,
         reason: item.reason,
         month: item.month,
-        amount: item.amount === null ? null : formatMoney(item.amount, 'RON'),
+        amount:
+          item.amount === null || (withheld(item) && item.pays!.persons < 2)
+            ? null
+            : formatMoney(item.amount, 'RON'),
+        ...(withheld(item) ? { redacted: true as const } : {}),
       });
       return {
         template: view!,
@@ -933,7 +948,11 @@ export class Templates {
           )
           .reverse()
           .slice(0, 20)
-          .map((item) => ({ ...shown(item), predicted: item.predicted, posted: item.posted })),
+          .map((item) => ({
+            ...shown(item),
+            predicted: withheld(item) ? null : item.predicted,
+            posted: withheld(item) ? null : item.posted,
+          })),
         outcomes: outcomes.map(shown),
       };
     });
@@ -945,7 +964,8 @@ export class Templates {
    * month, with the corrections.
    */
   agentPerformance(actor: Actor, input: { agentId?: string | undefined }) {
-    return this.commands.read(actor, 'agents.performance', async (tx) => {
+    return this.commands.read(actor, 'agents.performance', async (tx, access) => {
+      const pay = (await this.commands.disclosable(tx, actor, access.role))(payClasses);
       const rows = await tx.all<{
         agent_id: string;
         proposal_id: string;
@@ -975,14 +995,19 @@ export class Templates {
       );
       const byAgent = new Map<
         string,
-        { outcome: Outcome; row: (typeof rows)[number]; postedInput: unknown }[]
+        {
+          outcome: Outcome;
+          row: (typeof rows)[number];
+          postedInput: unknown;
+          withheld: boolean;
+        }[]
       >();
       for (const row of rows) {
         const found = posted.get(row.proposal_id);
         const outcome = outcomeOf(row.first, found?.posted ?? null, Number(row.withdrawn) > 0);
         byAgent.set(row.agent_id, [
           ...(byAgent.get(row.agent_id) ?? []),
-          { outcome, row, postedInput: found?.input ?? null },
+          { outcome, row, postedInput: found?.input ?? null, withheld: !pay && !!found?.pays },
         ]);
       }
       return {
@@ -998,8 +1023,9 @@ export class Templates {
               subject: item.row.subject_key,
               reason: item.outcome.reason,
               month: item.outcome.month,
-              first: JSON.parse(item.row.first_input) as unknown,
-              posted: item.postedInput,
+              first: item.withheld ? null : (JSON.parse(item.row.first_input) as unknown),
+              posted: item.withheld ? null : item.postedInput,
+              ...(item.withheld ? { redacted: true as const } : {}),
             })),
         })),
         next: null,
@@ -1017,6 +1043,8 @@ export type Posting = {
   /** What people stated that it relied on (its basis's answers). */
   answers: AnswerFact[];
   posted: Posted;
+  /** When it pays pay (`payPayment`): how many people. */
+  pays: { persons: number } | null;
 };
 
 /**
@@ -1088,6 +1116,9 @@ async function postingsOf(tx: Transaction, companyId: string, subjects: string[]
         seq: Number(row.seq),
         input: JSON.parse(row.input_json) as unknown,
         answers: cited,
+        pays: row.effect_json
+          ? payPayment((JSON.parse(row.effect_json) as StoredEffect).lines)
+          : null,
         posted: {
           fingerprint: row.fingerprint,
           reversed: Number(row.reversed) > 0,

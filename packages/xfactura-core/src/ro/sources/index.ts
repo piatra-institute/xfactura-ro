@@ -531,6 +531,26 @@ export const legalSources: readonly LegalSource[] = [
     ],
   },
   {
+    id: 'ANAF/D112-0126',
+    kind: 'official_document',
+    title:
+      'Structura și validările declarației 112 pentru lunile de raportare 01–06/2026 (anexa validări, structura_D112_0126_300326, publicată cu softul J26.0.3)',
+    issuer: 'ANAF',
+    publication: null,
+    urls: [
+      'https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/structura_D112_0126_300326.pdf',
+    ],
+    fetch: true,
+    snapshots: [
+      {
+        url: 'https://static.anaf.ro/static/10/Anaf/Declaratii_R/AplicatiiDec/structura_D112_0126_300326.pdf',
+        sha256: '35760cc509825eb9ee86c916af7f5b60038720757ce5f5af70a7210cf5067fe0',
+        retrievedOn: '2026-11-06',
+        mediaType: 'application/pdf',
+      },
+    ],
+  },
+  {
     id: 'OUG156/2024',
     kind: 'act',
     title: 'Ordonanța de urgență a Guvernului nr. 156/2024',

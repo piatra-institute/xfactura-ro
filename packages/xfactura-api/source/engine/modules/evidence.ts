@@ -22,6 +22,8 @@ import {
   type Role,
 } from '../db/schema';
 import { idSchema, type Actor, type Commands } from '../kernel/commands';
+import { evidenceUsed, legacyBenefits, q } from '../kernel/work';
+import { answerMediaType } from '../db/invariants';
 import { declarationClasses } from './declarations';
 import { sha256, type ObjectStore } from '../adapters/object-store';
 import {
@@ -199,6 +201,8 @@ const payrollFiles = [
  * - a file a document reads whose counterparty is an individual known by a CNP (a B2C invoice's
  *   XML, BT-47; a purchase from an individual; the invoicer's export): `personal`;
  * - a file a payroll record cites, or the answer to a payroll question: `payroll`, `personal`;
+ *   a run prepared before 5 November 2026 did not name its benefits' documents, so every file
+ *   nothing uses, recorded by the latest such run, is taken for one (`legacyBenefits`);
  * - a family enterprise's members' agreement, with their CNPs: `personal`.
  */
 export async function evidenceClasses(
@@ -272,6 +276,23 @@ export async function evidenceClasses(
       and(eq(payrollLines.companyId, companyId), ids ? inArray(sql`b.value`, [...ids]) : undefined),
     ))
     add(row.id, ['payroll', 'personal']);
+  // A run prepared before 5 November 2026 did not name them (`legacyBenefits`): every file nothing
+  // in the books uses, recorded by the latest such run, may be one, and is taken for one.
+  const legacy = await legacyBenefits(tx, companyId);
+  if (legacy)
+    for (const row of await tx
+      .select({ id: evidence.id })
+      .from(evidence)
+      .where(
+        and(
+          eq(evidence.companyId, companyId),
+          ids ? inArray(evidence.id, [...ids]) : undefined,
+          sql`${q(evidence.createdAt)} <= ${legacy}`,
+          sql`${q(evidence.mediaType)} <> ${answerMediaType}`,
+          sql`not (${sql.join(evidenceUsed, sql` or `)})`,
+        ),
+      ))
+      add(row.id, ['payroll', 'personal']);
   for (const row of await tx
     .select({ id: enterpriseMembers.evidenceId })
     .from(enterpriseMembers)

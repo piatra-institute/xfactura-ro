@@ -331,6 +331,12 @@ export const payrollClauses: readonly Clause[] = [
     'art. 31 alin. (2)–(4)',
     'Indemnizația de risc maternal se suportă integral din FNUASS, fără condiție de stagiu, și este 75% din baza de calcul stabilită conform art. 10.',
   ),
+  located(
+    `${OUG158}:modificari-2026`,
+    OUG158,
+    'notele de modificare ale consolidării la art. 10, 12, 17, 20, 22, 25, 26, 30, 30^3, 31 și 51',
+    'Până la 01.07.2026 consolidarea nu arată nicio modificare din 2026 a art. 10, 12, 20, 22, 25, 26, 30, 30^3 și 31: art. 17 alin. (1) și (1^1) sunt în vigoare din 01.08.2025 (Legea nr. 141/2025 art. IX), alin. (1^2) din 01.07.2026 (OUG nr. 89/2025 art. VII); OUG nr. 91/2025 modifică art. 51 din 31.12.2025 și diminuează cu o zi indemnizațiile doar pentru certificatele eliberate din 1 februarie 2026 (art. II).',
+  ),
   // Work accidents and occupational diseases (Legea nr. 346/2002, consolidated on 11.11.2024).
   located(
     `${ACCIDENTS}:art.19`,
@@ -433,6 +439,18 @@ export const payrollClauses: readonly Clause[] = [
     'ANAF/D112-0726',
     'p. 5: OUG nr. 91/2025 și Legea nr. 64/2026, excepțiile de la diminuarea cu o zi',
     'Nu se scade o zi lucrătoare pentru certificatele de boală infectocontagioasă cu izolare (51), risc maternal (15), maternitate (08), îngrijirea pacientului oncologic (17), pacienții programelor naționale, spitalizare (D_10 = 2) și continuări; angajatorul suportă zilele 2–6, cu excepția izolării, iar FNUASS de a doua zi indemnizațiile suportate integral din fond.',
+  ),
+  located(
+    'ANAF/D112-0126:sectiuneaD',
+    'ANAF/D112-0126',
+    'p. 3 (OUG nr. 91/2025 și excepțiile), p. 52–56 (asiguratD) și Nomenclatoarele 9–10 (p. 82–83)',
+    'În lunile 01–06/2026 secțiunea D are aceleași coduri de indemnizație și grupe, fără câmpurile introduse din 07/2026 (D_9a, D_9b, D_14a, D_15a, D_16a, D_20a, D_21a; nici B3_7D și C2_155–C2_156): D_14 și D_15 sunt zilele suportate de angajator (cel mult 5) și din FNUASS, D_16 = D_14 + D_15; pentru certificatele eliberate între 01.02.2026 și 31.12.2027 prima zi se scade din D_14/D_15, nu și pentru cele eliberate în ianuarie 2026 cu începutul în februarie.',
+  ),
+  located(
+    'ANAF/D112-0126:plafon',
+    'ANAF/D112-0126',
+    'p. 1–2: salMin, tabelul D_17',
+    'Salariul minim 4.050 lei în lunile 01–06/2026; suma veniturilor din ultimele 6 luni (D_17) nu poate depăși 12 salarii minime pe fiecare din cele 6 luni: 12 × 6 × 4.050 = 291.600 lei pentru fiecare lună 01–06/2026.',
   ),
   located(
     'ANAF/D112-0726:sectiuneaD',
