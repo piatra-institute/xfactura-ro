@@ -1,7 +1,13 @@
 import { expect, type Page, type TestInfo } from '@playwright/test';
 
 /** Signs in the person seeded for this spec and browser project, and creates their company. */
-export async function signInWithCompany(page: Page, info: TestInfo, spec: string, name: string) {
+export async function signInWithCompany(
+  page: Page,
+  info: TestInfo,
+  spec: string,
+  name: string,
+  cui = '12345678',
+) {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('/contabilitate');
@@ -14,10 +20,12 @@ export async function signInWithCompany(page: Page, info: TestInfo, spec: string
   if (!(await page.getByRole('heading', { name: 'Companie nouă', exact: true }).isVisible()))
     await page.getByText('Adaugă o companie', { exact: true }).click();
   await page.getByLabel('Denumire companie', { exact: true }).fill(name);
-  await page.getByLabel('CUI', { exact: true }).fill('12345678');
+  await page.getByLabel('CUI', { exact: true }).fill(cui);
   await page.getByLabel('An contabil', { exact: true }).fill('2026');
   await page.getByRole('button', { name: 'Adaugă compania', exact: true }).click();
   await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
+  const companyForm = page.locator('.acc-company-toolbar > details[open] > summary');
+  if (await companyForm.isVisible()) await companyForm.click();
   return errors;
 }
 

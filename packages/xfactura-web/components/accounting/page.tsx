@@ -71,7 +71,7 @@ export default function AccountingPage() {
   }, []);
 
   return (
-    <div className="accounting">
+    <div className="accounting" lang="ro">
       <header className="acc-header">
         <a href="/" className="acc-brand">
           xfactura.ro

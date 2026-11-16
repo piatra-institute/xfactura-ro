@@ -1,11 +1,17 @@
 type ErrorBody = {
-  error?: { code?: string; message?: string; fields?: { path: string; message: string }[] };
+  error?: {
+    code?: string;
+    message?: string;
+    fields?: { path: string; message: string }[];
+    details?: unknown;
+  };
 };
 export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
     readonly code?: string,
+    readonly details?: unknown,
   ) {
     super(message);
   }
@@ -17,11 +23,25 @@ async function read<T>(response: Response): Promise<T> {
   const body = await response.json();
   if (!response.ok) {
     const error = body as ErrorBody;
-    const fields = error.error?.fields?.map((field) => `${field.path}: ${field.message}`).join(' ');
+    const details = error.error?.details;
+    const issues =
+      error.error?.fields ??
+      (Array.isArray(details)
+        ? details.filter(
+            (item): item is { path: string; message: string } =>
+              item !== null &&
+              typeof item === 'object' &&
+              typeof item.path === 'string' &&
+              typeof item.message === 'string',
+          )
+        : []);
+    const fields = issues.map((field) => `${field.path}: ${field.message}`).join(' ');
     throw new ApiError(
-      fields || error.error?.message || 'Operațiunea nu a putut fi finalizată.',
+      [error.error?.message, fields].filter(Boolean).join(' ') ||
+        'Operațiunea nu a putut fi finalizată.',
       response.status,
       error.error?.code,
+      error.error?.details,
     );
   }
   return body as T;

@@ -15,19 +15,16 @@ test('an unbooked document reaches approval and posting from the worklist', asyn
   page,
 }, info) => {
   const observed: WorkItem[] = [];
-  const reads: Promise<void>[] = [];
   page.on('response', (response) => {
     if (response.url().endsWith('/capabilities/work.list') && response.ok())
-      reads.push(
-        response
-          .json()
-          .then((body: { items: WorkItem[] }) => {
-            observed.push(...body.items);
-          })
-          .catch(() => {
-            // Filter changes discard older responses; only completed bodies are diagnostic evidence.
-          }),
-      );
+      void response
+        .json()
+        .then((body: { items: WorkItem[] }) => {
+          observed.push(...body.items);
+        })
+        .catch(() => {
+          // Filter changes discard older responses; only completed bodies are diagnostic evidence.
+        });
   });
   const errors = await signInWithCompany(
     page,
@@ -95,7 +92,8 @@ test('an unbooked document reaches approval and posting from the worklist', asyn
     page.getByText('Niciun element pentru filtrele alese.', { exact: true }),
   ).toBeVisible();
   expect(errors).toEqual([]);
-  await Promise.all(reads);
+  // A cancelled request's response body may stay pending in Playwright. The diagnostic snapshot
+  // includes completed reads; collecting it must not wait on requests the interface discarded.
   const snapshot = info.outputPath('engine-worklist.json');
   await writeFile(
     snapshot,

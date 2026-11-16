@@ -1,12 +1,114 @@
 'use client';
 
 import { useState } from 'react';
-import type { ProposalView } from 'xfactura-api/contracts';
-import { amountField, companyPath, field, formatMoney } from './api';
+import type { ActionView, ProposalView } from 'xfactura-api/contracts';
+import { ApiError, amountField, companyPath, field, formatMoney } from './api';
 import { useLoad, useWorkspace } from './workspace';
 import { treatmentLabels, type WorkStepView } from './work-model';
 export { treatmentLabels } from './work-model';
 import { SectionLink } from './navigation';
+import { useAccountingData } from './use-data';
+import { WorkDetails } from './work-details';
+
+/** A person's decision is bound to the preview actually displayed. Execution remains a
+ * separate action, which the engine re-evaluates against the same hash. */
+export function ReviewedDeclarationAction({
+  id,
+  disabled = false,
+}: {
+  id: string;
+  disabled?: boolean;
+}) {
+  const { can, invoke, act } = useWorkspace();
+  const action = useAccountingData<ActionView>('actions.get', { id }, can('actions.get'));
+  const [busy, setBusy] = useState(false);
+  const [stale, setStale] = useState(false);
+  const request = action.data;
+  const preview = request?.preview;
+  const findings =
+    preview && typeof preview === 'object' && !Array.isArray(preview) ? preview.findings : null;
+  const blocking = !Array.isArray(findings) || findings.length > 0;
+  const authorization = request?.operation === 'declarations.authorize';
+  const run = async (operation: 'actions.approve' | 'actions.execute') => {
+    if (!request) return;
+    setBusy(true);
+    await act(
+      async () => {
+        try {
+          await invoke(operation, {
+            id,
+            ...(operation === 'actions.approve' ? { previewHash: request.previewHash } : {}),
+          });
+        } catch (reason) {
+          if (reason instanceof ApiError && reason.code === 'STALE') setStale(true);
+          throw reason;
+        }
+      },
+      operation === 'actions.approve'
+        ? 'Previzualizarea exactă a fost aprobată.'
+        : authorization
+          ? 'Declarația a fost autorizată pe XML-ul verificat.'
+          : 'Perioada fiscală a fost redeschisă.',
+    );
+    setBusy(false);
+  };
+  return (
+    <section
+      className="acc-review"
+      aria-label={authorization ? 'Revizuirea autorizării' : 'Revizuirea redeschiderii'}
+    >
+      <h4>{authorization ? 'Autorizează XML-ul verificat' : 'Redeschide perioada fiscală'}</h4>
+      {action.loading ? (
+        <p className="acc-hint" aria-busy="true">
+          Se încarcă previzualizarea…
+        </p>
+      ) : null}
+      {action.error ? (
+        <p role="alert" className="acc-error">
+          {action.error}
+        </p>
+      ) : null}
+      {request ? (
+        <>
+          <WorkDetails value={preview} technical={{ previewHash: request.previewHash }} />
+          <p className="acc-hint">
+            {authorization
+              ? 'Autorizarea blochează perioada fiscală pentru acest XML. PDF-ul se semnează și se depune în afara aplicației.'
+              : 'Redeschiderea permite corectarea perioadei fiscale. Declarația rectificativă se pregătește și se autorizează separat.'}
+          </p>
+          {stale ? (
+            <p role="alert" className="acc-error">
+              Previzualizarea este depășită. Solicită o previzualizare nouă înainte de a continua.
+            </p>
+          ) : null}
+          {request.status === 'rejected' ? (
+            <p>Cererea a fost respinsă.</p>
+          ) : request.status === 'executed' ? (
+            <p>Acțiunea a fost executată.</p>
+          ) : null}
+          <div className="acc-actions">
+            {request.status === 'requested' && can('actions.approve') ? (
+              <button
+                disabled={disabled || busy || stale || action.unavailable || blocking}
+                onClick={() => run('actions.approve')}
+              >
+                {authorization ? 'Aprobă autorizarea acestui XML' : 'Aprobă redeschiderea'}
+              </button>
+            ) : null}
+            {request.status === 'approved' && can('actions.execute') ? (
+              <button
+                disabled={disabled || busy || stale || action.unavailable || blocking}
+                onClick={() => run('actions.execute')}
+              >
+                {authorization ? 'Autorizează declarația' : 'Redeschide perioada'}
+              </button>
+            ) : null}
+          </div>
+        </>
+      ) : null}
+    </section>
+  );
+}
 
 const statusLabels: Record<ProposalView['status'], string> = {
   blocked: 'Blocată',

@@ -149,11 +149,11 @@ test('matching structured causes collapse across pages and keep each return and 
   const row = page.locator('[data-work-id="D300|2026-01"]');
   await row.locator(':scope > summary').click();
   await expect(row.getByText(first.message, { exact: true })).toBeVisible();
+  // Obligation actions now open the return's complete lifecycle in Termene.
   await expect(
-    row.getByText('Răspunde la întrebare: sunt necesare date suplimentare.'),
-  ).toBeVisible();
+    row.getByRole('link', { name: 'Deschide declarația în Termene', exact: true }),
+  ).toHaveAttribute('href', /view=deadlines.*return=D300%7C2026-01/);
   await expect(row.getByRole('button')).toHaveCount(0);
-  await expect(row.getByRole('link')).toHaveCount(0);
 });
 
 test('document details show names and exact decimals while identifiers and minor units stay closed', async ({

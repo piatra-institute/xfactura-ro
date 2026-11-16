@@ -757,6 +757,118 @@
 .acc-skeleton:nth-child(2) {
   max-width: 330px;
 }
+.acc-question {
+  border-bottom: 1px solid var(--acc-line);
+  padding: 24px 0;
+  overflow-wrap: anywhere;
+}
+.acc-question .acc-section-heading {
+  align-items: start;
+  margin: 0 0 14px;
+}
+.acc-question h4,
+.acc-return-life h4,
+.acc-deadline-citations h4,
+.acc-filing-note h4 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 10px;
+}
+.acc-question-body,
+.acc-question-waiting,
+.acc-answer-impact {
+  margin: 20px 0;
+}
+.acc-question-waiting,
+.acc-answer-impact,
+.acc-deadline-citations {
+  font-size: 13px;
+}
+.acc-question-waiting ul,
+.acc-answer-impact ul,
+.acc-deadline-citations ul {
+  padding-left: 20px;
+  margin: 8px 0 16px;
+}
+.acc-question fieldset,
+.acc-preparation-fields {
+  border: 0;
+  min-width: 0;
+  padding: 0;
+  display: grid;
+  gap: 20px;
+}
+.acc-question legend,
+.acc-preparation-fields legend {
+  margin-bottom: 14px;
+}
+.acc-question fieldset button {
+  justify-self: start;
+}
+.accounting .acc-decimal-input {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.acc-return-life {
+  margin-top: 30px;
+}
+.acc-declaration-history {
+  list-style: none;
+  padding: 0;
+  margin: 24px 0;
+}
+.acc-declaration-history > li {
+  border-top: 1px solid var(--acc-line);
+  padding: 18px 0 8px;
+}
+.acc-declaration-history h4 {
+  margin-bottom: 5px;
+}
+.acc-filing-action,
+.acc-filing-note {
+  margin: 22px 0;
+}
+.acc-filing-note {
+  padding: 16px;
+  border: 1px solid var(--acc-line);
+  border-radius: 5px;
+}
+.acc-engine-message {
+  white-space: pre-wrap;
+}
+.accounting .acc-return-heading {
+  display: inline;
+  font-size: inherit;
+  margin: 0;
+}
+.acc-opened-heading:focus {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.acc-form-error {
+  scroll-margin-block: 24px;
+}
+.acc-month-filter {
+  flex: 1;
+  max-width: 330px;
+  min-width: 180px;
+}
+.acc-month-filter .acc-hint {
+  margin: 8px 0 0;
+}
+.acc-d300-values td {
+  vertical-align: top;
+}
+.acc-d300-column {
+  display: block;
+  color: var(--acc-muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
+.acc-d300-values td:last-child {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 @media (max-width: 700px) {
   .acc-header {
     padding: 15px 18px;

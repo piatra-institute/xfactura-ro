@@ -30,6 +30,9 @@ const labels: Record<string, string> = {
   month: 'Lună',
   year: 'An',
   date: 'Dată',
+  createdAt: 'Data și ora întrebării (UTC)',
+  answeredAt: 'Data și ora răspunsului (UTC)',
+  at: 'Data și ora (UTC)',
   due: 'Termen',
   number: 'Număr',
   amount: 'Sumă',
@@ -247,25 +250,35 @@ function PartyName({ id }: { id: string }) {
     </span>
   );
 }
-function EvidenceName({ id }: { id: string }) {
+export function EvidenceName({ id }: { id: string }) {
   const { company, evidence } = useWorkspace();
   const file = evidence.find((candidate) => candidate.id === id);
-  return file ? (
+  return file?.filename ? (
     <a href={`${companyPath(company.id)}/evidence/${encodeURIComponent(file.id)}`}>
       {file.filename}
     </a>
+  ) : file ? (
+    <span>Fișier cu acces restricționat</span>
   ) : (
-    <span>Fișier indisponibil</span>
+    <a href={`${companyPath(company.id)}/evidence/${encodeURIComponent(id)}`}>
+      Deschide documentul păstrat
+    </a>
   );
 }
-function DocumentName({ id }: { id: string }) {
+export function DocumentName({ id }: { id: string }) {
   const { can } = useWorkspace();
   const { data, error } = useLoad<{
     number: string | null;
     date: string;
     evidenceId: string | null;
   }>('documents.get', { id }, can('documents.get'));
-  if (!data) return <span>{error || 'Document indisponibil'}</span>;
+  if (!data)
+    return (
+      <span>
+        {error ||
+          (can('documents.get') ? 'Se încarcă documentul…' : 'Document cu acces restricționat')}
+      </span>
+    );
   return (
     <span>
       {data.number ? `${data.number} · ${data.date}` : data.date}

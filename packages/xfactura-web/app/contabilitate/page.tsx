@@ -8,7 +8,13 @@ export const metadata = {
 };
 export default function Page() {
   return (
-    <Suspense fallback={<div className="accounting acc-loading">Se încarcă…</div>}>
+    <Suspense
+      fallback={
+        <div className="accounting acc-loading" lang="ro">
+          Se încarcă…
+        </div>
+      }
+    >
       <AccountingPage />
     </Suspense>
   );

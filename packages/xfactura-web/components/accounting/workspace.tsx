@@ -3,12 +3,19 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { ApiError, formatMoney, invoke, upload } from './api';
 import Worklist from './worklist';
-import { accountingViews, useAccountingNavigation, type Section } from './navigation';
+import {
+  accountingViews,
+  useAccountingNavigation,
+  yearForReturn,
+  type Section,
+} from './navigation';
 import Documents from './documents';
 import Bank from './bank';
 import Registers from './registers';
 import Periods from './periods';
 import Settings from './settings';
+import Questions from './questions';
+import Deadlines from './deadlines';
 
 export type Company = { id: string; name: string; cui: string };
 export type Year = {
@@ -41,7 +48,11 @@ export type Workspace = {
   evidence: Evidence[];
   version: number;
   /** Runs an action, reports its outcome and refreshes every section. */
-  act: (action: () => Promise<unknown>, success: string) => Promise<boolean>;
+  act: (
+    action: () => Promise<unknown>,
+    success: string,
+    onError?: (reason: unknown) => void,
+  ) => Promise<boolean>;
   refresh: () => void;
 };
 const Context = createContext<Workspace | null>(null);
@@ -53,6 +64,8 @@ export function useWorkspace() {
 
 const sectionComponents: Record<Section, typeof Documents> = {
   review: Worklist,
+  questions: Questions,
+  deadlines: Deadlines,
   registers: Registers,
   documents: Documents,
   bank: Bank,
@@ -75,16 +88,40 @@ const net = (balance: Balance | null, prefix: string, normal: 'debit' | 'credit'
 };
 
 export default function WorkspaceView({ company }: { company: Company }) {
-  const { section, view, navigate } = useAccountingNavigation();
+  const { section, view, navigate, params, href } = useAccountingNavigation();
   const Content = sectionComponents[section];
   const [capabilities, setCapabilities] = useState<Set<string>>(new Set());
   const [years, setYears] = useState<Year[]>([]);
-  const [yearId, setYearId] = useState('');
   const [evidence, setEvidence] = useState<Evidence[]>([]);
   const [balance, setBalance] = useState<Balance | null>(null);
   const [version, setVersion] = useState(0);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const financial = years.filter((year) => year.kind === 'financial');
+  const year =
+    financial.find((year) => year.id === params.get('year')) ??
+    yearForReturn(financial, params.get('return')) ??
+    financial.at(-1);
+  const yearId = year?.id ?? '';
+
+  const chooseYear = (id: string) => {
+    const selected = financial.find((year) => year.id === id);
+    if (!selected) return;
+    const month = params.get('month');
+    window.history.pushState(
+      null,
+      '',
+      href(section, {
+        year: id,
+        ...(params.get('return') && yearForReturn(financial, params.get('return'))?.id !== id
+          ? { return: null }
+          : {}),
+        ...(month && (month < selected.from.slice(0, 7) || month > selected.to.slice(0, 7))
+          ? { month: null }
+          : {}),
+      }),
+    );
+  };
 
   const call = useCallback(
     <T,>(operation: string, input: unknown = {}) => invoke<T>(company.id, operation, input),
@@ -102,45 +139,65 @@ export default function WorkspaceView({ company }: { company: Company }) {
       setCapabilities(new Set(available.capabilities.map((capability) => capability.id)));
       setYears(known.items);
       setEvidence(files.items);
-      const financial = known.items.filter((year) => year.kind === 'financial');
-      const current = financial.find((year) => year.id === yearId) ?? financial.at(-1);
-      if (current) {
-        setYearId(current.id);
-        setBalance(await call<Balance>('ledger.trialBalance', { financialYearId: current.id }));
-      }
     })().catch(
       (reason) => active && setError(reason instanceof Error ? reason.message : String(reason)),
     );
     return () => {
       active = false;
     };
-  }, [call, version, yearId]);
+  }, [call, version]);
+  useEffect(() => {
+    if (!yearId) return;
+    let active = true;
+    call<Balance>('ledger.trialBalance', { financialYearId: yearId })
+      .then((balance) => {
+        if (active) setBalance(balance);
+      })
+      .catch((reason: unknown) => {
+        if (active)
+          setError(
+            reason instanceof Error ? reason.message : 'Soldurile nu au putut fi încărcate.',
+          );
+      });
+    return () => {
+      active = false;
+    };
+  }, [call, yearId, version]);
 
-  const act = useCallback(async (action: () => Promise<unknown>, success: string) => {
-    setError('');
-    setNotice('');
-    try {
-      await action();
-      setNotice(success);
-      setVersion((value) => value + 1);
-      return true;
-    } catch (reason) {
-      if (reason instanceof ApiError && reason.code === 'STALE') {
-        setError(`Registrele s-au schimbat. Datele se reîncarcă. ${reason.message}`);
+  const act = useCallback(
+    async (
+      action: () => Promise<unknown>,
+      success: string,
+      onError?: (reason: unknown) => void,
+    ) => {
+      setError('');
+      setNotice('');
+      try {
+        await action();
+        setNotice(success);
         setVersion((value) => value + 1);
-      } else {
-        setError(reason instanceof Error ? reason.message : 'Operațiunea nu a reușit.');
+        return true;
+      } catch (reason) {
+        if (reason instanceof ApiError && reason.code === 'STALE') {
+          if (!onError)
+            setError(`Registrele s-au schimbat. Datele se reîncarcă. ${reason.message}`);
+          setVersion((value) => value + 1);
+        } else if (!onError) {
+          setError(reason instanceof Error ? reason.message : 'Operațiunea nu a reușit.');
+        }
+        onError?.(reason);
+        return false;
       }
-      return false;
-    }
-  }, []);
+    },
+    [],
+  );
   const workspace: Workspace = {
     company,
     can: (operation) => capabilities.has(operation),
     invoke: call,
     upload: (file) => upload(company.id, file),
     years,
-    year: years.find((year) => year.id === yearId),
+    year,
     evidence,
     version,
     act,
@@ -158,7 +215,7 @@ export default function WorkspaceView({ company }: { company: Company }) {
           <button onClick={() => navigate('documents')}>Adaugă documente</button>
           <label>
             Exercițiu
-            <select value={yearId} onChange={(event) => setYearId(event.target.value)}>
+            <select value={yearId} onChange={(event) => chooseYear(event.target.value)}>
               {years
                 .filter((year) => year.kind === 'financial')
                 .map((year) => (

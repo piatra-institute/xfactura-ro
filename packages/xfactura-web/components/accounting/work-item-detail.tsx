@@ -101,7 +101,53 @@ const detailRenderers: Record<string, ComponentType<DetailProps>> = {
 };
 export function WorkItemDetail({ item }: DetailProps) {
   const Detail = detailRenderers[item.subject.kind] ?? GenericDetail;
-  return <Detail item={item} />;
+  if (item.kind === 'obligation.due')
+    return (
+      <>
+        <ItemDetails item={item} />
+        <SectionLink
+          section="deadlines"
+          filters={{ return: item.subject.id, month: null, declarationStatus: null }}
+        >
+          Deschide declarația în Termene
+        </SectionLink>
+      </>
+    );
+  const questionIds = item.kind.startsWith('question.')
+    ? [
+        ...new Set([
+          ...(item.subject.kind === 'question' ? [item.subject.id] : []),
+          ...item.next.flatMap((step) =>
+            typeof step.inputHint.questionId === 'string' ? [step.inputHint.questionId] : [],
+          ),
+          ...(Array.isArray(item.details.questions)
+            ? item.details.questions.flatMap((question) =>
+                question &&
+                typeof question === 'object' &&
+                !Array.isArray(question) &&
+                typeof question.questionId === 'string'
+                  ? [question.questionId]
+                  : [],
+              )
+            : []),
+        ]),
+      ]
+    : [];
+  return (
+    <>
+      <Detail item={item} />
+      {questionIds.map((id, index) => (
+        <p key={id}>
+          <SectionLink
+            section="questions"
+            filters={{ question: id, questionStatus: null, questionKind: null }}
+          >
+            Deschide întrebarea{questionIds.length > 1 ? ` ${index + 1}` : ''} în Întrebări
+          </SectionLink>
+        </p>
+      ))}
+    </>
+  );
 }
 
 function Steps({
