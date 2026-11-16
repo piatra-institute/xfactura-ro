@@ -1,6 +1,6 @@
 # Replay workspace
 
-This private package inventories a corpus without posting, approving or interpreting any accounting records. Core XML parsing and the engine's PDF attachment adapter are reused; the engine and core are unchanged.
+This private package inventories a corpus and provides an accountant's journal treatment for private replay engines. Inventory never posts, approves or interprets accounting records. Core XML parsing and the engine's PDF attachment adapter are reused; the engine and core are unchanged.
 
 Run `bun scripts/differential/inventory.ts <source> <output> --dry` to print counts without creating the output. Without `--dry`, nonexcluded files are copied with their relative paths and all records are written to `<output>/manifest.json`. Add `--repair` only to explicitly permit replacing different output bytes; `--dry` still writes nothing when combined with `--repair`. Real corpora and their manifests belong in the root's ignored `.private/corpus/`; never commit real inputs or derived records. Run `bun run test:replay` for synthetic fixtures.
 
@@ -13,3 +13,42 @@ PDF file specifications or an embedded-files name tree identify attachments; an 
 The namespace-aware streaming reader projects only identity attributes into `sourceXml`, including the employer or old D394 identification child when needed. This avoids the core reader's attribute limit on historical return roots. For D406, `sourceXml` reads the actual bounded Header fragment; company tax registration, selection dates and HeaderComment supply its classification. Reading stops at that header; hashing still reads every byte. This inventory does not validate the remaining XML or read amounts. Archives are never extracted. Failed PDF/XML reads are recorded without copying exception text into the manifest.
 
 Source symlinks are rejected. Copy preflight rejects traversal, reserved manifest paths, overlapping trees and existing symlinks within the output. Existing files or a manifest with different bytes raise `OUTPUT_CONFLICT: <relative path>` before any copy writes. Explicit `copyCorpus(source, output, records, { repair: true })` or CLI `--repair` allows replacement, including changes to an existing manifest as the inventory changes. Replacements use temporary files inside the output and verify their hashes. Unchanged files and an unchanged manifest are not rewritten. Copying does not prune files left by earlier inventories, and source changes after inventory fail the copy instead of silently changing the recorded bytes.
+
+## Accountant's journal replay
+
+`src/treatments/journal.ts` exports `migrationJournal`, its strict `migrationJournalInput` schema and `MigrationJournalInput` type. Inject the treatment with `new Engine(db, objects, secret, { treatments: [migrationJournal] })` in a private replay engine. It is not registered in the product and has `agent: false`; neither its typed operations nor the generic proposal operation allow an agent to propose it. Replay still uses `migration.journal.propose`, a person's approval of the exact effect hash, and `ledger.post`; it provides no direct write path and reads no rule parameters.
+
+The input names a colon-free `source`, the source transaction's stable `reference`, retained source-file `evidenceId`, `date`, `journalCode` and `description`. The subject is `migration:<source>:<reference>`. Repeating identical input returns the existing proposal, including after posting; changed input for that subject is refused with `SUBJECT_EXISTS`. This is the kernel's normal recognition semantics: withdrawal or reversal can free the subject for a corrected proposal.
+
+Each line supplies `account`, `side` and a signed decimal `amount` in RON; optional `currency` supplies `code`, signed decimal `amount`, `rateId` and `rate`. Optional `analytics` contains `costCenter`, `project` and `item`; `memo` is also preserved. A control line names either an existing `openItem` UUID or a `newItem` ref declared in `newItems`, never both. New declarations provide `ref`, `partyId`, optional `dueDate`, optional `documentId` and optional `mayReverse` (false unless supplied); their account, kind, normal side and currency follow their lines and the chart, as in `ledger.general`.
+
+Each supplied tax entry names `key`, `tax`, semantic `code`, `direction`, signed decimal `base`, `amount`, `deductible` and `booked`, `taxPoint`, nullable `exigibility`, nullable `taxPeriod`, and `attributes`. Optional `line` is a zero-based line index; an entry without a line must book zero, as checked by the kernel. Optional `partyId`, `documentId` and `originTaxEntry` are preserved. Optional `currency` supplies `code`, `baseMinor` and `taxMinor` as signed integer strings in that currency's minor units, `rate` and `rateId`; the minor-unit strings become exact integers without scaling, and the other fields pass through unchanged. Amounts are parsed exactly, without computing tax, conversion, totals or rounding. Reverse charge supplies input and output tax entries in one transaction. VAT on collection supplies a deferred entry on 4428 and later signed release entries on 4428 and 4426 or 4427; releases may omit `documentId`.
+
+Period-closing lines on 4426/4427 carry `taxSettlement: { tax: 'VAT', period: '<period>' }` instead of tax entries. The 4423/4424 counterpart is an ordinary open-item control line. The treatment reports unknown evidence, partners, documents and existing items, undeclared or unused new items, new items on accounts without open items, and tax entries naming non-tax lines. `validateEffect` blocks a VAT line without tax entries or a settlement marker (`TAX_LINE_UNEXPLAINED`) and a control line without an item (`CONTROL_OPEN_ITEM`); the acceptance tests confirm the treatment itself emits neither finding and approval is refused before database posting. The unchanged database remains the posting backstop.
+
+| Control-account kind                            | Representative accounts                                | Normal side       |
+| ----------------------------------------------- | ------------------------------------------------------ | ----------------- |
+| `payable`                                       | 401, 404, 4551, 456, 457, 462                          | C                 |
+| `receivable`                                    | 4111, 461, 463, 542                                    | D                 |
+| `advance.paid`                                  | 4091, 4092                                             | D                 |
+| `advance.received`                              | 419                                                    | C                 |
+| `accrual.payable`                               | 408                                                    | C                 |
+| `accrual.receivable`                            | 418                                                    | D                 |
+| `deferral.expense`                              | 471                                                    | D                 |
+| `deferral.revenue`                              | 472                                                    | C                 |
+| `employee.payable`                              | 421, 423, 426, 427                                     | C                 |
+| `tax.payable`                                   | 431x, 436, 437x, 4411, 4418, 4423, 444, 446, 447, 4481 | C                 |
+| `tax.receivable`                                | 4424, 4482                                             | D                 |
+| `loan.payable`                                  | 1621, 1622, 1661, 1663, 167, 5191, 5192                | C                 |
+| `loan.interest`                                 | 1682, 1685, 1686, 1687, 5198                           | C                 |
+| `tax` (tax entries or settlement, no open item) | 4426, 4427, 4428                                       | Per supplied line |
+
+Analytical accounts inherit the chart's synthetic control kind. The tests post a representative of every open-item kind currently assigned by the chart. `unapplied.receipt` and `unapplied.payment` exist in the kernel but no chart account currently derives them.
+
+### Limits
+
+The input cannot express stock quantities/layers/moves, stock transfers without journal lines, or schedules. It emits general `effect@1` entries only. Retail price-method postings still need their warehouse analytics and the existing kernel rules; replay does not bypass them. Unsupported currencies, amounts finer than their minor unit, and amounts outside the bounded decimal input format are refused without rounding. None of the requested synthetic accountant entry shapes required a database guard change.
+
+A tax entry can reference only the tax-controlled line it books, not the expense, revenue or other base line that generated its tax base. The treatment also carries no dedicated withholding or allocation details for the D406 writer. Both gaps belong to the task that rebuilds returns from the imported journal; replay does not infer those links or details.
+
+A source control line without a partner must be resolved to a party by the mapping, as must any missing itemization; replay does not invent a partner or item. A line may omit `partyId` when its declared or existing open item already identifies the party.

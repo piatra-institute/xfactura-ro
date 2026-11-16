@@ -90,6 +90,7 @@
         "pdf-lib": "1.17.1",
         "saxes": "6.0.0",
         "xfactura-core": "workspace:*",
+        "zod": "4.6.7",
       },
     },
     "packages/xfactura-web": {
