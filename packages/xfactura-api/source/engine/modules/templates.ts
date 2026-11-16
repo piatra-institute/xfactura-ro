@@ -38,7 +38,7 @@ import type { ActionHandler } from '../kernel/actions';
 import { pausedScopes } from '../kernel/automation';
 import type { Actor, Commands } from '../kernel/commands';
 import { auditHead } from '../kernel/events';
-import { entryStands } from '../kernel/ledger';
+import { documentBooked, entryStands } from '../kernel/ledger';
 import { payClasses, payPayment } from '../kernel/personal';
 import type { Projector } from '../kernel/projectors';
 import { basisOf, type Proposals, type TemplateRef } from '../kernel/proposals';
@@ -730,6 +730,8 @@ export class Templates {
    * them: `document:<id>` (a group's root, not superseded) or `movement:<id>`. */
   private async unpredicted(tx: Transaction, companyId: string, row: TemplateRow, limit: number) {
     const scope = templateScope.parse(JSON.parse(row.scope));
+    const recognizes =
+      scope.treatment === 'invoices.recognize' || scope.treatment === 'receipts.recognize';
     const noPrediction = (
       source: string,
     ) => sql`not exists (select 1 from acc_template_predictions p
@@ -756,7 +758,8 @@ export class Templates {
         and not exists (select 1 from acc_document_links l where l.company_id = d.company_id
           and l.to_id = d.id and l.kind = 'supersedes')
         and ${noPrediction(`'document:' || d.id`)}
-        ${scope.treatment === 'invoices.recognize' || scope.treatment === 'receipts.recognize' ? sql`and ${notPosted(`'document:' || d.id`)}` : sql``}
+        and not ${documentBooked(companyId, sql`d.id`, { postedOnly: true, openingOnly: !recognizes })}
+        ${recognizes ? sql`and ${notPosted(`'document:' || d.id`)}` : sql``}
       order by d.created_at, d.id limit ${limit}`);
     return rows.map((item) => `document:${item.id}`);
   }

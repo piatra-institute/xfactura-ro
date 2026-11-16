@@ -1085,6 +1085,31 @@ async function documentRecords(world: World) {
   return { add, link, proposal };
 }
 
+/** An opening balance with a supplier's invoice retained as the payable's document. */
+function openingDocument(world: World, documentId: string): Effect {
+  const item = {
+    ...receivable(world),
+    kind: 'payable' as const,
+    controlAccount: '401',
+    normalSide: 'C' as const,
+    partyId: world.supplier,
+    documentId,
+  };
+  return effect(
+    [
+      { account: '5121', side: 'D', bani: 121000n },
+      { account: '401', side: 'C', bani: 121000n, openItem: item.ref, partyId: world.supplier },
+    ],
+    {
+      date: day('2026-01-01'),
+      journalCode: 'DESCHIDERE',
+      openItems: [item],
+    },
+  );
+}
+const bookOpening = (world: World, documentId: string) =>
+  book(world, openingDocument(world, documentId), { subjectKey: 'opening:2026-01-01' });
+
 /**
  * Earned autonomy's records written directly: reviewed requests approved by a decider, a
  * batch's approvals, a template version written by its request, its revocation and predictions,
@@ -1555,6 +1580,148 @@ async function lockYear(world: World) {
 }
 
 const attacks: Attack[] = [
+  {
+    trigger: 'inv_proposal_subject',
+    code: 'subject_taken',
+    name: 'recognizing a document carried by a standing opening item',
+    run: async (world) => {
+      const records = await documentRecords(world);
+      const document = await records.add();
+      await bookOpening(world, document);
+      return records.proposal(document);
+    },
+  },
+  {
+    trigger: 'inv_proposal_subject',
+    code: 'subject_taken',
+    name: 'recognizing an opening document whose reversal is only proposed',
+    run: async (world) => {
+      const records = await documentRecords(world);
+      const document = await records.add();
+      const opened = await bookOpening(world, document);
+      await propose(world, plain(1n, 1n), { subjectKey: `reverse:${opened.entry.id}` });
+      return records.proposal(document);
+    },
+  },
+  {
+    trigger: 'inv_proposal_subject',
+    code: 'identity_taken',
+    name: 'recognizing an identity copy of a standing opening document',
+    run: async (world) => {
+      const records = await documentRecords(world);
+      const document = await records.add();
+      const copy = await records.add();
+      await bookOpening(world, document);
+      return records.proposal(copy);
+    },
+  },
+  ...[false, true].map((member): Attack => ({
+    trigger: 'inv_proposal_subject',
+    code: 'identity_taken',
+    name: `recognizing a group's ${member ? 'root' : 'member'} carried by an opening's other copy`,
+    run: async (world) => {
+      const records = await documentRecords(world);
+      const root = await records.add();
+      const copy = await records.add({ identityKey: 'identity-2' });
+      await records.link(copy, root, 'same_as_confirmed');
+      await bookOpening(world, member ? copy : root);
+      return records.proposal(member ? root : copy);
+    },
+  })),
+  ...['exact', 'identity', 'group'].flatMap((copy) =>
+    [false, true].map((openingFirst): Attack => ({
+      trigger: entry,
+      code: 'subject_posted',
+      name: `posting duplicate ${copy} document balances with ${openingFirst ? 'the opening' : 'recognition'} first`,
+      run: async (world) => {
+        const records = await documentRecords(world);
+        const document = await records.add();
+        const other =
+          copy === 'exact'
+            ? document
+            : await records.add({ identityKey: copy === 'group' ? 'identity-2' : 'identity-1' });
+        if (copy === 'group') await records.link(other, document, 'same_as_confirmed');
+        if (openingFirst) {
+          const recognized = await approved(world, sale(world), {
+            subjectKey: `document:${document}`,
+          });
+          await bookOpening(world, other);
+          return post(world, recognized.proposed, { approvalId: recognized.approvalId });
+        }
+        await book(world, sale(world), { subjectKey: `document:${document}` });
+        return bookOpening(world, other);
+      },
+    })),
+  ),
+  {
+    trigger: entry,
+    code: 'subject_posted',
+    name: 'opening two items of the same kind for one invoice',
+    run: async (world) => {
+      const document = await (await documentRecords(world)).add();
+      const first = openingDocument(world, document);
+      const second = openingDocument(world, document);
+      return book(
+        world,
+        {
+          ...first,
+          lines: [{ account: '5121', side: 'D', bani: 242000n }, first.lines[1]!, second.lines[1]!],
+          openItems: [...first.openItems, ...second.openItems],
+        },
+        { subjectKey: 'opening:2026-01-01' },
+      );
+    },
+  },
+  {
+    trigger: entry,
+    code: 'subject_posted',
+    name: 'opening two items for distinct copies of one document group',
+    run: async (world) => {
+      const records = await documentRecords(world);
+      const root = await records.add();
+      const member = await records.add({ identityKey: 'identity-2' });
+      await records.link(member, root, 'same_as_confirmed');
+      const first = openingDocument(world, root);
+      const second = openingDocument(world, member);
+      return book(
+        world,
+        {
+          ...first,
+          lines: [{ account: '5121', side: 'D', bani: 242000n }, first.lines[1]!, second.lines[1]!],
+          openItems: [...first.openItems, ...second.openItems],
+        },
+        { subjectKey: 'opening:2026-01-01' },
+      );
+    },
+  },
+  ...[false, true].map((sibling): Attack => ({
+    trigger: 'inv_document_link_guard',
+    code: 'supersede',
+    name: `superseding a group's ${sibling ? 'sibling' : 'root'} while another member's recognition stands`,
+    run: async (world) => {
+      const records = await documentRecords(world);
+      const root = await records.add();
+      const member = await records.add({ identityKey: 'identity-2' });
+      await records.link(member, root, 'same_as_confirmed');
+      const target = sibling ? await records.add({ identityKey: 'identity-3' }) : root;
+      if (sibling) await records.link(target, root, 'same_as_confirmed');
+      await book(world, sale(world), { subjectKey: `document:${member}` });
+      return records.link(await records.add({ identityKey: null }), target, 'supersedes');
+    },
+  })),
+  ...[false, true].map((group): Attack => ({
+    trigger: 'inv_document_link_guard',
+    code: 'supersede',
+    name: `superseding an extraction carried by ${group ? 'its group member in' : ''} a standing opening`,
+    run: async (world) => {
+      const records = await documentRecords(world);
+      const document = await records.add();
+      const carried = group ? await records.add({ identityKey: 'identity-2' }) : document;
+      if (group) await records.link(carried, document, 'same_as_confirmed');
+      await bookOpening(world, carried);
+      return records.link(await records.add({ identityKey: null }), document, 'supersedes');
+    },
+  })),
   {
     trigger: 'inv_question_guard',
     code: 'question_open',
@@ -4335,6 +4502,29 @@ describe('approval controls', () => {
 });
 
 describe('database invariants', () => {
+  test('the opening booking guard plans its own items through open_item_origin', async () => {
+    const world = await fresh();
+    const guard = await world.db.client.execute(
+      "SELECT sql FROM sqlite_master WHERE name = 'inv_entry_guard'",
+    );
+    // Bind NEW to one row and compile the installed check to inspect its correlated lookups.
+    const condition =
+      /SELECT CASE WHEN ([\s\S]*?)\n\s*THEN RAISE\(ABORT, 'inv:subject_posted'\) END/.exec(
+        String(guard.rows[0]!.sql),
+      )?.[1];
+    expect(condition).toBeDefined();
+    const plan = await world.db.client.execute({
+      sql: `EXPLAIN QUERY PLAN WITH NEW(company_id, id, proposal_id, journal_code) AS (VALUES (?, ?, ?, ?)) SELECT (${condition}) FROM NEW`,
+      args: [world.company, 'new-opening', 'new-proposal', 'DESCHIDERE'],
+    });
+    const ownItems = plan.rows
+      .map((row) => String(row.detail))
+      .filter((detail) => /\bni\b/.test(detail))
+      .join('\n');
+    expect(ownItems).toContain('USING INDEX open_item_origin');
+    expect(ownItems).not.toContain('open_item_document');
+  });
+
   for (const attack of attacks)
     test(`refuses ${attack.name} (${attack.code})`, async () => {
       expect(await refusal(attack.run(await fresh()))).toBe(attack.code);

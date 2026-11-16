@@ -61,7 +61,8 @@ import {
 } from 'xfactura-core/kernel';
 import type { LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
-import { entryStands, linesUnder } from './ledger';
+import { documentBookingRows, entryStands, linesUnder } from './ledger';
+import { rootOf } from './sources';
 import {
   assetEvents,
   assetFiscal,
@@ -680,6 +681,21 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
       });
       readSet.push({ kind: 'document', id: row.id, version: row.bodyHash });
     }
+
+  for (const id of [...new Set(plan.documentBookings ?? [])].sort()) {
+    const [booking] = await tx.all<{ entryId: string; number: number; opening: number }>(
+      sql`select entryId, number, opening from (${documentBookingRows(companyId, id, { postedOnly: true })}) limit 1`,
+    );
+    const document = documentMap.get(id);
+    if (document) document.groupId = await rootOf(tx, companyId, id);
+    if (document && booking)
+      document.booking = {
+        entryId: booking.entryId,
+        number: Number(booking.number),
+        opening: !!booking.opening,
+      };
+    readSet.push({ kind: 'documentBooking', id, version: booking?.entryId ?? '' });
+  }
 
   const entryMap = new Map<string, PostedEntry>();
   if (plan.entries?.length) {

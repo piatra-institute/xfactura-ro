@@ -60,7 +60,7 @@ import {
   segregationOn,
   type Segregation,
 } from './controls';
-import { holdsSubject, writeEntry } from './ledger';
+import { documentBookingRows, holdsSubject, writeEntry } from './ledger';
 import { closedMonths } from './periods';
 import { loadAccounts, loadState, mergeStates } from './state';
 import { auditHead } from './events';
@@ -516,6 +516,19 @@ export class Proposals {
     return issues;
   }
 
+  private async openingIssue(tx: Transaction, companyId: string, documentId: string) {
+    const [booking] = await tx.all<{ entryId: string; number: number }>(
+      sql`select entryId, number from (${documentBookingRows(companyId, documentId, { openingOnly: true })}) limit 1`,
+    );
+    return booking
+      ? block(
+          'DOCUMENT_IN_OPENING',
+          `Soldul documentului ${documentId} este preluat prin nota de deschidere ${booking.number} (${booking.entryId}): nu îl contabilizați din nou.`,
+          { documentId, entryId: booking.entryId },
+        )
+      : null;
+  }
+
   /** Evaluates a treatment for a proposal: deterministic for the same input and state. */
   async evaluate(
     tx: Transaction,
@@ -537,6 +550,11 @@ export class Proposals {
     const rules = new RuleContext(this.register, mode);
     let effect: Effect | null = null;
     const issues: Issue[] = [];
+    const subject = treatment.subject(input);
+    if (subject.startsWith('document:')) {
+      const issue = await this.openingIssue(tx, companyId, subject.slice('document:'.length));
+      if (issue) issues.push(issue);
+    }
     try {
       const evaluation = treatment.evaluate(input, loaded, rules);
       issues.push(...evaluation.issues);
@@ -653,6 +671,14 @@ export class Proposals {
         const pay = await this.payReader(tx, actor, access.role);
         if (!pay)
           await this.requirePay(subjectKey, salarySubjects(tx, actor.companyId, [subjectKey]));
+        if (declared.startsWith('document:')) {
+          const issue = await this.openingIssue(
+            tx,
+            actor.companyId,
+            declared.slice('document:'.length),
+          );
+          if (issue) throw new DomainError(issue.code, issue.message, 409, issue.details);
+        }
         // The proposal holding this subject, open or posted, if any: a withdrawal frees the
         // subject, and so does the reversal of its posted entry (a correction is a reversal and
         // a new proposal).

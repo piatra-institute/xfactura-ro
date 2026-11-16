@@ -1,4 +1,4 @@
-import { and, eq, gte, like, lt, max, or, sql, type SQL } from 'drizzle-orm';
+import { and, eq, gte, like, lt, max, or, sql, type SQL, type SQLWrapper } from 'drizzle-orm';
 import { canonical } from 'xfactura-core/hash';
 import type { Effect } from 'xfactura-core/kernel';
 import type { Transaction } from '../db/database';
@@ -57,6 +57,48 @@ export const holdsSubject = (proposal: string) =>
     and not exists (select 1 from acc_entries hse
       where hse.company_id = ${proposal}.company_id and hse.proposal_id = ${proposal}.id
         and not ${standsText('hse')}))`);
+
+/** Bookings of a document's group. Pending document proposals hold the subject too, unless a
+ * caller needs posted balances only. Opening associations come from their items, never from a
+ * second subject claim; the document index serves both a root and its copies. Evidence
+ * corrections also respect explicit references from effects with another subject. */
+export function documentBookingRows(
+  companyId: string | SQLWrapper,
+  documentId: string | SQLWrapper,
+  options: { postedOnly?: boolean; openingOnly?: boolean; includeReferences?: boolean } = {},
+): SQL {
+  const root = sql`coalesce((select bg.to_id from acc_document_links bg
+    where bg.company_id = ${companyId} and bg.from_id = ${documentId}
+      and bg.kind in ('same_as', 'same_as_confirmed')), ${documentId})`;
+  const group = sql`select ${root} as id union all
+    select bm.from_id from acc_document_links bm
+    where bm.company_id = ${companyId} and bm.to_id = ${root}
+      and bm.kind in ('same_as', 'same_as_confirmed')`;
+  const opening = sql`select bp.id as proposalId, be.id as entryId, be.number, 1 as opening
+    from acc_open_items bo
+    join acc_entries be on be.company_id = bo.company_id and be.id = bo.origin_entry_id
+    join acc_proposals bp on bp.company_id = be.company_id and bp.id = be.proposal_id
+    where bo.company_id = ${companyId} and bo.document_id in (${group})
+      and be.journal_code = 'DESCHIDERE' and bp.subject_key like 'opening:%'
+      and ${entryStands('be')}`;
+  if (options.openingOnly) return opening;
+  return sql`select bp.id as proposalId, be.id as entryId, be.number, 0 as opening
+    from acc_proposals bp
+    left join acc_entries be on be.company_id = bp.company_id and be.proposal_id = bp.id
+    where bp.company_id = ${companyId}
+      and (bp.subject_key in (select 'document:' || id from (${group}) as members)
+        ${options.includeReferences ? sql`or bp.document_id = ${documentId}` : sql``})
+      and ${holdsSubject('bp')}
+      ${options.postedOnly ? sql`and be.id is not null and ${entryStands('be')}` : sql``}
+    union all ${opening}`;
+}
+
+/** Whether a group's document subject is held, or a standing opening carries its balance. */
+export const documentBooked = (
+  companyId: string | SQLWrapper,
+  documentId: string | SQLWrapper,
+  options: Parameters<typeof documentBookingRows>[2] = {},
+) => sql`exists (${documentBookingRows(companyId, documentId, options)})`;
 
 /**
  * A company's lines on accounts under any of `prefixes`, as `account LIKE 'prefix%'` reads them,

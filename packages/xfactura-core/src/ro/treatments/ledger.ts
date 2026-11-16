@@ -87,6 +87,8 @@ export const generalJournalInput = z
           .object({
             ref: itemRef,
             partyId: z.uuid(),
+            /** The document whose balance an opening item carries. */
+            documentId: z.uuid().optional(),
             dueDate: date.optional(),
             mayReverse: z.boolean().optional(),
           })
@@ -112,7 +114,7 @@ export const generalJournal: Treatment<GeneralJournalInput> = {
   input: generalJournalInput,
   agent: true,
   summary:
-    'Explicit journal entry (opening balance, general entry or adjustment) with its supporting document.',
+    'Explicit journal entry (opening balance, general entry or adjustment) with its supporting document; opening items may retain their recorded documents.',
   subject: (input) =>
     input.purpose === 'opening'
       ? `opening:${input.date}`
@@ -121,6 +123,12 @@ export const generalJournal: Treatment<GeneralJournalInput> = {
     evidence: [input.evidenceId],
     openItems: [{ ids: input.lines.flatMap((line) => (line.openItem ? [line.openItem] : [])) }],
     parties: [...new Set(input.newItems.map((item) => item.partyId))],
+    ...(input.newItems.some((item) => item.documentId)
+      ? {
+          documents: [...new Set(input.newItems.flatMap((item) => item.documentId ?? []))],
+          documentBookings: [...new Set(input.newItems.flatMap((item) => item.documentId ?? []))],
+        }
+      : {}),
   }),
   evaluate(input, loaded) {
     const issues: Issue[] = [];
@@ -151,6 +159,32 @@ export const generalJournal: Treatment<GeneralJournalInput> = {
       );
 
     const declared = new Map(input.newItems.map((item) => [item.ref, item]));
+    for (const [index, item] of input.newItems.entries()) {
+      if (!item.documentId) continue;
+      const path = `newItems.${index}.documentId`;
+      const document = loaded.documents.get(item.documentId);
+      if (input.purpose !== 'opening')
+        issues.push(
+          block(
+            'OPENING_DOCUMENT_ONLY',
+            'O poziție nouă poate numi un document doar într-o notă de deschidere.',
+            path,
+          ),
+        );
+      if (!document)
+        issues.push(block('DOCUMENT', 'Documentul poziției nu este disponibil.', path));
+      else if (document.partyId !== item.partyId)
+        issues.push(block('DOCUMENT_PARTY', 'Documentul poziției are alt partener.', path));
+      if (document?.booking)
+        issues.push({
+          ...block(
+            'DOCUMENT_BOOKED',
+            `Documentul ${document.number ?? document.id} este deja contabilizat prin nota ${document.booking.number} (${document.booking.entryId}).`,
+            path,
+          ),
+          details: { documentId: document.id, entryId: document.booking.entryId },
+        });
+    }
     const created = new Map<string, OpenItemSpec>();
     const lines: LineSpec[] = input.lines.map((line, index) => {
       const path = `lines.${index}`;
@@ -180,6 +214,9 @@ export const generalJournal: Treatment<GeneralJournalInput> = {
             normalSide: debitKinds.has(kind) ? 'D' : 'C',
             mayReverse: item.mayReverse ?? false,
             ...(item.dueDate ? { dueDate: item.dueDate } : {}),
+            ...(item.documentId && input.purpose === 'opening'
+              ? { documentId: item.documentId }
+              : {}),
           });
       }
       const partyId =
@@ -212,6 +249,22 @@ export const generalJournal: Treatment<GeneralJournalInput> = {
         ...(line.memo ? { memo: line.memo } : {}),
       };
     });
+    const documents = new Set<string>();
+    for (const [index, item] of input.newItems.entries()) {
+      const kind = created.get(item.ref)?.kind;
+      if (!item.documentId || !kind) continue;
+      const group = loaded.documents.get(item.documentId)?.groupId ?? item.documentId;
+      const key = `${kind}:${group}`;
+      if (documents.has(key))
+        issues.push(
+          block(
+            'DUPLICATE_DOCUMENT',
+            'Același document nu poate deschide două poziții de același fel.',
+            `newItems.${index}.documentId`,
+          ),
+        );
+      documents.add(key);
+    }
     const effect: Effect = {
       schema: 'effect@1',
       date: input.date,

@@ -195,6 +195,28 @@ const holdsSubject = (proposal: string) => `NOT EXISTS (
             AND NOT EXISTS (
               SELECT 1 FROM acc_entries he WHERE he.company_id = ${proposal}.company_id AND he.proposal_id = ${proposal}.id
                 AND NOT ${stands('he')})`;
+/** A document and its group/identity copies, scoped to the row's company. */
+const groupLinks = `('same_as', 'same_as_confirmed')`;
+const rootOf = (id: string) => `COALESCE((
+          SELECT l.to_id FROM acc_document_links l
+          WHERE l.company_id = NEW.company_id AND l.from_id = ${id} AND l.kind IN ${groupLinks}), ${id})`;
+const relatedDocuments = (id: string) => `SELECT ${id} AS id
+      UNION SELECT ${rootOf(id)}
+      UNION SELECT l.from_id FROM acc_document_links l
+        WHERE l.company_id = NEW.company_id AND l.to_id = ${rootOf(id)} AND l.kind IN ${groupLinks}
+      UNION SELECT d.id FROM acc_documents d WHERE d.company_id = NEW.company_id
+        AND d.identity_key = (SELECT identity_key FROM acc_documents
+          WHERE company_id = NEW.company_id AND id = ${id})`;
+/** A standing opening's items carry a document's balance, even without a document subject. */
+const openingCarries = (id: string, match: 'exact' | 'related' | 'other' = 'related') => `EXISTS (
+      SELECT 1 FROM acc_open_items oi
+      JOIN acc_entries oe ON oe.company_id = oi.company_id AND oe.id = oi.origin_entry_id
+      JOIN acc_proposals op ON op.company_id = oe.company_id AND op.id = oe.proposal_id
+      WHERE oi.company_id = NEW.company_id
+        AND ${match === 'exact' ? `oi.document_id = ${id}` : `oi.document_id IN (${relatedDocuments(id)})`}
+        ${match === 'other' ? `AND oi.document_id <> ${id}` : ''}
+        AND oe.journal_code = 'DESCHIDERE' AND op.subject_key LIKE 'opening:%'
+        AND ${stands('oe')})`;
 /** An active owner or reviewer whose membership has not changed since the given epoch. */
 const isReviewer = (user: string, epoch: string) => `EXISTS (
       SELECT 1 FROM acc_memberships m
@@ -432,13 +454,34 @@ const scheduleRowFields: Field[] = [
 const entryChecks: Check[] = [
   {
     code: 'subject_posted',
-    rule: 'A subject (document, movement, …) has at most one posted entry that stands: it is posted again only once every earlier entry of it was reversed.',
+    rule: 'A subject has at most one posted entry that stands. A document or any copy is booked either by recognition or by a standing opening item, never both; an opening names no already booked document and creates at most one item of each kind per document group. Reversal frees the booking.',
+    // Unary + keeps the new entry's items on open_item_origin, not a company-wide document range.
     violation: `EXISTS (
       SELECT 1 FROM acc_entries e
       JOIN acc_proposals p ON p.company_id = e.company_id AND p.id = e.proposal_id
       WHERE e.company_id = NEW.company_id AND p.subject_key = (
         SELECT subject_key FROM acc_proposals WHERE company_id = NEW.company_id AND id = NEW.proposal_id)
-        AND ${stands('e')})`,
+        AND ${stands('e')})
+      OR EXISTS (SELECT 1 FROM acc_proposals np
+        WHERE np.company_id = NEW.company_id AND np.id = NEW.proposal_id
+          AND np.subject_key LIKE 'document:%'
+          AND ${openingCarries('substr(np.subject_key, 10)')})
+      OR (NEW.journal_code = 'DESCHIDERE' AND EXISTS (
+        SELECT 1 FROM acc_proposals np WHERE np.company_id = NEW.company_id
+          AND np.id = NEW.proposal_id AND np.subject_key LIKE 'opening:%') AND EXISTS (
+        SELECT 1 FROM acc_open_items ni WHERE ni.company_id = NEW.company_id
+          AND ni.origin_entry_id = NEW.id AND +ni.document_id IS NOT NULL
+          AND (EXISTS (
+            SELECT 1 FROM acc_proposals p JOIN acc_entries e
+              ON e.company_id = p.company_id AND e.proposal_id = p.id
+            WHERE p.company_id = NEW.company_id
+              AND p.subject_key IN (SELECT 'document:' || id FROM (${relatedDocuments('ni.document_id')}) AS docs)
+              AND ${stands('e')})
+            OR ${openingCarries('ni.document_id')}
+            OR EXISTS (SELECT 1 FROM acc_open_items sibling
+              WHERE sibling.company_id = NEW.company_id AND sibling.origin_entry_id = NEW.id
+                AND sibling.id <> ni.id AND sibling.kind = ni.kind
+                AND sibling.document_id IN (${relatedDocuments('ni.document_id')})))))`,
   },
   {
     code: 'reversal_of_reversal',
@@ -1356,13 +1399,6 @@ const assetChecks: Record<'cards' | 'events' | 'fiscal', Check[]> = {
   ],
 };
 
-/** Links that make a document a member of another's group: the engine's, between documents of
- * the same identity, and a person's, between near matches. */
-const groupLinks = `('same_as', 'same_as_confirmed')`;
-/** The root of the group of the document `id` names: the document it joined, or itself. */
-const rootOf = (id: string) => `COALESCE((
-          SELECT l.to_id FROM acc_document_links l
-          WHERE l.company_id = NEW.company_id AND l.from_id = ${id} AND l.kind IN ${groupLinks}), ${id})`;
 const subjectDocument = `substr(NEW.subject_key, 10)`;
 
 const documentChecks: Check[] = [
@@ -1402,7 +1438,7 @@ const documentLinkChecks: Check[] = [
   },
   {
     code: 'supersede',
-    rule: 'Only an extracted document is superseded, by another extracted document of its kind, once, and only while no posted entry that stands recognizes it or its group (whose subject is the group’s root); after posting, a correction is a reversal, then the correction of the extraction and a new proposal.',
+    rule: 'Only an extracted document is superseded, by another extracted document of its kind, once, while no standing recognition, explicit reference or opening item books it or any identity/group copy; after posting, a correction requires reversal first.',
     violation: `NEW.kind = 'supersedes' AND (
         NOT EXISTS (
           SELECT 1 FROM acc_documents f
@@ -1417,9 +1453,10 @@ const documentLinkChecks: Check[] = [
           SELECT 1 FROM acc_proposals p
           JOIN acc_entries e ON e.company_id = p.company_id AND e.proposal_id = p.id
           WHERE p.company_id = NEW.company_id
-            AND (p.subject_key IN ('document:' || NEW.to_id, 'document:' || ${rootOf('NEW.to_id')})
-              OR p.document_id = NEW.to_id)
-            AND ${stands('e')}))`,
+            AND (p.subject_key IN (SELECT 'document:' || id FROM (${relatedDocuments('NEW.to_id')}) AS docs)
+              OR p.document_id IN (${relatedDocuments('NEW.to_id')}))
+            AND ${stands('e')})
+        OR ${openingCarries('NEW.to_id')})`,
   },
 ];
 
@@ -1487,16 +1524,17 @@ const triggers: Trigger[] = [
     checks: [
       {
         code: 'subject_taken',
-        rule: 'A subject has at most one proposal that holds it: not withdrawn, and not posted by an entry reversed since.',
+        rule: 'A subject has at most one proposal that holds it: not withdrawn or reversed. A document named by a standing opening item cannot acquire a recognition proposal.',
         violation: `EXISTS (
           SELECT 1 FROM acc_proposals p
           WHERE p.company_id = NEW.company_id AND p.subject_key = NEW.subject_key
-            AND ${holdsSubject('p')})`,
+            AND ${holdsSubject('p')})
+          OR (NEW.subject_key LIKE 'document:%' AND ${openingCarries(subjectDocument, 'exact')})`,
       },
       {
         code: 'identity_taken',
-        rule: 'A document is recognized once, whatever its copies: no proposal names a document while another document of its identity (the same identity key) or of its group (the same root) has a proposal that holds its subject (open, or posted by an entry that stands).',
-        violation: `NEW.subject_key LIKE 'document:%' AND EXISTS (
+        rule: 'A document is recognized once across its identity and group: no recognition proposal names a copy while another copy has a held document subject or a standing opening item carrying its balance.',
+        violation: `NEW.subject_key LIKE 'document:%' AND (EXISTS (
           SELECT 1 FROM acc_proposals p
           WHERE p.company_id = NEW.company_id AND p.subject_key <> NEW.subject_key
             AND p.subject_key IN (
@@ -1508,7 +1546,8 @@ const triggers: Trigger[] = [
               UNION SELECT 'document:' || l.from_id FROM acc_document_links l
               WHERE l.company_id = NEW.company_id AND l.kind IN ${groupLinks}
                 AND l.to_id = ${rootOf(subjectDocument)})
-            AND ${holdsSubject('p')})`,
+            AND ${holdsSubject('p')})
+          OR ${openingCarries(subjectDocument, 'other')})`,
       },
     ],
   },

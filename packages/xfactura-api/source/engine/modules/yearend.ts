@@ -59,7 +59,7 @@ import {
 } from '../db/schema';
 import type { ActionHandler } from '../kernel/actions';
 import type { Actor, Commands } from '../kernel/commands';
-import { entryStands, holdsSubject, linesUnder } from '../kernel/ledger';
+import { documentBooked, entryStands, holdsSubject, linesUnder } from '../kernel/ledger';
 import {
   differencesWithoutPersons,
   payClasses,
@@ -1180,13 +1180,7 @@ export async function yearEndReview(
         inArray(documents.kind, Object.values(invoiceKinds)),
         gte(documents.docDate, year.from),
         lte(documents.docDate, year.to),
-        sql`not exists (select 1 from ${proposals} p join ${entries} e
-          on e.company_id = p.company_id and e.proposal_id = p.id
-          where p.company_id = ${documents.companyId}
-            and p.subject_key = 'document:' || coalesce((select g.to_id from ${documentLinks} g
-              where g.company_id = ${documents.companyId} and g.from_id = ${documents.id}
-                and g.kind in ('same_as', 'same_as_confirmed') limit 1), ${documents.id})
-            and ${entryStands('e')})`,
+        sql`not ${documentBooked(documents.companyId, documents.id, { postedOnly: true })}`,
         sql`not exists (select 1 from ${dispositions} d where d.company_id = ${documents.companyId}
           and d.subject_kind = 'document' and d.subject_id = ${documents.id}
           and d.disposition = 'no_booking')`,

@@ -1,4 +1,4 @@
-import { and, asc, eq, exists, inArray, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireCondition } from 'xfactura-core/errors';
 import { canonical, hashOf } from 'xfactura-core/hash';
@@ -41,18 +41,9 @@ import type { InvoiceDocument } from 'xfactura-core/ubl/invoice-document';
 import type { Transaction } from '../db/database';
 import type { PartyIdentities } from '../db/identity';
 import { maskCnps } from '../kernel/personal';
-import {
-  companies,
-  documentLinks,
-  documents,
-  entries,
-  evidence,
-  parties,
-  proposals,
-  type Role,
-} from '../db/schema';
+import { companies, documentLinks, documents, evidence, parties, type Role } from '../db/schema';
 import type { Actor, Commands, Ids } from '../kernel/commands';
-import { entryStands, holdsSubject } from '../kernel/ledger';
+import { documentBooked, documentBookingRows } from '../kernel/ledger';
 import { joinIdentityGroup, placesOf, rootOf, type DocumentPlace } from '../kernel/sources';
 import type { Evidence, TextLayer } from './evidence';
 
@@ -226,30 +217,6 @@ function viewOf(row: DocumentRow, place: DocumentPlace | undefined): DocumentVie
 export async function documentViewOf(tx: Transaction, row: DocumentRow) {
   return viewOf(row, (await placesOf(tx, row.companyId, [row.id])).get(row.id));
 }
-
-/** Whether a posted entry that stands recognizes the document: one of its group's (whose subject
- * is the group's root, whichever copy it read), or one that named it when proposed. A reversed
- * booking no longer does: the correction is the reversal, then this one, then a new proposal. */
-const postedFor = (tx: Transaction, companyId: string, documentId: string, rootId: string) =>
-  exists(
-    tx
-      .select({ id: entries.id })
-      .from(entries)
-      .innerJoin(
-        proposals,
-        and(eq(proposals.companyId, entries.companyId), eq(proposals.id, entries.proposalId)),
-      )
-      .where(
-        and(
-          eq(entries.companyId, companyId),
-          or(
-            inArray(proposals.subjectKey, [`document:${documentId}`, `document:${rootId}`]),
-            eq(proposals.documentId, documentId),
-          ),
-          entryStands('"acc_entries"'),
-        ),
-      ),
-  );
 
 /** The VAT rates the register has in force on a date, as the company's assurance admits them. */
 function ratesFrom(rules: RuleContext): RatesAt {
@@ -448,7 +415,10 @@ export class Documents {
             and(
               eq(documents.companyId, actor.companyId),
               eq(documents.id, old.id),
-              postedFor(tx, actor.companyId, old.id, await rootOf(tx, actor.companyId, old.id)),
+              documentBooked(actor.companyId, old.id, {
+                postedOnly: true,
+                includeReferences: true,
+              }),
             ),
           );
         requireCondition(
@@ -633,26 +603,15 @@ export class Documents {
         409,
         { groupId: place.rootId },
       );
-      const [open] = await tx
-        .select({ id: proposals.id })
-        .from(proposals)
-        .where(
-          and(
-            eq(proposals.companyId, actor.companyId),
-            or(
-              eq(proposals.subjectKey, `document:${joining.id}`),
-              eq(proposals.documentId, joining.id),
-            ),
-            // Withdrawn, or posted and reversed since: it no longer books the document.
-            holdsSubject('"acc_proposals"'),
-          ),
-        );
+      const [open] = await tx.all<{ proposalId: string }>(
+        sql`${documentBookingRows(actor.companyId, joining.id, { includeReferences: true })} limit 1`,
+      );
       requireCondition(
         !open,
         'DOCUMENT_BOOKED',
         'Documentul are o propunere: retrageți-o (sau stornați înregistrarea) înainte de a-l lega de celălalt.',
         409,
-        { proposalId: open?.id },
+        { proposalId: open?.proposalId },
       );
       const rootId = await rootOf(tx, actor.companyId, target.id);
       await tx.insert(documentLinks).values({

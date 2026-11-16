@@ -6,7 +6,7 @@ import type { ProposalView } from '../../source/engine/kernel/views';
 import type { DocumentView } from '../../source/engine/modules/documents';
 import { invoiceXml } from './fixtures/invoice';
 import { pdfDocument, show } from './fixtures/pdf';
-import { scenario, type Scenario } from './scenario';
+import { journal, scenario, type Scenario } from './scenario';
 
 // Synthetic parties with valid control digits; amounts and texts are written by hand.
 const company = '12345674';
@@ -146,6 +146,146 @@ async function fromSpv(s: Scenario, overrides: Record<string, string> = {}) {
 }
 
 describe('documents read from a PDF', () => {
+  test('explicit document references still prevent linking without a document subject', async () => {
+    const { s, file, record } = await setup();
+    const { id: evidenceId } = await file('referenced.pdf', 'application/pdf', invoicePdf());
+    const extracted = await record({
+      evidenceId,
+      kind: 'invoice.received',
+      body: invoiceBody(),
+      citations: invoiceCitations,
+    });
+    const other = await fromSpv(s, { number: 'FCT0043' });
+    const proposal = await s.propose('deferrals.defer', {
+      documentId: extracted.id,
+      partyId: extracted.partyId,
+      evidenceId,
+      date: '2026-10-05',
+      account: '628',
+      amount: '100.00',
+      from: '2026-10',
+      months: 2,
+    });
+    const link = { documentId: extracted.id, targetId: other };
+    expect((await s.refused(s.invoke(s.reviewer, 'documents.link', link)))?.code).toBe(
+      'DOCUMENT_BOOKED',
+    );
+    await s.post(await s.approve(proposal, s.reviewer, ['SOURCE_EXTRACTED']));
+    expect((await s.refused(s.invoke(s.reviewer, 'documents.link', link)))?.code).toBe(
+      'DOCUMENT_BOOKED',
+    );
+    expect(
+      (
+        await s.refused(
+          s.invoke(s.owner, 'documents.supersede', {
+            documentId: extracted.id,
+            body: invoiceBody(),
+            citations: invoiceCitations,
+          }),
+        )
+      )?.code,
+    ).toBe('DOCUMENT_POSTED');
+  });
+
+  test('an opening prevents correction and linking of its extraction until reversed', async () => {
+    const { s, file, record } = await setup();
+    const { id: evidenceId } = await file('opening-invoice.pdf', 'application/pdf', invoicePdf());
+    const extracted = await record({
+      evidenceId,
+      kind: 'invoice.received',
+      body: invoiceBody(),
+      citations: invoiceCitations,
+    });
+    const proposal = await s.propose(
+      'ledger.general',
+      journal(
+        (await s.evidence()).id,
+        [
+          { account: '5121', side: 'D', amount: '1452.00' },
+          { account: '401', side: 'C', amount: '1452.00', newItem: 'supplier' },
+        ],
+        {
+          date: '2026-01-01',
+          purpose: 'opening',
+          newItems: [{ ref: 'supplier', partyId: extracted.partyId, documentId: extracted.id }],
+        },
+      ),
+    );
+    const opening = await s.post(await s.approve(proposal, s.reviewer, ['SOURCE_EXTRACTED']));
+    const { id: otherEvidence } = await file(
+      'other.xml',
+      'application/xml',
+      invoiceXml({
+        company,
+        counterparty: supplier,
+        number: 'FCT0043',
+        date: '2026-10-05',
+        net: '1200.00',
+        tax: '252.00',
+        gross: '1452.00',
+      }),
+    );
+    const other = await s.invoke<{ id: string }>(s.owner, 'invoices.import', {
+      evidenceId: otherEvidence,
+    });
+    const correction = {
+      documentId: extracted.id,
+      body: invoiceBody(),
+      citations: invoiceCitations,
+    };
+    const link = { documentId: extracted.id, targetId: other.id };
+    expect((await s.refused(s.invoke(s.owner, 'documents.supersede', correction)))?.code).toBe(
+      'DOCUMENT_POSTED',
+    );
+    expect((await s.refused(s.invoke(s.reviewer, 'documents.link', link)))?.code).toBe(
+      'DOCUMENT_BOOKED',
+    );
+    await s.book('ledger.reverse', {
+      entryId: opening.entry!.id,
+      date: '2026-10-10',
+      method: 'red',
+      reason: 'Corectarea poziției inițiale',
+      evidenceId: (await s.evidence()).id,
+    });
+    expect(await s.refused(s.invoke(s.reviewer, 'documents.link', link))).toBeUndefined();
+    expect(await s.refused(s.invoke(s.owner, 'documents.supersede', correction))).toBeUndefined();
+  });
+
+  test('the year-end cut-off recognizes an SPV invoice carried by an opening', async () => {
+    const { s } = await setup();
+    const id = await fromSpv(s);
+    const document = await s.invoke<Detail>(s.owner, 'documents.get', { id });
+    const review = () =>
+      s.invoke<{ items: { id: string }[] }>(s.owner, 'yearend.review', {
+        financialYearId: s.year.id,
+      });
+    expect((await review()).items.some((item) => item.id === 'cutoff|spv')).toBe(true);
+    const opening = await s.book(
+      'ledger.general',
+      journal(
+        (await s.evidence()).id,
+        [
+          { account: '5121', side: 'D', amount: '1452.00' },
+          { account: '401', side: 'C', amount: '1452.00', newItem: 'supplier' },
+        ],
+        {
+          date: '2026-01-01',
+          purpose: 'opening',
+          newItems: [{ ref: 'supplier', partyId: document.partyId, documentId: id }],
+        },
+      ),
+    );
+    expect((await review()).items.some((item) => item.id === 'cutoff|spv')).toBe(false);
+    await s.book('ledger.reverse', {
+      entryId: opening.entry!.id,
+      date: '2026-10-10',
+      method: 'red',
+      reason: 'Corectarea poziției inițiale',
+      evidenceId: (await s.evidence()).id,
+    });
+    expect((await review()).items.some((item) => item.id === 'cutoff|spv')).toBe(true);
+  });
+
   test('an extracted invoice with verified citations is checked and booked like any invoice', async () => {
     const { s, agent, file, record } = await setup();
     const { id: evidenceId } = await file('factura-0042.pdf', 'application/pdf', invoicePdf());

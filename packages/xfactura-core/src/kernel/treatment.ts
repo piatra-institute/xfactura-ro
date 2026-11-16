@@ -23,6 +23,8 @@ export interface ReadPlan {
   /** Retained source files the effect cites. */
   evidence?: string[];
   documents?: string[];
+  /** With the documents' standing bookings, including balances carried by opening items. */
+  documentBookings?: string[];
   /** Posted entries, with their lines and tax entries (for reversals and corrections). */
   entries?: string[];
   openItems?: OpenItemQuery[];
@@ -391,6 +393,8 @@ export interface ReadSetEntry {
     /** Where a document read comes from: its authority, its group and whether it was
      * superseded (the engine adds it beside the document's own entry). */
     | 'documentSource'
+    /** A document group's standing booking, or its absence. */
+    | 'documentBooking'
     /** A question a proposal's basis cites, by its id: the version is its latest answer's id
      * (the engine adds it, and loads the answer into `Loaded.answers`). */
     | 'answer'
@@ -413,6 +417,10 @@ export interface DocumentRecord {
   currency: string | null;
   number: string | null;
   evidenceId: string | null;
+  /** On request (`documentBookings`), the standing entry carrying this document's balance. */
+  booking?: { entryId: string; number: number; opening: boolean };
+  /** On request (`documentBookings`), the group's root, or this document outside a group. */
+  groupId?: string;
 }
 
 export interface OpenItemState extends OpenItemInfo {

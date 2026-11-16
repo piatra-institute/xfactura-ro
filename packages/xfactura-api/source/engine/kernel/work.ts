@@ -64,7 +64,7 @@ import { maskCnps, maskCnpText, payClasses, salaryPayment } from './personal';
 import { salaryMovements, salarySubjects } from './salaries';
 import { pausedScopes } from './automation';
 import { auditHead } from './events';
-import { entryStands, holdsSubject } from './ledger';
+import { documentBooked, entryStands, holdsSubject } from './ledger';
 import { SYSTEM_PRINCIPAL } from './principals';
 import { closedMonths, type CloseCheck } from './periods';
 import { groupLinkKinds } from './sources';
@@ -1740,11 +1740,8 @@ const documentsDetector: Detector = {
             and not exists (select 1 from ${documentLinks} m
               where m.company_id = ${q(documents.companyId)} and m.to_id = ${q(documents.id)}
                 and m.kind in ${groupKinds}))`,
-          // No proposal holds the group's subject: none open, none posted by an entry that
-          // stands (a reversal frees the document for a new booking).
-          sql`not exists (select 1 from ${proposals} p
-            where p.company_id = ${q(documents.companyId)} and p.subject_key = 'document:' || ${q(documents.id)}
-              and ${holdsSubject('p')})`,
+          // No held document subject or standing opening carries the group's balance.
+          sql`not ${documentBooked(q(documents.companyId), q(documents.id))}`,
         ),
       )
       .orderBy(asc(documents.id))
