@@ -1,0 +1,520 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "number",
+      "const": 1
+    },
+    "company": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1
+    },
+    "accounts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "sourceId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "standardId": {
+            "type": ["string", "null"]
+          },
+          "controlKind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "receivable",
+                  "payable",
+                  "advance.paid",
+                  "advance.received",
+                  "accrual.payable",
+                  "accrual.receivable",
+                  "deferral.expense",
+                  "deferral.revenue",
+                  "employee.payable",
+                  "tax.payable",
+                  "tax.receivable",
+                  "unapplied.receipt",
+                  "unapplied.payment",
+                  "loan.payable",
+                  "loan.interest",
+                  "tax",
+                  "retail"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "decidedBy": {
+            "type": "string",
+            "enum": [
+              "person",
+              "rule:unresolved",
+              "rule:account-synthetic",
+              "rule:account-analytic",
+              "rule:control-master-party",
+              "rule:control-saga-party",
+              "rule:control-line-party",
+              "rule:control-placeholder",
+              "rule:partner-fiscal-match",
+              "rule:partner-fiscal-create",
+              "rule:partner-source-id"
+            ]
+          },
+          "confirmedByPerson": {
+            "type": "boolean"
+          },
+          "target": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "const": "unresolved"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "enum": [
+                      "ACCOUNT_STANDARD_MISSING",
+                      "ACCOUNT_STANDARD_CONFLICT",
+                      "ACCOUNT_CODE_INVALID",
+                      "ACCOUNT_SYNTHETIC_UNKNOWN",
+                      "ACCOUNT_NOT_POSTABLE",
+                      "ACCOUNT_ANALYTIC_UNSUPPORTED",
+                      "ACCOUNT_NAME_MISSING",
+                      "ACCOUNT_PARTNER_AMBIGUOUS",
+                      "PARTNER_MASTER_MISSING",
+                      "PARTNER_IDENTITY_CONFLICT",
+                      "PARTNER_COUNTRY_MISSING",
+                      "PARTNER_KIND_UNSUPPORTED",
+                      "PARTNER_NAME_MISSING",
+                      "PARTNER_FISCAL_CODE_AMBIGUOUS",
+                      "PARTNER_FISCAL_CODE_OPAQUE",
+                      "PARTNER_PARTIES_CREATE_REQUIRES_CNP"
+                    ]
+                  }
+                },
+                "required": ["status", "reason"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "const": "mapped"
+                  },
+                  "account": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "synthetic"
+                          },
+                          "code": {
+                            "type": "string",
+                            "allOf": [
+                              {
+                                "pattern": "^[1-9]\\d{1,3}(?:\\.[A-Z0-9_-]{1,24}){0,4}$"
+                              },
+                              {
+                                "pattern": "^[1-9]\\d{1,3}$"
+                              }
+                            ]
+                          },
+                          "name": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": ["kind", "code", "name"],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "analytic"
+                          },
+                          "action": {
+                            "type": "string",
+                            "enum": ["existing", "create"]
+                          },
+                          "code": {
+                            "type": "string",
+                            "format": "includes",
+                            "allOf": [
+                              {
+                                "pattern": "^[1-9]\\d{1,3}(?:\\.[A-Z0-9_-]{1,24}){0,4}$"
+                              },
+                              {
+                                "pattern": "\\."
+                              }
+                            ]
+                          },
+                          "name": {
+                            "type": "string",
+                            "minLength": 2,
+                            "maxLength": 300
+                          }
+                        },
+                        "required": ["kind", "action", "code", "name"],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "party": {
+                    "anyOf": [
+                      {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "source"
+                              },
+                              "source": {
+                                "type": "object",
+                                "properties": {
+                                  "origin": {
+                                    "type": "string",
+                                    "enum": ["d406", "saga"]
+                                  },
+                                  "role": {
+                                    "type": "string",
+                                    "enum": ["customer", "supplier"]
+                                  },
+                                  "id": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required": ["origin", "role", "id"],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": ["kind", "source"],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "line"
+                              },
+                              "role": {
+                                "type": "string",
+                                "enum": ["customer", "supplier"]
+                              }
+                            },
+                            "required": ["kind"],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "placeholder"
+                              },
+                              "key": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "required": ["kind", "key"],
+                            "additionalProperties": false
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "requiresOpenItem": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["status", "account", "party", "requiresOpenItem"],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": [
+          "sourceId",
+          "standardId",
+          "controlKind",
+          "decidedBy",
+          "confirmedByPerson",
+          "target"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "partners": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "object",
+            "properties": {
+              "origin": {
+                "type": "string",
+                "enum": ["d406", "saga"]
+              },
+              "role": {
+                "type": "string",
+                "enum": ["customer", "supplier"]
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": ["origin", "role", "id"],
+            "additionalProperties": false
+          },
+          "decidedBy": {
+            "type": "string",
+            "enum": [
+              "person",
+              "rule:unresolved",
+              "rule:account-synthetic",
+              "rule:account-analytic",
+              "rule:control-master-party",
+              "rule:control-saga-party",
+              "rule:control-line-party",
+              "rule:control-placeholder",
+              "rule:partner-fiscal-match",
+              "rule:partner-fiscal-create",
+              "rule:partner-source-id"
+            ]
+          },
+          "confirmedByPerson": {
+            "type": "boolean"
+          },
+          "target": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "const": "unresolved"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "enum": [
+                      "ACCOUNT_STANDARD_MISSING",
+                      "ACCOUNT_STANDARD_CONFLICT",
+                      "ACCOUNT_CODE_INVALID",
+                      "ACCOUNT_SYNTHETIC_UNKNOWN",
+                      "ACCOUNT_NOT_POSTABLE",
+                      "ACCOUNT_ANALYTIC_UNSUPPORTED",
+                      "ACCOUNT_NAME_MISSING",
+                      "ACCOUNT_PARTNER_AMBIGUOUS",
+                      "PARTNER_MASTER_MISSING",
+                      "PARTNER_IDENTITY_CONFLICT",
+                      "PARTNER_COUNTRY_MISSING",
+                      "PARTNER_KIND_UNSUPPORTED",
+                      "PARTNER_NAME_MISSING",
+                      "PARTNER_FISCAL_CODE_AMBIGUOUS",
+                      "PARTNER_FISCAL_CODE_OPAQUE",
+                      "PARTNER_PARTIES_CREATE_REQUIRES_CNP"
+                    ]
+                  }
+                },
+                "required": ["status", "reason"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "const": "mapped"
+                  },
+                  "party": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "action": {
+                            "type": "string",
+                            "const": "existing"
+                          },
+                          "id": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": ["action", "id"],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "action": {
+                            "type": "string",
+                            "const": "create"
+                          },
+                          "key": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "ro_legal_entity",
+                              "ro_individual_enterprise",
+                              "ro_individual",
+                              "ro_public_institution",
+                              "eu_taxable",
+                              "non_eu"
+                            ]
+                          },
+                          "country": {
+                            "type": "string",
+                            "pattern": "^[A-Z]{2}$"
+                          },
+                          "taxId": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 40
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "name": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 300
+                          }
+                        },
+                        "required": ["action", "key", "kind", "country", "taxId", "name"],
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                },
+                "required": ["status", "party"],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": ["source", "decidedBy", "confirmedByPerson", "target"],
+        "additionalProperties": false
+      }
+    },
+    "placeholders": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "decidedBy": {
+            "type": "string",
+            "enum": [
+              "person",
+              "rule:unresolved",
+              "rule:account-synthetic",
+              "rule:account-analytic",
+              "rule:control-master-party",
+              "rule:control-saga-party",
+              "rule:control-line-party",
+              "rule:control-placeholder",
+              "rule:partner-fiscal-match",
+              "rule:partner-fiscal-create",
+              "rule:partner-source-id"
+            ]
+          },
+          "confirmedByPerson": {
+            "type": "boolean"
+          },
+          "placeholder": {
+            "type": "boolean",
+            "const": true
+          },
+          "sourceAccountId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "party": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "create"
+              },
+              "key": {
+                "type": "string",
+                "minLength": 1
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "ro_legal_entity",
+                  "ro_individual_enterprise",
+                  "ro_individual",
+                  "ro_public_institution",
+                  "eu_taxable",
+                  "non_eu"
+                ]
+              },
+              "country": {
+                "type": "string",
+                "pattern": "^[A-Z]{2}$"
+              },
+              "taxId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 40
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              }
+            },
+            "required": ["action", "key", "kind", "country", "taxId", "name"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["decidedBy", "confirmedByPerson", "placeholder", "sourceAccountId", "party"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["schemaVersion", "company", "source", "accounts", "partners", "placeholders"],
+  "additionalProperties": false
+}
