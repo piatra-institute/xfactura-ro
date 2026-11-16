@@ -11,8 +11,17 @@ import { vatTaxCodes } from './data/tax';
  * A reverse charge (RC-*) is one operation: the code ANAF lists for it corresponds to both the
  * collected VAT (D300 rd. 7) and its deduction (rd. 22), so it is reported once, with the
  * acquisition, and the collected side has no code of its own. The engine's codes without a row
- * here (O, S-9, S-5, partial deductions) have no certain TaxCode: the caller reports them as
- * problems for the expert, never as a guess.
+ * here (O, a sale at 9%, partial deductions) have no certain TaxCode: the caller reports them as
+ * problems for the expert, never as a guess. A sale at 9% has two active codes, Livrari 310310
+ * ("taxabile cu cota 9%", rd. 10.1) and 310357 ("cu cota 9% conform art.III din Legea nr.141/
+ * 2025", active from 01.08.2025, rd. 11), and the register has no version of a 9% rate to tell
+ * their periods apart: both are read back only (tax-code-readings.ts, `d406InverseOnlyCodes`).
+ *
+ * The 9% and 5% rows quote codes the sheets keep active, with their D300 rows from 01.08.2025.
+ * The register has no version of either rate (`ro.vat.rate.reduced` starts on 2025-08-01 at
+ * 11%), so no row says which periods they apply to: the treatments decide the rate, the row only
+ * how an entry at it is reported. Their codes deducted by half (3411xx and 3413xx at 9% and 5%)
+ * are marked "x - Inactiv" in sheet Achizitii ded 50% and have no row.
  *
  * VAT on collection (`cashVat`): the invoices of a supplier applying it have codes of their own,
  * its sales (Livrari 3103xx, "furnizorii care aplică TVA la încasare", no D300 row: the VAT is
@@ -30,7 +39,9 @@ export type D406VatCodeRow = {
   /** The engine's code: S-<rate>, RC-EU-SERV, RC-NONEU-SERV, EXP-EU-SERV, EXP-NONEU-SERV,
    * TI-A-<rate>, TI-L, the exempt codes, O. */
   code: string;
-  /** The VAT rate, for the reverse charges taxed at the standard rate of their tax point. */
+  /** The VAT rate, for the codes that do not name it: the reverse charges, which the D406 module
+   * reports at the standard rate of their tax point, and the adjustments and regularizations, at
+   * the rate their tax entry records. */
   rate?: string;
   /** For acquisitions: the VAT deducted in full, by half, not at all, or under a pro-rata (art.
    * 300 alin. (5): the provisional pro-rata, which the TaxTable gives as the code's BaseRate). */
@@ -71,6 +82,14 @@ export const d406VatCodes: readonly D406VatCodeRow[] = [
     taxCode: '310351',
     description: 'Livrări de bunuri şi prestări de servicii taxabile cu cota 11%',
     d300: '10',
+  },
+  // Livrari row 23: D300 rd. 11.1 from 01.08.2025, rd. 11 until 31.07.2025.
+  {
+    direction: 'output',
+    code: 'S-5',
+    taxCode: '310311',
+    description: 'Livrări de bunuri şi prestări de servicii taxabile cu cota 5%',
+    d300: '11.1',
   },
   {
     direction: 'output',
@@ -113,6 +132,26 @@ export const d406VatCodes: readonly D406VatCodeRow[] = [
     description:
       'Achiziţii de bunuri şi servicii taxabile cu cota de 11% altele decât importurile si cele supuse masurilor de simplificare',
     d300: '25',
+  },
+  // Achizitii ded 100% row 55: D300 rd. 25.1 from 01.08.2025, rd. 25 until 31.07.2025.
+  {
+    direction: 'input',
+    code: 'S-9',
+    deduction: 'full',
+    taxCode: '301102',
+    description:
+      'Achiziţii de bunuri şi servicii taxabile cu cota de 9% altele decât importurile si cele supuse masurilor de simplificare',
+    d300: '25.1',
+  },
+  // Achizitii ded 100% row 56: D300 rd. 26 in both periods.
+  {
+    direction: 'input',
+    code: 'S-5',
+    deduction: 'full',
+    taxCode: '301103',
+    description:
+      'Achiziţii de bunuri și servicii, taxabile cu cota de 5% altele decât importurile si cele supuse masurilor de simplificare',
+    d300: '26',
   },
   {
     direction: 'input',
@@ -206,6 +245,26 @@ export const d406VatCodes: readonly D406VatCodeRow[] = [
       'Achiziţii de bunuri şi servicii taxabile cu cota de 11% altele decât importurile si cele supuse masurilor de simplificare',
     d300: '25',
   },
+  // Achizitii neded row 55: D300 rd. 25.1 from 01.08.2025, rd. 25 until 31.07.2025.
+  {
+    direction: 'input',
+    code: 'S-9',
+    deduction: 'none',
+    taxCode: '351102',
+    description:
+      'Achiziţii de bunuri şi servicii taxabile cu cota de 9% altele decât importurile si cele supuse masurilor de simplificare',
+    d300: '25.1',
+  },
+  // Achizitii neded row 56: D300 rd. 26 in both periods.
+  {
+    direction: 'input',
+    code: 'S-5',
+    deduction: 'none',
+    taxCode: '351103',
+    description:
+      'Achiziţii de bunuri și servicii, taxabile cu cota de 5% altele decât importurile si cele supuse masurilor de simplificare',
+    d300: '26',
+  },
   {
     direction: 'input',
     code: 'RC-EU-SERV',
@@ -268,16 +327,33 @@ export const d406VatCodes: readonly D406VatCodeRow[] = [
     description: 'Livrări/ prestări de către furnizorii care aplică TVA la încasare 11%',
     d300: '',
   },
+  // Livrari row 49, without a D300 row. At 9% the sheet has 310336 (row 48) and 310358 (row 70,
+  // "conform art.III din Legea nr.141/ 2025 efectuate de către furnizorii care aplică TVA la
+  // încasare"): no forward row, as for the sale at 9%.
+  {
+    direction: 'output',
+    code: 'S-5',
+    cashVat: true,
+    taxCode: '310337',
+    description: 'Livrări/ prestări de către furnizorii care aplică TVA la încasare 5%',
+    d300: '',
+  },
+  // Achizitii ded 100% rows 64–66, 68–69, Achizitii ded 50% rows 64, 69 and Achizitii neded rows
+  // 64–66, 68–69, without a D300 row.
   ...(
     [
       ['S-21', 'full', '301305'],
       ['S-19', 'full', '301301'],
       ['S-11', 'full', '301306'],
+      ['S-9', 'full', '301302'],
+      ['S-5', 'full', '301303'],
       ['S-21', 'half', '341306'],
       ['S-19', 'half', '341301'],
       ['S-21', 'none', '351305'],
       ['S-19', 'none', '351301'],
       ['S-11', 'none', '351306'],
+      ['S-9', 'none', '351302'],
+      ['S-5', 'none', '351303'],
     ] as const
   ).map(([code, deduction, taxCode]): D406VatCodeRow => ({
     direction: 'input',
@@ -316,11 +392,34 @@ export const d406VatCodes: readonly D406VatCodeRow[] = [
       'Achiziţii de bunuri şi servicii taxabile cu cota de 11% altele decât importurile si cele supuse masurilor de simplificare',
     d300: '25',
   },
+  // Achizitii baserate row 55: D300 rd. 25.1 from 01.08.2025, rd. 25 until 31.07.2025.
+  {
+    direction: 'input',
+    code: 'S-9',
+    deduction: 'prorata',
+    taxCode: '361102',
+    description:
+      'Achiziţii de bunuri şi servicii taxabile cu cota de 9% altele decât importurile si cele supuse masurilor de simplificare',
+    d300: '25.1',
+  },
+  // Achizitii baserate row 56: D300 rd. 26 in both periods.
+  {
+    direction: 'input',
+    code: 'S-5',
+    deduction: 'prorata',
+    taxCode: '361103',
+    description:
+      'Achiziţii de bunuri și servicii, taxabile cu cota de 5% altele decât importurile si cele supuse masurilor de simplificare',
+    d300: '26',
+  },
+  // Achizitii baserate rows 64–66, 68–69, without a D300 row.
   ...(
     [
       ['S-21', '361305'],
       ['S-19', '361301'],
       ['S-11', '361306'],
+      ['S-9', '361302'],
+      ['S-5', '361303'],
     ] as const
   ).map(([code, taxCode]): D406VatCodeRow => ({
     direction: 'input',
@@ -338,7 +437,8 @@ export const d406VatCodes: readonly D406VatCodeRow[] = [
  * "supuse măsurilor de simplificare" rows: a supply (TI-L) is Livrari 310312, without VAT (D300 rd.
  * 13); an acquisition (TI-A-<rate>) is one operation, its collected VAT (rd. 12) and its deduction
  * (rd. 27 in ANAF's sheets) reported once, with the acquisition, by its deduction: Achizitii ded
- * 100% 3009xx, Achizitii neded 3509xx; the collected side has no code of its own.
+ * 100% 3009xx, Achizitii neded 3509xx (rows 47–53 of each); the collected side has no code of
+ * its own. The sheets keep the codes at 20% and 24% active, with the 19% rows' D300 rows.
  */
 export const d406DomesticReverseChargeCodes: readonly D406VatCodeRow[] = [
   {
@@ -356,6 +456,8 @@ export const d406DomesticReverseChargeCodes: readonly D406VatCodeRow[] = [
       ['19', '300901', '350901', '12.3/27.3'],
       ['9', '300902', '350902', '12.4/27.4'],
       ['5', '300903', '350903', '12.5/27.5'],
+      ['20', '300904', '350904', '12.3/27.3'],
+      ['24', '300905', '350905', '12.3/27.3'],
     ] as const
   ).flatMap(([rate, full, none, d300]): D406VatCodeRow[] =>
     (
@@ -380,7 +482,12 @@ export const d406DomesticReverseChargeCodes: readonly D406VatCodeRow[] = [
  * the scope of VAT (category O: a supplier not registered for VAT, D300 rd. 29's "neimpozabilă sau
  * supusă unui regim special de taxă", OPANAF nr. 174/2026) on the same row; the adjustments of
  * rd. 34 by the rate of the VAT they adjust (`rate` attribute): the pro-rata's "Ajustări conform
- * pro-rata", the capital goods' and the stock's "Ajustări de taxă".
+ * pro-rata", the capital goods' and the stock's "Ajustări de taxă". The adjustments' codes are
+ * Achizitii ded 100% rows 89–90 (24%), 94–101 (19%, 9%, 5%, 20%) and 104–107 (21%, 11%); the
+ * sheet's D300 column gives them rd. 35, and the rows keep rd. 34, the adjustments' row of the
+ * return as src/ro/exempt/codes.ts reads it. An adjustment records the rate of the VAT it
+ * adjusts, from the capital good's acquisition code or as the stock's input
+ * (treatments/vat-registration.ts), so every rate the sheet lists has its row.
  */
 export const d406ExemptCodes: readonly D406VatCodeRow[] = [
   {
@@ -436,12 +543,24 @@ export const d406ExemptCodes: readonly D406VatCodeRow[] = [
       ['ADJ-300', '21', '307327', 'Ajustări conform pro-rata'],
       ['ADJ-300', '11', '307328', 'Ajustări conform pro-rata'],
       ['ADJ-300', '19', '307311', 'Ajustări conform pro-rata'],
+      ['ADJ-300', '9', '307312', 'Ajustări conform pro-rata'],
+      ['ADJ-300', '5', '307313', 'Ajustări conform pro-rata'],
+      ['ADJ-300', '20', '307314', 'Ajustări conform pro-rata'],
+      ['ADJ-300', '24', '307301', 'Ajustări conform pro-rata'],
       ['ADJ-305', '21', '307329', 'Ajustări de taxă'],
       ['ADJ-305', '11', '307330', 'Ajustări de taxă'],
       ['ADJ-305', '19', '307321', 'Ajustări de taxă'],
+      ['ADJ-305', '9', '307322', 'Ajustări de taxă'],
+      ['ADJ-305', '5', '307323', 'Ajustări de taxă'],
+      ['ADJ-305', '20', '307324', 'Ajustări de taxă'],
+      ['ADJ-305', '24', '307302', 'Ajustări de taxă'],
       ['ADJ-304', '21', '307329', 'Ajustări de taxă'],
       ['ADJ-304', '11', '307330', 'Ajustări de taxă'],
       ['ADJ-304', '19', '307321', 'Ajustări de taxă'],
+      ['ADJ-304', '9', '307322', 'Ajustări de taxă'],
+      ['ADJ-304', '5', '307323', 'Ajustări de taxă'],
+      ['ADJ-304', '20', '307324', 'Ajustări de taxă'],
+      ['ADJ-304', '24', '307302', 'Ajustări de taxă'],
     ] as const
   ).map(([code, rate, taxCode, description]): D406VatCodeRow => ({
     direction: 'input',
@@ -532,7 +651,8 @@ export const d406RegimeCodes: readonly D406VatCodeRow[] = [
  *   324) and never deducts (`regime: special` on the tax entry): Achizitii neded 3563xx, "pentru
  *   care beneficiarul este obligat la plata TVA cf. art. 307 alin. (2)", with the column D301
  *   (sections 4 and 4.1): 356319/356320/356306 from the Union, 356317/356318/356304 from outside
- *   it. ANAF's answers (v1.2, 5) give 306306 for an art. 317 code holder: the same row with the
+ *   it, and at 9% and 5% 356307/356308 and 356309/356310 (Achizitii neded rows 73–78, 85–88).
+ *   ANAF's answers (v1.2, 5) give 306306 for an art. 317 code holder: the same row with the
  *   deduction a non-payer does not have.
  */
 export const d406NonPayerSaleCode = '310326';
@@ -541,9 +661,13 @@ export const d406SpecialCodes: readonly D406VatCodeRow[] = (
     ['RC-EU-SERV', '21', '356319'],
     ['RC-EU-SERV', '11', '356320'],
     ['RC-EU-SERV', '19', '356306'],
+    ['RC-EU-SERV', '9', '356307'],
+    ['RC-EU-SERV', '5', '356308'],
     ['RC-NONEU-SERV', '21', '356317'],
     ['RC-NONEU-SERV', '11', '356318'],
     ['RC-NONEU-SERV', '19', '356304'],
+    ['RC-NONEU-SERV', '9', '356309'],
+    ['RC-NONEU-SERV', '5', '356310'],
   ] as const
 ).map(([code, rate, taxCode]) => ({
   direction: 'input',
@@ -645,19 +769,28 @@ export function d406UnionSchemeTax(
  * subject to the simplification measures (IMP-DEF-<rate>, art. 326 alin. (4)–(5), D300 7/22;
  * 3006xx, 3506xx) are each one operation, reported once with the acquisition by its deduction;
  * an import whose VAT was paid at customs (IMP-<rate>, D300 24/25; 3012xx, 3512xx) is an
- * acquisition. Supplies keep V2's codes (EX-IC 310301, EX-EXPORT 310313).
+ * acquisition. Supplies keep V2's codes (EX-IC 310301, EX-EXPORT 310313). The codes are rows
+ * 17–21, 32–36 and 59–63 of each sheet; an import at 9% is D300 rd. 25.1 from 01.08.2025 (rd. 25
+ * until 31.07.2025), one at 5% rd. 26. The treatments deduct in full or not at all, so the
+ * Achizitii ded 50% and Achizitii baserate rows of these operations have no row here.
  */
 export const d406TradeCodes: readonly D406VatCodeRow[] = (
   [
     ['AIC', '21', '300204', '350204', '5/5.1/20/20.1'],
     ['AIC', '11', '300205', '350205', '5/5.1/20/20.1'],
     ['AIC', '19', '300201', '350201', '5/5.1/20/20.1'],
+    ['AIC', '9', '300202', '350202', '5/5.1/20/20.1'],
+    ['AIC', '5', '300203', '350203', '5/5.1/20/20.1'],
     ['IMP-DEF', '21', '300604', '350604', '7/22'],
     ['IMP-DEF', '11', '300605', '350605', '7/22'],
     ['IMP-DEF', '19', '300601', '350601', '7/22'],
+    ['IMP-DEF', '9', '300602', '350602', '7/22'],
+    ['IMP-DEF', '5', '300603', '350603', '7/22'],
     ['IMP', '21', '301204', '351204', '24'],
     ['IMP', '11', '301205', '351205', '25'],
     ['IMP', '19', '301201', '351201', '24.1'],
+    ['IMP', '9', '301202', '351202', '25.1'],
+    ['IMP', '5', '301203', '351203', '26'],
   ] as const
 ).flatMap(([prefix, rate, full, none, d300]): D406VatCodeRow[] =>
   (
