@@ -1,0 +1,8 @@
+{
+  "id": "source-balance-carry",
+  "explanation": "The closing balance reported for an account differs from its opening in the next contiguous reporting period. The accountant must explain the carry before attributing the difference to the engine.",
+  "class": "source-inconsistency",
+  "pattern": {
+    "kind": "source-chain-balance"
+  }
+}

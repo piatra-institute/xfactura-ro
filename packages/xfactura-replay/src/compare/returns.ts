@@ -1,4 +1,5 @@
 import { createHmac } from 'node:crypto';
+import { decimal, decimalText, subtract } from './decimal';
 import type { FiledDeclaration } from 'xfactura-core/ro/declarations/read';
 import { catalogueApplies, matches, type Normalization, type ReturnCatalogue } from './catalogues';
 
@@ -45,33 +46,6 @@ export class ReturnComparisonError extends Error {
 }
 function fail(code: string, message: string): never {
   throw new ReturnComparisonError(code, message);
-}
-
-type Decimal = { units: bigint; scale: number };
-function decimal(value: string): Decimal | null {
-  const match = /^([+-]?)(?:(\d+)(?:\.(\d*))?|\.(\d+))$/.exec(value.trim());
-  if (!match) return null;
-  const fraction = match[3] ?? match[4] ?? '';
-  return {
-    units: BigInt(`${match[1] === '-' ? '-' : ''}${match[2] ?? '0'}${fraction}`),
-    scale: fraction.length,
-  };
-}
-function decimalText({ units, scale }: Decimal): string {
-  if (units === 0n) return '0';
-  const sign = units < 0n ? '-' : '';
-  const digits = (units < 0n ? -units : units).toString().padStart(scale + 1, '0');
-  if (scale === 0) return sign + digits;
-  return `${sign}${digits.slice(0, -scale)}.${digits.slice(-scale)}`.replace(/\.?0+$/, '');
-}
-function subtract(left: Decimal, right: Decimal): Decimal {
-  const scale = Math.max(left.scale, right.scale);
-  return {
-    units:
-      left.units * 10n ** BigInt(scale - left.scale) -
-      right.units * 10n ** BigInt(scale - right.scale),
-    scale,
-  };
 }
 
 function normalize(value: string, policy: readonly Normalization[]): string {
