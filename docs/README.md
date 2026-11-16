@@ -39,4 +39,4 @@ xFactura's goal is a free, open Romanian accounting suite operated through a sha
 
 Keep implemented coverage and verification in `IMPLEMENTATION.md`, exact behavior in `ACCOUNTING_ENGINE.md`/`AGENT_API.md`, and open delivery work in `ROADMAP.md`. `FEATURE_VISION.md` owns product outcomes and candidate ideas; it is not a second implementation tracker. Update facts in place and link their owner instead of copying test counts, module status or legal values into several files.
 
-The regulatory baseline remains a dated planning reference; a documentation update is not a new legal review or a signed fiscal release. The [chat export](../chats/agentic_accounting_romania_chat_export.md) is design background. Its examples and proposed domains do not establish implemented support, passing corpus counts or current legal requirements.
+The regulatory baseline remains a dated planning reference; a documentation update is not a new legal review or a signed fiscal release. Design background, examples and proposed domains do not establish implemented support, passing corpus counts or current legal requirements.

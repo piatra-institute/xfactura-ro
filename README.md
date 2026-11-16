@@ -14,7 +14,7 @@ bun run setup
 bun run db:migrate
 ```
 
-`setup` creates private local configuration and generates an authentication secret. It preserves existing nonempty values. Configure an account through the operator CLI; public registration is disabled:
+`setup` creates private local configuration and generates an authentication secret. It preserves existing nonempty values except an authentication secret beginning with `replace-with-`. Configure an account through the operator CLI with a password of at least 12 characters; public registration is disabled:
 
 ```sh
 read -r -s ACCOUNT_PASSWORD
@@ -28,9 +28,9 @@ Open [localhost:3000/contabilitate](http://localhost:3000/contabilitate). `dev` 
 
 ## Accounting coverage
 
-Accounting runs on one append-only kernel: documents and evidence feed pure treatments, every effect is approved by a person for its exact hash (or posted under a human-approved policy), and the database itself refuses unapproved, unbalanced or altered entries. It covers the general ledger, e-Factura service invoices and credit notes in lei or foreign currency, MT940/camt.053 bank settlement, BNR rates with realized and month-end FX differences, working VAT journals, the trial balance and reviewed month close.
+Accounting runs on one append-only kernel: documents and evidence feed pure treatments, every effect is approved by a person for its exact hash (or posted under a human-approved policy), and the database itself refuses unapproved, unbalanced or altered entries.
 
-It is not yet a complete accounting system for a Romanian SRL: VAT settlement and declarations, payroll, assets, stock, micro and profit tax and year-end close remain to be built, and every fiscal parameter is still awaiting review by an expert contabil. [IMPLEMENTATION.md](docs/IMPLEMENTATION.md) owns current coverage, [ACCOUNTING_ENGINE.md](docs/ACCOUNTING_ENGINE.md) the exact behavior, and [ROADMAP.md](docs/ROADMAP.md) the remaining work.
+See [IMPLEMENTATION.md](docs/IMPLEMENTATION.md) for what exists today and [ROADMAP.md](docs/ROADMAP.md) for what remains.
 
 The public invoicer retains its own browser-local data and JSON/PDF/XML workflows. Importing an invoice does not establish ANAF acceptance, and a VAT journal or a closed month is not a declaration.
 
@@ -38,7 +38,7 @@ The public invoicer retains its own browser-local data and JSON/PDF/XML workflow
 
 Configure `.env` using [.env.example](.env.example). Local data is stored in `.accounting/xfactura.db`; immutable originals and generated exports are stored in `.accounting/objects`.
 
-For Turso, set `DATABASE_URL` to the libSQL database URL and `DATABASE_AUTH_TOKEN` to its scoped token, then run the same migration and account commands. Keep document storage persistent and shared between API and worker. The automated integration/recovery suite currently exercises local SQLite; a live Turso deployment requires its own adapter and provider recovery verification.
+For Turso, set `DATABASE_URL` to the libSQL database URL and `DATABASE_AUTH_TOKEN` to its scoped token, then run the same migration and account commands through the existing libSQL adapter. Keep document storage persistent and shared between API and worker. The automated integration/recovery suite exercises local SQLite; remote Turso behavior and provider recovery need verification on the target deployment.
 
 ## Schema changes
 
@@ -103,6 +103,7 @@ Acts are credited only for a completed session whose payment is `paid`, and exac
 
 ```sh
 bun run test
+bun scripts/rules/rollover.ts --date 2027-01-01 --check docs/ROLLOVER.md
 bun run test:integration
 bun run test:legacy
 bun run test:perf
@@ -112,17 +113,19 @@ bun run format:check
 bun run build:api
 bun run build
 bun run test:e2e
-bun run validators:fetch   # once: pinned official UBL, EN 16931 and Saxon artifacts
+bun run validators:fetch   # pinned UBL, EN 16931, Saxon and ANAF packages
 bun run test:official
 ```
 
-`test:official` validates the e-Factura writer against the UBL 2.1 schema (with `xmllint`) and the CEN EN 16931 rules (with Java and Saxon-HE), and checks that broken documents are rejected. Without the artifacts, Java or `xmllint` it reports skipped, not passed. The national CIUS-RO rules are published only by the Ministry of Finance; place them in `.validators/cius-ro/` as [sources.json](scripts/validators/sources.json) describes. `bun run validate:official <files or directories>` validates any XML the same way.
+`test:official` checks the e-Factura writer against UBL 2.1 (with `xmllint`) and CEN EN 16931 (with Java and Saxon-HE), exercises the accounting return writers with ANAF's pinned validators, and checks rejection of broken fixtures. Tests missing their required artifacts or tools report skipped, not passed. `bun run validate:official <files or directories>` applies UBL and EN 16931 checks to e-Factura invoices and credit notes, plus CIUS-RO when compiled `.xslt` or `.xsl` files are installed in `.validators/cius-ro/`; a raw `.sch` file is not loaded. [sources.json](scripts/validators/sources.json) records the artifacts and the manual CIUS-RO acquisition step.
+
+`bun run docs:rollover` prints and regenerates the register-derived table in [ROLLOVER.md](docs/ROLLOVER.md); `bun run test` includes its drift check.
 
 Browser tests use isolated temporary books, API port 8189 and web port 3100 by default. Each viewport gets a fresh server/database run so the growing suite respects local authentication rate limits. They exercise accounting and the existing invoicer without provider keys; artifacts are grouped under `test-results/desktop` and `test-results/mobile`. macOS uses installed Chrome; other systems need Playwright Chromium (`bunx playwright install chromium`). Keep those ports available during the tests, or move them with `XFACTURA_E2E_WEB_PORT` and `XFACTURA_E2E_API_PORT`.
 
 The versioned API is mounted in the existing `xfactura-api` server. Its OpenAPI document is served at `/api/accounting/openapi.json`. [ARCHITECTURE.md](docs/ARCHITECTURE.md) describes the domain boundaries and [DESIGN.md](docs/DESIGN.md) the interface conventions.
 
-Scoped accounting agents use the shared capability API or MCP at `/api/accounting/v1/companies/{companyId}/mcp`. Human-issued credentials expire, can be revoked, end when their issuer's membership changes, and never approve anything. MCP supports 2025 and 2026 protocol clients; browser OAuth delegation and the built-in Piatra AI/BYOK accounting agent remain planned. [AGENT_API.md](docs/AGENT_API.md) documents capabilities, connection and exact approvals. Accounting does not require an inference provider.
+Scoped accounting agents use the shared capability API or MCP at `/api/accounting/v1/companies/{companyId}/mcp`, authenticated with a human-issued bearer credential. Credentials expire, can be revoked, end when their issuer's membership changes, and never authorize approval by an agent. [AGENT_API.md](docs/AGENT_API.md) owns the connection and approval contract, and [ROADMAP.md](docs/ROADMAP.md) tracks planned integrations. Accounting does not require an inference provider.
 
 ## License and credits
 
