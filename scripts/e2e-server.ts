@@ -4,11 +4,12 @@ import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { Database } from '../packages/xfactura-api/source/engine/db/database';
 import { createAuth } from '../packages/xfactura-api/source/engine/http/auth';
+import { e2ePorts } from '../playwright.config';
 
 const directory = await mkdtemp(join(tmpdir(), 'xfactura-browser-'));
 const databaseUrl = `file:${join(directory, 'books.db')}`;
 const authSecret = randomBytes(32).toString('hex');
-const publicUrl = 'http://localhost:3100';
+const publicUrl = `http://localhost:${e2ePorts.web}`;
 const db = new Database(databaseUrl);
 try {
   await db.migrate();
@@ -49,7 +50,7 @@ const shared = {
 };
 const children = [
   Bun.spawn(['bun', 'packages/xfactura-api/source/index.ts'], {
-    env: { ...shared, PORT: '8189' },
+    env: { ...shared, PORT: String(e2ePorts.api) },
     stdout: 'inherit',
     stderr: 'inherit',
   }),
@@ -58,17 +59,20 @@ const children = [
     stdout: 'inherit',
     stderr: 'inherit',
   }),
-  Bun.spawn(['bun', 'run', '--cwd', 'packages/xfactura-web', 'dev', '--port', '3100'], {
-    env: {
-      ...shared,
-      PORT: '3100',
-      ACCOUNTING_API_URL: 'http://127.0.0.1:8189',
-      NEXT_DIST_DIR: '.next-e2e',
-      NEXT_TSCONFIG_PATH: tsconfig,
+  Bun.spawn(
+    ['bun', 'run', '--cwd', 'packages/xfactura-web', 'dev', '--port', String(e2ePorts.web)],
+    {
+      env: {
+        ...shared,
+        PORT: String(e2ePorts.web),
+        ACCOUNTING_API_URL: `http://127.0.0.1:${e2ePorts.api}`,
+        NEXT_DIST_DIR: '.next-e2e',
+        NEXT_TSCONFIG_PATH: tsconfig,
+      },
+      stdout: 'inherit',
+      stderr: 'inherit',
     },
-    stdout: 'inherit',
-    stderr: 'inherit',
-  }),
+  ),
 ];
 const stop = () => children.forEach((child) => child.kill());
 process.on('SIGINT', stop);
