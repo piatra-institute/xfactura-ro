@@ -37,6 +37,7 @@
     "./ro/sources": "./src/ro/sources/index.ts",
     "./ro/treatments/vat-settlement": "./src/ro/treatments/vat-settlement.ts",
     "./ro/declarations/d300": "./src/ro/declarations/d300.ts",
+    "./ro/declarations/read": "./src/ro/declarations/read.ts",
     "./ro/procedure": "./src/ro/procedure.ts",
     "./ro/obligations": "./src/ro/obligations.ts",
     "./ro/treatments/cross-border": "./src/ro/treatments/cross-border.ts",

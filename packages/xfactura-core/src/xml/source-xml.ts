@@ -17,11 +17,22 @@ export type XmlElement = {
   uri: string;
   text: string;
   attributes: Record<string, string>;
+  namespacedAttributes?: { uri: string; local: string; value: string }[];
   children: XmlElement[];
 };
 
+export type SourceXmlOptions = {
+  /** A positive finite integer; maximum attributes per element, including namespace declarations. */
+  maxAttributes?: number;
+  /** Retain namespaced content attributes separately from un-namespaced attributes. */
+  namespacedAttributes?: boolean;
+};
+
 // Bounded, namespace-aware parsing. No external entities, DTDs, network or filesystem access.
-export function sourceXml(bytes: Uint8Array): XmlElement {
+export function sourceXml(bytes: Uint8Array, options: SourceXmlOptions = {}): XmlElement {
+  const maxAttributes = options.maxAttributes === undefined ? 100 : options.maxAttributes;
+  if (!Number.isInteger(maxAttributes) || maxAttributes <= 0)
+    throw new TypeError('Limita atributelor XML trebuie să fie un număr întreg pozitiv și finit.');
   requireCondition(
     bytes.length > 0 && bytes.length <= 10 * 1024 * 1024,
     'XML_SIZE',
@@ -43,7 +54,7 @@ export function sourceXml(bytes: Uint8Array): XmlElement {
   });
   parser.on('opentag', (tag) => {
     requireCondition(
-      ++nodes <= 100000 && stack.length < 64 && Object.keys(tag.attributes).length <= 100,
+      ++nodes <= 100000 && stack.length < 64 && Object.keys(tag.attributes).length <= maxAttributes,
       'XML_COMPLEXITY',
       'Structura XML depășește limita.',
     );
@@ -56,6 +67,11 @@ export function sourceXml(bytes: Uint8Array): XmlElement {
           .filter((attr) => !attr.uri)
           .map((attr) => [attr.local, attr.value]),
       ),
+      ...(options.namespacedAttributes && {
+        namespacedAttributes: Object.values(tag.attributes)
+          .filter((attr) => attr.uri && attr.uri !== 'http://www.w3.org/2000/xmlns/')
+          .map(({ uri, local, value }) => ({ uri, local, value })),
+      }),
       children: [],
     };
     if (stack.length) stack.at(-1)!.children.push(node);
