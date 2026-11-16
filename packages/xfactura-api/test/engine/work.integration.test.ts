@@ -10,7 +10,7 @@ import { documentLinks, documents, evidence, spvMessages } from '../../source/en
 import { defaultRegister } from '../../source/engine/engine';
 import type { ActionView } from '../../source/engine/kernel/actions';
 import type { Actor } from '../../source/engine/kernel/commands';
-import type { WorkItem } from '../../source/engine/kernel/work';
+import { Work, type Detector, type Draft, type WorkItem } from '../../source/engine/kernel/work';
 import { iban, mt940 } from './fixtures/bank';
 import { invoiceXml, type XmlInput } from './fixtures/invoice';
 import { journal, scenario, type Scenario } from './scenario';
@@ -39,6 +39,32 @@ const items = async (s: Scenario, actor: Actor, input: Record<string, unknown> =
   (await list(s, actor, input)).items;
 const kinds = (found: WorkItem[]) => [...new Set(found.map((item) => item.kind))].sort();
 const of = (found: WorkItem[], kind: string) => found.filter((item) => item.kind === kind);
+
+function expectCleanMessage(message: string) {
+  const withoutFiles = message.replace(
+    /\b[a-zA-Z0-9_-]+\.(pdf|xml|csv|mt940|txt|jpg|jpeg|png|webp|json|zip)\b/gi,
+    '',
+  );
+  expect(withoutFiles).not.toMatch(/\b[a-z][a-z0-9]*\.[a-z][a-zA-Z0-9_]*\b/);
+  expect(withoutFiles).not.toMatch(/\b[A-Za-z0-9_.]+\|[A-Za-z0-9_.-]+\b/);
+  expect(withoutFiles).not.toMatch(/\b[a-z][a-z0-9]*_[a-z][a-z0-9_]*\b/);
+  const sentences = message
+    .split(/(?<=[.!?])\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  expect(new Set(sentences).size).toBe(sentences.length);
+}
+
+function expectCompleteLabels(item: WorkItem) {
+  for (const key of Object.keys(item.details)) {
+    const entry = item.labels[key];
+    expect(entry).toBeDefined();
+    expect(entry!.label.length).toBeGreaterThan(0);
+    if (entry!.type === 'amount' || entry!.type === 'minor')
+      expect(entry!.currency !== undefined || entry!.currencyKey !== undefined).toBe(true);
+    if (entry!.type === 'id') expect(entry!.kind.length).toBeGreaterThan(0);
+  }
+}
 
 /** A VAT-registered company with a bank account and its October statement, an invoice nobody
  * booked, a file nobody read, proposals in every state and an SPV message from a buyer. */
@@ -153,7 +179,6 @@ describe('the worklist', () => {
       'bank.unexplained',
       'close.finding',
       'closure.need',
-      'determination.missing',
       'document.unproposed',
       'evidence.unused',
       'obligation.due',
@@ -163,6 +188,10 @@ describe('the worklist', () => {
       'proposal.blocked',
       'spv.message',
     ]);
+    for (const item of page.items) {
+      expectCleanMessage(item.message);
+      expectCompleteLabels(item);
+    }
     const find = (kind: string, id: string) =>
       page.items.find((item) => item.kind === kind && item.subject.id === id)!;
 
@@ -172,6 +201,8 @@ describe('the worklist', () => {
         operation: 'proposals.approve',
         by: 'human',
         allowed: false,
+        reason: { kind: 'grant' },
+        complete: true,
         inputHint: {
           proposalId: awaiting.id,
           version: 1,
@@ -333,6 +364,8 @@ describe('the worklist', () => {
       operation: 'invoices.recognize.propose',
       by: 'agent',
       allowed: true,
+      complete: false,
+      missing: ['account', 'allocations'],
       inputHint: { documentId: unbooked.id },
     });
     const both = await agent(s, ['toolset:review', 'invoices.recognize.propose']);
@@ -340,6 +373,8 @@ describe('the worklist', () => {
       operation: 'proposals.propose',
       by: 'agent',
       allowed: true,
+      complete: false,
+      missing: ['input.account', 'input.allocations'],
       inputHint: { treatment: 'invoices.recognize', input: { documentId: unbooked.id } },
     });
     // The same for a revision: the treatment's own .revise when the generic one is not granted.
@@ -584,6 +619,8 @@ describe('documents and their copies', () => {
       operation: 'documents.supersede',
       by: 'agent',
       allowed: true,
+      complete: false,
+      missing: ['body'],
       inputHint: { documentId: extracted },
     });
 
@@ -745,6 +782,7 @@ describe('the close and the worklist', () => {
             operation: 'periods.close.request',
             by: 'agent',
             allowed: true,
+            complete: true,
             inputHint: { month: '2026-09' },
           },
         ],
@@ -768,7 +806,13 @@ describe('the close and the worklist', () => {
     });
     const [execute] = of(await items(s, s.owner), 'action.approved');
     expect(execute!.next).toEqual([
-      { operation: 'actions.execute', by: 'agent', allowed: true, inputHint: { id: request.id } },
+      {
+        operation: 'actions.execute',
+        by: 'agent',
+        allowed: true,
+        complete: true,
+        inputHint: { id: request.id },
+      },
     ]);
     expect(
       (await s.invoke<ActionView>(s.reviewer, 'actions.execute', execute!.next[0]!.inputHint))
@@ -1030,5 +1074,375 @@ describe('returns, the closure and the months on the worklist', () => {
     // In 2027 the register's start date is past its review horizon, yet the day is past.
     at('2027-01-05');
     expect(await reges()).toEqual([]);
+  });
+
+  test('reports each missing company fact once with causes, clean Romanian text, labels, refusal reasons and step completeness', async () => {
+    const fresh = await scenario({ clock: now });
+    open.push(fresh);
+    const freshItems = await items(fresh, fresh.owner);
+    const needs = of(freshItems, 'closure.need');
+    const obligations = of(freshItems, 'obligation.due');
+    expect(of(freshItems, 'determination.missing')).toEqual([]);
+    const factAxes = needs.map((item) => item.details.fact as string);
+    expect(new Set(factAxes).size).toBe(factAxes.length);
+    for (const need of needs) {
+      expect(need.causes?.length).toBeGreaterThanOrEqual(1);
+      expect(need.causes?.[0]).toMatchObject({
+        id: `fact:${need.details.fact as string}`,
+        kind: 'fact',
+      });
+    }
+    const vatNeed = needs.find((item) => item.details.fact === 'vat.status')!;
+    expect(vatNeed).toBeDefined();
+    const d300 = obligations.find((item) => item.subject.id.startsWith('D300|'))!;
+    expect(d300).toBeDefined();
+    expect(d300.causes?.map((cause) => cause.id)).toContain(vatNeed.causes![0]!.id);
+    expect(new Set(d300.causes!.map((cause) => cause.id)).size).toBe(d300.causes!.length);
+    for (const item of freshItems) {
+      expectCleanMessage(item.message);
+      expectCompleteLabels(item);
+      for (const cause of item.causes ?? []) expectCleanMessage(cause.message);
+    }
+
+    // Exercise all four step refusal reasons plus complete vs. incomplete step inputs.
+    const { s, awaiting, unbooked } = await books();
+    const readOnlyAgent = await agent(s, ['work.list']);
+    const viewerItems = await items(s, s.viewer);
+    const readOnlyItems = await items(s, readOnlyAgent);
+    const ownerItems = await items(s, s.owner);
+
+    // 1. Role refusal + complete proposals.approve
+    const viewerApprove = viewerItems.find(
+      (item) => item.kind === 'proposal.awaitingApproval' && item.subject.id === awaiting.id,
+    )!.next[0]!;
+    expect(viewerApprove).toMatchObject({
+      operation: 'proposals.approve',
+      allowed: false,
+      reason: { kind: 'role', permission: 'review' },
+      complete: true,
+    });
+    expect(viewerApprove.missing).toBeUndefined();
+
+    // 2. Grant refusal + complete proposals.approve for owner
+    const agentApprove = readOnlyItems.find(
+      (item) => item.kind === 'proposal.awaitingApproval' && item.subject.id === awaiting.id,
+    )!.next[0]!;
+    expect(agentApprove).toMatchObject({
+      operation: 'proposals.approve',
+      allowed: false,
+      reason: { kind: 'grant' },
+      complete: true,
+    });
+
+    // 3. Complete actions.approve + incomplete work.dispose + incomplete proposals.propose
+    const closeRequest = await s.close('2026-09');
+    const actionItem = (await items(s, s.owner, { kinds: ['action.awaitingDecision'] })).find(
+      (item) => item.subject.id === closeRequest.id,
+    )!;
+    expect(actionItem.next[0]).toMatchObject({
+      operation: 'actions.approve',
+      allowed: true,
+      complete: true,
+    });
+
+    const unproposed = ownerItems.find(
+      (item) => item.kind === 'document.unproposed' && item.subject.id === unbooked.id,
+    )!;
+    const proposeStep = unproposed.next.find((step) => step.operation === 'proposals.propose')!;
+    const disposeStep = unproposed.next.find((step) => step.operation === 'work.dispose')!;
+    expect(proposeStep).toMatchObject({
+      complete: false,
+      missing: ['input.account', 'input.allocations'],
+    });
+    expect(disposeStep).toMatchObject({
+      allowed: true,
+      complete: false,
+      missing: ['reason'],
+    });
+
+    // 4. Incomplete questions.answer on an open question
+    const asked = await s.invoke<{ id: string }>(s.owner, 'questions.ask', {
+      kind: 'vehicle.use',
+      subject: { kind: 'vehicle', id: 'B12ABC' },
+      params: { documentId: unbooked.id },
+    });
+    const openQuestion = (await items(s, s.owner, { kinds: ['question.open'] })).find(
+      (item) => item.subject.id === asked.id,
+    )!;
+    expectCleanMessage(openQuestion.message);
+    expectCompleteLabels(openQuestion);
+    expect(openQuestion.next.find((step) => step.operation === 'questions.answer')).toMatchObject({
+      allowed: true,
+      complete: false,
+      missing: ['value'],
+    });
+
+    // 5. Complete proposals.propose (fx.revalue on an open-month FX balance)
+    const bnrXml = `<?xml version="1.0" encoding="utf-8"?>
+<DataSet xmlns="http://www.bnr.ro/xsd" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<Header><Publisher>National Bank of Romania</Publisher><PublishingDate>2026-10-31</PublishingDate><MessageType>DR</MessageType></Header>
+<Body><Subject>Reference rates</Subject><OrigCurrency>RON</OrigCurrency>
+<Cube date="2026-10-10"><Rate currency="EUR">4.9765</Rate></Cube>
+<Cube date="2026-10-31"><Rate currency="EUR">4.9900</Rate></Cube>
+</Body></DataSet>`;
+    const { id: bnrEv } = await s.invoke<{ id: string }>(s.owner, 'evidence.record', {
+      filename: 'bnr-oct.xml',
+      mediaType: 'application/xml',
+      base64: Buffer.from(bnrXml).toString('base64'),
+    });
+    await s.invoke(s.owner, 'fx.importBnr', { evidenceId: bnrEv });
+    const eurXml = invoiceXml({
+      direction: 'sale',
+      currency: 'EUR',
+      number: 'EUR-1',
+      date: '2026-10-10',
+      net: '1000.00',
+      tax: '210.00',
+      gross: '1210.00',
+    })
+      .replace(
+        '</cbc:DocumentCurrencyCode>',
+        '</cbc:DocumentCurrencyCode><cbc:TaxCurrencyCode>RON</cbc:TaxCurrencyCode>',
+      )
+      .replace(
+        '<cac:LegalMonetaryTotal>',
+        '<cac:TaxTotal><cbc:TaxAmount currencyID="RON">1045.07</cbc:TaxAmount></cac:TaxTotal><cac:LegalMonetaryTotal>',
+      );
+    const { id: eurEv } = await s.invoke<{ id: string }>(s.owner, 'evidence.record', {
+      filename: 'eur-1.xml',
+      mediaType: 'application/xml',
+      base64: Buffer.from(eurXml).toString('base64'),
+    });
+    const eurDoc = await s.invoke<{ id: string }>(s.owner, 'invoices.import', {
+      evidenceId: eurEv,
+    });
+    await s.book('invoices.recognize', { documentId: eurDoc.id, account: '704' });
+    const fxFinding = (await items(s, s.owner, { kinds: ['close.finding'] })).find(
+      (item) => item.details.code === 'FX_NOT_REVALUED',
+    )!;
+    expect(fxFinding).toBeDefined();
+    expectCleanMessage(fxFinding.message);
+    expectCompleteLabels(fxFinding);
+    expect(fxFinding.next[0]).toMatchObject({
+      operation: 'proposals.propose',
+      complete: true,
+      inputHint: { treatment: 'fx.revalue', input: { date: '2026-10-31' } },
+    });
+    expect(fxFinding.next[0]!.missing).toBeUndefined();
+
+    // 6. State refusal: blocking SPV message cannot be disposed
+    await s.db.write((tx) =>
+      tx.insert(spvMessages).values({
+        id: randomUUID(),
+        companyId: s.company.id,
+        uploadId: '999999',
+        createdAtAnaf: Date.parse('2026-10-15T10:00:00Z'),
+        outcome: 'error',
+        details: 'Eroare la citirea mesajului SPV',
+        detail: 'Fișierul SPV nu a putut fi citit',
+        createdBy: s.owner.actorId,
+        kind: 'error',
+      }),
+    );
+    const spvError = (await items(s, s.owner, { kinds: ['spv.message'] })).find(
+      (item) => item.severity === 'block',
+    )!;
+    expect(spvError).toBeDefined();
+    expectCleanMessage(spvError.message);
+    expectCompleteLabels(spvError);
+    expect(spvError.next.find((step) => step.operation === 'work.dispose')).toMatchObject({
+      allowed: false,
+      reason: {
+        kind: 'state',
+        message: 'O problemă care blochează se rezolvă, nu se închide printr-o decizie.',
+      },
+      complete: false,
+      missing: ['reason'],
+    });
+
+    // 7. Data refusal + withheld labels: salary bank movement without personal/payroll scopes
+    await s.invoke(s.owner, 'profile.record', {
+      axis: 'employer',
+      value: 'yes',
+      effectiveFrom: '2026-01-01',
+      evidenceId: (await s.evidence('decl-angajator.pdf')).id,
+    });
+    await s.invoke<{ id: string }>(s.owner, 'payroll.employees.record', {
+      lastName: 'Marin',
+      firstName: 'Elena',
+      cnp: '2950301123457',
+      healthFund: 'RO-B',
+    });
+    const bankAccounts = await s.list<{ id: string }>(s.owner, 'treasury.accounts', {});
+    const salBank = bankAccounts[0]!;
+    const netAmount = '2925.00';
+    const closingAmount = '1000.00';
+    const { id: stmtEvidenceId } = await s.invoke<{ id: string }>(s.owner, 'evidence.record', {
+      filename: 'extras-salariu.txt',
+      mediaType: 'text/plain',
+      base64: Buffer.from(
+        `Sold initial: 3925.00\nPlata salariu ${netAmount} MARIN ELENA\nSold final: ${closingAmount}\n`,
+      ).toString('base64'),
+    });
+    await s.invoke(s.owner, 'bank.recordStatement', {
+      evidenceId: stmtEvidenceId,
+      accountId: salBank.id,
+      statement: {
+        number: 'EXT-SAL',
+        from: '2026-11-05',
+        to: '2026-11-05',
+        opening: {
+          amount: '3925.00',
+          citation: { page: 1, line: 1, text: 'Sold initial: 3925.00' },
+        },
+        closing: {
+          amount: closingAmount,
+          citation: { page: 1, line: 3, text: `Sold final: ${closingAmount}` },
+        },
+        entries: [
+          {
+            date: '2026-11-05',
+            amount: `-${netAmount}`,
+            description: 'Plata salariu',
+            reference: 'SAL-OCT-01',
+            counterparty: 'MARIN ELENA',
+            citation: { page: 1, line: 2, text: `Plata salariu ${netAmount} MARIN ELENA` },
+          },
+        ],
+      },
+    });
+    const payMovements = await s.list<Movement>(s.owner, 'bank.movements', {});
+    const salMove = payMovements.find((item) => item.amount === `-${netAmount}`)!;
+    expect(salMove).toBeDefined();
+    const bookAgent = await agent(s, ['toolset:review', 'bank.settle.propose']);
+    const bankItem = (await items(s, bookAgent, { kinds: ['bank.unexplained'] })).find(
+      (item) => item.subject.id === salMove.id,
+    )!;
+    expect(bankItem).toBeDefined();
+    expect(bankItem.details).toMatchObject({ redacted: true, amountMinor: null });
+    expectCompleteLabels(bankItem);
+    expectCleanMessage(bankItem.message);
+    const bankStep = bankItem.next.find(
+      (step) => step.operation === 'proposals.propose' || step.operation === 'bank.settle.propose',
+    )!;
+    expect(bankStep).toMatchObject({
+      allowed: false,
+      reason: { kind: 'data' },
+      needs: ['payroll', 'personal'],
+    });
+    for (const item of await items(s, s.owner)) {
+      expectCleanMessage(item.message);
+      expectCompleteLabels(item);
+      for (const cause of item.causes ?? []) expectCleanMessage(cause.message);
+    }
+  });
+
+  test('marks step completeness false when operation or treatment cannot be checked', async () => {
+    const s = await scenario({ clock: now });
+    open.push(s);
+    const detector: Detector = {
+      id: 'test.unknownCompleteness',
+      kinds: ['document.unproposed', 'proposal.stale'],
+      list: async () => {
+        const drafts: Draft[] = [
+          {
+            kind: 'document.unproposed',
+            subject: { kind: 'document', id: 'doc-unknown-op' },
+            severity: 'warn',
+            due: null,
+            period: null,
+            message: 'Document de verificat.',
+            details: {},
+            next: [
+              {
+                operation: 'nonexistent.operation',
+                by: 'agent',
+                inputHint: { anything: true },
+              },
+              {
+                operation: 'proposals.propose',
+                by: 'agent',
+                inputHint: { treatment: 'nonexistent.treatment', input: { anything: true } },
+              },
+              {
+                operation: 'proposals.propose',
+                by: 'agent',
+                inputHint: { treatment: 'fx.revalue', input: { date: '2026-10-31' } },
+              },
+            ],
+            cursor: '1',
+          },
+          {
+            kind: 'proposal.stale',
+            subject: { kind: 'proposal', id: 'prop-unknown-treatment' },
+            severity: 'warn',
+            due: null,
+            period: null,
+            message: 'Propunere de revizuit.',
+            details: { treatment: 'nonexistent.treatment' },
+            next: [
+              {
+                operation: 'proposals.revise',
+                by: 'agent',
+                inputHint: {
+                  proposalId: randomUUID(),
+                  version: 1,
+                  input: { anything: true },
+                },
+              },
+            ],
+            cursor: '2',
+          },
+        ];
+        return { items: drafts, next: null };
+      },
+    };
+
+    const withMetadata = new Work(s.engine.commands, [detector], now, {
+      operations: () => s.engine.operations,
+      treatments: () => s.engine.proposals.allTreatments(),
+    });
+    const fullPage = await withMetadata.list(s.owner, { limit: 10 });
+    const docItem = fullPage.items.find((item) => item.subject.id === 'doc-unknown-op')!;
+    expect(docItem.next[0]).toMatchObject({
+      operation: 'nonexistent.operation',
+      complete: false,
+      missing: ['operation'],
+    });
+    expect(docItem.next[1]).toMatchObject({
+      operation: 'proposals.propose',
+      complete: false,
+      missing: ['input'],
+    });
+    expect(docItem.next[2]).toMatchObject({
+      operation: 'proposals.propose',
+      complete: true,
+    });
+    const propItem = fullPage.items.find((item) => item.subject.id === 'prop-unknown-treatment')!;
+    expect(propItem.next[0]).toMatchObject({
+      operation: 'proposals.revise',
+      complete: false,
+      missing: ['input'],
+    });
+
+    // Without a treatment map, proposals.propose cannot verify the treatment's input.
+    const withoutTreatments = new Work(s.engine.commands, [detector], now, {
+      operations: () => s.engine.operations,
+    });
+    const noTreatPage = await withoutTreatments.list(s.owner, { limit: 10 });
+    expect(noTreatPage.items[0]!.next[2]).toMatchObject({
+      operation: 'proposals.propose',
+      complete: false,
+      missing: ['input'],
+    });
+
+    // Without an operation registry, no step's input can be verified.
+    const withoutOperations = new Work(s.engine.commands, [detector], now);
+    const noOpsPage = await withoutOperations.list(s.owner, { limit: 10 });
+    expect(noOpsPage.items[0]!.next[2]).toMatchObject({
+      operation: 'proposals.propose',
+      complete: false,
+      missing: ['operation'],
+    });
   });
 });

@@ -174,7 +174,7 @@ test('a VAT deadline prepares D300, shows the validator response and retains the
   await page.getByRole('combobox', { name: 'Familie', exact: true }).selectOption('deadlines');
   const work = page
     .locator('[data-work-kind="obligation.due"]')
-    .filter({ hasText: 'Declarația D300 pentru 2026-10,' });
+    .filter({ hasText: 'Decontul de TVA (D300) pentru octombrie 2026' });
   await work.locator(':scope > summary').click();
   await work.getByRole('link', { name: 'Deschide declarația în Termene', exact: true }).click();
   await expect(page).toHaveURL(/view=deadlines/);

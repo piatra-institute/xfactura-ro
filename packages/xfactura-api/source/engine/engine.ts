@@ -313,6 +313,7 @@ import {
   d112WithoutHealth,
   obligationsCalendar,
   obligationView,
+  workObligations,
 } from './modules/obligations';
 import {
   compareInput,
@@ -963,7 +964,7 @@ export class Engine {
         closeChecks: () => this.closeChecks,
         register: this.register,
         obligations: async (tx, companyId, range, today) =>
-          obligationsCalendar(
+          workObligations(
             tx,
             companyId,
             range,
@@ -1019,8 +1020,14 @@ export class Engine {
             await this.proposals.ruleContext(tx, companyId),
             (tx2, company, period) => filedD100.inputs(tx2, company, period),
           ),
+        operations: () => this.operations,
+        treatments: () => this.proposals.allTreatments(),
       }),
       this.clock,
+      {
+        operations: () => this.operations,
+        treatments: () => this.proposals.allTreatments(),
+      },
     );
     this.operations.add(...this.catalogue());
   }

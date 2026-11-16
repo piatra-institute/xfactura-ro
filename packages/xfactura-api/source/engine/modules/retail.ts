@@ -45,6 +45,13 @@ import {
 import { appendAudit, type Actor, type Commands } from '../kernel/commands';
 import type { CloseCheck, Finding } from '../kernel/periods';
 import { joinIdentityGroup } from '../kernel/sources';
+import {
+  cleanIdentifierText,
+  dateLabel,
+  idLabel,
+  textLabel,
+  type DetailLabels,
+} from '../kernel/work-names';
 import type { DeclarationProblem } from './declarations';
 
 /*
@@ -396,7 +403,9 @@ export const retailChecks: CloseCheck[] = [
         findings.push({
           code: 'ZREPORT_REGISTER',
           severity: 'warn',
-          message: `Rapoarte Z ale unor case de marcat neînregistrate (${[...new Set(unknown.map((row) => row.body.register))].join(', ')}): înregistrați casele (retail.registers.record).`,
+          message: cleanIdentifierText(
+            `Rapoarte Z ale unor case de marcat neînregistrate (${[...new Set(unknown.map((row) => row.body.register))].join(', ')}): înregistrați casele (retail.registers.record).`,
+          ),
           count: unknown.length,
           items: unknown.map((row) => row.id),
         });
@@ -461,7 +470,9 @@ export const retailChecks: CloseCheck[] = [
         findings.push({
           code: 'ZREPORT_GAP',
           severity: 'block',
-          message: `Lipsesc rapoarte Z din numerotarea caselor de marcat: ${gaps.join('; ')}. Înregistrați-le (retail.importZ sau documents.record) și contabilizați-le.`,
+          message: cleanIdentifierText(
+            `Lipsesc rapoarte Z din numerotarea caselor de marcat: ${gaps.join('; ')}. Înregistrați-le (retail.importZ sau documents.record) și contabilizați-le.`,
+          ),
           count: gaps.length,
           items: gaps,
         });
@@ -485,7 +496,9 @@ export const retailChecks: CloseCheck[] = [
         findings.push({
           code: 'ZREPORT_DAY',
           severity: 'warn',
-          message: `Zile fără raport Z: ${days.slice(0, 31).join(', ')}${days.length > 31 ? ', …' : ''}. Înregistrați raportul zilei, sau confirmați că unitatea a fost închisă (work.dispose).`,
+          message: cleanIdentifierText(
+            `Zile fără raport Z: ${days.slice(0, 31).join(', ')}${days.length > 31 ? ', …' : ''}. Înregistrați raportul zilei, sau confirmați că unitatea a fost închisă (work.dispose).`,
+          ),
           count: days.length,
           items: days,
         });
@@ -502,7 +515,9 @@ export const retailChecks: CloseCheck[] = [
         findings.push({
           code: 'ZREPORT_UNBOOKED',
           severity: 'block',
-          message: `Rapoarte Z necontabilizate: ${unbooked.map((row) => `${row.body.register} nr. ${row.body.number} (${row.body.issueDate})`).join(', ')} (retail.zReport).`,
+          message: cleanIdentifierText(
+            `Rapoarte Z necontabilizate: ${unbooked.map((row) => `${row.body.register} nr. ${row.body.number} (${row.body.issueDate})`).join(', ')} (retail.zReport).`,
+          ),
           count: unbooked.length,
           items: unbooked.map((row) => row.root),
         });
@@ -581,7 +596,9 @@ export const retailChecks: CloseCheck[] = [
         findings.push({
           code: 'RETAIL_DISCHARGE_MISSING',
           severity: 'block',
-          message: `Gestiunile la preț cu amănuntul ${missing.join(', ')} au ieșiri în ${month} fără descărcarea adaosului și a TVA neexigibile (retail.discharge).`,
+          message: cleanIdentifierText(
+            `Gestiunile la preț cu amănuntul ${missing.join(', ')} au ieșiri în ${month} fără descărcarea adaosului și a TVA neexigibile (retail.discharge).`,
+          ),
           count: missing.length,
           items: missing,
         });
@@ -597,7 +614,9 @@ export const retailChecks: CloseCheck[] = [
         findings.push({
           code: 'RETAIL_COUNT_MISSING',
           severity: 'block',
-          message: `Ultima lună a exercițiului: gestiunile ${counts.join(', ')} la preț cu amănuntul nu au inventarul la preț de vânzare (retail.count; OMF nr. 2.861/2009, anexa pct. 1–2 și 4).`,
+          message: cleanIdentifierText(
+            `Ultima lună a exercițiului: gestiunile ${counts.join(', ')} la preț cu amănuntul nu au inventarul la preț de vânzare (retail.count; OMF nr. 2.861/2009, anexa pct. 1–2 și 4).`,
+          ),
           count: counts.length,
           items: counts,
         });
@@ -657,7 +676,7 @@ export const retailChecks: CloseCheck[] = [
         {
           code: 'CARDS_IN_TRANSIT',
           severity: 'warn',
-          message: `Încasări cu cardul nedecontate de bancă de peste o lună: ${old.map((row) => lei(row.bani)).join(', ')} lei (bank.settle cu cards).`,
+          message: `Încasări cu cardul nedecontate de bancă de peste o lună: ${old.map((row) => lei(row.bani)).join(', ')} lei (decontare bancară pentru încasările cu cardul).`,
           count: old.length,
           items: old.map((row) => row.item!.slice(8)),
         },
@@ -676,6 +695,7 @@ export type RetailWorkItem = {
   period: string;
   message: string;
   details: { [key: string]: JsonValue };
+  labels?: DetailLabels;
   next: { operation: string; by: 'agent' | 'human'; inputHint: { [key: string]: JsonValue } }[];
 };
 
@@ -800,6 +820,13 @@ export async function retailWork(
         due,
         b2c: row.kind === 'ro_individual',
       },
+      labels: {
+        documentId: idLabel('Document', 'document'),
+        number: textLabel('Număr'),
+        issueDate: dateLabel('Data emiterii'),
+        due: dateLabel('Termen'),
+        b2c: textLabel('Client persoană fizică'),
+      },
       next: [{ operation: 'spv.submit', by: 'human', inputHint: { documentId: row.id } }],
     });
   }
@@ -832,6 +859,11 @@ export async function retailWork(
         registerId: register.id,
         code: register.code,
         pending: pending.map((item) => item.id),
+      },
+      labels: {
+        registerId: idLabel('Casă de marcat', 'cashRegister'),
+        code: textLabel('Cod'),
+        pending: textLabel('Obligații neînregistrate'),
       },
       next: [
         {

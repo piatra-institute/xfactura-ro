@@ -28,6 +28,7 @@ import { appendAudit, type Actor, type Commands } from '../kernel/commands';
 import type { CloseCheck } from '../kernel/periods';
 import { entryStands } from '../kernel/ledger';
 import { loadStock } from '../kernel/state';
+import { cleanIdentifierText } from '../kernel/work-names';
 
 /*
  * The stock register (G1): the item catalogue and the warehouses, kept as recorded, and what the
@@ -345,7 +346,7 @@ export const stockChecks: CloseCheck[] = [
                 )
                 .join(
                   '; ',
-                )}. Înregistrați intrările și ieșirile prin gestiune (recepție, bon de consum, descărcare), sau preluați soldul în gestiune (stock.opening).`,
+                )}. Înregistrați intrările și ieșirile prin gestiune (recepție, bon de consum, descărcare), sau preluați soldul inițial în gestiune.`,
               count: differing.length,
               items: differing.map((row) => row.account),
             },
@@ -393,7 +394,9 @@ export const stockChecks: CloseCheck[] = [
         findings.push({
           code: 'STOCK_PERIOD_COST_MISSING',
           severity: 'block' as const,
-          message: `Ieșirile lunii ${month} din ${pending.count} poziții de stoc sunt evaluate provizoriu, la costul mediu curent: cu costul mediu ponderat calculat lunar, costul lor se stabilește la sfârșitul lunii (stock.periodCost).`,
+          message: cleanIdentifierText(
+            `Ieșirile lunii ${month} din ${pending.count} poziții de stoc sunt evaluate provizoriu, la costul mediu curent: cu costul mediu ponderat calculat lunar, costul lor se stabilește la sfârșitul lunii (stock.periodCost).`,
+          ),
           count: pending.count,
           items: [month],
         });

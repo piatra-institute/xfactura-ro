@@ -22,6 +22,7 @@ import {
 import { appendAudit, type Actor, type Commands } from '../kernel/commands';
 import { entryStands } from '../kernel/ledger';
 import type { CloseCheck, Finding } from '../kernel/periods';
+import { treatmentName } from '../kernel/work-names';
 
 /*
  * Production (G4): the bills of materials, versioned and dated, and the work orders with their
@@ -268,7 +269,7 @@ export const productionChecks: CloseCheck[] = [
         findings.push({
           code: 'PRODUCTION_WIP_REVERSAL_MISSING',
           severity: 'block',
-          message: `Producția în curs de la sfârșitul lunii precedente nu este scăzută din gestiune la ${start} (funcțiunea contului 331): production.wipReverse.`,
+          message: `Producția în curs de la sfârșitul lunii precedente nu este scăzută din gestiune la ${start} (funcțiunea contului 331): ${treatmentName('production.wipReverse').toLowerCase()}.`,
           items: [month],
         });
       // Production postings of the month, or work in progress carried into it, need the costing.
@@ -290,7 +291,7 @@ export const productionChecks: CloseCheck[] = [
         findings.push({
           code: 'PRODUCTION_COST_MISSING',
           severity: 'block',
-          message: `Luna ${month} are consumuri, predări sau producție în curs pe comenzi fără calculația costurilor (production.cost): manopera și regia de producție nu sunt repartizate, producția în curs nu este evaluată.`,
+          message: `Luna ${month} are consumuri, predări sau producție în curs pe comenzi fără calculația costurilor (${treatmentName('production.cost').toLowerCase()}): manopera și regia de producție nu sunt repartizate, producția în curs nu este evaluată.`,
           count: active!.count,
           items: [month],
         });
@@ -351,7 +352,7 @@ export const productionChecks: CloseCheck[] = [
           findings.push({
             code: 'PRODUCTION_DIFFERENCES_MISSING',
             severity: 'block',
-            message: `Produse ieșite din gestiune în ${month} fără diferențele de preț repartizate (pct. 286 alin. (4)): production.differences.`,
+            message: `Produse ieșite din gestiune în ${month} fără diferențele de preț repartizate (pct. 286 alin. (4)): ${treatmentName('production.differences').toLowerCase()}.`,
             count: exits!.count,
             items: [month],
           });

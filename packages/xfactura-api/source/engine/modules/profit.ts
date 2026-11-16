@@ -11,6 +11,14 @@ import type { Actor, Commands } from '../kernel/commands';
 import { entryStands } from '../kernel/ledger';
 import { loadState } from '../kernel/state';
 import type { ProfitWorkItem, WorkStep } from '../kernel/work';
+import {
+  causeFromQuestion,
+  dateLabel,
+  idLabel,
+  textLabel,
+  type DetailLabels,
+  type WorkCause,
+} from '../kernel/work-names';
 import { standing } from './questions';
 
 /*
@@ -335,23 +343,29 @@ export async function profitWork(
       }
       return null;
     };
-    const ask = (account: string, message: string, details: ProfitWork['details']) =>
+    const ask = (
+      account: string,
+      message: string,
+      details: ProfitWork['details'],
+      labels: DetailLabels,
+    ) => {
+      const request = {
+        kind: 'profit.account' as const,
+        subject: { kind: 'account', id: account },
+        params: { account },
+      };
       items.push({
         kind: 'profit.unclassified',
         subject: { kind: 'account', id: `${account}/${year}` },
         severity: 'block',
         year,
         message,
+        causes: [causeFromQuestion(request, message)],
         details: { account, year, ...details },
-        next: [
-          agent('questions.ask', {
-            kind: 'profit.account',
-            subject: { kind: 'account', id: account },
-            params: { account },
-          }),
-          human('questions.answer'),
-        ],
+        labels: { account: textLabel('Cont'), year: { label: 'An', type: 'period' }, ...labels },
+        next: [agent('questions.ask', request), human('questions.answer')],
       });
+    };
     for (const row of turnover) {
       if (row.net === 0n || natureOf(row.account).nature !== 'classify') continue;
       if (await classification(row.account)) continue;
@@ -359,6 +373,7 @@ export async function profitWork(
         row.account,
         `Contul ${row.account} are rulaj în ${year}, an cu impozit pe profit: tratamentul lui fiscal depinde de natura cheltuielii sau a venitului, pe care nu a precizat-o nimeni.`,
         { nature: 'classify' },
+        { nature: textLabel('Natură') },
       );
     }
     // Purchases booked as a vehicle's whose account is not that vehicle's.
@@ -406,6 +421,7 @@ export async function profitWork(
           part.account,
           `Contul ${part.account} ține cheltuieli ale vehiculului ${plate} (facturi recunoscute cu vehiculul), dar nu este clasificat ca al lui: limita de 50% a art. 25 alin. (3) lit. l) se aplică pe cont; folosiți un cont analitic al vehiculului sau clasificați contul.`,
           { vehicle: plate },
+          { vehicle: textLabel('Vehicul') },
         );
       }
     }
@@ -422,6 +438,11 @@ export async function profitWork(
         year,
         message: `${asset.number} ${asset.name} nu are regimul fiscal de amortizare înregistrat (art. 28): impozitul pe profit nu se poate calcula.`,
         details: { assetId: asset.id, number: asset.number, commissionedOn: asset.commissionedOn },
+        labels: {
+          assetId: idLabel('Mijloc fix', 'asset'),
+          number: textLabel('Număr'),
+          commissionedOn: dateLabel('Data punerii în funcțiune'),
+        },
         next: [agent('assets.recordFiscal', { assetId: asset.id })],
       });
     }
@@ -446,27 +467,32 @@ export async function profitWork(
         other.position.kind === 'year' &&
         other.position.year === year,
     );
+    const filingRequest = {
+      kind: 'obligation.filed' as const,
+      subject: { kind: 'obligation', id: `D101/${year}` },
+      params: { kind: 'D101', period: String(year) },
+    };
     // A year outside the books: its rectifying D101 is filed outside, which a person records.
-    if (
-      !inBooks &&
-      (
-        await standing(tx, companyId, {
-          kind: 'obligation.filed',
-          subject: { kind: 'obligation', id: `D101/${year}` },
-          params: { kind: 'D101', period: String(year) },
-        })
-      ).answered
-    )
-      continue;
+    if (!inBooks && (await standing(tx, companyId, filingRequest)).answered) continue;
+    const message = inBooks
+      ? `Corecția din ${posting.date} schimbă rezultatul fiscal al anului ${year} cu ${posting.position.change} lei: rectificați impozitul anului și declarația 101.`
+      : `Corecția din ${posting.date} schimbă rezultatul fiscal al anului ${year}, pe care registrele nu îl cuprind: declarația 101 rectificativă se depune în afara aplicației.`;
+    const causes: WorkCause[] | undefined = inBooks
+      ? undefined
+      : [causeFromQuestion(filingRequest, message)];
     items.push({
       kind: 'profit.correction',
       subject: { kind: 'entry', id: posting.entryId },
       severity: 'warn',
       year,
-      message: inBooks
-        ? `Corecția din ${posting.date} schimbă rezultatul fiscal al anului ${year} cu ${posting.position.change} lei: rectificați impozitul anului și declarația 101.`
-        : `Corecția din ${posting.date} schimbă rezultatul fiscal al anului ${year}, pe care registrele nu îl cuprind: declarația 101 rectificativă se depune în afara aplicației.`,
+      message,
+      ...(causes ? { causes } : {}),
       details: { year, change: posting.position.change, inBooks },
+      labels: {
+        year: { label: 'An', type: 'period' },
+        change: { label: 'Diferență', type: 'amount', currency: 'RON' },
+        inBooks: textLabel('An în registre'),
+      },
       next: inBooks
         ? [
             agent('tax.profit.propose', {
@@ -475,14 +501,7 @@ export async function profitWork(
               date: posting.date,
             }),
           ]
-        : [
-            agent('questions.ask', {
-              kind: 'obligation.filed',
-              subject: { kind: 'obligation', id: `D101/${year}` },
-              params: { kind: 'D101', period: String(year) },
-            }),
-            human('questions.answer'),
-          ],
+        : [agent('questions.ask', filingRequest), human('questions.answer')],
     });
   }
   return items;

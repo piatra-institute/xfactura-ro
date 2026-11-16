@@ -39,6 +39,14 @@ import {
 import type { Actor, Commands } from '../kernel/commands';
 import { entryStands } from '../kernel/ledger';
 import type { TradeWorkItem, WorkStep } from '../kernel/work';
+import {
+  causeFromQuestion,
+  dateLabel,
+  flowName,
+  idLabel,
+  periodLabel,
+  textLabel,
+} from '../kernel/work-names';
 import type { Documents } from './documents';
 import { standing } from './questions';
 
@@ -441,23 +449,39 @@ export class Trade {
     }
     for (const row of await this.transports(tx, companyId)) {
       if (row.status !== 'missing') continue;
+      const request = {
+        kind: 'etransport.uit' as const,
+        subject: { kind: 'document', id: row.documentId },
+        params: { flow: row.flow, date: row.start },
+      };
+      const message = `Transportul documentului ${row.number ?? row.documentId} (${flowName(row.flow)}, ${row.start}) nu are cod UIT RO e-Transport înregistrat: dacă bunurile sunt cu risc fiscal ridicat, ${row.declarant} declară datele între ${row.declareFrom} și ${row.declareBy} (OUG nr. 41/2022 art. 8, 11); altfel indicați motivul.`;
       items.push({
         kind: 'etransport.uit',
         subject: { kind: 'document', id: row.documentId },
         severity: 'warn',
         due: row.declareBy,
         period: row.period,
-        message: `Transportul documentului ${row.number ?? row.documentId} (${row.flow}, ${row.start}) nu are cod UIT RO e-Transport înregistrat: dacă bunurile sunt cu risc fiscal ridicat, ${row.declarant} declară datele între ${row.declareFrom} și ${row.declareBy} (OUG nr. 41/2022 art. 8, 11); altfel indicați motivul.`,
+        message,
+        causes: [causeFromQuestion(request, message)],
         details: { ...row },
+        labels: {
+          documentId: idLabel('Document', 'document'),
+          number: textLabel('Număr'),
+          flow: textLabel('Flux'),
+          declarant: textLabel('Declarant'),
+          period: periodLabel('Perioadă'),
+          start: dateLabel('Data începerii'),
+          declareFrom: dateLabel('Declarare de la'),
+          declareBy: dateLabel('Termen declarare'),
+          validUntil: dateLabel('Valabil până la'),
+          uit: textLabel('Cod UIT'),
+          status: textLabel('Stare'),
+        },
         next: [
           {
             operation: 'questions.ask',
             by: 'agent',
-            inputHint: {
-              kind: 'etransport.uit',
-              subject: { kind: 'document', id: row.documentId },
-              params: { flow: row.flow, date: row.start },
-            },
+            inputHint: request,
           },
           { operation: 'questions.answer', by: 'human', inputHint: {} },
         ],
@@ -534,16 +558,25 @@ export class Trade {
       }
     }
     const late = today > due;
+    const message = late
+      ? `Termenul de ${basis === 'intra_eu' ? 'dovadă a transportului' : 'certificare a ieșirii'} pentru ${row.number ?? row.documentId} a trecut (${due}): fără documente, livrarea nu este scutită și TVA se colectează de la faptul generator (OMFP nr. 103/2016 art. 1 alin. (7)); ${reason}.`
+      : `${basis === 'intra_eu' ? 'Livrarea intracomunitară' : 'Exportul'} ${row.number ?? row.documentId} din ${supplied} așteaptă ${basis === 'intra_eu' ? 'documentele transportului' : 'certificarea ieșirii'} până la ${due} (OMFP nr. 103/2016 art. 1 alin. (4)); ${reason}.`;
     return {
       kind: 'goods.proof',
       subject: { kind: 'document', id: row.documentId },
       severity: late ? 'block' : 'warn',
       due,
       period: supplied.slice(0, 7),
-      message: late
-        ? `Termenul de ${basis === 'intra_eu' ? 'dovadă a transportului' : 'certificare a ieșirii'} pentru ${row.number ?? row.documentId} a trecut (${due}): fără documente, livrarea nu este scutită și TVA se colectează de la faptul generator (OMFP nr. 103/2016 art. 1 alin. (7)); ${reason}.`
-        : `${basis === 'intra_eu' ? 'Livrarea intracomunitară' : 'Exportul'} ${row.number ?? row.documentId} din ${supplied} așteaptă ${basis === 'intra_eu' ? 'documentele transportului' : 'certificarea ieșirii'} până la ${due} (OMFP nr. 103/2016 art. 1 alin. (4)); ${reason}.`,
+      message,
+      causes: [causeFromQuestion(request, message)],
       details: { basis, supplied, due, code: row.code, number: row.number },
+      labels: {
+        basis: textLabel('Temei'),
+        supplied: dateLabel('Data livrării'),
+        due: dateLabel('Termen'),
+        code: textLabel('Cod'),
+        number: textLabel('Număr'),
+      },
       next: [
         {
           operation: 'questions.ask',

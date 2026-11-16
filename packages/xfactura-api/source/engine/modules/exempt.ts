@@ -26,6 +26,7 @@ import type { Actor, Commands } from '../kernel/commands';
 import { entryStands } from '../kernel/ledger';
 import { loadState } from '../kernel/state';
 import type { VatAdjustmentWorkItem, WorkStep } from '../kernel/work';
+import { causeFromFact, idLabel, periodLabel, textLabel } from '../kernel/work-names';
 import { standing } from './questions';
 
 /*
@@ -403,14 +404,17 @@ export async function vatAdjustmentWork(
           .limit(1)
       ).length > 0;
     const provisional = provisionalProrata(loaded.profile, (today < to ? today : to) as LocalDate);
-    if (exempt && !provisional.found)
+    if (exempt && !provisional.found) {
+      const message = `În ${year} registrele au operațiuni scutite fără drept de deducere: compania are regim mixt și comunică pro rata provizorie (art. 300 alin. (9)–(10) din Codul fiscal); fără ea, achizițiile destinate ambelor feluri de operațiuni nu deduc TVA.`;
       items.push({
         kind: 'vat.prorata',
         subject: { kind: 'prorata', id: String(year) },
         severity: 'block',
         period: String(year),
-        message: `În ${year} registrele au operațiuni scutite fără drept de deducere: compania are regim mixt și comunică pro rata provizorie (art. 300 alin. (9)–(10) din Codul fiscal); fără ea, achizițiile destinate ambelor feluri de operațiuni nu deduc TVA.`,
+        message,
+        causes: [causeFromFact(`vat.prorata/${year}`, message)],
         details: { year, rule: 'ro.vat.prorata' },
+        labels: { year: periodLabel('An'), rule: textLabel('Regulă') },
         next: [
           step('questions.ask', 'agent', {
             kind: 'profile.fact',
@@ -421,6 +425,7 @@ export async function vatAdjustmentWork(
           step('questions.answer', 'human'),
         ],
       });
+    }
     if ((exempt || mixedPurchases) && !adjusted && today >= `${year}-12-01`)
       items.push({
         kind: 'vat.prorata',
@@ -429,6 +434,7 @@ export async function vatAdjustmentWork(
         period: String(year),
         message: `Pro rata definitivă a anului ${year} și ajustarea taxei deduse cu pro rata provizorie se înscriu în decontul ultimei perioade fiscale a anului (art. 300 alin. (8), (14) din Codul fiscal).`,
         details: { year, rule: 'ro.vat.prorata' },
+        labels: { year: periodLabel('An'), rule: textLabel('Regulă') },
         next: [
           step('vat.proRata.compute', 'agent', { year }),
           step('vat.proRata.propose', 'agent', { year, date: to }),
@@ -463,6 +469,11 @@ export async function vatAdjustmentWork(
         period: String(year),
         message: `${good.number} ${good.name} este folosit ${good.use.share}% pentru operațiuni cu drept de deducere (de la ${good.use.from}), față de deducerea inițială (${good.initialShare}): ajustarea anului ${year} se înscrie în decontul ultimei perioade fiscale a anului (art. 305 alin. (5), norme pct. 79 alin. (1)).`,
         details: { assetId: good.assetId, year, rule: 'ro.vat.capital_goods' },
+        labels: {
+          assetId: idLabel('Mijloc fix', 'asset'),
+          year: periodLabel('An'),
+          rule: textLabel('Regulă'),
+        },
         next: [
           step('vat.capitalGoods.register', 'agent'),
           step('vat.capitalGoods.propose', 'agent', {

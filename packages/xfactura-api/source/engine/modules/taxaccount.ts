@@ -19,6 +19,15 @@ import {
   type TaxStatementDocument,
 } from 'xfactura-core/ro/taxaccount';
 import { isLocalDate, type LocalDate } from 'xfactura-core/time';
+import {
+  amountLabel,
+  causeFromQuestion,
+  dateLabel,
+  idLabel,
+  periodLabel,
+  textLabel,
+  treatmentName,
+} from '../kernel/work-names';
 import type { Transaction } from '../db/database';
 import {
   artifactEvents,
@@ -372,6 +381,10 @@ export async function taxAccountWork(
               explanations: row.explanations.map((item) => item.code),
             })) as JsonValue,
           },
+          labels: {
+            asOf: dateLabel('Data situației'),
+            differences: textLabel('Diferențe'),
+          },
           next: [
             agent('taxaccount.reconcile', { documentId: result.document.id }),
             agent('documents.record', { kind: 'tax.decision' }),
@@ -400,11 +413,16 @@ export async function taxAccountWork(
         subject: { kind: 'party', id: authorityId },
         severity: 'warn',
         period: today.slice(0, 7),
-        message: `Plăți în contul unic de ${lei(undistributed)} lei sunt încă nedistribuite, iar ${due.length} ${due.length === 1 ? 'obligație este scadentă' : 'obligații sunt scadente'}: distribuiți-le în ordinea legală (tax.distribute).`,
+        message: `Plăți în contul unic de ${lei(undistributed)} lei sunt încă nedistribuite, iar ${due.length} ${due.length === 1 ? 'obligație este scadentă' : 'obligații sunt scadente'}: distribuiți-le în ordinea legală (${treatmentName('tax.distribute').toLowerCase()}).`,
         details: {
           authorityId,
           undistributed: lei(undistributed),
           due: due.map((item) => item.id),
+        },
+        labels: {
+          authorityId: idLabel('Autoritate fiscală', 'party'),
+          undistributed: amountLabel('Sumă nedistribuită', { currency: 'RON' }),
+          due: textLabel('Obligații scadente'),
         },
         next: [
           agent('proposals.propose', {
@@ -439,13 +457,19 @@ export async function taxAccountWork(
       params: { kind: 'D710', period: row.period },
     };
     if ((await standing(tx, companyId, request)).answered) continue;
+    const message = `Registrele s-au schimbat după depunerea declarației 100 pentru ${row.period}: dacă obligațiile declarate s-au schimbat, corectați-le prin declarația 710, depusă în afara aplicației, și înregistrați-o.`;
     work.push({
       kind: 'taxaccount.correction',
       subject: { kind: 'declaration', id: row.id },
       severity: 'warn',
       period: row.period,
-      message: `Registrele s-au schimbat după depunerea declarației 100 pentru ${row.period}: dacă obligațiile declarate s-au schimbat, corectați-le prin declarația 710, depusă în afara aplicației, și înregistrați-o.`,
+      message,
+      causes: [causeFromQuestion(request, message)],
       details: { period: row.period, artifactId: row.id },
+      labels: {
+        period: periodLabel('Perioadă'),
+        artifactId: idLabel('Declarație', 'artifact'),
+      },
       next: [agent('questions.ask', request), human('questions.answer')],
     });
   }

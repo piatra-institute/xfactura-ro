@@ -894,6 +894,8 @@ describe('reading proposals', () => {
       operation: 'proposals.revise',
       by: 'agent',
       allowed: true,
+      complete: false,
+      missing: ['input'],
       inputHint: { proposalId: revised.id, version: 2 },
     });
     expect((await revise(s.owner)).inputHint).toEqual({

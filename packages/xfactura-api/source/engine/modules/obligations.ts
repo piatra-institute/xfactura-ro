@@ -6,6 +6,13 @@ import { RuleGapError, type RuleContext } from 'xfactura-core/rules';
 import type { LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
 import { artifactEvents, artifacts, questions } from '../db/schema';
+import {
+  causeFromQuestion,
+  causeFromRule,
+  dedupeCauses,
+  returnName,
+  type WorkCause,
+} from '../kernel/work-names';
 import { closureOf } from './determinations';
 import { standing as answered } from './questions';
 
@@ -151,9 +158,9 @@ async function filedOutside(
   return filed;
 }
 
-/** The year whose rules a blocked return waits for: its deadline's rule is beyond the register's
- * horizon for its period (that year's rules are not reviewed yet), or null. */
-function waitingFor(item: ClosureObligation, rules: RuleContext) {
+/** The year and rule gap a blocked return waits for: its deadline's rule is beyond the
+ * register's horizon for its period (that year's rules are not reviewed yet), or null. */
+function waitingRuleFor(item: ClosureObligation, rules: RuleContext) {
   if (!item.deadline) return null;
   const { start, end } = bounds(item.period);
   try {
@@ -165,7 +172,11 @@ function waitingFor(item: ClosureObligation, rules: RuleContext) {
     return null;
   } catch (error) {
     if (!(error instanceof RuleGapError) || error.gap.reason !== 'BEYOND_HORIZON') return null;
-    return Number(error.gap.date.slice(0, 4));
+    return {
+      year: Number(error.gap.date.slice(0, 4)),
+      key: error.gap.key,
+      reason: error.gap.reason,
+    };
   }
 }
 
@@ -184,6 +195,8 @@ export type ClosureNeedItem = {
   blocks: string[];
   /** The year whose rules every return it blocks waits for, or null. */
   waiting: number | null;
+  /** Structured rule cause when every blocked return waits for a rule beyond the horizon. */
+  waitingRule?: { year: number; key: string; reason: string } | null;
 };
 
 /**
@@ -208,7 +221,10 @@ export async function closureNeeds(
         item.blockers.includes(need.id) &&
         !applies.has(key(item)),
     );
-    const waits = blocked.map((item) => waitingFor(item, rules));
+    const waits = blocked.map((item) => waitingRuleFor(item, rules));
+    const allWaiting = waits.length > 0 && waits.every((entry) => entry !== null);
+    const waiting = allWaiting ? Math.max(...waits.map((entry) => entry!.year)) : null;
+    const waitingRule = allWaiting ? waits.find((entry) => entry!.year === waiting)! : null;
     return {
       id: need.id,
       code: need.code,
@@ -220,10 +236,8 @@ export async function closureNeeds(
         params: { ...need.question.params },
       },
       blocks: [...new Set(blocked.map(key))],
-      waiting:
-        waits.length && waits.every((year) => year !== null)
-          ? Math.max(...(waits as number[]))
-          : null,
+      waiting,
+      waitingRule,
     };
   });
 }
@@ -276,6 +290,29 @@ export async function obligationsCalendar(
   rules: RuleContext,
   today: string,
 ): Promise<ObligationView[]> {
+  return (await computeObligations(tx, companyId, input, rules, today)).map(
+    ({ causes: _causes, ...view }) => view,
+  );
+}
+
+/** Obligations for the worklist, carrying structured causes for blocked returns. */
+export async function workObligations(
+  tx: Transaction,
+  companyId: string,
+  input: { from: string; to: string },
+  rules: RuleContext,
+  today: string,
+): Promise<(ObligationView & { causes?: WorkCause[] })[]> {
+  return computeObligations(tx, companyId, input, rules, today);
+}
+
+async function computeObligations(
+  tx: Transaction,
+  companyId: string,
+  input: { from: string; to: string },
+  rules: RuleContext,
+  today: string,
+): Promise<(ObligationView & { causes?: WorkCause[] })[]> {
   const closure = await closureOf(
     tx,
     companyId,
@@ -303,12 +340,18 @@ export async function obligationsCalendar(
 
   return (
     due
-      .map((item): ObligationView => {
+      .map((item): ObligationView & { causes?: WorkCause[] } => {
         const { start, end } = bounds(item.period);
         const counted = item.deadlinePeriod ? bounds(item.deadlinePeriod) : { start, end };
         const artifact = filed.get(`${item.kind}|${item.period}`);
         const basis = { rule: item.rule, facts: item.facts, clauses: item.clauses };
-        const blocked = (gap: string, question: ObligationView['question']): ObligationView => ({
+        const uniqueBlockers = [...new Set(item.blockers)];
+        const waitRule = artifact ? null : waitingRuleFor(item, rules);
+        const blocked = (
+          gap: string,
+          question: ObligationView['question'],
+          causes: WorkCause[] = [],
+        ): ObligationView & { causes?: WorkCause[] } => ({
           kind: item.kind,
           deadline: item.deadline ?? item.kind,
           period: item.period,
@@ -323,23 +366,67 @@ export async function obligationsCalendar(
           conflict: null,
           basis,
           question,
-          blockers: item.blockers,
-          waiting: artifact ? null : waitingFor(item, rules),
+          blockers: uniqueBlockers,
+          waiting: waitRule?.year ?? null,
+          ...(causes.length ? { causes: dedupeCauses(causes) } : {}),
         });
         if (item.state === 'needs_evidence') {
-          const first = item.blockers.map((id) => needs.get(id)).find(Boolean);
+          const first = uniqueBlockers.map((id) => needs.get(id)).find(Boolean);
+          const causes: WorkCause[] = [];
+          for (const id of uniqueBlockers) {
+            const need = needs.get(id);
+            if (need) {
+              causes.push(causeFromQuestion(need.question, need.message));
+              continue;
+            }
+            const missing = unsupported.get(id);
+            if (missing?.trigger === 'RULE_GAP')
+              causes.push(
+                causeFromRule(
+                  missing.missingCapabilities[0] ?? item.deadline ?? 'ro',
+                  'RULE_GAP',
+                  missing.message,
+                ),
+              );
+          }
+          if (waitRule)
+            causes.push(
+              causeFromRule(
+                waitRule.key,
+                waitRule.reason,
+                `Termenul pentru ${returnName(item.kind)} în ${waitRule.year} nu este verificat în registru.`,
+              ),
+            );
+          const deduped = dedupeCauses(causes);
           return blocked(
-            item.blockers
-              .map((id) => needs.get(id)?.message ?? unsupported.get(id)?.message ?? id)
-              .join(' '),
+            deduped.length
+              ? deduped.map((cause) => cause.message).join(' ')
+              : uniqueBlockers
+                  .map((id) => needs.get(id)?.message ?? unsupported.get(id)?.message ?? id)
+                  .join(' '),
             first ? { ...first.question, params: { ...first.question.params } } : null,
+            deduped,
           );
         }
-        if (item.state === 'unsupported' || !item.deadline)
+        if (item.state === 'unsupported' || !item.deadline) {
+          const causes: WorkCause[] = [];
+          for (const id of uniqueBlockers) {
+            const missing = unsupported.get(id);
+            if (missing?.trigger === 'RULE_GAP')
+              causes.push(
+                causeFromRule(
+                  missing.missingCapabilities[0] ?? item.deadline ?? 'ro',
+                  'RULE_GAP',
+                  missing.message,
+                ),
+              );
+          }
           return blocked(
-            `UNSUPPORTED: ${item.blockers.map((id) => unsupported.get(id)?.message ?? needs.get(id)?.message ?? id).join(' ')}`,
+            `UNSUPPORTED: ${uniqueBlockers.map((id) => unsupported.get(id)?.message ?? needs.get(id)?.message ?? id).join(' ')}`,
             null,
+            causes,
           );
+        }
         try {
           const deadline = obligationDue(item.deadline as ObligationKind, counted, rules);
           return {
@@ -368,7 +455,12 @@ export async function obligationsCalendar(
           };
         } catch (error) {
           if (!(error instanceof RuleGapError)) throw error;
-          return { ...blocked(error.message, null), deadline: item.deadline };
+          return {
+            ...blocked(error.message, null, [
+              causeFromRule(error.gap.key, error.gap.reason, error.message),
+            ]),
+            deadline: item.deadline,
+          };
         }
       })
       // By due date, the blocked ones (without a deadline) last; then by period and return.

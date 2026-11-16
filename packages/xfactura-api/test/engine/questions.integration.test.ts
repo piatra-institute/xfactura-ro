@@ -117,6 +117,7 @@ describe('questions to people', () => {
         operation: 'questions.ask',
         by: 'agent',
         allowed: true,
+        complete: true,
         inputHint: (blocked.issues[0]!.details as { question: Record<string, unknown> }).question,
       },
     ]);
@@ -144,6 +145,9 @@ describe('questions to people', () => {
         operation: 'questions.answer',
         by: 'human',
         allowed: false,
+        reason: { kind: 'grant' },
+        complete: false,
+        missing: ['value'],
         inputHint: { questionId: asked.id },
       },
     ]);
@@ -220,6 +224,7 @@ describe('questions to people', () => {
         operation: 'proposals.approve',
         by: 'human',
         allowed: true,
+        complete: true,
         inputHint: {
           proposalId: revised.id,
           version: 2,
@@ -582,6 +587,9 @@ describe('questions to people', () => {
         operation: 'questions.answer',
         by: 'human',
         allowed: false,
+        reason: { kind: 'grant' },
+        complete: false,
+        missing: ['value'],
         inputHint: { questionId: asked.id },
       },
     ]);

@@ -2,7 +2,7 @@ import { and, asc, eq, getTableName, inArray, sql, type Column } from 'drizzle-o
 import { z } from 'zod';
 import { requireCondition } from 'xfactura-core/errors';
 import { canonical, hashOf } from 'xfactura-core/hash';
-import type { DataClass, Issue, JsonValue } from 'xfactura-core/kernel';
+import type { DataClass, Issue, JsonValue, Treatment } from 'xfactura-core/kernel';
 import { documentTotals, normalizedNumber } from 'xfactura-core/documents/schemas';
 import { questionOf, type QuestionRequest } from 'xfactura-core/questions/kinds';
 import { euVatPrefixes } from 'xfactura-core/ro/geo';
@@ -60,15 +60,51 @@ import {
   type Role,
 } from '../db/schema';
 import type { Actor, Commands } from './commands';
+import { roleAllows } from './commands';
 import { maskCnps, maskCnpText, payClasses, salaryPayment } from './personal';
 import { salaryMovements, salarySubjects } from './salaries';
 import { pausedScopes } from './automation';
 import { auditHead } from './events';
 import { documentBooked, entryStands, holdsSubject } from './ledger';
+import type { OperationRegistry } from './operations';
 import { SYSTEM_PRINCIPAL } from './principals';
 import { closedMonths, type CloseCheck } from './periods';
 import { groupLinkKinds } from './sources';
 import type { ProposalChange } from './views';
+import {
+  authorityName,
+  axisName,
+  causeFromFact,
+  causeFromQuestion,
+  causeFromRule,
+  cleanIdentifierText,
+  comparableFieldName,
+  completeLabels,
+  countLabel,
+  dateLabel,
+  dedupeCauses,
+  detailLabelView,
+  documentKindName,
+  formatObligationKey,
+  idLabel,
+  obligationStatusName,
+  operationName,
+  parameterName,
+  periodLabel,
+  periodName,
+  questionKindName,
+  returnName,
+  ruleGapReasonName,
+  stepRefusalView,
+  subjectKindName,
+  textLabel,
+  treatmentName,
+  workCauseView,
+  type DetailLabels,
+  type PermissionKind,
+  type StepRefusal,
+  type WorkCause,
+} from './work-names';
 
 /*
  * The worklist: everything waiting on an agent or a person, computed on read from the books.
@@ -134,12 +170,17 @@ export type WorkStep = {
   by: 'agent' | 'human';
   inputHint: { [key: string]: JsonValue };
   needs?: readonly DataClass[];
+  /** Non-empty when the item's current state forbids taking this step. */
+  stateReason?: string;
 };
 /** A step as the caller reads it: `allowed` when the caller may take it now (an agent, a step for
- * agents under its grant and its issuer's role; a person, under their role); `needs`, when the
- * data it reads is what stops the caller: the classes it may not read. */
+ * agents under its grant and its issuer's role; a person, under their role); `reason` when
+ * `allowed` is false; `complete` whether `inputHint` suffices to run the operation as is. */
 export type WorkStepView = Pick<WorkStep, 'operation' | 'by'> & {
   allowed: boolean;
+  reason?: StepRefusal;
+  complete: boolean;
+  missing?: string[];
   inputHint: WorkStep['inputHint'];
   needs?: DataClass[];
 };
@@ -153,8 +194,12 @@ export interface Draft {
   period: string | null;
   /** What is waiting, in Romanian, for people. */
   message: string;
+  /** Deduplicated structured causes when waiting on missing facts, questions or rules. */
+  causes?: WorkCause[];
   /** What the item is about; its fingerprint hashes them. */
   details: { [key: string]: JsonValue };
+  /** Romanian labels and value types for keys in `details`. */
+  labels?: DetailLabels;
   next: WorkStep[];
   /** Where the detector's list resumes after this item. */
   cursor: string;
@@ -168,6 +213,7 @@ export interface Withheld {
   classes: readonly DataClass[];
   message: string;
   details: { [key: string]: JsonValue };
+  labels?: DetailLabels;
 }
 
 export interface WorkContext {
@@ -181,6 +227,8 @@ export interface WorkContext {
 interface Caller {
   /** An agent, which never takes a step `by: human`. */
   agent: boolean;
+  /** Whether the caller's role allows `permission`. */
+  roleAllows: (permission: PermissionKind) => boolean;
   /** Whether it may invoke an operation now. */
   allowed: (operation: string) => boolean;
   /** Whether it may read a treatment's inputs (`Commands.readable` on the treatment's classes). */
@@ -216,6 +264,12 @@ const stepView = z.object({
    * (`proposals.revise` needs the treatment's own `.revise` too) and its issuer's role; a person,
    * any step under their role. */
   allowed: z.boolean(),
+  /** Why `allowed` is false: lacking role permission, agent grant, data disclosure, or item state. */
+  reason: stepRefusalView.optional(),
+  /** Whether `inputHint` validates as is against the operation (and treatment) input schema. */
+  complete: z.boolean(),
+  /** Missing fields when `complete` is false. */
+  missing: z.array(z.string()).optional(),
   inputHint: z.record(z.string(), z.unknown()),
   /** When what stops the caller is the data the step reads (a payment of pay, a person's
    * balance): the classes it may not read. The item then waits on someone who may. */
@@ -230,7 +284,9 @@ export const workItemView = z.object({
   due: z.string().nullable(),
   period: z.string().nullable(),
   message: z.string(),
+  causes: z.array(workCauseView).optional(),
   details: z.record(z.string(), z.unknown()),
+  labels: z.record(z.string(), detailLabelView),
   /** A hash of the kind, subject and details: a disposition holds while it is unchanged. */
   fingerprint: z.string(),
   next: z.array(stepView),
@@ -421,7 +477,11 @@ const groupKinds = sql.raw(`(${groupLinkKinds.map((kind) => `'${kind}'`).join(',
 
 // Proposals waiting on a person, an agent or a question.
 
-function proposalsDetector(questionState: QuestionState): Detector {
+function proposalsDetector(
+  questionState: QuestionState,
+  treatments?: () => readonly Treatment[],
+): Detector {
+  const byId = () => new Map((treatments?.() ?? []).map((item) => [item.id, item]));
   return {
     id: 'proposals',
     kinds: [
@@ -480,8 +540,10 @@ function proposalsDetector(questionState: QuestionState): Detector {
         .orderBy(asc(proposals.id))
         .limit(page.limit + 1);
       const { page: chosen, next } = paged(rows, page.limit, (row) => row.id);
+      const treatmentMap = byId();
       const items: Draft[] = [];
       for (const row of chosen) {
+        const treatmentLabel = treatmentName(row.treatment, treatmentMap);
         const issues = JSON.parse(row.issues) as Issue[];
         const base = {
           subject: { kind: 'proposal', id: row.id },
@@ -540,18 +602,34 @@ function proposalsDetector(questionState: QuestionState): Detector {
                     ? [human('questions.answer', { questionId: item.questionId })]
                     : [],
               );
+          const questionCauses = dedupeCauses([
+            ...asked.map(({ issue, question }) => causeFromQuestion(question, issue.message)),
+            ...blocks
+              .filter((issue) => issue.code === 'RULE_GAP')
+              .map((issue) => {
+                const gap = (issue.details ?? {}) as { key?: string; reason?: string };
+                return causeFromRule(gap.key ?? 'unknown', gap.reason ?? 'RULE_GAP', issue.message);
+              }),
+          ]);
           items.push({
             ...base,
             kind: 'question.needed',
             severity: 'block',
             message: answered
-              ? `S-a răspuns la întrebările propunerii ${row.treatment}: revizuiți-o citând răspunsurile.`
-              : `Propunerea ${row.treatment} așteaptă un răspuns: ${asked.map(({ issue }) => issue.message).join(' ')}`,
+              ? `S-a răspuns la întrebările propunerii ${treatmentLabel}: revizuiți-o citând răspunsurile.`
+              : `Propunerea ${treatmentLabel} așteaptă un răspuns: ${questionCauses.map((cause) => cause.message).join(' ')}`,
+            causes: questionCauses,
             details: {
               treatment: row.treatment,
               version: row.version,
               questions: states as unknown as JsonValue,
               blocking: blocks.filter((issue) => !questionOf(issue)).map((issue) => issue.code),
+            },
+            labels: {
+              treatment: textLabel('Tratament'),
+              version: countLabel('Versiune'),
+              questions: textLabel('Întrebări'),
+              blocking: countLabel('Blocaje'),
             },
             next,
           });
@@ -562,11 +640,16 @@ function proposalsDetector(questionState: QuestionState): Detector {
             ...base,
             kind: 'proposal.stale',
             severity: 'warn',
-            message: `Registrele s-au schimbat de la evaluarea propunerii ${row.treatment}: revizuiți-o.`,
+            message: `Registrele s-au schimbat de la evaluarea propunerii ${treatmentLabel}: revizuiți-o.`,
             details: {
               treatment: row.treatment,
               version: row.version,
               changed: (JSON.parse(row.changed ?? '[]') as ProposalChange[]).slice(0, 20),
+            },
+            labels: {
+              treatment: textLabel('Tratament'),
+              version: countLabel('Versiune'),
+              changed: textLabel('Modificări'),
             },
             next: [revise(), agent('proposals.get', { id: row.id, recheck: true })],
           });
@@ -575,11 +658,14 @@ function proposalsDetector(questionState: QuestionState): Detector {
         if (row.blocking) {
           // A proposal blocked only by missing rules is listed with its rule (`rule.gap`).
           if (blocks.every((issue) => issue.code === 'RULE_GAP')) continue;
+          const blockSummary = blocks
+            .map((issue) => cleanIdentifierText(issue.message).replace(/\.$/, ''))
+            .join('; ');
           items.push({
             ...base,
             kind: 'proposal.blocked',
             severity: 'block',
-            message: `Propunerea ${row.treatment} are probleme care împiedică aprobarea: ${blocks.map((issue) => issue.code).join(', ')}.`,
+            message: `Propunerea ${treatmentLabel} are probleme care împiedică aprobarea: ${blockSummary}.`,
             details: {
               treatment: row.treatment,
               version: row.version,
@@ -588,6 +674,11 @@ function proposalsDetector(questionState: QuestionState): Detector {
                 message: issue.message,
                 ...(issue.path ? { path: issue.path } : {}),
               })),
+            },
+            labels: {
+              treatment: textLabel('Tratament'),
+              version: countLabel('Versiune'),
+              issues: textLabel('Probleme'),
             },
             next: [revise(), agent('proposals.withdraw', { proposalId: row.id })],
           });
@@ -598,25 +689,38 @@ function proposalsDetector(questionState: QuestionState): Detector {
             ...base,
             kind: 'proposal.approved',
             severity: 'warn',
-            message: `Propunerea ${row.treatment} este aprobată și necontabilizată.`,
+            message: `Propunerea ${treatmentLabel} este aprobată și necontabilizată.`,
             details: { treatment: row.treatment, version: row.version, effectHash: row.effectHash },
+            labels: {
+              treatment: textLabel('Tratament'),
+              version: countLabel('Versiune'),
+              effectHash: textLabel('Amprenta efectului'),
+            },
             next: [agent('ledger.post', { ...named, effectHash: row.effectHash })],
           });
           continue;
         }
-        const acknowledge = issues
-          .filter((issue) => issue.severity === 'ack')
-          .map((issue) => issue.code);
+        const ackIssues = issues.filter((issue) => issue.severity === 'ack');
+        const acknowledge = ackIssues.map((issue) => issue.code);
+        const ackSummary = ackIssues
+          .map((issue) => cleanIdentifierText(issue.message).replace(/\.$/, ''))
+          .join('; ');
         items.push({
           ...base,
           kind: 'proposal.awaitingApproval',
           severity: 'warn',
-          message: `Propunerea ${row.treatment} așteaptă aprobarea unei persoane${acknowledge.length ? `, cu avertismentele ${acknowledge.join(', ')}` : ''}.`,
+          message: `Propunerea ${treatmentLabel} așteaptă aprobarea unei persoane${ackSummary ? `, cu avertismentele: ${ackSummary}` : ''}.`,
           details: {
             treatment: row.treatment,
             version: row.version,
             effectHash: row.effectHash,
             acknowledge,
+          },
+          labels: {
+            treatment: textLabel('Tratament'),
+            version: countLabel('Versiune'),
+            effectHash: textLabel('Amprenta efectului'),
+            acknowledge: textLabel('Avertismente de confirmat'),
           },
           next: [human('proposals.approve', { ...named, effectHash: row.effectHash, acknowledge })],
         });
@@ -633,12 +737,18 @@ function proposalsDetector(questionState: QuestionState): Detector {
         if (!salaries.has(row.subject)) continue;
         item.withheld = {
           classes: payClasses,
-          message: `Propunerea ${row.treatment} (${salaryPayment}) așteaptă: o vede cine poate citi datele salariale.`,
+          message: `Propunerea ${treatmentName(row.treatment, treatmentMap)} (${salaryPayment}) așteaptă: o vede cine poate citi datele salariale.`,
           details: {
             treatment: row.treatment,
             version: row.version,
             effectHash: row.effectHash,
             redacted: true,
+          },
+          labels: {
+            treatment: textLabel('Tratament'),
+            version: countLabel('Versiune'),
+            effectHash: textLabel('Amprenta efectului'),
+            redacted: textLabel('Date cu acces restricționat'),
           },
         };
         item.next = item.next.map((step) => ({ ...step, needs: payClasses }));
@@ -683,24 +793,42 @@ const questionsDetector: Detector = {
       .limit(page.limit + 1);
     const { page: chosen, next } = paged(rows, page.limit, (row) => row.id);
     return {
-      items: chosen.map((row) => ({
-        kind: 'question.open',
-        subject: { kind: 'question', id: row.id },
-        severity: 'warn',
-        due: row.due,
-        period: null,
-        message: `O întrebare ${row.kind} despre ${row.subjectKind} ${row.subjectId} așteaptă răspunsul unei persoane.`,
-        details: {
-          kind: row.kind,
-          subject: { kind: row.subjectKind, id: row.subjectId },
-          params: json(row.params),
-        },
-        next: [
-          human('questions.answer', { questionId: row.id }),
-          agent('questions.withdraw', { questionId: row.id }),
-        ],
-        cursor: row.id,
-      })),
+      items: chosen.map((row) => {
+        const subjectText =
+          row.subjectKind === 'profile' || row.subjectKind === 'determination'
+            ? axisName(row.subjectId)
+            : `${subjectKindName(row.subjectKind)} ${row.subjectId}`;
+        const message = `Întrebarea privind ${questionKindName(row.kind)} (${subjectText}) așteaptă răspunsul unei persoane.`;
+        return {
+          kind: 'question.open',
+          subject: { kind: 'question', id: row.id },
+          severity: 'warn',
+          due: row.due,
+          period: null,
+          message,
+          causes: [
+            causeFromQuestion(
+              { kind: row.kind, subject: { kind: row.subjectKind, id: row.subjectId } },
+              message,
+            ),
+          ],
+          details: {
+            kind: row.kind,
+            subject: { kind: row.subjectKind, id: row.subjectId },
+            params: json(row.params),
+          },
+          labels: {
+            kind: textLabel('Tip'),
+            subject: textLabel('Obiect'),
+            params: textLabel('Parametri'),
+          },
+          next: [
+            human('questions.answer', { questionId: row.id }),
+            agent('questions.withdraw', { questionId: row.id }),
+          ],
+          cursor: row.id,
+        };
+      }),
       next,
     };
   },
@@ -708,91 +836,100 @@ const questionsDetector: Detector = {
 
 // Reviewed actions waiting on a decision or on their execution.
 
-const actionsDetector: Detector = {
-  id: 'actions',
-  kinds: ['action.awaitingDecision', 'action.approved'],
-  async list({ tx, companyId }, page) {
-    const rows = await tx
-      .select({
-        id: actionRequests.id,
-        operation: actionRequests.operation,
-        input: actionRequests.input,
-        preview: actionRequests.preview,
-        previewHash: actionRequests.previewHash,
-        decision: actionDecisions.decision,
-      })
-      .from(actionRequests)
-      .leftJoin(
-        actionDecisions,
-        and(
-          eq(actionDecisions.companyId, actionRequests.companyId),
-          eq(actionDecisions.requestId, actionRequests.id),
-        ),
-      )
-      .where(
-        and(
-          eq(actionRequests.companyId, companyId),
-          position(actionRequests.id, page),
-          sql`(${q(actionDecisions.decision)} is null or ${q(actionDecisions.decision)} = 'approve')`,
-          sql`not exists (select 1 from ${actionExecutions} x
+function actionsDetector(operations?: () => OperationRegistry): Detector {
+  return {
+    id: 'actions',
+    kinds: ['action.awaitingDecision', 'action.approved'],
+    async list({ tx, companyId }, page) {
+      const rows = await tx
+        .select({
+          id: actionRequests.id,
+          operation: actionRequests.operation,
+          input: actionRequests.input,
+          preview: actionRequests.preview,
+          previewHash: actionRequests.previewHash,
+          decision: actionDecisions.decision,
+        })
+        .from(actionRequests)
+        .leftJoin(
+          actionDecisions,
+          and(
+            eq(actionDecisions.companyId, actionRequests.companyId),
+            eq(actionDecisions.requestId, actionRequests.id),
+          ),
+        )
+        .where(
+          and(
+            eq(actionRequests.companyId, companyId),
+            position(actionRequests.id, page),
+            sql`(${q(actionDecisions.decision)} is null or ${q(actionDecisions.decision)} = 'approve')`,
+            sql`not exists (select 1 from ${actionExecutions} x
             where x.company_id = ${q(actionRequests.companyId)} and x.request_id = ${q(actionRequests.id)})`,
-          // A request asked again for the same input is replaced by the later one.
-          sql`not exists (select 1 from ${actionRequests} r
+            // A request asked again for the same input is replaced by the later one.
+            sql`not exists (select 1 from ${actionRequests} r
             where r.company_id = ${q(actionRequests.companyId)} and r.operation = ${q(actionRequests.operation)}
               and r.input_json = ${q(actionRequests.input)}
               and (r.created_at > ${q(actionRequests.createdAt)}
                 or (r.created_at = ${q(actionRequests.createdAt)} and r.id > ${q(actionRequests.id)})))`,
-        ),
-      )
-      .orderBy(asc(actionRequests.id))
-      .limit(page.limit + 1);
-    const { page: chosen, next } = paged(rows, page.limit, (row) => row.id);
-    return {
-      items: chosen.map((row): Draft => {
-        const input = JSON.parse(row.input) as { month?: string; artifactId?: string };
-        const preview = JSON.parse(row.preview) as { findings?: { severity: string }[] };
-        const blocking = (preview.findings ?? []).filter(
-          (item) => item.severity === 'block',
-        ).length;
-        const base = {
-          subject: { kind: 'action', id: row.id },
-          due: null,
-          period: input.month ?? null,
-          cursor: row.id,
-          details: {
-            operation: row.operation,
-            input: input as JsonValue,
-            previewHash: row.previewHash,
-            blocking,
-          },
-        };
-        return row.decision === 'approve'
-          ? {
-              ...base,
-              kind: 'action.approved',
-              severity: 'warn',
-              message: `Acțiunea ${row.operation} este aprobată și neexecutată.`,
-              next: [agent('actions.execute', { id: row.id })],
-            }
-          : {
-              ...base,
-              kind: 'action.awaitingDecision',
-              severity: blocking ? 'block' : 'warn',
-              message: blocking
-                ? `Acțiunea ${row.operation} are ${blocking} probleme care împiedică aprobarea: rezolvați-le și cereți-o din nou.`
-                : `Acțiunea ${row.operation} așteaptă decizia unei persoane.`,
-              next: blocking
-                ? []
-                : [
-                    human('actions.approve', { id: row.id, previewHash: row.previewHash }),
-                    human('actions.reject', { id: row.id, previewHash: row.previewHash }),
-                  ],
-            };
-      }),
-      next,
-    };
-  },
-};
+          ),
+        )
+        .orderBy(asc(actionRequests.id))
+        .limit(page.limit + 1);
+      const { page: chosen, next } = paged(rows, page.limit, (row) => row.id);
+      return {
+        items: chosen.map((row): Draft => {
+          const input = JSON.parse(row.input) as { month?: string; artifactId?: string };
+          const preview = JSON.parse(row.preview) as { findings?: { severity: string }[] };
+          const blocking = (preview.findings ?? []).filter(
+            (item) => item.severity === 'block',
+          ).length;
+          const base = {
+            subject: { kind: 'action', id: row.id },
+            due: null,
+            period: input.month ?? null,
+            cursor: row.id,
+            details: {
+              operation: row.operation,
+              input: input as JsonValue,
+              previewHash: row.previewHash,
+              blocking,
+            },
+            labels: {
+              operation: textLabel('Operațiune'),
+              input: textLabel('Date de intrare'),
+              previewHash: textLabel('Amprenta previzualizării'),
+              blocking: countLabel('Blocaje'),
+            },
+          };
+          const opLabel = operationName(row.operation, operations?.());
+          return row.decision === 'approve'
+            ? {
+                ...base,
+                kind: 'action.approved',
+                severity: 'warn',
+                message: `Acțiunea „${opLabel}” este aprobată și neexecutată.`,
+                next: [agent('actions.execute', { id: row.id })],
+              }
+            : {
+                ...base,
+                kind: 'action.awaitingDecision',
+                severity: blocking ? 'block' : 'warn',
+                message: blocking
+                  ? `Acțiunea „${opLabel}” are ${blocking} probleme care împiedică aprobarea: rezolvați-le și cereți-o din nou.`
+                  : `Acțiunea „${opLabel}” așteaptă decizia unei persoane.`,
+                next: blocking
+                  ? []
+                  : [
+                      human('actions.approve', { id: row.id, previewHash: row.previewHash }),
+                      human('actions.reject', { id: row.id, previewHash: row.previewHash }),
+                    ],
+              };
+        }),
+        next,
+      };
+    },
+  };
+}
 
 // Returns not yet filed: every one from the books' first month (an overdue return stays until
 // it is filed, in the engine or recorded as filed outside it) to two months ahead.
@@ -817,6 +954,8 @@ export type Obligation = {
   /** For a blocked return whose deadline's rule is beyond the register's horizon: the year whose
    * rules it waits for. */
   waiting?: number | null;
+  /** Structured causes for why the return is blocked, deduplicated by cause id. */
+  causes?: WorkCause[];
 };
 export type ObligationsOf = (
   tx: Transaction,
@@ -939,6 +1078,18 @@ function obligationsDetector(calendar: ObligationsOf): Detector {
                           human('declarations.recordSubmission', { artifactId }),
                         ]
                       : [];
+        const causes = item.causes?.length
+          ? dedupeCauses(
+              item.causes.map((cause) => ({
+                ...cause,
+                message: cleanIdentifierText(cause.message),
+              })),
+            )
+          : undefined;
+        const returnLabel = returnName(item.kind);
+        const periodLabelText = periodName(item.period);
+        const causesText = causes?.map((cause) => cause.message).join(' ');
+        const cleanGap = item.gap ? cleanIdentifierText(item.gap) : null;
         const draft: Draft = {
           kind: 'obligation.due',
           subject: { kind: 'obligation', id: `${item.kind}|${item.period}` },
@@ -948,11 +1099,12 @@ function obligationsDetector(calendar: ObligationsOf): Detector {
           message:
             item.status === 'blocked'
               ? item.waiting
-                ? `Declarația ${item.kind} pentru ${item.period} așteaptă regulile pentru ${item.waiting}: termenul ei și ce lipsește (${(item.gap ?? 'regula').replace(/\.+$/, '')}) se stabilesc după ce expertul contabil le aprobă.`
+                ? `${returnLabel} pentru ${periodLabelText} așteaptă regulile pentru ${item.waiting}${cleanGap ? `: ${cleanGap.replace(/\.+$/, '')}` : ''}.`
                 : item.question
-                  ? `Nu se știe dacă declarația ${item.kind} pentru ${item.period} se datorează: ${item.gap ?? 'lipsește un fapt'}`
-                  : `Declarația ${item.kind} pentru ${item.period} este blocată: ${item.gap ?? 'lipsește regula'}.`
-              : `Declarația ${item.kind} pentru ${item.period}${item.due ? `, cu termen la ${item.due}` : ''}: ${item.status}.`,
+                  ? `${returnLabel} pentru ${periodLabelText} depinde de: ${causesText || cleanGap || 'lipsește un fapt'}`
+                  : `${returnLabel} pentru ${periodLabelText} este blocată: ${causesText || cleanGap || 'lipsește regula.'}`
+              : `${returnLabel} pentru ${periodLabelText}${item.due ? `, cu termen la ${item.due}` : ''}: ${obligationStatusName(item.status)}.`,
+          ...(causes?.length ? { causes } : {}),
           details: {
             kind: item.kind,
             deadline: item.deadline,
@@ -963,6 +1115,17 @@ function obligationsDetector(calendar: ObligationsOf): Detector {
             gap: item.gap,
             ...(item.question ? { question: item.question as unknown as JsonValue } : {}),
             ...(item.waiting ? { waiting: item.waiting } : {}),
+          },
+          labels: {
+            kind: textLabel('Declarație'),
+            deadline: textLabel('Regula termenului'),
+            period: periodLabel('Perioadă'),
+            due: dateLabel('Termen'),
+            status: textLabel('Stare'),
+            artifactId: idLabel('Declarație', 'artifact'),
+            gap: textLabel('Ce lipsește'),
+            ...(item.question ? { question: textLabel('Întrebare') } : {}),
+            ...(item.waiting ? { waiting: periodLabel('An așteptat') } : {}),
           },
           next,
           cursor: key(item).join('|'),
@@ -975,6 +1138,7 @@ function obligationsDetector(calendar: ObligationsOf): Detector {
             classes: ['health'],
             message: draft.message,
             details: { ...draft.details, deadline: 'D112' },
+            labels: draft.labels,
           };
         return draft;
       });
@@ -997,6 +1161,8 @@ export type ClosureNeed = {
   blocks: string[];
   /** The year whose rules every return it blocks waits for, or null. */
   waiting: number | null;
+  /** The deadline rule gap when `waiting` is set, if known. */
+  waitingRule?: { key: string; reason: string } | null;
 };
 export type NeedsOf = (
   tx: Transaction,
@@ -1023,6 +1189,20 @@ function needsDetector(source: NeedsOf): Detector {
         // can settle, waits: nobody can answer it yet.
         const year = /\/(\d{4})$/.exec(need.fact)?.[1];
         const waits = need.waiting ?? (year && `${year}-01-01` > today ? Number(year) : null);
+        const cleanNeed = cleanIdentifierText(need.message);
+        const causes = dedupeCauses([
+          causeFromFact(need.fact, cleanNeed),
+          ...(waits && need.waitingRule
+            ? [
+                causeFromRule(
+                  need.waitingRule.key,
+                  need.waitingRule.reason,
+                  `Regulile pentru anul ${waits} nu sunt încă aprobate (${ruleGapReasonName(need.waitingRule.reason)}).`,
+                ),
+              ]
+            : []),
+        ]);
+        const formattedBlocks = need.blocks.slice(0, 6).map(formatObligationKey).join(', ');
         return {
           kind: 'closure.need',
           subject: { kind: 'need', id: need.id },
@@ -1030,18 +1210,26 @@ function needsDetector(source: NeedsOf): Detector {
           due: null,
           period: year ?? null,
           message: waits
-            ? `${need.message} Se stabilește după începutul anului ${waits}, cu regulile lui.`
-            : `${need.message}${
+            ? `${cleanNeed} Se stabilește după începutul anului ${waits}, cu regulile lui.`
+            : `${cleanNeed}${
                 need.blocks.length
-                  ? ` Nu se știe dacă se datorează: ${need.blocks.slice(0, 6).join(', ')}${need.blocks.length > 6 ? ` și încă ${need.blocks.length - 6}` : ''}.`
+                  ? ` Afectează declarațiile: ${formattedBlocks}${need.blocks.length > 6 ? ` și încă ${need.blocks.length - 6}` : ''}.`
                   : ' Închiderea obligațiilor nu poate confirma ce declarații se datorează.'
               }`,
+          causes,
           details: {
             code: need.code,
             fact: need.fact,
             question: need.question as unknown as JsonValue,
             blocks: need.blocks,
             ...(waits ? { waiting: waits } : {}),
+          },
+          labels: {
+            code: textLabel('Cod'),
+            fact: textLabel('Fapt'),
+            question: textLabel('Întrebare'),
+            blocks: textLabel('Declarații afectate'),
+            ...(waits ? { waiting: periodLabel('An așteptat') } : {}),
           },
           next: waits ? [] : askSteps(need.question, Number(year ?? today.slice(0, 4))),
           cursor: need.id,
@@ -1062,7 +1250,9 @@ export type DeterminationWork = {
   severity: 'block' | 'warn';
   year: number;
   message: string;
+  causes?: WorkCause[];
   details: { [key: string]: JsonValue };
+  labels?: DetailLabels;
 };
 export type DeterminationsOf = (
   tx: Transaction,
@@ -1093,7 +1283,9 @@ function determinationsDetector(source: DeterminationsOf): Detector {
         due: null,
         period: String(item.year),
         message: item.message,
+        ...(item.causes ? { causes: item.causes } : {}),
         details: item.details,
+        ...(item.labels ? { labels: item.labels } : {}),
         next: [agent('determinations.propose', { year: item.year })],
         cursor: cursorOf(item),
       }));
@@ -1112,7 +1304,9 @@ export type ProfitWorkItem = {
   severity: 'block' | 'warn';
   year: number;
   message: string;
+  causes?: WorkCause[];
   details: { [key: string]: JsonValue };
+  labels?: DetailLabels;
   next: WorkStep[];
 };
 export type ProfitWorkOf = (
@@ -1141,7 +1335,9 @@ function profitDetector(source: ProfitWorkOf): Detector {
         due: null,
         period: String(item.year),
         message: item.message,
+        ...(item.causes ? { causes: item.causes } : {}),
         details: item.details,
+        ...(item.labels ? { labels: item.labels } : {}),
         next: item.next,
         cursor: cursorOf(item),
       }));
@@ -1160,7 +1356,9 @@ export type AnnualWorkItem = {
   year: number;
   kind: string;
   message: string;
+  causes?: WorkCause[];
   details: { [key: string]: JsonValue };
+  labels?: DetailLabels;
 };
 export type AnnualWorkOf = (
   tx: Transaction,
@@ -1187,7 +1385,9 @@ function annualDetector(source: AnnualWorkOf): Detector {
         due: null,
         period: String(item.year),
         message: item.message,
+        ...(item.causes ? { causes: item.causes } : {}),
         details: item.details,
+        ...(item.labels ? { labels: item.labels } : {}),
         next:
           item.kind === 'halfyear'
             ? []
@@ -1212,7 +1412,9 @@ export type TaxAccountWorkItem = {
   severity: 'block' | 'warn';
   period: string;
   message: string;
+  causes?: WorkCause[];
   details: { [key: string]: JsonValue };
+  labels?: DetailLabels;
   next: WorkStep[];
 };
 export type TaxAccountWorkOf = (
@@ -1242,7 +1444,9 @@ function taxAccountDetector(source: TaxAccountWorkOf): Detector {
         due: null,
         period: item.period,
         message: item.message,
+        ...(item.causes ? { causes: item.causes } : {}),
         details: item.details,
+        ...(item.labels ? { labels: item.labels } : {}),
         next: item.next,
         cursor: cursorOf(item),
       }));
@@ -1262,7 +1466,9 @@ export type VatAdjustmentWorkItem = {
   severity: 'block' | 'warn';
   period: string;
   message: string;
+  causes?: WorkCause[];
   details: { [key: string]: JsonValue };
+  labels?: DetailLabels;
   next: WorkStep[];
 };
 export type VatAdjustmentWorkOf = (
@@ -1292,7 +1498,9 @@ function vatAdjustmentDetector(source: VatAdjustmentWorkOf): Detector {
         due: null,
         period: item.period,
         message: item.message,
+        ...(item.causes ? { causes: item.causes } : {}),
         details: item.details,
+        ...(item.labels ? { labels: item.labels } : {}),
         next: item.next,
         cursor: cursorOf(item),
       }));
@@ -1311,7 +1519,9 @@ export type SchemeWorkItem = {
   severity: 'block' | 'warn';
   period: string;
   message: string;
+  causes?: WorkCause[];
   details: { [key: string]: JsonValue };
+  labels?: DetailLabels;
   next: WorkStep[];
 };
 export type SchemeWorkOf = (
@@ -1340,7 +1550,9 @@ function schemeDetector(source: SchemeWorkOf): Detector {
         due: null,
         period: item.period,
         message: item.message,
+        ...(item.causes ? { causes: item.causes } : {}),
         details: item.details,
+        ...(item.labels ? { labels: item.labels } : {}),
         next: item.next,
         cursor: cursorOf(item),
       }));
@@ -1359,7 +1571,9 @@ export type YearEndWorkItem = {
   severity: 'block' | 'warn';
   period: string;
   message: string;
+  causes?: WorkCause[];
   details: { [key: string]: JsonValue };
+  labels?: DetailLabels;
   next: WorkStep[];
   withheld?: Withheld;
 };
@@ -1389,7 +1603,9 @@ function yearEndDetector(source: YearEndWorkOf): Detector {
         due: null,
         period: item.period,
         message: item.message,
+        ...(item.causes ? { causes: item.causes } : {}),
         details: item.details,
+        ...(item.labels ? { labels: item.labels } : {}),
         next: item.next,
         cursor: cursorOf(item),
         ...(item.withheld ? { withheld: item.withheld } : {}),
@@ -1425,7 +1641,9 @@ function payrollDetector(source: PayrollWorkOf): Detector {
         due: null,
         period: item.period,
         message: item.message,
+        ...(item.causes ? { causes: item.causes } : {}),
         details: item.details,
+        ...(item.labels ? { labels: item.labels } : {}),
         next: item.next,
         cursor: cursorOf(item),
       }));
@@ -1540,13 +1758,20 @@ function closeDetector(checks: () => CloseCheck[]): Detector {
           severity: finding.severity,
           due: null,
           period: month,
-          message: finding.message,
+          message: cleanIdentifierText(finding.message),
           details: {
             month,
             check,
             code: finding.code,
             ...(finding.count === undefined ? {} : { count: finding.count }),
             ...(finding.items ? { items: finding.items.slice(0, 20) } : {}),
+          },
+          labels: {
+            month: periodLabel('Lună'),
+            check: textLabel('Verificare'),
+            code: textLabel('Cod'),
+            ...(finding.count === undefined ? {} : { count: countLabel('Număr') }),
+            ...(finding.items ? { items: textLabel('Elemente') } : {}),
           },
           next: [
             ...(findingSteps[finding.code]?.(month) ?? []),
@@ -1565,9 +1790,10 @@ function closeDetector(checks: () => CloseCheck[]): Detector {
           due: null,
           period: month,
           message: blocking
-            ? `Luna ${month} s-a încheiat și nu este închisă: rezolvați întâi cele ${blocking} probleme care împiedică închiderea.`
-            : `Luna ${month} s-a încheiat și nu este închisă: cereți închiderea ei.`,
+            ? `Luna ${periodName(month)} s-a încheiat și nu este închisă: rezolvați întâi cele ${blocking} probleme care împiedică închiderea.`
+            : `Luna ${periodName(month)} s-a încheiat și nu este închisă: cereți închiderea ei.`,
           details: { month, blocking },
+          labels: { month: periodLabel('Lună'), blocking: countLabel('Blocaje') },
           next: blocking ? [] : [agent('periods.close.request', { month })],
           cursor: `${month}#${found.length}`,
         });
@@ -1642,20 +1868,40 @@ function rulesDetector(register: ParameterRegister): Detector {
       const items: Draft[] = [
         ...[...gaps].map(([key, group]): Draft => {
           const dates = group.dates.sort();
+          const reasons = [...group.reasons].sort();
+          const label = parameterName(key, register);
+          const causes = dedupeCauses(
+            (reasons.length ? reasons : ['NOT_FOUND']).map((reason) =>
+              causeFromRule(
+                key,
+                reason,
+                `Lipsește o regulă verificată pentru ${label} (${ruleGapReasonName(reason)}).`,
+              ),
+            ),
+          );
           return {
             kind: 'rule.gap',
             subject: { kind: 'parameter', id: key },
             severity: 'block',
             due: null,
             period: null,
-            message: `Lipsește o regulă verificată pentru ${key} (${[...group.reasons].join(', ')}): ${group.proposals.length} propuneri sunt blocate până o aprobă expertul contabil.`,
+            message: `Lipsește o regulă verificată pentru ${label} (${(reasons.length ? reasons : ['NOT_FOUND']).map(ruleGapReasonName).join(', ')}): ${group.proposals.length} propuneri sunt blocate până o aprobă expertul contabil.`,
+            causes,
             details: {
               key,
-              reasons: [...group.reasons].sort(),
+              reasons,
               from: dates[0] ?? null,
               to: dates.at(-1) ?? null,
               count: group.proposals.length,
               proposals: group.proposals.slice(0, 20),
+            },
+            labels: {
+              key: textLabel('Parametru'),
+              reasons: textLabel('Motive'),
+              from: dateLabel('De la'),
+              to: dateLabel('Până la'),
+              count: countLabel('Număr'),
+              proposals: textLabel('Propuneri'),
             },
             next: [],
             cursor: `rule.gap|${key}`,
@@ -1667,12 +1913,18 @@ function rulesDetector(register: ParameterRegister): Detector {
           severity: 'warn',
           due: version.reviewedThrough,
           period: null,
-          message: `Parametrul ${version.key} este verificat doar până la ${version.reviewedThrough}: o versiune verificată pentru perioada următoare trebuie aprobată.`,
+          message: `Parametrul „${parameterName(version.key, register)}” este verificat doar până la ${version.reviewedThrough}: o versiune verificată pentru perioada următoare trebuie aprobată.`,
           details: {
             key: version.key,
             versionId: version.id,
             scope: version.scope as JsonValue,
             reviewedThrough: version.reviewedThrough,
+          },
+          labels: {
+            key: textLabel('Parametru'),
+            versionId: idLabel('Versiune parametru', 'parameterVersion'),
+            scope: textLabel('Domeniu'),
+            reviewedThrough: dateLabel('Verificat până la'),
           },
           next: [],
           cursor: `rule.expiring|${version.id}`,
@@ -1834,7 +2086,7 @@ const documentsDetector: Detector = {
           period: monthOf(row.date),
           message: receipt
             ? `Bonul fiscal ${row.number ?? row.id} din ${row.date} nu este înregistrat.`
-            : `Documentul ${row.kind} ${row.number ?? row.id} din ${row.date} nu are o propunere de înregistrare.`,
+            : `Documentul (${documentKindName(row.kind)}) ${row.number ?? row.id} din ${row.date} nu are o propunere de înregistrare.`,
           details: {
             kind: row.kind,
             number: row.number,
@@ -1846,6 +2098,17 @@ const documentsDetector: Detector = {
             evidenceId: row.evidenceId,
             members: row.members ? row.members.split(',').sort() : [],
           },
+          labels: {
+            kind: textLabel('Tip'),
+            number: textLabel('Număr'),
+            date: dateLabel('Dată'),
+            partyId: idLabel('Partener', 'party'),
+            currency: textLabel('Monedă'),
+            totals: textLabel('Totaluri'),
+            authority: textLabel('Sursă'),
+            evidenceId: idLabel('Document justificativ', 'evidence'),
+            members: textLabel('Copii ale documentului'),
+          },
           next: [...steps, dispose('human', 'no_booking')],
           cursor: row.id,
         };
@@ -1855,87 +2118,98 @@ const documentsDetector: Detector = {
   },
 };
 
-const betterSourceDetector: Detector = {
-  id: 'betterSource',
-  kinds: ['document.betterSource'],
-  async list({ tx, companyId }, page) {
-    // The document the current version reads: its input's, as a revision may move it.
-    const root = rootOf(documents.id);
-    const rows = await tx
-      .select({
-        id: proposals.id,
-        treatment: proposals.treatmentId,
-        documentId: documents.id,
-        number: documents.number,
-        authority: documents.authority,
-        version: proposalVersions.version,
-        input: proposalVersions.input,
-        entryDate: proposalVersions.entryDate,
-        better: sql<string | null>`(select e.id from ${documents} e
+function betterSourceDetector(treatments?: () => readonly Treatment[]): Detector {
+  const byId = () => new Map((treatments?.() ?? []).map((item) => [item.id, item]));
+  return {
+    id: 'betterSource',
+    kinds: ['document.betterSource'],
+    async list({ tx, companyId }, page) {
+      // The document the current version reads: its input's, as a revision may move it.
+      const root = rootOf(documents.id);
+      const rows = await tx
+        .select({
+          id: proposals.id,
+          treatment: proposals.treatmentId,
+          documentId: documents.id,
+          number: documents.number,
+          authority: documents.authority,
+          version: proposalVersions.version,
+          input: proposalVersions.input,
+          entryDate: proposalVersions.entryDate,
+          better: sql<string | null>`(select e.id from ${documents} e
           where e.company_id = ${q(proposals.companyId)} and e.authority = 'efactura' and e.id <> ${q(documents.id)}
             and (e.id = ${root} or exists (select 1 from ${documentLinks} b
               where b.company_id = e.company_id and b.from_id = e.id and b.to_id = ${root}
                 and b.kind in ${groupKinds}))
           order by e.id limit 1)`,
-      })
-      .from(proposals)
-      .innerJoin(
-        proposalVersions,
-        and(
-          eq(proposalVersions.companyId, proposals.companyId),
-          eq(proposalVersions.proposalId, proposals.id),
-          eq(proposalVersions.version, latestVersion),
-        ),
-      )
-      .innerJoin(
-        documents,
-        and(
-          eq(documents.companyId, proposals.companyId),
-          eq(documents.id, sql`${q(proposalVersions.input)} ->> '$.documentId'`),
-        ),
-      )
-      .where(
-        and(
-          eq(proposals.companyId, companyId),
-          position(proposals.id, page),
-          sql`${q(documents.authority)} not in ('efactura', 'issued')`,
-          notPosted,
-          notWithdrawn,
-        ),
-      )
-      .orderBy(asc(proposals.id))
-      .limit(page.limit + 1);
-    const { page: chosen, next } = paged(rows, page.limit, (row) => row.id);
-    return {
-      items: chosen
-        .filter((row) => row.better)
-        .map((row): Draft => ({
-          kind: 'document.betterSource',
-          subject: { kind: 'proposal', id: row.id },
-          severity: 'warn',
-          due: null,
-          period: monthOf(row.entryDate),
-          message: `Propunerea ${row.treatment} citește documentul ${row.number ?? row.documentId} (${row.authority}), care există și din e-Factura: revizuiți-o pe documentul e-Factura.`,
-          details: {
-            treatment: row.treatment,
-            version: row.version,
-            documentId: row.documentId,
-            authority: row.authority,
-            better: row.better,
-          },
-          next: [
-            agent('proposals.revise', {
-              proposalId: row.id,
+        })
+        .from(proposals)
+        .innerJoin(
+          proposalVersions,
+          and(
+            eq(proposalVersions.companyId, proposals.companyId),
+            eq(proposalVersions.proposalId, proposals.id),
+            eq(proposalVersions.version, latestVersion),
+          ),
+        )
+        .innerJoin(
+          documents,
+          and(
+            eq(documents.companyId, proposals.companyId),
+            eq(documents.id, sql`${q(proposalVersions.input)} ->> '$.documentId'`),
+          ),
+        )
+        .where(
+          and(
+            eq(proposals.companyId, companyId),
+            position(proposals.id, page),
+            sql`${q(documents.authority)} not in ('efactura', 'issued')`,
+            notPosted,
+            notWithdrawn,
+          ),
+        )
+        .orderBy(asc(proposals.id))
+        .limit(page.limit + 1);
+      const { page: chosen, next } = paged(rows, page.limit, (row) => row.id);
+      const treatmentMap = byId();
+      return {
+        items: chosen
+          .filter((row) => row.better)
+          .map((row): Draft => ({
+            kind: 'document.betterSource',
+            subject: { kind: 'proposal', id: row.id },
+            severity: 'warn',
+            due: null,
+            period: monthOf(row.entryDate),
+            message: `Propunerea ${treatmentName(row.treatment, treatmentMap)} citește documentul ${row.number ?? row.documentId} (${authorityName(row.authority ?? '')}), care există și din e-Factura: revizuiți-o pe documentul e-Factura.`,
+            details: {
+              treatment: row.treatment,
               version: row.version,
-              input: { ...(JSON.parse(row.input) as object), documentId: row.better },
-            }),
-          ],
-          cursor: row.id,
-        })),
-      next,
-    };
-  },
-};
+              documentId: row.documentId,
+              authority: row.authority,
+              better: row.better,
+            },
+            labels: {
+              treatment: textLabel('Tratament'),
+              version: countLabel('Versiune'),
+              documentId: idLabel('Document', 'document'),
+              authority: textLabel('Sursă'),
+              better: idLabel('Document e-Factura', 'document'),
+            },
+            next: [
+              agent('proposals.revise', {
+                proposalId: row.id,
+                version: row.version,
+                input: { ...(JSON.parse(row.input) as object), documentId: row.better },
+              }),
+            ],
+            cursor: row.id,
+          })),
+        next,
+      };
+    },
+  };
+}
 
 /** The fields every copy of a document should agree on. */
 function comparable(row: {
@@ -2035,8 +2309,12 @@ const originsDetector: Detector = {
         severity: 'warn',
         due: null,
         period: monthOf(byId.get(rootId)?.docDate),
-        message: `Copiile documentului ${byId.get(rootId)?.number ?? rootId} diferă (${differences.map((item) => item.field).join(', ')}): verificați extragerea față de original.`,
+        message: `Copiile documentului ${byId.get(rootId)?.number ?? rootId} diferă (${differences.map((item) => comparableFieldName(item.field)).join(', ')}): verificați extragerea față de original.`,
         details: { rootId, differences },
+        labels: {
+          rootId: idLabel('Document principal', 'document'),
+          differences: textLabel('Diferențe'),
+        },
         next: [
           ...extracted.map((row) => agent('documents.supersede', { documentId: row.id })),
           dispose('human', 'dealt_with'),
@@ -2112,6 +2390,14 @@ const bankDetector: Detector = {
           period: monthOf(row.bookingDate),
           message: `Mișcarea bancară din ${row.bookingDate} (${row.reference}) nu este explicată.`,
           details,
+          labels: {
+            treasuryAccountId: idLabel('Cont de trezorerie', 'treasuryAccount'),
+            bookingDate: dateLabel('Data operațiunii'),
+            amountMinor: { label: 'Sumă', type: 'minor', currencyKey: 'currency' },
+            currency: textLabel('Monedă'),
+            reference: textLabel('Referință'),
+            counterparty: textLabel('Partener'),
+          },
           // A transfer to the State Treasury (an IBAN of bank code TREZ) pays the state: the tax
           // account distributes it (tax.pay).
           next: [
@@ -2125,13 +2411,22 @@ const bankDetector: Detector = {
             ? {
                 withheld: {
                   classes: payClasses,
-                  message: `${salaryPayment} din ${row.bookingDate} nu este explicată: o explică cine poate citi datele salariale (un proprietar, un revizor sau un agent a cărui permisiune acoperă payroll și personal).`,
+                  message: `${salaryPayment} din ${row.bookingDate} nu este explicată: o explică cine poate citi datele salariale (un proprietar, un revizor sau un agent a cărui permisiune acoperă datele salariale și de personal).`,
                   details: {
                     ...details,
                     amountMinor: salary.persons > 1 ? details.amountMinor : null,
                     reference: null,
                     counterparty: salaryPayment,
                     redacted: true,
+                  },
+                  labels: {
+                    treasuryAccountId: idLabel('Cont de trezorerie', 'treasuryAccount'),
+                    bookingDate: dateLabel('Data operațiunii'),
+                    amountMinor: { label: 'Sumă', type: 'minor', currencyKey: 'currency' },
+                    currency: textLabel('Monedă'),
+                    reference: textLabel('Referință'),
+                    counterparty: textLabel('Partener'),
+                    redacted: textLabel('Date cu acces restricționat'),
                   },
                 },
               }
@@ -2170,7 +2465,7 @@ const spvDetector: Detector = {
           row.outcome === 'error' ? 'block' : row.kind === 'buyer_message' ? 'info' : 'warn',
         due: null,
         period: new Date(row.createdAtAnaf).toISOString().slice(0, 7),
-        message:
+        message: cleanIdentifierText(
           row.outcome === 'differs'
             ? `Factura din SPV diferă de cea emisă: ${row.detail ?? ''}`
             : row.outcome === 'error'
@@ -2178,12 +2473,20 @@ const spvDetector: Detector = {
               : row.kind === 'buyer_message'
                 ? `Un cumpărător a trimis un mesaj prin SPV (${row.id}).`
                 : `ANAF a trimis o eroare pentru o încărcare necunoscută (${row.uploadId}).`,
+        ),
         details: {
           kind: row.kind,
           outcome: row.outcome,
           uploadId: row.uploadId,
           documentId: row.documentId,
           detail: row.detail,
+        },
+        labels: {
+          kind: textLabel('Tip'),
+          outcome: textLabel('Rezultat'),
+          uploadId: idLabel('Încărcare SPV', 'spvUpload'),
+          documentId: idLabel('Document', 'document'),
+          detail: textLabel('Detaliu'),
         },
         next: [
           ...(row.documentId ? [agent('documents.get', { id: row.documentId })] : []),
@@ -2301,6 +2604,12 @@ const evidenceDetector: Detector = {
                   hash: row.hash,
                   redacted: true,
                 },
+                labels: {
+                  mediaType: textLabel('Tip fișier'),
+                  size: countLabel('Dimensiune (octeți)'),
+                  hash: textLabel('Amprentă fișier'),
+                  redacted: textLabel('Date cu acces restricționat'),
+                },
               }
             : undefined;
         return {
@@ -2320,6 +2629,12 @@ const evidenceDetector: Detector = {
             mediaType: row.mediaType,
             size: row.size,
             hash: row.hash,
+          },
+          labels: {
+            filename: textLabel('Fișier'),
+            mediaType: textLabel('Tip fișier'),
+            size: countLabel('Dimensiune (octeți)'),
+            hash: textLabel('Amprentă fișier'),
           },
           next: [
             agent('evidence.read', { id: row.id, mode: 'meta' }),
@@ -2368,15 +2683,21 @@ export interface AutonomyWork {
   >;
 }
 
-function autonomyDetector(autonomy: AutonomyWork): Detector {
+function autonomyDetector(
+  autonomy: AutonomyWork,
+  treatments?: () => readonly Treatment[],
+): Detector {
+  const byId = () => new Map((treatments?.() ?? []).map((item) => [item.id, item]));
   return {
     id: 'automation',
     kinds: ['automation.paused', 'template.graduation', 'template.candidate'],
     async list({ tx, companyId }, page) {
+      const treatmentMap = byId();
       const drafts: Draft[] = [];
       const paused = await pausedScopes(tx, companyId);
       for (const row of paused.rows) {
         const id = row.scopeId ?? companyId;
+        const cleanReason = cleanIdentifierText(row.reason);
         drafts.push({
           kind: 'automation.paused',
           subject: { kind: row.scope, id },
@@ -2385,8 +2706,8 @@ function autonomyDetector(autonomy: AutonomyWork): Detector {
           period: null,
           message:
             row.createdBy === SYSTEM_PRINCIPAL
-              ? `Contabilizarea automată a fost oprită de sistem: ${row.reason} Verificați și reluați-o sau revocați politica.`
-              : `Contabilizarea automată este oprită: ${row.reason}`,
+              ? `Contabilizarea automată a fost oprită de sistem: ${cleanReason} Verificați și reluați-o sau revocați politica.`
+              : `Contabilizarea automată este oprită: ${cleanReason}`,
           details: {
             seq: row.seq,
             reason: row.reason,
@@ -2394,6 +2715,14 @@ function autonomyDetector(autonomy: AutonomyWork): Detector {
             system: row.createdBy === SYSTEM_PRINCIPAL,
             by: row.createdBy,
             details: json(row.details),
+          },
+          labels: {
+            seq: countLabel('Poziție'),
+            reason: textLabel('Motiv'),
+            trigger: textLabel('Cauză'),
+            system: textLabel('Oprit de sistem'),
+            by: textLabel('Autor'),
+            details: textLabel('Detalii suplimentare'),
           },
           next: [
             human('automation.resume', {
@@ -2421,6 +2750,13 @@ function autonomyDetector(autonomy: AutonomyWork): Detector {
             months: report.months,
             rulesHash: report.rulesHash,
           },
+          labels: {
+            version: countLabel('Versiune'),
+            treatment: textLabel('Tratament'),
+            correct: countLabel('Înregistrări corecte'),
+            months: textLabel('Luni'),
+            rulesHash: textLabel('Amprenta regulilor'),
+          },
           next: [agent('policies.request', { templateId: template.id })],
           cursor: `1|${template.id}`,
         });
@@ -2432,13 +2768,20 @@ function autonomyDetector(autonomy: AutonomyWork): Detector {
           severity: 'info',
           due: null,
           period: null,
-          message: `${candidate.treatment} se repetă pentru același partener (${candidate.posted} înregistrări în ${candidate.months} luni) fără un șablon.`,
+          message: `Tratamentul „${treatmentName(candidate.treatment, treatmentMap)}” (${documentKindName(candidate.documentKind)}) se repetă pentru același partener (${candidate.posted} înregistrări în ${candidate.months} luni) fără un șablon.`,
           details: {
             treatment: candidate.treatment,
             partyId: candidate.partyId,
             documentKind: candidate.documentKind,
             posted: candidate.posted,
             months: candidate.months,
+          },
+          labels: {
+            treatment: textLabel('Tratament'),
+            partyId: idLabel('Partener', 'party'),
+            documentKind: textLabel('Tip document'),
+            posted: countLabel('Înregistrări contabilizate'),
+            months: countLabel('Luni'),
           },
           next: [
             agent('templates.request', {
@@ -2477,7 +2820,9 @@ export type TradeWorkItem = {
   due: string | null;
   period: string;
   message: string;
+  causes?: WorkCause[];
   details: { [key: string]: JsonValue };
+  labels?: DetailLabels;
   next: WorkStep[];
 };
 export type TradeWorkOf = (
@@ -2506,7 +2851,9 @@ function tradeDetector(source: TradeWorkOf): Detector {
         due: item.due,
         period: item.period,
         message: item.message,
+        ...(item.causes ? { causes: item.causes } : {}),
         details: item.details,
+        ...(item.labels ? { labels: item.labels } : {}),
         next: item.next,
         cursor: cursorOf(item),
       }));
@@ -2526,7 +2873,9 @@ export type RetailWorkItem = {
   due: string | null;
   period: string;
   message: string;
+  causes?: WorkCause[];
   details: { [key: string]: JsonValue };
+  labels?: DetailLabels;
   next: WorkStep[];
 };
 export type RetailWorkOf = (
@@ -2555,7 +2904,9 @@ function retailDetector(source: RetailWorkOf): Detector {
         due: item.due,
         period: item.period,
         message: item.message,
+        ...(item.causes ? { causes: item.causes } : {}),
         details: item.details,
+        ...(item.labels ? { labels: item.labels } : {}),
         next: item.next,
         cursor: cursorOf(item),
       }));
@@ -2588,13 +2939,17 @@ export interface WorkSources {
   trade?: TradeWorkOf;
   /** Retail's e-Factura deadlines and cash registers' obligations; none without it. */
   retail?: RetailWorkOf;
+  /** Operation metadata and input schemas for human names and step completeness. */
+  operations?: () => OperationRegistry;
+  /** Registered treatments for human names and proposal input completeness. */
+  treatments?: () => readonly Treatment[];
 }
 
 /** The detectors in worklist order: decisions and blocked work first, then intake. */
 export function workDetectors(sources: WorkSources): Detector[] {
   return [
-    actionsDetector,
-    proposalsDetector(sources.questionState),
+    actionsDetector(sources.operations),
+    proposalsDetector(sources.questionState, sources.treatments),
     questionsDetector,
     obligationsDetector(sources.obligations),
     ...(sources.needs ? [needsDetector(sources.needs)] : []),
@@ -2610,13 +2965,13 @@ export function workDetectors(sources: WorkSources): Detector[] {
     ...(sources.retail ? [retailDetector(sources.retail)] : []),
     closeDetector(sources.closeChecks),
     rulesDetector(sources.register),
-    betterSourceDetector,
+    betterSourceDetector(sources.treatments),
     originsDetector,
     documentsDetector,
     bankDetector,
     spvDetector,
     evidenceDetector,
-    autonomyDetector(sources.autonomy),
+    autonomyDetector(sources.autonomy, sources.treatments),
   ];
 }
 
@@ -2628,6 +2983,61 @@ export function workDetectors(sources: WorkSources): Detector[] {
 const callBudget = 40;
 const timeBudget = 150;
 
+const customMissingFields: Record<string, readonly string[]> = {
+  'invoices.recognize': ['account', 'allocations'],
+  'invoices.credit': ['account', 'allocations'],
+  'bank.settle': ['allocations', 'lines', 'opens', 'cards'],
+  'cash.settle': ['allocations', 'lines', 'opens'],
+};
+
+function missingFromSchema(
+  schema: z.ZodType,
+  value: unknown,
+  prefix = '',
+  treatmentId?: string,
+): string[] {
+  const parsed = schema.safeParse(value);
+  if (parsed.success) return [];
+  const fields: string[] = [];
+  for (const issue of parsed.error.issues) {
+    if (issue.path.length) fields.push(`${prefix}${issue.path.map(String).join('.')}`);
+    else if (issue.code === 'custom' && treatmentId && customMissingFields[treatmentId])
+      fields.push(...customMissingFields[treatmentId]!.map((name) => `${prefix}${name}`));
+    else fields.push(prefix ? prefix.replace(/\.$/, '') : 'input');
+  }
+  return [...new Set(fields)];
+}
+
+function stepCompleteness(
+  step: WorkStep,
+  draft: Pick<Draft, 'details'>,
+  inputHint: WorkStep['inputHint'],
+  operations?: OperationRegistry,
+  treatments?: ReadonlyMap<string, Treatment>,
+): { complete: boolean; missing?: string[] } {
+  const op = operations?.find(step.operation);
+  if (!op) return { complete: false, missing: ['operation'] };
+  const treatmentId = treatmentOf(step, draft);
+  const typedTreatment =
+    treatmentId === undefined &&
+    step.operation.endsWith('.propose') &&
+    treatments?.has(step.operation.slice(0, -'.propose'.length))
+      ? step.operation.slice(0, -'.propose'.length)
+      : undefined;
+  const fields = missingFromSchema(op.input, inputHint, '', typedTreatment);
+  if (
+    (step.operation === 'proposals.propose' || step.operation === 'proposals.revise') &&
+    !fields.includes('input')
+  ) {
+    const treatment = treatmentId ? treatments?.get(treatmentId) : undefined;
+    if (treatment)
+      fields.push(...missingFromSchema(treatment.input, inputHint.input, 'input.', treatmentId));
+    else fields.push('input');
+  }
+  const unique = [...new Set(fields)];
+  return unique.length ? { complete: false, missing: unique } : { complete: true };
+}
+
 export class Work {
   private readonly byKind = new Map<WorkKind, Detector>();
 
@@ -2636,6 +3046,10 @@ export class Work {
     private readonly detectors: Detector[],
     /** The engine's time: the Bucharest date items are judged on. */
     private readonly clock: () => number = Date.now,
+    private readonly metadata: {
+      operations?: () => OperationRegistry;
+      treatments?: () => readonly Treatment[];
+    } = {},
   ) {
     for (const detector of detectors)
       for (const kind of detector.kinds) this.byKind.set(kind, detector);
@@ -2647,6 +3061,7 @@ export class Work {
     const discloses = await this.commands.disclosable(tx, actor, role);
     return {
       agent: !!actor.agentId,
+      roleAllows: (permission) => roleAllows(role, permission),
       allowed: await this.commands.usable(tx, actor, role),
       reads: (treatment) => {
         const classes = this.commands.dataClassesOf(`${treatment}.propose`);
@@ -2661,14 +3076,18 @@ export class Work {
     return { tx, companyId, today: bucharestDate(this.clock()) };
   }
 
-  /** Ids, fingerprints and the audit position, the `work.dispose` steps' inputs, and whether
-   * the caller may take each step. A proposal's input in a hint goes only to a caller who may
-   * read it, as `proposals.get` decides. */
+  /** Ids, fingerprints and the audit position, the `work.dispose` steps' inputs, whether
+   * the caller may take each step (and why if not), and whether `inputHint` is complete. A
+   * proposal's input in a hint goes only to a caller who may read it, as `proposals.get` decides. */
   private finish(
     drafts: Draft[],
     asOfSeq: number,
     caller: Caller,
   ): (WorkItem & { cursor: string })[] {
+    const operations = this.metadata.operations?.();
+    const treatmentMap = this.metadata.treatments
+      ? new Map(this.metadata.treatments().map((item) => [item.id, item]))
+      : undefined;
     return drafts.map((draft) => {
       const id = itemId(draft.kind, draft.subject);
       const fingerprint = hashOf({
@@ -2676,10 +3095,15 @@ export class Work {
         subject: draft.subject,
         details: draft.details,
       });
-      const shown =
-        draft.withheld && !caller.discloses(draft.withheld.classes)
-          ? { message: draft.withheld.message, details: draft.withheld.details }
-          : draft;
+      const redacted = draft.withheld && !caller.discloses(draft.withheld.classes);
+      const shown = redacted
+        ? {
+            message: draft.withheld!.message,
+            details: draft.withheld!.details,
+            labels: draft.withheld!.labels,
+          }
+        : draft;
+      const details = caller.cnps ? shown.details : maskCnps(shown.details);
       return {
         id,
         kind: draft.kind,
@@ -2689,26 +3113,68 @@ export class Work {
         period: draft.period,
         // The fingerprint is the item's own, whatever the caller reads of it.
         message: caller.cnps ? shown.message : maskCnpText(shown.message),
-        details: caller.cnps ? shown.details : maskCnps(shown.details),
+        ...(draft.causes?.length
+          ? {
+              causes: caller.cnps
+                ? draft.causes
+                : draft.causes.map((cause) => ({ ...cause, message: maskCnpText(cause.message) })),
+            }
+          : {}),
+        details,
+        labels: completeLabels(details, shown.labels),
         fingerprint,
         next: draft.next.map((found): WorkStepView => {
           const step = asCalled(found, draft, caller);
-          const missing = (step.needs ?? []).filter((kind) => !caller.discloses([kind]));
+          const missingData = (step.needs ?? []).filter((kind) => !caller.discloses([kind]));
+          const ops = stepNeeds(step, draft);
+          let missingRole: PermissionKind | undefined;
+          if (operations)
+            for (const opId of ops) {
+              const perm = operations.find(opId)?.permission;
+              if (perm && !caller.roleAllows(perm)) {
+                missingRole = perm;
+                break;
+              }
+            }
+          const stateReason =
+            step.stateReason ??
+            (step.operation === 'work.dispose' && draft.severity === 'block'
+              ? 'O problemă care blochează se rezolvă, nu se închide printr-o decizie.'
+              : undefined);
+          const allowed =
+            (step.by === 'agent' || !caller.agent) &&
+            ops.every(caller.allowed) &&
+            !missingData.length &&
+            stateReason === undefined;
+          const reason: StepRefusal | undefined = allowed
+            ? undefined
+            : missingRole !== undefined
+              ? { kind: 'role', permission: missingRole }
+              : (step.by === 'human' && caller.agent) ||
+                  (caller.agent && !ops.every(caller.allowed))
+                ? { kind: 'grant' }
+                : missingData.length
+                  ? { kind: 'data' }
+                  : stateReason !== undefined
+                    ? { kind: 'state', message: stateReason }
+                    : { kind: 'grant' };
+          // A step whose data the caller may not read shows no input to start from.
+          const inputHint =
+            step.operation === 'work.dispose'
+              ? { id, fingerprint, ...step.inputHint }
+              : missingData.length
+                ? (({ input: _, ...rest }) => rest)(step.inputHint)
+                : hidden(step, draft, caller);
+          const completeness = stepCompleteness(step, draft, inputHint, operations, treatmentMap);
           return {
             operation: step.operation,
             by: step.by,
-            allowed:
-              (step.by === 'agent' || !caller.agent) &&
-              stepNeeds(step, draft).every(caller.allowed) &&
-              !missing.length,
-            // A step whose data the caller may not read shows no input to start from.
-            inputHint:
-              step.operation === 'work.dispose'
-                ? { id, fingerprint, ...step.inputHint }
-                : missing.length
-                  ? (({ input: _, ...rest }) => rest)(step.inputHint)
-                  : hidden(step, draft, caller),
-            ...(missing.length ? { needs: missing } : {}),
+            allowed,
+            ...(reason ? { reason } : {}),
+            complete: completeness.complete,
+            ...(completeness.missing ? { missing: completeness.missing } : {}),
+            inputHint,
+            ...(missingData.length ? { needs: missingData } : {}),
           };
         }),
         asOfSeq,
@@ -2868,6 +3334,7 @@ export class Work {
       // Only the item's fingerprint and severity decide here, never its steps.
       const found = await this.find(this.context(tx, actor.companyId), input.id, {
         agent: !!actor.agentId,
+        roleAllows: () => false,
         allowed: () => false,
         reads: () => false,
         cnps: false,

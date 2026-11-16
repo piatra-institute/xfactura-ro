@@ -21,6 +21,13 @@ import { entryStands } from '../kernel/ledger';
 import type { CloseCheck } from '../kernel/periods';
 import { maskCnps } from '../kernel/personal';
 import type { WorkStep } from '../kernel/work';
+import {
+  amountLabel,
+  periodLabel,
+  textLabel,
+  treatmentName,
+  type DetailLabels,
+} from '../kernel/work-names';
 import type { DeclarationProblem } from './declarations';
 
 /*
@@ -275,6 +282,7 @@ export type SchemeWorkItem = {
   period: string;
   message: string;
   details: { [key: string]: JsonValue };
+  labels?: DetailLabels;
   next: WorkStep[];
 };
 
@@ -306,6 +314,12 @@ export async function schemeWork(
         total: money(held.bani),
         rule: 'ro.vat.margin.travel',
       },
+      labels: {
+        period: periodLabel('Perioadă'),
+        documents: textLabel('Documente'),
+        total: amountLabel('Total', { currency: 'RON' }),
+        rule: textLabel('Regulă'),
+      },
       next: [
         step('proposals.propose', 'agent', {
           treatment: 'margin.travel',
@@ -332,7 +346,7 @@ export const schemeChecks: CloseCheck[] = [
             {
               code: 'TRAVEL_MARGIN_UNCOMPUTED',
               severity: 'warn' as const,
-              message: `${documents.length} vânzări ale agenției de turism în regimul marjei nu sunt cuprinse în marja perioadei (margin.travel): fără calcul, decontul nu are TVA lor.`,
+              message: `${documents.length} vânzări ale agenției de turism în regimul marjei nu sunt cuprinse în marja perioadei (${treatmentName('margin.travel').toLowerCase()}): fără calcul, decontul nu are TVA lor.`,
               count: documents.length,
               items: documents.slice(0, 20),
             },

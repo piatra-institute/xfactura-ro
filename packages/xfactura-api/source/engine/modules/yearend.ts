@@ -69,6 +69,19 @@ import {
 import type { CloseCheck, Finding } from '../kernel/periods';
 import { loadState } from '../kernel/state';
 import type { WorkStep, Withheld, YearEndWorkItem } from '../kernel/work';
+import {
+  axisName,
+  causeFromFact,
+  causeFromQuestion,
+  cleanIdentifierText,
+  countLabel,
+  idLabel,
+  operationName,
+  textLabel,
+  treatmentName,
+  type DetailLabels,
+  type WorkCause,
+} from '../kernel/work-names';
 import { standing } from './questions';
 
 /*
@@ -624,7 +637,9 @@ export interface ReviewItem {
   check: string;
   severity: 'block' | 'warn';
   message: string;
+  causes?: WorkCause[];
   details: { [key: string]: JsonValue };
+  labels?: DetailLabels;
   next: WorkStep[];
   /** What a caller who may not read these classes reads instead (`Withheld`). */
   withheld?: Withheld;
@@ -704,7 +719,9 @@ export async function yearEndReview(
       check: 'inventory.lists',
       about: 'lists',
       severity: 'block',
-      message: `Inventarierea anuală la ${end} nu este înregistrată: transcrieți listele de inventariere semnate (documents.record, tipul inventory.list).`,
+      message: cleanIdentifierText(
+        `Inventarierea anuală la ${end} nu este înregistrată: transcrieți listele de inventariere semnate (documents.record, tipul inventory.list).`,
+      ),
       details: { date: end },
       next: [agent('documents.record', { kind: inventoryDocumentKind })],
     });
@@ -714,7 +731,7 @@ export async function yearEndReview(
         check: 'inventory.lists',
         about: gap.message,
         severity: 'block',
-        message: gap.message,
+        message: cleanIdentifierText(gap.message),
         details: { date: end, code: gap.code },
         next: [
           agent('documents.record', { kind: inventoryDocumentKind }),
@@ -726,7 +743,7 @@ export async function yearEndReview(
       check: 'inventory.stock',
       about: problem.code,
       severity: 'block',
-      message: `UNSUPPORTED: ${problem.message}`,
+      message: cleanIdentifierText(`UNSUPPORTED: ${problem.message}`),
       details: { date: end, code: problem.code },
       next: [],
     });
@@ -740,7 +757,8 @@ export async function yearEndReview(
         check: 'inventory.differences',
         about: 'single',
         severity: 'block',
-        message: `UNSUPPORTED: inventarierea a constatat diferențe (${bookable.length}), a căror înregistrare în partidă simplă nu este încă acoperită; se înregistrează în afara aplicației.`,
+        message:
+          'Caz neacoperit: inventarierea a constatat diferențe, a căror înregistrare în partidă simplă nu este încă acoperită; se înregistrează în afara aplicației.',
         details: { date: end, differences: bookable.map(differenceView) },
         next: [],
       });
@@ -752,7 +770,9 @@ export async function yearEndReview(
         message: `Inventarierea de la ${end} a constatat ${bookable.length} diferențe neînregistrate (${bookable
           .slice(0, 3)
           .map((item) => ('number' in item ? item.number : `${item.account} ${item.currency}`))
-          .join(', ')}): propuneți inventory.differences cu decizia administratorului.`,
+          .join(
+            ', ',
+          )}): propuneți ${treatmentName('inventory.differences').toLowerCase()} cu decizia administratorului.`,
         details: { date: end, differences: bookable.map(differenceView) },
         next: [propose('inventory.differences', { date: end, documentIds: lists })],
       });
@@ -768,7 +788,7 @@ export async function yearEndReview(
       check: 'inventory.differences',
       about: 'stock',
       severity: 'block',
-      message: `Inventarierea de la ${end} a constatat ${counted.length} diferențe de stoc neînregistrate: propuneți inventory.stock cu decizia administratorului și cauza fiecărei lipse.`,
+      message: `Inventarierea de la ${end} a constatat ${counted.length} diferențe de stoc neînregistrate: propuneți ${treatmentName('inventory.stock').toLowerCase()} cu decizia administratorului și cauza fiecărei lipse.`,
       details: { date: end, differences: counted.map(differenceView) },
       next: [propose('inventory.stock', { date: end, documentIds: lists })],
     });
@@ -787,7 +807,7 @@ export async function yearEndReview(
         check: 'inventory.differences',
         about: 'impaired',
         severity: 'block',
-        message: `Listele de inventariere evaluează ${missing.map((item) => item.number).join(', ')} sub valoarea contabilă: înregistrați ajustarea (impairment.assets).`,
+        message: `Listele de inventariere evaluează ${missing.map((item) => item.number).join(', ')} sub valoarea contabilă: înregistrați ajustarea (${treatmentName('impairment.assets').toLowerCase()}).`,
         details: { date: end, differences: missing.map(differenceView) },
         next: [
           propose('impairment.assets', {
@@ -843,6 +863,13 @@ export async function yearEndReview(
         classes: payClasses,
         message: withheld,
         details: { account, currency, partners: group.length, redacted: true },
+        labels: {
+          check: textLabel('Verificare'),
+          account: textLabel('Cont'),
+          currency: textLabel('Monedă'),
+          partners: countLabel('Parteneri'),
+          redacted: textLabel('Date cu acces restricționat'),
+        },
       },
     });
   }
@@ -860,12 +887,14 @@ export async function yearEndReview(
   const tagged491 = (await taggedBalances(tx, companyId, ['491'], end)).filter(
     (row) => row.bani !== 0n,
   );
-  if (overdue.length && !policy)
+  if (overdue.length && !policy) {
+    const message = `${overdue.length} creanțe sunt restante la ${end}, iar ${axisName('policy.impairment.receivables').toLowerCase()} nu este înregistrată.`;
     push({
       check: 'impairment.receivables',
       about: 'policy',
       severity: 'block',
-      message: `${overdue.length} creanțe sunt restante la ${end}, iar politica de testare a creanțelor pentru depreciere nu este înregistrată (policy.impairment.receivables).`,
+      message,
+      causes: [causeFromFact('policy.impairment.receivables', message)],
       details: { yearEnd: end, overdue: overdue.length },
       next: [
         ask(
@@ -877,7 +906,7 @@ export async function yearEndReview(
         ),
       ],
     });
-  else if (policy && (impairmentPolicies as readonly string[]).includes(policy)) {
+  } else if (policy && (impairmentPolicies as readonly string[]).includes(policy)) {
     const days = policyDays(policy as (typeof impairmentPolicies)[number]);
     const parties = [...new Set(receivables.map((item) => item.partyId))].sort();
     let needed = tagged491.length > 0;
@@ -897,11 +926,13 @@ export async function yearEndReview(
       if (answer.value && answer.value.status !== 'collectible') needed = true;
       if (tested && !answer.value) {
         pending = true;
+        const message = `Creanțele partenerului ${partyId} sunt restante de peste ${days} de zile la ${end}: indicați gradul de încasare.`;
         push({
           check: 'impairment.receivables',
           about: `party:${partyId}`,
           severity: 'block',
-          message: `Creanțele partenerului ${partyId} sunt restante de peste ${days} de zile la ${end}: întrebați cât de încasabile sunt (receivable.collectibility).`,
+          message,
+          causes: [causeFromQuestion(request, message)],
           details: { yearEnd: end, partyId, policy },
           next: [ask(request.kind, request.subject, request.params), human('questions.answer')],
         });
@@ -916,7 +947,7 @@ export async function yearEndReview(
         check: 'impairment.receivables',
         about: 'unbooked',
         severity: 'block',
-        message: `Răspunsurile despre creanțe cer ajustări pentru depreciere la ${end} pe care nicio înregistrare nu le cuprinde: propuneți impairment.receivables, citând răspunsurile.`,
+        message: `Răspunsurile despre creanțe cer ajustări pentru depreciere la ${end} pe care nicio înregistrare nu le cuprinde: propuneți ${treatmentName('impairment.receivables').toLowerCase()}, citând răspunsurile.`,
         details: { yearEnd: end },
         next: [propose('impairment.receivables', { yearEnd: end })],
       });
@@ -938,16 +969,18 @@ export async function yearEndReview(
     };
     const answer = await answerOf(tx, companyId, request, untakenLeaveAnswer);
     const tag = provisionTag('leave', `concedii-${yearNumber}`);
-    if (!answer.value)
+    if (!answer.value) {
+      const message = `Concediile de odihnă neefectuate la ${end} nu sunt stabilite: indicați valoarea lor.`;
       push({
         check: 'provisions',
         about: 'leave',
         severity: 'block',
-        message: `Concediile de odihnă neefectuate la ${end} nu sunt stabilite: întrebați (leave.untaken).`,
+        message,
+        causes: [causeFromQuestion(request, message)],
         details: { year: yearNumber },
         next: [ask(request.kind, request.subject, request.params), human('questions.answer')],
       });
-    else {
+    } else {
       const target =
         parseMoney(answer.value.amount, LEDGER_CURRENCY) +
         parseMoney(answer.value.contributions, LEDGER_CURRENCY);
@@ -956,7 +989,7 @@ export async function yearEndReview(
           check: 'provisions',
           about: 'leave.unbooked',
           severity: 'block',
-          message: `Concediile neefectuate la ${end} sunt ${lei(target)} lei; registrele țin ${lei(held(tag))} lei: propuneți provisions.record (leave), citând răspunsul.`,
+          message: `Concediile neefectuate la ${end} sunt ${lei(target)} lei; registrele țin ${lei(held(tag))} lei: propuneți provizionul pentru concedii, citând răspunsul.`,
           details: { year: yearNumber, target: lei(target), held: lei(held(tag)) },
           next: [
             propose('provisions.record', {
@@ -974,7 +1007,7 @@ export async function yearEndReview(
           check: 'provisions',
           about: `stale:${row.item}`,
           severity: 'block',
-          message: `${row.item.slice('provision:leave:'.length)} are încă ${lei(row.bani)} lei la ${end}: concediile unui an anterior se reiau pe măsura efectuării lor (provisions.record cu suma 0).`,
+          message: `${row.item.slice('provision:leave:'.length)} are încă ${lei(row.bani)} lei la ${end}: concediile unui an anterior se reiau pe măsura efectuării lor (provizion cu suma 0).`,
           details: { item: row.item, held: lei(row.bani) },
           next: [
             propose('provisions.record', {
@@ -993,16 +1026,18 @@ export async function yearEndReview(
       params: { year: yearNumber },
     };
     const answer = await answerOf(tx, companyId, request, provisionReviewAnswer);
-    if (!answer.value)
+    if (!answer.value) {
+      const message = `Obligațiile de la ${end} pentru care se constituie provizioane (procese, garanții, prime, altele) nu sunt analizate: confirmați situația lor.`;
       push({
         check: 'provisions',
         about: 'review',
         severity: 'block',
-        message: `Obligațiile de la ${end} pentru care se constituie provizioane (procese, garanții, prime, altele) nu sunt analizate: întrebați (provisions.review).`,
+        message,
+        causes: [causeFromQuestion(request, message)],
         details: { year: yearNumber },
         next: [ask(request.kind, request.subject, request.params), human('questions.answer')],
       });
-    else {
+    } else {
       const listed = 'obligations' in answer.value ? answer.value.obligations : [];
       for (const obligation of listed) {
         const tag = provisionTag(obligation.kind, obligation.reference);
@@ -1012,7 +1047,7 @@ export async function yearEndReview(
             check: 'provisions',
             about: `unbooked:${tag}`,
             severity: 'block',
-            message: `${obligation.kind} ${obligation.reference}: estimarea de la ${end} este ${lei(target)} lei, provizionul ține ${lei(held(tag))} lei: propuneți provisions.record.`,
+            message: `${obligation.kind} ${obligation.reference}: estimarea de la ${end} este ${lei(target)} lei, provizionul ține ${lei(held(tag))} lei: propuneți înregistrarea provizionului.`,
             details: { tag, target: lei(target), held: lei(held(tag)) },
             next: [
               propose('provisions.record', {
@@ -1033,7 +1068,7 @@ export async function yearEndReview(
             check: 'provisions',
             about: `unlisted:${row.item}`,
             severity: 'block',
-            message: `Provizionul ${kind} ${reference} (${lei(row.bani)} lei) nu mai apare în analiza obligațiilor de la ${end}: anulați-l (provisions.record cu suma 0) sau revizuiți analiza.`,
+            message: `Provizionul ${kind} ${reference} (${lei(row.bani)} lei) nu mai apare în analiza obligațiilor de la ${end}: anulați-l (provizion cu suma 0) sau revizuiți analiza.`,
             details: { tag: row.item, held: lei(row.bani) },
             next: [propose('provisions.record', { date: end, kind, reference, amount: '0.00' })],
           });
@@ -1085,7 +1120,7 @@ export async function yearEndReview(
         check: 'cutoff',
         about: 'deferrals',
         severity: 'block',
-        message: `${off.length} sume în avans (471, 472) nu sunt la partea exercițiilor următoare la ${end}: reluați ce privește exercițiul (deferrals.release).`,
+        message: `${off.length} sume în avans (471, 472) nu sunt la partea exercițiilor următoare la ${end}: reluați ce privește exercițiul (${treatmentName('deferrals.release').toLowerCase()}).`,
         details: { items: off },
         next: [propose('deferrals.release', { month: end.slice(0, 7) })],
       });
@@ -1155,7 +1190,7 @@ export async function yearEndReview(
         check: 'cutoff',
         about: 'fx',
         severity: 'block',
-        message: `${off.length} poziții monetare în valută nu sunt la cursul BNR de la ${end} (OMFP nr. 1.802/2014 pct. 94): reevaluați la sfârșitul exercițiului (fx.revalue), după ultima înregistrare a anului.`,
+        message: `${off.length} poziții monetare în valută nu sunt la cursul BNR de la ${end} (OMFP nr. 1.802/2014 pct. 94): reevaluați la sfârșitul exercițiului, după ultima înregistrare a anului.`,
         details: { items: off },
         next: [propose('fx.revalue', { date: end })],
       });
@@ -1164,7 +1199,7 @@ export async function yearEndReview(
         check: 'cutoff',
         about: 'fx.uncovered',
         severity: 'block',
-        message: `UNSUPPORTED: soldurile în valută din ${uncovered.join(', ')} nu sunt nici pe parteneri, nici conturi de trezorerie, iar fx.revalue nu le reevaluează (depozite, sume în curs de decontare); se reevaluează în afara aplicației.`,
+        message: `Caz neacoperit: soldurile în valută din ${uncovered.join(', ')} nu sunt nici pe parteneri, nici conturi de trezorerie, iar reevaluarea automată nu le acoperă (depozite, sume în curs de decontare); se reevaluează în afara aplicației.`,
         details: { accounts: uncovered },
         next: [],
       });
@@ -1230,7 +1265,7 @@ export async function yearEndReview(
         check: 'result',
         about: 'profit',
         severity: 'block',
-        message: `Impozitul pe profit al anului ${yearNumber} nu este calculat (tax.profit, perioada ${yearNumber}), înaintea închiderii conturilor de rezultat; ajustările și provizioanele se stabilesc înaintea lui (OMFP nr. 1.802/2014 pct. 388 alin. (3)).`,
+        message: `Impozitul pe profit al anului ${yearNumber} nu este calculat pentru anul ${yearNumber}, înaintea închiderii conturilor de rezultat; ajustările și provizioanele se stabilesc înaintea lui (OMFP nr. 1.802/2014 pct. 388 alin. (3)).`,
         details: { year: yearNumber },
         next: [
           propose('tax.profit', { period: String(yearNumber), date: end }),
@@ -1252,7 +1287,7 @@ export async function yearEndReview(
       check: 'result',
       about: 'close',
       severity: 'block',
-      message: `Conturile de venituri și cheltuieli au sold la ${end} (${result.length}): închideți-le în contul 121 (year.closeResult).`,
+      message: `Conturile de venituri și cheltuieli au sold la ${end} (${result.length}): închideți-le în contul 121 (${treatmentName('year.closeResult').toLowerCase()}).`,
       details: { accounts: result.map((row) => row.account) },
       next: [propose('year.closeResult', { yearEnd: end })],
     });
@@ -1703,7 +1738,7 @@ export function yearEndChecks(
               {
                 code: 'YEAR_END_REVIEW',
                 severity: 'warn' as const,
-                message: `Sfârșitul exercițiului așteaptă ${blocking.length} elemente (yearend.review): închiderea exercițiului le cere pe toate.`,
+                message: `Sfârșitul exercițiului așteaptă ${blocking.length} elemente (${operationName('yearend.review')}): închiderea exercițiului le cere pe toate.`,
                 count: blocking.length,
                 items: blocking.slice(0, 20).map((item) => item.id),
               },
@@ -1769,6 +1804,11 @@ export async function yearEndWork(
               differences: check.differences.length,
               openings: check.openings,
             },
+            labels: {
+              check: textLabel('Verificare'),
+              differences: countLabel('Diferențe'),
+              openings: textLabel('Note de deschidere'),
+            },
             next: [agent('years.opening', { financialYearId: next.id })],
           });
       }
@@ -1804,13 +1844,19 @@ export async function yearEndWork(
         severity: item.severity === 'block' && !ended ? 'warn' : item.severity,
         period: year.to.slice(0, 4),
         message: item.message,
+        ...(item.causes ? { causes: item.causes } : {}),
         details: { check: item.check, ...item.details },
+        ...(item.labels ? { labels: { check: textLabel('Verificare'), ...item.labels } } : {}),
         next: item.next,
         ...(item.withheld
           ? {
               withheld: {
                 ...item.withheld,
                 details: { check: item.check, ...item.withheld.details },
+                labels: {
+                  check: textLabel('Verificare'),
+                  ...(item.withheld.labels ?? {}),
+                },
               },
             }
           : {}),
@@ -1823,8 +1869,12 @@ export async function yearEndWork(
         subject: { kind: 'yearend', id: `${year.to.slice(0, 4)}|year.close` },
         severity: 'warn',
         period: year.to.slice(0, 4),
-        message: `Lunile exercițiului ${year.from} – ${year.to} sunt închise: cereți închiderea exercițiului (years.close), care înregistrează închiderea pe conturi, parteneri și imobilizări și blochează exercițiul.`,
+        message: `Lunile exercițiului ${year.from} – ${year.to} sunt închise: cereți ${operationName('years.close')}, care înregistrează închiderea pe conturi, parteneri și imobilizări și blochează exercițiul.`,
         details: { check: 'year.close', financialYearId: year.id },
+        labels: {
+          check: textLabel('Verificare'),
+          financialYearId: idLabel('Exercițiu financiar', 'financialYear'),
+        },
         next: [agent('years.close.request', { financialYearId: year.id })],
       });
   }

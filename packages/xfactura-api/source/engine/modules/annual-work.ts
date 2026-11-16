@@ -10,6 +10,19 @@ import { addDays, type LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
 import { artifactEvents, artifacts, fiscalYears, profileFacts } from '../db/schema';
 import type { Actor, Commands } from '../kernel/commands';
+import {
+  causeFromQuestion,
+  causeFromRule,
+  dateLabel,
+  dedupeCauses,
+  periodLabel,
+  questionKindName,
+  returnName,
+  ruleGapReasonName,
+  textLabel,
+  type DetailLabels,
+  type WorkCause,
+} from '../kernel/work-names';
 import { annualInput, disclosuresOf, documentsOf, informativeOf, openQuestions } from './annual';
 import { statementConfigs } from './s1005';
 
@@ -105,7 +118,9 @@ export type AnnualWork = {
   year: number;
   kind: string;
   message: string;
+  causes?: WorkCause[];
   details: { [key: string]: JsonValue };
+  labels: DetailLabels;
 };
 
 /** How many days before the statements' deadline their missing answers block the worklist. */
@@ -171,6 +186,7 @@ export async function annualWork(
       format = false;
     }
     let due: string | null = null;
+    let dueGap: { key: string; reason: string } | null = null;
     try {
       due = obligationDue(
         kind,
@@ -179,19 +195,37 @@ export async function annualWork(
       ).due;
     } catch (error) {
       if (!(error instanceof RuleGapError)) throw error;
+      dueGap = { key: error.gap.key, reason: error.gap.reason };
     }
     const severity = !format
       ? 'info'
       : due && addDays(today, blockingDays) < due
         ? 'warn'
         : 'block';
+    const causes = dedupeCauses([
+      ...wanted.map((request) =>
+        causeFromQuestion(
+          request,
+          `Lipsește răspunsul pentru ${questionKindName(request.kind)} (${year}).`,
+        ),
+      ),
+      ...(dueGap
+        ? [
+            causeFromRule(
+              dueGap.key,
+              dueGap.reason,
+              `Termenul de depunere nu este verificat (${ruleGapReasonName(dueGap.reason)}).`,
+            ),
+          ]
+        : []),
+    ]);
     items.push({
       subjectId: `${kind}|${year}`,
       severity,
       year,
       kind,
-      message: `${kind} ${year} așteaptă ${wanted.length} răspunsuri: ${wanted
-        .map((request) => `${request.kind} ${request.subject.id}`)
+      message: `${returnName(kind)} pentru anul ${year} așteaptă ${wanted.length} răspunsuri: ${wanted
+        .map((request) => questionKindName(request.kind))
         .join(', ')}.${
         !format
           ? ` ANAF nu a publicat formatul situațiilor pentru ${year}: ele se întocmesc după publicarea lui.`
@@ -199,12 +233,20 @@ export async function annualWork(
             ? ` Termenul de depunere: ${due}.`
             : ''
       }`,
+      causes,
       details: {
         kind,
         year,
         wanted: wanted.map((request) => ({ kind: request.kind, subject: request.subject.id })),
         format,
         due,
+      },
+      labels: {
+        kind: textLabel('Tip situație'),
+        year: periodLabel('An'),
+        wanted: textLabel('Răspunsuri necesare'),
+        format: textLabel('Format publicat'),
+        due: dateLabel('Termen'),
       },
     });
   }

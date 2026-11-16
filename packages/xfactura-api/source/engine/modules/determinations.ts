@@ -63,6 +63,20 @@ import {
 } from '../db/schema';
 import type { Actor, Commands } from '../kernel/commands';
 import { entryStands } from '../kernel/ledger';
+import {
+  amountLabel,
+  axisName,
+  causeFromFact,
+  causeFromQuestion,
+  causeFromRule,
+  cleanIdentifierText,
+  countLabel,
+  dedupeCauses,
+  periodLabel,
+  textLabel,
+  type DetailLabels,
+  type WorkCause,
+} from '../kernel/work-names';
 import { halfYearOf } from './annual';
 import { distanceSalesOf } from './d398';
 import { standing } from './questions';
@@ -1595,12 +1609,17 @@ export interface DeterminationItem {
   year: number;
   message: string;
   details: { [key: string]: string | number | boolean | null };
+  labels: DetailLabels;
+  causes?: WorkCause[];
 }
+
+/** Company-level facts owned by `closure.need`, never duplicated as `determination.missing`. */
+const companyFactAxes = new Set(['entity.form', 'vat.status', 'employer']);
 
 /**
  * What the worklist shows about determinations for the current year (and the next one in
- * December): the yearly axes without a fact for the year, or whose fact the books contradict,
- * and the thresholds at 80% or more.
+ * December): the yearly axes without a fact for the year (once their prerequisite company facts
+ * exist), or whose fact the books contradict, and the thresholds at 80% or more.
  */
 export async function determinationItems(
   tx: Transaction,
@@ -1627,14 +1646,49 @@ export async function determinationItems(
         : recordedAt(result.context.facts, determination.axis, `${current}-12-31`) !== null;
       const conflict = shown.recorded.agrees === false && !shown.recorded.confirmed && recorded;
       if (!missing && !conflict) continue;
+      if (
+        !conflict &&
+        determination.status === 'needs_evidence' &&
+        determination.questions.length > 0 &&
+        determination.questions.every(
+          (question) =>
+            question.kind === 'profile.fact' && companyFactAxes.has(question.subject.id),
+        )
+      )
+        continue;
+      const summary = cleanIdentifierText(determination.summary);
+      const label = axisName(determination.axis);
+      const causes: WorkCause[] = conflict
+        ? [
+            causeFromFact(
+              `${determination.axis}/${current}`,
+              `${label} înregistrat pentru ${current} diferă de calcul: ${summary}`,
+            ),
+          ]
+        : determination.status === 'rule_gap'
+          ? [causeFromRule(determination.axis, 'RULE_GAP', summary)]
+          : determination.questions.length
+            ? dedupeCauses(
+                determination.questions.map((question) => causeFromQuestion(question, summary)),
+              )
+            : determination.dependsOn.length
+              ? dedupeCauses(
+                  determination.dependsOn.map((dep) =>
+                    causeFromFact(
+                      `${dep}/${current}`,
+                      `${axisName(dep)} pentru ${current} nu este stabilit.`,
+                    ),
+                  ),
+                )
+              : [causeFromFact(`${determination.axis}/${current}`, summary)];
       items.push({
         kind: 'determination.missing',
         subjectId: `${determination.axis}/${current}`,
         severity: conflict ? 'block' : 'warn',
         year: current,
         message: conflict
-          ? `${determination.axis} înregistrat pentru ${current} diferă de calcul: ${determination.summary}`
-          : `${determination.axis} nu este stabilit pentru ${current}: ${determination.summary}`,
+          ? `${label} înregistrat pentru ${current} diferă de calcul: ${summary}`
+          : `${label} nu este stabilit pentru ${current}: ${summary}`,
         details: {
           axis: determination.axis,
           year: current,
@@ -1643,6 +1697,15 @@ export async function determinationItems(
           conflict,
           fingerprint: determination.fingerprint,
         },
+        labels: {
+          axis: textLabel('Încadrare'),
+          year: periodLabel('An'),
+          status: textLabel('Stare'),
+          value: textLabel('Valoare calculată'),
+          conflict: textLabel('Conflict cu registrele'),
+          fingerprint: textLabel('Amprentă'),
+        },
+        causes,
       });
     }
     for (const watch of result.watches)
@@ -1651,7 +1714,7 @@ export async function determinationItems(
         subjectId: `${watch.key}/${current}`,
         severity: watch.percent >= 100 ? 'block' : 'warn',
         year: current,
-        message: watch.message,
+        message: cleanIdentifierText(watch.message),
         details: {
           key: watch.key,
           axis: watch.axis,
@@ -1659,6 +1722,14 @@ export async function determinationItems(
           limit: (Number(watch.limit) / 100).toFixed(2),
           value: (Number(watch.value) / 100).toFixed(2),
           level: watch.percent >= 100 ? 100 : 80,
+        },
+        labels: {
+          key: textLabel('Parametru'),
+          axis: textLabel('Încadrare'),
+          year: periodLabel('An'),
+          limit: amountLabel('Limită', { currency: 'RON' }),
+          value: amountLabel('Valoare cumulată', { currency: 'RON' }),
+          level: countLabel('Prag atins (%)'),
         },
       });
   }

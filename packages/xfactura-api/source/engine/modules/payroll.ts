@@ -82,6 +82,15 @@ import {
 import { entryStands } from '../kernel/ledger';
 import { loadState } from '../kernel/state';
 import type { YearEndWorkItem } from '../kernel/work';
+import {
+  causeFromRule,
+  cleanIdentifierText,
+  countLabel,
+  dateLabel,
+  idLabel,
+  periodLabel,
+  textLabel,
+} from '../kernel/work-names';
 
 const money = z.string().regex(/^(0|[1-9]\d*)(\.\d{1,2})?$/);
 const localDate = z.iso.date();
@@ -2074,19 +2083,28 @@ export class Payroll {
     for (const due of await this.regesDue(tx, companyId, today)) {
       if (due.transmittedOn) continue;
       const late = due.deadline !== null && today > due.deadline;
+      const blockedText = due.blocked ? cleanIdentifierText(due.blocked) : null;
       items.push({
         subject: { kind: 'contract', id: `${due.contractId}:${due.termsSeq}:${due.event}` },
         severity: late || due.blocked ? 'block' : 'warn',
         period: due.effective.slice(0, 7),
         message: due.deadline
           ? `REGES-ONLINE: ${events[due.event]} contractului din ${due.effective} se transmite până la ${due.deadline}${late ? ' (termen depășit)' : ''}; înregistrați recipisa.`
-          : `REGES-ONLINE: ${events[due.event]} contractului din ${due.effective} se transmite în registru; ${due.blocked}`,
+          : `REGES-ONLINE: ${events[due.event]} contractului din ${due.effective} se transmite în registru; ${blockedText}`,
+        ...(blockedText ? { causes: [causeFromRule(due.rule, 'RULE_GAP', blockedText)] } : {}),
         details: {
           contractId: due.contractId,
           termsSeq: due.termsSeq,
           event: due.event,
           deadline: due.deadline,
           rules: [due.rule],
+        },
+        labels: {
+          contractId: idLabel('Contract', 'contract'),
+          termsSeq: countLabel('Versiune contract'),
+          event: textLabel('Eveniment'),
+          deadline: dateLabel('Termen'),
+          rules: textLabel('Reguli'),
         },
         next: [
           {
@@ -2136,6 +2154,11 @@ export class Payroll {
         period: month,
         message: `Statul de plată pentru ${month} a fost corectat după depunerea D112: depuneți D112 rectificativă pentru lună (OPANAF nr. 605/2026 anexa nr. 6 cap. II pct. 2).`,
         details: { month, runId: current, rules: ['ro.payroll.correction.retroactive'] },
+        labels: {
+          month: periodLabel('Lună'),
+          runId: idLabel('Stat de plată', 'payrollRun'),
+          rules: textLabel('Reguli'),
+        },
         next: [
           {
             operation: 'declarations.prepare',

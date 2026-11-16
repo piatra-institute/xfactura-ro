@@ -22,6 +22,7 @@ import {
 import { sha256, type ObjectStore } from '../adapters/object-store';
 import type { Actor, Commands } from '../kernel/commands';
 import type { CloseCheck } from '../kernel/periods';
+import { operationName } from '../kernel/work-names';
 
 export const checkStatusInput = z
   .object({
@@ -446,7 +447,7 @@ export const partyStatusChecks: CloseCheck[] = [
             {
               code: 'SUPPLIER_STATUS_UNCHECKED',
               severity: 'warn' as const,
-              message: `${unchecked.length} facturi de achiziție din ${month} au furnizori din România a căror stare la ANAF (inclusiv inactivitatea, art. 11 alin. (7) din Codul fiscal) nu a fost verificată la data facturii (parties.checkStatus).`,
+              message: `${unchecked.length} facturi de achiziție din ${month} au furnizori din România a căror stare la ANAF (inclusiv inactivitatea, art. 11 alin. (7) din Codul fiscal) nu a fost verificată la data facturii (${operationName('parties.checkStatus')}).`,
               count: unchecked.length,
               items: unchecked.slice(0, 20).map((item) => item.documentId),
             },

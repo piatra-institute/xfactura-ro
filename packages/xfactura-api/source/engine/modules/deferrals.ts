@@ -3,6 +3,7 @@ import { releaseDue } from 'xfactura-core/ro/treatments/deferrals';
 import type { LocalDate } from 'xfactura-core/time';
 import type { CloseCheck } from '../kernel/periods';
 import { loadState } from '../kernel/state';
+import { treatmentName } from '../kernel/work-names';
 
 const monthEnd = (month: string) =>
   new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0))
@@ -34,7 +35,7 @@ export const deferralChecks: CloseCheck[] = [
             {
               code: 'DEFERRAL_DUE',
               severity: 'block' as const,
-              message: `${count} sume în avans au de reluat ${formatMoney(due, LEDGER_CURRENCY)} lei până la ${monthEnd(month)} (deferrals.release).`,
+              message: `${count} sume în avans au de reluat ${formatMoney(due, LEDGER_CURRENCY)} lei până la ${monthEnd(month)} (${treatmentName('deferrals.release').toLowerCase()}).`,
               count,
             },
           ]
