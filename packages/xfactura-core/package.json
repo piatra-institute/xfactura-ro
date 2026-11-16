@@ -90,6 +90,7 @@
     "./ro/saft/d406": "./src/ro/saft/d406.ts",
     "./ro/saft/accounts": "./src/ro/saft/accounts.ts",
     "./ro/saft/tax-codes": "./src/ro/saft/tax-codes.ts",
+    "./ro/saft/tax-code-readings": "./src/ro/saft/tax-code-readings.ts",
     "./ro/saft/assets": "./src/ro/saft/assets.ts",
     "./ro/saft/stock": "./src/ro/saft/stock.ts",
     "./ro/saft/applicability": "./src/ro/saft/applicability.ts",

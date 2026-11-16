@@ -715,7 +715,7 @@ export function d406VatTaxCode(entry: {
 }
 
 /** "TVA neexigibilă" of TVA_NoteContabile by rate, for the release of VAT on collection. */
-const releaseCodes: Readonly<Record<string, string>> = {
+export const releaseCodes: Readonly<Record<string, string>> = {
   'S-19': '380101',
   'S-9': '380102',
   'S-5': '380103',
@@ -735,7 +735,7 @@ export function d406CashVatReleaseCode(code: string): string | undefined {
  * "Livrări/ prestări pentru care nu există obligația emiterii facturii … conform Art. 319 aliniat
  * 10 din Cod Fiscal" 3803xx, on the general-ledger entry, as ANAF's SAF-T answers say for the
  * registers' daily reports (General Ledger Entries, answer 1). */
-const zReportCodes: Readonly<Record<string, string>> = {
+export const zReportCodes: Readonly<Record<string, string>> = {
   'S-19': '380301',
   'S-9': '380302',
   'S-5': '380303',
