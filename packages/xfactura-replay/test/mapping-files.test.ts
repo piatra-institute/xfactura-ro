@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import {
   link,
   mkdir,
@@ -15,6 +16,8 @@ import { join } from 'node:path';
 import { PDFDocument } from 'pdf-lib';
 import { proposeMapping, readMappingFile, readSagaDump, writeMappingFile } from '../src/mapping';
 import { inventoryCorpus } from '../src/corpus/inventory';
+import { readCompanyFilingDocuments } from '../src/mapping/corpus';
+import { selectPeriods } from '../src/run/driver';
 import { parseMappingArguments } from '../../../scripts/differential/mapping';
 import { mappingChart, mappingFiled, mappingXml, sourceAccount } from './fixtures/mapping';
 
@@ -262,6 +265,13 @@ describe('mapping CLI', () => {
     });
     const saved = await readMappingFile(output, directory);
     expect(saved!.accounts.map((a) => a.sourceId).sort()).toEqual(['FEB', 'JAN', 'REFILING']);
+    // The replay's reader makes the same selection by fiscal code, with each payload's bytes.
+    const documents = await readCompanyFilingDocuments('RO90000001', join(corpus, 'manifest.json'));
+    expect(documents).toHaveLength(3);
+    for (const item of documents)
+      expect(createHash('sha256').update(item.xml).digest('hex')).toBe(item.sha256);
+    // Two different filings of one month stop a replay: choosing one is the owner's decision.
+    expect(() => selectPeriods(documents)).toThrow('PERIOD_REFILINGS_DIFFER');
     for (const value of ['90000001', '90000009', 'canonical.xml', 'filing.xml', 'REFILING'])
       expect(result.stdout + result.stderr).not.toContain(value);
     seedRecord.duplicateOf = seedRecord.path;

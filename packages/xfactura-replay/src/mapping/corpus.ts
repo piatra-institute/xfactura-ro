@@ -86,6 +86,35 @@ export async function readCompanyFilings(
           throw new MappingError('MAPPING_CORPUS_MANIFEST_REQUIRED');
     return [...new Map(seedBytes.map((bytes, i) => [digest(bytes), seeds[i]!])).values()];
   }
+  return (await manifestFilings(company, root, content)).map((item) => item.filed);
+}
+
+/** A selected filing with its XML payload, as the manifest's owner file holds it. */
+export type CompanyFiling = { filed: D406Filed; xml: Uint8Array; sha256: string };
+
+/** Every D406 payload the corpus manifest holds for a fiscal code, with its bytes. Identical
+ * payloads collapse; the order follows the manifest's sorted paths. */
+export async function readCompanyFilingDocuments(
+  company: string,
+  manifestPath = resolve('.private/corpus/manifest.json'),
+): Promise<CompanyFiling[]> {
+  let content: string;
+  try {
+    const info = await lstat(manifestPath);
+    if (!info.isFile() || info.isSymbolicLink()) throw new MappingError('MAPPING_CORPUS_PATH');
+    content = await readFile(manifestPath, 'utf8');
+  } catch (error: unknown) {
+    if (error instanceof MappingError) throw error;
+    throw new MappingError('MAPPING_CORPUS_MANIFEST_REQUIRED');
+  }
+  return manifestFilings(companyCode(company), dirname(manifestPath), content);
+}
+
+async function manifestFilings(
+  company: string,
+  root: string,
+  content: string,
+): Promise<CompanyFiling[]> {
   const parsed = manifestSchema.safeParse(JSON.parse(content));
   if (!parsed.success) throw new MappingError('MAPPING_CORPUS_SCHEMA');
   const records = new Map(parsed.data.map((record) => [record.path, record]));
@@ -107,7 +136,7 @@ export async function readCompanyFilings(
   };
   const files = new Map<string, Uint8Array>();
   const attachments = new Map<string, ReturnType<typeof pdfAttachments>>();
-  const documents = new Map<string, D406Filed>();
+  const documents = new Map<string, CompanyFiling>();
   for (const record of [...records.values()].sort((a, b) => comparePaths(a.path, b.path))) {
     const matching = record.returns.filter(
       (item) =>
@@ -139,7 +168,7 @@ export async function readCompanyFilings(
       if (documents.has(hash)) continue;
       const filed = readD406(xml);
       if (filedCompany([filed]) !== company) throw new MappingError('MAPPING_COMPANY_MISMATCH');
-      documents.set(hash, filed);
+      documents.set(hash, { filed, xml, sha256: hash });
     }
   }
   if (!documents.size) throw new MappingError('MAPPING_CORPUS_COMPANY_UNKNOWN');

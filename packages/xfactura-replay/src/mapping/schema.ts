@@ -61,7 +61,7 @@ const unresolved = z.strictObject({
   reason: z.enum(unresolvedReasons),
 });
 const accountCode = z.string().regex(accountCodePattern);
-const account = z.discriminatedUnion('kind', [
+export const accountTargetSchema = z.discriminatedUnion('kind', [
   z.strictObject({
     kind: z.literal('synthetic'),
     code: accountCode.regex(/^[1-9]\d{1,3}$/),
@@ -74,7 +74,7 @@ const account = z.discriminatedUnion('kind', [
     name: z.string().trim().min(2).max(300),
   }),
 ]);
-const partyBinding = z.discriminatedUnion('kind', [
+export const partyBindingSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('source'), source: partySourceSchema }),
   z.strictObject({ kind: z.literal('line'), role: z.enum(['customer', 'supplier']).optional() }),
   z.strictObject({ kind: z.literal('placeholder'), key: z.string().min(1) }),
@@ -89,8 +89,8 @@ export const accountMappingSchema = z.strictObject({
     unresolved,
     z.strictObject({
       status: z.literal('mapped'),
-      account,
-      party: partyBinding.nullable(),
+      account: accountTargetSchema,
+      party: partyBindingSchema.nullable(),
       requiresOpenItem: z.boolean(),
     }),
   ]),

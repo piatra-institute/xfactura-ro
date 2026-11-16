@@ -27,6 +27,7 @@ const eventSchema = z.discriminatedUnion('type', [
           .object({ type: z.literal('person'), id: z.string().min(1), reason: z.string().min(1) })
           .strict(),
         z.object({ type: z.literal('rule'), causeId: z.string().min(1) }).strict(),
+        z.object({ type: z.literal('replay'), reason: z.string().min(1).max(100) }).strict(),
       ]),
     })
     .strict(),
@@ -82,23 +83,30 @@ function fold(events: readonly Event[]): Map<string, StoredDifference> {
 }
 
 /** A single-company append-only log. Each complete reconcile call owns one scope: use a
- * distinct scope for balances, journals or a deliberately partial period range. */
+ * distinct scope for balances, journals or a deliberately partial period range. An optional
+ * `area` places the company's log one level down, as `.private/<area>/<company>`. */
 export class DifferenceStore {
   readonly directory: string;
   readonly path: string;
-  constructor(privateRoot: string, company: string) {
+  private readonly area: string | undefined;
+  constructor(privateRoot: string, company: string, area?: string) {
     if (
       basename(resolve(privateRoot)) !== '.private' ||
-      !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(company)
+      !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(company) ||
+      (area !== undefined && !/^[a-z][a-z0-9-]{0,39}$/.test(area))
     )
       fail('STORE_PRIVATE_PATH', 'Diferențele se păstrează numai în .private/<companie>.');
-    this.directory = join(resolve(privateRoot), company);
+    this.area = area === undefined ? undefined : join(resolve(privateRoot), area);
+    this.directory = join(this.area ?? resolve(privateRoot), company);
     this.path = join(this.directory, 'differences.jsonl');
   }
 
   private async locked<T>(work: () => Promise<T>): Promise<T> {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
-    if (!(await lstat(this.directory)).isDirectory())
+    if (
+      (this.area !== undefined && !(await lstat(this.area)).isDirectory()) ||
+      !(await lstat(this.directory)).isDirectory()
+    )
       fail('STORE_PRIVATE_PATH', 'Directorul companiei nu poate fi o legătură simbolică.');
     const lock = join(this.directory, '.differences.lock');
     try {
@@ -218,6 +226,21 @@ export class DifferenceStore {
             id: item.id,
             class: item.class,
             by: { type: 'rule', causeId: item.causeId },
+          });
+        // A cause the replay driver observed classifies only what neither a person nor a
+        // repository cause has classified.
+        else if (
+          !item.causeId &&
+          item.status === 'open' &&
+          observed.get(item.id)!.class === 'unclassified' &&
+          item.context?.cause &&
+          seen.has(item.id)
+        )
+          next.push({
+            type: 'classified',
+            id: item.id,
+            class: item.context.cause.class,
+            by: { type: 'replay', reason: item.context.cause.reason },
           });
       }
       const result = fold([...history, ...next]);

@@ -70,10 +70,49 @@ function netBalance(pair: BalancePair): BalancePair {
   return net.startsWith('-') ? { debit: '0', credit: net.slice(1) } : { debit: net, credit: '0' };
 }
 
+const isZeroPair = (pair: BalancePair | null | undefined) =>
+  pair?.debit === '0' && pair.credit === '0';
+const isZeroRow = (row: BalanceValues | null) =>
+  !!row &&
+  isZeroPair(row.opening) &&
+  isZeroPair(row.closing) &&
+  row.debitTurnover === '0' &&
+  row.creditTurnover === '0';
+
+/**
+ * SAGA lists an account in a period only when it has a balance or movement there, so an
+ * account present on one side with nothing but zeros is a listing convention, not a balance
+ * difference. Such one-sided findings become `balance-presence-zero` or
+ * `source-chain-presence-zero`; every other finding is returned unchanged.
+ */
+export function separateZeroPresence(differences: readonly Difference[]): Difference[] {
+  return differences.map((item) => {
+    const zero =
+      item.kind === 'balance-only-source'
+        ? isZeroRow(item.source as BalanceValues | null)
+        : item.kind === 'balance-only-engine'
+          ? isZeroRow(item.engine as BalanceValues | null)
+          : item.kind === 'source-chain-only-previous'
+            ? isZeroPair(item.source as BalancePair | null)
+            : item.kind === 'source-chain-only-next'
+              ? isZeroPair(item.engine as BalancePair | null)
+              : false;
+    if (!zero) return item;
+    const { id: _id, class: _class, status: _status, causeId: _cause, ...rest } = item;
+    return difference({
+      ...rest,
+      kind: item.kind.startsWith('balance')
+        ? 'balance-presence-zero'
+        : 'source-chain-presence-zero',
+    });
+  });
+}
+
 export function compareBalances(
   source: readonly D406Filed[],
   engine: readonly EngineBalancePeriod[],
   mapping: AccountMapping,
+  options: { zeroPresence?: 'separate' } = {},
 ) {
   const periods = sourcePeriods(source);
   const chain = checkSourceChain(source);
@@ -209,5 +248,10 @@ export function compareBalances(
       }
     }
   }
-  return { rows, differences: [...differences, ...chain.findings], chain: chain.counts };
+  const all = [...differences, ...chain.findings];
+  return {
+    rows,
+    differences: options.zeroPresence === 'separate' ? separateZeroPresence(all) : all,
+    chain: chain.counts,
+  };
 }

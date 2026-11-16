@@ -34,6 +34,11 @@ export const kinds = [
   'journal-period',
   'journal-only-source',
   'journal-only-engine',
+  'balance-presence-zero',
+  'source-chain-presence-zero',
+  'replay-settlement-unallocated',
+  'replay-opening-refused',
+  'replay-invoice-key-reused',
 ] as const;
 export type DifferenceKind = (typeof kinds)[number];
 export const order = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
@@ -77,6 +82,34 @@ export const observationSchema = z
     source: z.json(),
     engine: z.json(),
     delta: z.string().optional(),
+    /** What a replay driver knew when it observed the finding; never part of its identity. */
+    context: z
+      .object({
+        /** Lab assumptions the finding rests on, by their identifiers in the run's manifest. */
+        assumptions: z.array(z.string().min(1)).optional(),
+        /** Reason codes of decisions the driver took in translating the source transaction. */
+        notes: z.array(z.string().min(1)).optional(),
+        /** The driver's or the engine's refusal of the source transaction. */
+        refusal: z
+          .object({
+            stage: z.enum(['translate', 'propose', 'proposal', 'approve', 'post']),
+            code: z.string().min(1),
+            message: z.string(),
+            issues: z.array(z.string()).optional(),
+          })
+          .strict()
+          .optional(),
+        /** A class the driver knows the cause of, with its reason code. */
+        cause: z
+          .object({
+            class: z.enum(classes).exclude(['unclassified']),
+            reason: z.string().min(1).max(100),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type Observation = z.infer<typeof observationSchema>;

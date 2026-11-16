@@ -2,7 +2,7 @@ import { addDays, parseLocalDate } from 'xfactura-core/time';
 import type { Engine } from '../../../xfactura-api/source/engine/engine';
 import type { ProposalView } from '../../../xfactura-api/source/engine/kernel/views';
 import type { EngineBalancePeriod } from './balances';
-import type { EngineJournalEntry } from './journals';
+import type { ComparisonTax, EngineJournalEntry } from './journals';
 import { fail } from './differences';
 import { reportingPeriod } from './filed';
 
@@ -50,13 +50,26 @@ export async function readEngineBalances(
   };
 }
 
+export type EngineTaxEntry = NonNullable<ProposalView['effect']>['taxEntries'][number];
+export type EngineTaxView = (entry: EngineTaxEntry) => ComparisonTax | null;
+const engineTax: EngineTaxView = (tax) => ({
+  code: tax.code,
+  base: tax.base,
+  tax: tax.amount,
+  deductible: tax.deductible,
+  period: tax.taxPeriod,
+});
+
 /** ledger.journal supplies posted lines; proposals.get supplies the bound subject and taxes.
- * Refuse incomplete/redacted reads rather than comparing a partial journal. */
+ * Refuse incomplete/redacted reads rather than comparing a partial journal. `taxView` states
+ * how each posted tax entry is compared, or leaves it out with null; by default every entry is
+ * compared under its own code. */
 export async function readEngineJournals(
   read: ReadOperation,
   from: string,
   to: string,
   limit = 500,
+  taxView: EngineTaxView = engineTax,
 ): Promise<EngineJournalEntry[]> {
   reportingPeriod(from, to);
   const result: EngineJournalEntry[] = [];
@@ -96,13 +109,7 @@ export async function readEngineJournals(
           side: line.side,
           amount: line.amount!,
         })),
-        taxEntries: proposal.effect.taxEntries.map((tax) => ({
-          code: tax.code,
-          base: tax.base,
-          tax: tax.amount,
-          deductible: tax.deductible,
-          period: tax.taxPeriod,
-        })),
+        taxEntries: proposal.effect.taxEntries.flatMap((tax) => taxView(tax) ?? []),
       });
     }
     if (page.next === null) return result;

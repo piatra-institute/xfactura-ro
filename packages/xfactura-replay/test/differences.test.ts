@@ -188,6 +188,37 @@ describe('append-only difference store', () => {
   });
 });
 
+describe('replay classifications and areas', () => {
+  test("a driver's known cause classifies once, after repository causes and never over a person", async () => {
+    const root = join(await temporary(), '.private');
+    const log = new DifferenceStore(root, 'synthetic', 'replay');
+    expect(log.path).toBe(join(root, 'replay', 'synthetic', 'differences.jsonl'));
+    const known = {
+      ...finding(),
+      context: {
+        assumptions: ['accept.0'],
+        cause: { class: 'mapping' as const, reason: 'LAB_ASSUMPTION' },
+      },
+    };
+    const [stored] = await log.reconcile('balances', [known]);
+    expect(stored).toMatchObject({ class: 'mapping', context: known.context });
+    // A repository cause matching the same finding takes precedence on a new log.
+    const other = new DifferenceStore(root, 'other', 'replay');
+    expect((await other.reconcile('balances', [known], [cause]))[0]!.class).toBe(
+      'accountant-choice',
+    );
+    // A person's classification stays when the driver observes the finding again.
+    await log.classify(known.id, 'engine-defect', { id: 'synthetic-person', reason: 'Checked.' });
+    expect((await log.reconcile('balances', [known]))[0]!.class).toBe('engine-defect');
+    expect(() => new DifferenceStore(root, 'synthetic', '../escape')).toThrow('STORE_PRIVATE_PATH');
+    await mkdir(join(root, 'public'));
+    await symlink(join(root, 'public'), join(root, 'linked'));
+    await expect(
+      new DifferenceStore(root, 'synthetic', 'linked').reconcile('balances', [finding()]),
+    ).rejects.toThrow('STORE_PRIVATE_PATH');
+  });
+});
+
 describe('public causes', () => {
   test('every repository cause passes the privacy check and fixture requirement', async () => {
     const causes = await loadCauses();

@@ -2,7 +2,12 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { ParameterRegister } from 'xfactura-core/rules';
 import { parseLocalDate } from 'xfactura-core/time';
 import { scenario, type Scenario } from '../../xfactura-api/test/engine/scenario';
-import { compareBalances, type EngineBalancePeriod } from '../src/compare/balances';
+import {
+  compareBalances,
+  separateZeroPresence,
+  type EngineBalancePeriod,
+} from '../src/compare/balances';
+import { difference } from '../src/compare/differences';
 import { readEngineBalances, readEngineJournals, type ReadOperation } from '../src/compare/engine';
 import {
   compareJournals,
@@ -151,6 +156,47 @@ describe('filed books against private migration.journal operations', () => {
     const second = compareBalances(sourceBooks(), changed, mapping).differences;
     expect(second[0]!.id).toBe(first[0]!.id);
     expect(second[0]!.delta).toBe('0.000000000000000001');
+  });
+
+  test('a one-sided account with only zeros is counted apart only when asked', () => {
+    const changed = structuredClone(books.balances);
+    const zero = { debit: '0.00', credit: '0.00' };
+    changed[0]!.rows.push({
+      account: '461',
+      values: { opening: zero, debitTurnover: '0.00', creditTurnover: '0.00', closing: zero },
+    });
+    changed[0]!.rows.push({
+      account: '462',
+      values: { opening: zero, debitTurnover: '1.00', creditTurnover: '1.00', closing: zero },
+    });
+    const kinds = (options?: { zeroPresence: 'separate' }) =>
+      compareBalances(sourceBooks(), changed, mapping, options).differences.map((item) => [
+        item.kind,
+        item.locator.account,
+      ]);
+    expect(kinds()).toEqual([
+      ['balance-only-engine', '461'],
+      ['balance-only-engine', '462'],
+    ]);
+    // Movement without a balance is still a difference.
+    expect(kinds({ zeroPresence: 'separate' })).toEqual([
+      ['balance-presence-zero', '461'],
+      ['balance-only-engine', '462'],
+    ]);
+    const chain = (source: { debit: string; credit: string }) =>
+      difference({
+        kind: 'source-chain-only-previous',
+        period: '2026-02',
+        locator: { sourceAccount: 'source-461', previousPeriod: '2026-01' },
+        source,
+        engine: null,
+      });
+    expect(
+      separateZeroPresence([
+        chain({ debit: '0', credit: '0' }),
+        chain({ debit: '1', credit: '0' }),
+      ]).map((item) => item.kind),
+    ).toEqual(['source-chain-presence-zero', 'source-chain-only-previous']);
   });
 
   test('both unpaired sides, duplicate identities, missing mappings and redacted reads stay visible', async () => {
