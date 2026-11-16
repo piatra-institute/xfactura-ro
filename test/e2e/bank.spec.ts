@@ -18,6 +18,7 @@ test('an imported invoice is recognized and its payment explained', async ({ pag
   await expect(page.getByRole('status')).toContainText('pregătită pentru verificare');
   await approveAndPost(page);
 
+  await page.getByRole('button', { name: 'Registre', exact: true }).click();
   await page.getByRole('button', { name: 'Bancă', exact: true }).click();
   await page.getByText('Adaugă un cont bancar sau o casă', { exact: true }).click();
   await page.getByLabel('Denumire', { exact: true }).fill('Cont curent');
@@ -43,6 +44,7 @@ test('an imported invoice is recognized and its payment explained', async ({ pag
   await expect(page.getByRole('status')).toContainText('pregătită pentru verificare');
   await approveAndPost(page);
 
+  await page.getByRole('button', { name: 'Registre', exact: true }).click();
   await page.getByRole('button', { name: 'Bancă', exact: true }).click();
   await expect(page.locator('.acc-review', { hasText: '−100,00 RON' })).toHaveCount(0);
   await expect(page.locator('.acc-review', { hasText: '−2,03 RON' })).toHaveCount(1);

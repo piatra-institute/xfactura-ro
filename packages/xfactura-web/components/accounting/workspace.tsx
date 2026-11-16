@@ -1,8 +1,9 @@
 'use client';
 
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { formatMoney, invoke, upload } from './api';
-import Review from './review';
+import { ApiError, formatMoney, invoke, upload } from './api';
+import Worklist from './worklist';
+import { accountingViews, useAccountingNavigation, type Section } from './navigation';
 import Documents from './documents';
 import Bank from './bank';
 import Registers from './registers';
@@ -41,6 +42,7 @@ export type Workspace = {
   version: number;
   /** Runs an action, reports its outcome and refreshes every section. */
   act: (action: () => Promise<unknown>, success: string) => Promise<boolean>;
+  refresh: () => void;
 };
 const Context = createContext<Workspace | null>(null);
 export function useWorkspace() {
@@ -49,15 +51,14 @@ export function useWorkspace() {
   return value;
 }
 
-const tabs = [
-  ['review', 'De verificat'],
-  ['documents', 'Documente'],
-  ['bank', 'Bancă'],
-  ['registers', 'Registre'],
-  ['periods', 'Luni'],
-  ['settings', 'Configurare'],
-] as const;
-type Tab = (typeof tabs)[number][0];
+const sectionComponents: Record<Section, typeof Documents> = {
+  review: Worklist,
+  registers: Registers,
+  documents: Documents,
+  bank: Bank,
+  settings: Settings,
+  periods: Periods,
+};
 
 /** The net closing balance of accounts with a prefix, positive on their normal side. */
 const net = (balance: Balance | null, prefix: string, normal: 'debit' | 'credit' = 'debit') => {
@@ -74,7 +75,8 @@ const net = (balance: Balance | null, prefix: string, normal: 'debit' | 'credit'
 };
 
 export default function WorkspaceView({ company }: { company: Company }) {
-  const [tab, setTab] = useState<Tab>('review');
+  const { section, view, navigate } = useAccountingNavigation();
+  const Content = sectionComponents[section];
   const [capabilities, setCapabilities] = useState<Set<string>>(new Set());
   const [years, setYears] = useState<Year[]>([]);
   const [yearId, setYearId] = useState('');
@@ -123,7 +125,12 @@ export default function WorkspaceView({ company }: { company: Company }) {
       setVersion((value) => value + 1);
       return true;
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Operațiunea nu a reușit.');
+      if (reason instanceof ApiError && reason.code === 'STALE') {
+        setError(`Registrele s-au schimbat. Datele se reîncarcă. ${reason.message}`);
+        setVersion((value) => value + 1);
+      } else {
+        setError(reason instanceof Error ? reason.message : 'Operațiunea nu a reușit.');
+      }
       return false;
     }
   }, []);
@@ -137,6 +144,7 @@ export default function WorkspaceView({ company }: { company: Company }) {
     evidence,
     version,
     act,
+    refresh: () => setVersion((value) => value + 1),
   };
 
   return (
@@ -146,18 +154,21 @@ export default function WorkspaceView({ company }: { company: Company }) {
           <h1>{company.name}</h1>
           <p>CUI {company.cui}</p>
         </div>
-        <label>
-          Exercițiu
-          <select value={yearId} onChange={(event) => setYearId(event.target.value)}>
-            {years
-              .filter((year) => year.kind === 'financial')
-              .map((year) => (
-                <option key={year.id} value={year.id}>
-                  {year.label}
-                </option>
-              ))}
-          </select>
-        </label>
+        <div className="acc-workspace-tools">
+          <button onClick={() => navigate('documents')}>Adaugă documente</button>
+          <label>
+            Exercițiu
+            <select value={yearId} onChange={(event) => setYearId(event.target.value)}>
+              {years
+                .filter((year) => year.kind === 'financial')
+                .map((year) => (
+                  <option key={year.id} value={year.id}>
+                    {year.label}
+                  </option>
+                ))}
+            </select>
+          </label>
+        </div>
       </div>
       <div className="acc-feedback" aria-live="polite">
         {error ? (
@@ -183,24 +194,28 @@ export default function WorkspaceView({ company }: { company: Company }) {
         </div>
       </dl>
       <nav className="acc-tabs" aria-label="Secțiuni contabilitate">
-        {tabs.map(([id, label]) => (
+        {accountingViews.map(({ id, label, sections }) => (
           <button
             key={id}
-            className={tab === id ? 'acc-active' : ''}
-            aria-pressed={tab === id}
-            onClick={() => setTab(id)}
+            className={view.id === id ? 'acc-active' : ''}
+            aria-pressed={view.id === id}
+            onClick={() => navigate(sections[0].id)}
           >
             {label}
           </button>
         ))}
       </nav>
+      {view.sections.length > 1 ? (
+        <nav className="acc-subnav" aria-label={view.navigationLabel}>
+          {view.sections.map(({ id, label }) => (
+            <button key={id} aria-pressed={section === id} onClick={() => navigate(id)}>
+              {label}
+            </button>
+          ))}
+        </nav>
+      ) : null}
       <section className="acc-content">
-        {tab === 'review' ? <Review /> : null}
-        {tab === 'documents' ? <Documents /> : null}
-        {tab === 'bank' ? <Bank /> : null}
-        {tab === 'registers' ? <Registers /> : null}
-        {tab === 'periods' ? <Periods /> : null}
-        {tab === 'settings' ? <Settings /> : null}
+        <Content />
       </section>
     </Context.Provider>
   );
@@ -215,20 +230,31 @@ export function useList<T>(operation: string, input: unknown, enabled = true) {
 /** Loads a capability's result and reloads it whenever the workspace changes. */
 export function useLoad<T>(operation: string, input: unknown, enabled = true) {
   const { invoke: call, version } = useWorkspace();
-  const [data, setData] = useState<T | null>(null);
-  const [error, setError] = useState('');
+  const [result, setResult] = useState<{
+    key: string;
+    version: number;
+    data?: T;
+    error?: string;
+  } | null>(null);
   const key = JSON.stringify(input);
   useEffect(() => {
     if (!enabled) return;
     let active = true;
     call<T>(operation, JSON.parse(key))
-      .then((result) => active && setData(result))
+      .then((data) => active && setResult({ key, version, data }))
       .catch(
-        (reason) => active && setError(reason instanceof Error ? reason.message : String(reason)),
+        (reason) =>
+          active &&
+          setResult({
+            key,
+            version,
+            error: reason instanceof Error ? reason.message : 'Datele nu au putut fi încărcate.',
+          }),
       );
     return () => {
       active = false;
     };
   }, [call, operation, key, version, enabled]);
-  return { data, error };
+  const current = enabled && result?.key === key && result.version === version ? result : null;
+  return { data: current?.data ?? null, error: current?.error ?? '' };
 }

@@ -2,17 +2,12 @@
 
 import { useState } from 'react';
 import type { ProposalView } from 'xfactura-api/contracts';
-import { amountField, field, formatMoney } from './api';
+import { amountField, companyPath, field, formatMoney } from './api';
 import { useLoad, useWorkspace } from './workspace';
+import { treatmentLabels, type WorkStepView } from './work-model';
+export { treatmentLabels } from './work-model';
+import { SectionLink } from './navigation';
 
-export const treatmentLabels: Record<string, string> = {
-  'ledger.general': 'Notă contabilă',
-  'ledger.reverse': 'Stornare',
-  'invoices.recognize': 'Factură',
-  'invoices.credit': 'Notă de credit',
-  'bank.settle': 'Mișcare bancară',
-  'fx.revalue': 'Reevaluare valutară',
-};
 const statusLabels: Record<ProposalView['status'], string> = {
   blocked: 'Blocată',
   proposed: 'De aprobat',
@@ -22,35 +17,21 @@ const statusLabels: Record<ProposalView['status'], string> = {
   withdrawn: 'Retrasă',
 };
 
-export default function Review() {
-  const { can } = useWorkspace();
-  const { data, error } = useLoad<{ items: ProposalView[] }>('proposals.list', { limit: 200 });
-  const open = (data?.items ?? []).filter(
-    (item) => item.status !== 'posted' && item.status !== 'withdrawn',
-  );
-  return (
-    <>
-      <div className="acc-section-heading">
-        <h2>De verificat</h2>
-        <p>Fiecare propunere arată efectul exact; aprobarea se aplică acestei versiuni.</p>
-      </div>
-      {error ? <p className="acc-error">{error}</p> : null}
-      {data && open.length === 0 ? (
-        <p className="acc-empty">Nu există propuneri deschise.</p>
-      ) : null}
-      {open.map((proposal) => (
-        <ProposalCard key={`${proposal.id}:${proposal.version}`} proposal={proposal} />
-      ))}
-      {can('ledger.general.propose') ? <JournalForm /> : null}
-    </>
-  );
-}
-
-export function ProposalCard({ proposal }: { proposal: ProposalView }) {
+export function ProposalCard({
+  proposal,
+  steps,
+}: {
+  proposal: ProposalView;
+  steps?: WorkStepView[];
+}) {
   const { can, invoke, act } = useWorkspace();
   const [acknowledged, setAcknowledged] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const effect = proposal.effect;
+  const permitted = (operation: string) =>
+    can(operation) &&
+    !proposal.redacted &&
+    (steps?.find((step) => step.operation === operation)?.allowed ?? true);
   const warnings = proposal.issues.filter((issue) => issue.severity === 'ack');
   const unreviewed = proposal.rules.used.filter((rule) => rule.status !== 'signed');
   const review = {
@@ -67,7 +48,9 @@ export function ProposalCard({ proposal }: { proposal: ProposalView }) {
     <article className="acc-review" aria-label={effect?.description ?? proposal.subject}>
       <div className="acc-review-heading">
         <div>
-          <h3>{treatmentLabels[proposal.treatment] ?? proposal.treatment}</h3>
+          <h4 className="acc-proposal-title">
+            {treatmentLabels[proposal.treatment] ?? 'Propunere contabilă'}
+          </h4>
           <p>
             {effect ? `${effect.description} · ${effect.date}` : proposal.subject} · versiunea{' '}
             {proposal.version}
@@ -115,61 +98,81 @@ export function ProposalCard({ proposal }: { proposal: ProposalView }) {
           {unreviewed.map((rule) => rule.id).join(', ')}.
         </p>
       ) : null}
-      {effect ? (
-        <div className="acc-table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th scope="col">Cont</th>
-                <th scope="col">Debit</th>
-                <th scope="col">Credit</th>
-                <th scope="col">Valută</th>
-                <th scope="col">Detalii</th>
-              </tr>
-            </thead>
-            <tbody>
-              {effect.lines.map((line, index) => (
-                <tr key={index}>
-                  <td>{line.account}</td>
-                  <td>{line.side === 'D' ? formatMoney(line.amount) : ''}</td>
-                  <td>{line.side === 'C' ? formatMoney(line.amount) : ''}</td>
-                  <td>
-                    {line.currency
-                      ? `${formatMoney(line.currency.amount, line.currency.code)} · ${line.currency.rate}`
-                      : ''}
-                  </td>
-                  <td>
-                    {line.memo ??
-                      (line.openItem
-                        ? 'poziție deschisă'
-                        : line.taxSettlement
-                          ? `decont ${line.taxSettlement.period}`
-                          : '')}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : null}
-      {effect?.taxEntries.length ? (
-        <dl className="acc-review-meta">
-          {effect.taxEntries.map((entry) => (
-            <div key={entry.key}>
-              <dt>
-                TVA {entry.direction === 'output' ? 'colectată' : 'deductibilă'} {entry.code} ·{' '}
-                {entry.taxPeriod}
-              </dt>
-              <dd>
-                bază {formatMoney(entry.base)}, TVA {formatMoney(entry.amount)}
-                {entry.direction === 'input' ? `, deductibil ${formatMoney(entry.deductible)}` : ''}
-              </dd>
+      <div className="acc-review-columns">
+        <ProposalEvidence proposal={proposal} />
+        <div className="acc-review-effect">
+          <h5>Efectul exact</h5>
+          {effect ? (
+            <div className="acc-table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Cont</th>
+                    <th scope="col">Debit</th>
+                    <th scope="col">Credit</th>
+                    <th scope="col">Valută</th>
+                    <th scope="col">Detalii</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {effect.lines.map((line, index) => (
+                    <tr key={index}>
+                      <td>{line.account}</td>
+                      <td>{line.side === 'D' ? formatMoney(line.amount) : ''}</td>
+                      <td>{line.side === 'C' ? formatMoney(line.amount) : ''}</td>
+                      <td>
+                        {line.currency
+                          ? `${formatMoney(line.currency.amount, line.currency.code)} · ${line.currency.rate}`
+                          : ''}
+                      </td>
+                      <td>
+                        {line.memo ??
+                          (line.openItem
+                            ? 'poziție deschisă'
+                            : line.taxSettlement
+                              ? `decont ${line.taxSettlement.period}`
+                              : '')}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          ))}
-        </dl>
-      ) : null}
+          ) : null}
+          {effect?.taxEntries.length ? (
+            <dl className="acc-review-meta">
+              {effect.taxEntries.map((entry) => (
+                <div key={entry.key}>
+                  <dt>
+                    TVA {entry.direction === 'output' ? 'colectată' : 'deductibilă'} {entry.code} ·{' '}
+                    {entry.taxPeriod}
+                  </dt>
+                  <dd>
+                    bază {formatMoney(entry.base)}, TVA {formatMoney(entry.amount)}
+                    {entry.direction === 'input'
+                      ? `, deductibil ${formatMoney(entry.deductible)}`
+                      : ''}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          ) : null}
+        </div>
+      </div>
+      <dl className="acc-review-meta">
+        <div>
+          <dt>Versiune</dt>
+          <dd>{proposal.version}</dd>
+        </div>
+        <div>
+          <dt>Amprenta efectului</dt>
+          <dd>
+            <code>{proposal.effectHash}</code>
+          </dd>
+        </div>
+      </dl>
       <div className="acc-actions">
-        {proposal.status === 'proposed' && can('proposals.approve') ? (
+        {proposal.status === 'proposed' && permitted('proposals.approve') ? (
           <button
             disabled={busy || warnings.some((warning) => !acknowledged.includes(warning.code))}
             onClick={() =>
@@ -182,7 +185,7 @@ export function ProposalCard({ proposal }: { proposal: ProposalView }) {
             Aprobă această versiune
           </button>
         ) : null}
-        {proposal.status === 'approved' && can('ledger.post') ? (
+        {proposal.status === 'approved' && permitted('ledger.post') ? (
           <button
             disabled={busy}
             onClick={() =>
@@ -192,7 +195,9 @@ export function ProposalCard({ proposal }: { proposal: ProposalView }) {
             Contabilizează
           </button>
         ) : null}
-        {can('proposals.withdraw') ? (
+        {proposal.status !== 'posted' &&
+        proposal.status !== 'withdrawn' &&
+        permitted('proposals.withdraw') ? (
           <form
             className="acc-inline-form"
             onSubmit={(event) => {
@@ -218,9 +223,121 @@ export function ProposalCard({ proposal }: { proposal: ProposalView }) {
   );
 }
 
+function EvidenceLink({ id }: { id: string }) {
+  const { company, evidence } = useWorkspace();
+  const file = evidence.find((candidate) => candidate.id === id);
+  return (
+    <a
+      href={`${companyPath(company.id)}/evidence/${encodeURIComponent(id)}`}
+      target="_blank"
+      rel="noreferrer"
+    >
+      {file?.filename ?? 'Deschide documentul justificativ'}
+    </a>
+  );
+}
+
+function DocumentEvidence({ id }: { id: string }) {
+  const { data, error } = useLoad<{
+    number: string | null;
+    date: string;
+    evidenceId: string | null;
+    currency: string | null;
+    totals: { net: string; tax: string; gross: string } | null;
+  }>('documents.get', { id });
+  if (error) return <p className="acc-error">{error}</p>;
+  if (!data) return <p className="acc-hint">Se încarcă documentul…</p>;
+  return (
+    <div>
+      <p>
+        {data.number ?? 'Document fără număr'} · {data.date}
+      </p>
+      {data.totals ? <p>{formatMoney(data.totals.gross, data.currency ?? 'RON')}</p> : null}
+      {data.evidenceId ? (
+        <EvidenceLink id={data.evidenceId} />
+      ) : (
+        <p className="acc-hint">Documentul nu indică un fișier original.</p>
+      )}
+    </div>
+  );
+}
+
+function MovementEvidence({ id }: { id: string }) {
+  const { data, error } = useLoad<{
+    items: {
+      id: string;
+      bookingDate: string;
+      amount: string | null;
+      currency: string;
+      reference: string | null;
+      counterparty: string | null;
+    }[];
+  }>('bank.movements', {});
+  const movement = data?.items.find((item) => item.id === id);
+  return (
+    <div>
+      {error ? (
+        <p className="acc-error">{error}</p>
+      ) : !data ? (
+        <p className="acc-hint">Se încarcă mișcarea bancară…</p>
+      ) : movement ? (
+        <>
+          <p>
+            {movement.bookingDate} · {movement.counterparty}
+          </p>
+          <p>
+            {movement.amount === null
+              ? 'Sumă cu acces restricționat'
+              : formatMoney(movement.amount, movement.currency)}
+          </p>
+          <p>{movement.reference}</p>
+        </>
+      ) : (
+        <p className="acc-hint">Mișcarea nu este disponibilă.</p>
+      )}
+      <SectionLink section="bank">Deschide Bancă</SectionLink>
+    </div>
+  );
+}
+
+function ProposalEvidence({ proposal }: { proposal: ProposalView }) {
+  const input = proposal.input ?? {};
+  const documents = [
+    ...new Set(
+      ['documentId', 'originalDocumentId'].flatMap((key) =>
+        typeof input[key] === 'string' ? [input[key]] : [],
+      ),
+    ),
+  ];
+  const evidenceId = typeof input.evidenceId === 'string' ? input.evidenceId : null;
+  const movementId = typeof input.movementId === 'string' ? input.movementId : null;
+  return (
+    <aside className="acc-review-source" aria-label="Documente justificative">
+      <h5>Documente justificative</h5>
+      {proposal.redacted ? (
+        <p className="acc-hint">Documentele necesită acces la datele acestei propuneri.</p>
+      ) : (
+        <>
+          {documents.map((id) => (
+            <DocumentEvidence key={id} id={id} />
+          ))}
+          {evidenceId ? <EvidenceLink id={evidenceId} /> : null}
+          {movementId ? <MovementEvidence id={movementId} /> : null}
+          {!documents.length && !evidenceId && !movementId ? (
+            <p className="acc-hint">Datele propunerii nu indică un document justificativ.</p>
+          ) : null}
+        </>
+      )}
+      {proposal.effect?.explanation.summary ? (
+        <p className="acc-hint">{proposal.effect.explanation.summary}</p>
+      ) : null}
+    </aside>
+  );
+}
+
 const LINES = 4;
 
-function JournalForm() {
+export function JournalForm() {
   const { evidence, invoke, act } = useWorkspace();
   return (
     <details className="acc-disclosure">

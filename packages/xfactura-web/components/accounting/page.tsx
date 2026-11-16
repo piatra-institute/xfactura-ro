@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { ApiError, command, field, get, signIn, signOut } from './api';
 import Workspace from './workspace';
 
@@ -14,6 +15,10 @@ export default function AccountingPage() {
   const [selected, setSelected] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const requestedCompany = useSearchParams()?.get('company');
+  const companyId = companies.some((company) => company.id === requestedCompany)
+    ? requestedCompany!
+    : selected;
 
   async function createCompany(body: { name: string; cui: string; year: number }) {
     setBusy(true);
@@ -156,7 +161,7 @@ export default function AccountingPage() {
                 <label>
                   Companie
                   <select
-                    value={selected}
+                    value={companyId}
                     onChange={(event) => {
                       setSelected(event.target.value);
                       history.replaceState(
@@ -182,10 +187,10 @@ export default function AccountingPage() {
                 </details>
               </div>
             ) : null}
-            {companies.some((company) => company.id === selected) ? (
+            {companies.some((company) => company.id === companyId) ? (
               <Workspace
-                key={selected}
-                company={companies.find((company) => company.id === selected)!}
+                key={companyId}
+                company={companies.find((company) => company.id === companyId)!}
               />
             ) : (
               <section className="acc-onboarding">

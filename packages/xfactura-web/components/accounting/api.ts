@@ -1,8 +1,11 @@
-type ErrorBody = { error?: { message?: string; fields?: { path: string; message: string }[] } };
+type ErrorBody = {
+  error?: { code?: string; message?: string; fields?: { path: string; message: string }[] };
+};
 export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly code?: string,
   ) {
     super(message);
   }
@@ -18,6 +21,7 @@ async function read<T>(response: Response): Promise<T> {
     throw new ApiError(
       fields || error.error?.message || 'Operațiunea nu a putut fi finalizată.',
       response.status,
+      error.error?.code,
     );
   }
   return body as T;

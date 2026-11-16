@@ -10,7 +10,9 @@ export async function signInWithCompany(page: Page, info: TestInfo, spec: string
   await page.getByLabel('Email', { exact: true }).fill(`${spec}-${info.project.name}@example.test`);
   await page.getByLabel('Parolă', { exact: true }).fill('synthetic-browser-password');
   await page.getByRole('button', { name: 'Intră în cont', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Companie nouă', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Deconectare', exact: true })).toBeVisible();
+  if (!(await page.getByRole('heading', { name: 'Companie nouă', exact: true }).isVisible()))
+    await page.getByText('Adaugă o companie', { exact: true }).click();
   await page.getByLabel('Denumire companie', { exact: true }).fill(name);
   await page.getByLabel('CUI', { exact: true }).fill('12345678');
   await page.getByLabel('An contabil', { exact: true }).fill('2026');
@@ -20,7 +22,7 @@ export async function signInWithCompany(page: Page, info: TestInfo, spec: string
 }
 
 export async function keep(page: Page, name: string, content: string, mimeType = 'text/plain') {
-  await page.getByRole('button', { name: 'Documente', exact: true }).click();
+  await page.getByRole('button', { name: 'Adaugă documente', exact: true }).click();
   await page
     .getByLabel('Document original', { exact: true })
     .setInputFiles({ name, mimeType, buffer: Buffer.from(content) });
@@ -29,7 +31,7 @@ export async function keep(page: Page, name: string, content: string, mimeType =
 }
 
 export async function recordVatPayer(page: Page, evidence: string) {
-  await page.getByRole('button', { name: 'Configurare', exact: true }).click();
+  await page.getByRole('button', { name: 'Setări', exact: true }).click();
   await page.getByRole('combobox', { name: 'Axă', exact: true }).selectOption('vat.status');
   await page.getByRole('combobox', { name: 'Valoare', exact: true }).selectOption('normal_vat');
   await page.getByLabel('De la', { exact: true }).fill('2026-01-01');
@@ -40,10 +42,19 @@ export async function recordVatPayer(page: Page, evidence: string) {
   await expect(page.getByRole('status')).toContainText('Faptul a fost înregistrat.');
 }
 
-/** Approves and posts the first open proposal on the review tab. */
-export async function approveAndPost(page: Page) {
+/** Opens the first proposal from the worklist, preserving the human decision and exact hash. */
+export async function openProposal(page: Page) {
   await page.getByRole('button', { name: 'De verificat', exact: true }).click();
-  const proposal = page.locator('.acc-review').first();
+  await page.getByRole('combobox', { name: 'Familie', exact: true }).selectOption('proposals');
+  const item = page.locator('[data-work-kind="proposal.awaitingApproval"]').first();
+  await expect(item).toBeVisible();
+  if ((await item.getAttribute('open')) === null) await item.locator('summary').click();
+  return item.locator('.acc-review');
+}
+
+/** Approves and posts the first open proposal on De verificat. */
+export async function approveAndPost(page: Page) {
+  const proposal = await openProposal(page);
   await proposal.getByRole('button', { name: 'Aprobă această versiune', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Versiunea a fost aprobată.');
   await page

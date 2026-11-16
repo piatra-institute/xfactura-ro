@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { approveAndPost, keep, signInWithCompany } from './support/session';
+import { approveAndPost, keep, openProposal, signInWithCompany } from './support/session';
 
 test('a reviewed opening is posted, reported and closed', async ({ page }, info) => {
   const errors = await signInWithCompany(
@@ -11,7 +11,10 @@ test('a reviewed opening is posted, reported and closed', async ({ page }, info)
   await keep(page, 'balanta-deschidere.pdf', 'Balanța de deschidere 2026');
 
   await page.getByRole('button', { name: 'De verificat', exact: true }).click();
-  await expect(page.getByText('Nu există propuneri deschise.', { exact: true })).toBeVisible();
+  await page.getByRole('combobox', { name: 'Familie', exact: true }).selectOption('proposals');
+  await expect(
+    page.getByText('Niciun element pentru filtrele alese.', { exact: true }),
+  ).toBeVisible();
   await page.getByText('Notă contabilă nouă', { exact: true }).click();
   await page.getByLabel('Data', { exact: true }).fill('2026-01-01');
   await page.getByRole('combobox', { name: 'Tip', exact: true }).selectOption('opening');
@@ -26,7 +29,7 @@ test('a reviewed opening is posted, reported and closed', async ({ page }, info)
   await page.getByRole('button', { name: 'Pregătește propunerea', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('pregătită pentru verificare');
 
-  const proposal = page.locator('.acc-review').first();
+  const proposal = await openProposal(page);
   await expect(
     proposal.getByRole('heading', { name: 'Notă contabilă', exact: true }),
   ).toBeVisible();
@@ -38,6 +41,7 @@ test('a reviewed opening is posted, reported and closed', async ({ page }, info)
   await expect(page.getByRole('cell', { name: '5121', exact: true })).toBeVisible();
   await expect(page.getByText(/1\. 2026-01-01 · DESCHIDERE · Sold inițial la bancă/)).toBeVisible();
 
+  await page.getByRole('button', { name: 'Setări', exact: true }).click();
   await page.getByRole('button', { name: 'Luni', exact: true }).click();
   await page.getByLabel('Luna', { exact: true }).fill('2026-01');
   await page.getByRole('button', { name: 'Verifică luna', exact: true }).click();
