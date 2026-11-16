@@ -5,6 +5,7 @@ import { PDFDict, PDFDocument, PDFName } from 'pdf-lib';
 import {
   pdfAttachments,
   pdfHasSignature,
+  type PdfAttachment,
 } from '../../../xfactura-api/source/engine/adapters/pdf-attachments';
 import { comparePaths, fileSha256, ownerPath } from './files';
 import { readReturnXml, xmlChunks, type ReturnXml } from './xml';
@@ -28,6 +29,8 @@ export type InventoryProblem =
   | 'XML_UNREADABLE'
   | 'PDF_UNREADABLE'
   | 'PDF_ATTACHMENTS_UNREADABLE'
+  | 'PDF_ATTACHMENTS_AMBIGUOUS'
+  | 'PDF_ATTACHMENTS_READER_FAILED'
   | 'PDF_ATTACHMENTS_IN_OBJECT_STREAM';
 
 export interface CorpusRecord {
@@ -96,18 +99,24 @@ function attachmentProblem(document: PDFDocument, raw: string): InventoryProblem
   return 'PDF_ATTACHMENTS_UNREADABLE';
 }
 
-async function inspectPdf(bytes: Uint8Array, content: Content): Promise<void> {
+async function inspectPdf(
+  bytes: Uint8Array,
+  content: Content,
+  readAttachments: typeof pdfAttachments = pdfAttachments,
+): Promise<void> {
   const raw = Buffer.from(bytes).toString('latin1');
   if (!raw.slice(0, 1024).includes('%PDF-')) {
     content.problems.push('PDF_UNREADABLE');
     return;
   }
-  let attachments: ReturnType<typeof pdfAttachments> = [];
-  try {
-    attachments = pdfAttachments(bytes);
-  } catch {
-    // Diagnose attachment structure below without treating internal XFA streams as files.
+  let attachmentResult = await readAttachments(bytes);
+  if (
+    !attachmentResult.ok &&
+    (attachmentResult.reason === 'timeout' || attachmentResult.reason === 'failed')
+  ) {
+    attachmentResult = await readAttachments(bytes);
   }
+  const attachments: PdfAttachment[] = attachmentResult.ok ? attachmentResult.attachments : [];
   for (const attachment of attachments) {
     if (!looksXml(attachment.bytes) && !/\.xml$/i.test(attachment.name)) continue;
     try {
@@ -128,6 +137,17 @@ async function inspectPdf(bytes: Uint8Array, content: Content): Promise<void> {
           : 'other';
     return;
   }
+  const readerFailureProblem = (): InventoryProblem | null => {
+    if (attachmentResult.ok) return null;
+    if (attachmentResult.reason === 'ambiguous') return 'PDF_ATTACHMENTS_AMBIGUOUS';
+    if (
+      attachmentResult.reason === 'timeout' ||
+      attachmentResult.reason === 'failed' ||
+      (attachmentResult.reason === 'too_large' && attachmentResult.limit === 'memory')
+    )
+      return 'PDF_ATTACHMENTS_READER_FAILED';
+    return null;
+  };
   try {
     const document = await PDFDocument.load(bytes, {
       updateMetadata: false,
@@ -135,7 +155,11 @@ async function inspectPdf(bytes: Uint8Array, content: Content): Promise<void> {
     });
     document.getPageCount();
     content.pdf = true;
-    if (attachments.length === 0) {
+    if (!attachmentResult.ok) {
+      content.problems.push(
+        readerFailureProblem() ?? attachmentProblem(document, raw) ?? 'PDF_ATTACHMENTS_UNREADABLE',
+      );
+    } else if (attachments.length === 0) {
       const problem = attachmentProblem(document, raw);
       if (problem) content.problems.push(problem);
     }
@@ -143,13 +167,21 @@ async function inspectPdf(bytes: Uint8Array, content: Content): Promise<void> {
     if (/\brecipis[aă]\b/i.test(description)) content.kind = 'receipt';
     else if (/\be[\s-]?factura\b/i.test(description)) content.kind = 'efactura-pdf';
   } catch {
-    if (attachments.length === 0 && /\/(?:Filespec|EmbeddedFiles)\b/.test(raw))
+    const failure = readerFailureProblem();
+    if (failure) {
+      content.problems.push(failure);
+    } else if (attachments.length === 0 && /\/(?:Filespec|EmbeddedFiles)\b/.test(raw)) {
       content.problems.push('PDF_ATTACHMENTS_UNREADABLE');
+    }
     content.problems.push('PDF_UNREADABLE');
   }
 }
 
-async function inspectContent(path: string, prefix: Uint8Array): Promise<Content> {
+async function inspectContent(
+  path: string,
+  prefix: Uint8Array,
+  readAttachments: typeof pdfAttachments = pdfAttachments,
+): Promise<Content> {
   const content: Content = {
     kind: null,
     returns: [],
@@ -173,7 +205,7 @@ async function inspectContent(path: string, prefix: Uint8Array): Promise<Content
       content.problems.push('XML_UNREADABLE');
     }
   } else if (signature.slice(0, 1024).includes('%PDF-') || extname(path).toLowerCase() === '.pdf') {
-    await inspectPdf(await readFile(path), content);
+    await inspectPdf(await readFile(path), content, readAttachments);
   }
   return content;
 }
@@ -193,7 +225,10 @@ async function walk(root: string, relative = ''): Promise<string[]> {
 /** No writes, dates or filename-derived fiscal facts. A duplicate group is owned by its path
  * with the fewest segments, then the first in code-unit order, including when that owner is
  * itself a validator file. Records stay in path order. */
-export async function inventoryCorpus(source: string): Promise<CorpusRecord[]> {
+export async function inventoryCorpus(
+  source: string,
+  options: { readAttachments?: typeof pdfAttachments } = {},
+): Promise<CorpusRecord[]> {
   const root = await realpath(source);
   const paths = (await walk(root)).sort(comparePaths);
   const contentByHash = new Map<string, Content>();
@@ -209,25 +244,42 @@ export async function inventoryCorpus(source: string): Promise<CorpusRecord[]> {
     else groups.set(sha256, [path]);
   }
   const owners = new Map([...groups].map(([sha256, group]) => [sha256, ownerPath(group)]));
+  const uniqueTargets: { contentKey: string; absolute: string }[] = [];
+  const seenKeys = new Set<string>();
+  for (const path of paths) {
+    const { sha256 } = facts.get(path)!;
+    const contentKey = `${sha256}:${extname(path).toLowerCase() === '.pdf' ? 'pdf' : ''}`;
+    if (seenKeys.has(contentKey)) continue;
+    seenKeys.add(contentKey);
+    uniqueTargets.push({ contentKey, absolute: join(root, path) });
+  }
+  let cursor = 0;
+  const workerCount = Math.min(4, uniqueTargets.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (cursor < uniqueTargets.length) {
+        const target = uniqueTargets[cursor++]!;
+        const file = await open(target.absolute, 'r');
+        let prefix: Uint8Array;
+        try {
+          const buffer = new Uint8Array(4096);
+          const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+          prefix = buffer.subarray(0, bytesRead);
+        } finally {
+          await file.close();
+        }
+        contentByHash.set(
+          target.contentKey,
+          await inspectContent(target.absolute, prefix, options.readAttachments),
+        );
+      }
+    }),
+  );
   const records: CorpusRecord[] = [];
   for (const path of paths) {
-    const absolute = join(root, path);
     const { size, sha256 } = facts.get(path)!;
     const contentKey = `${sha256}:${extname(path).toLowerCase() === '.pdf' ? 'pdf' : ''}`;
-    let content = contentByHash.get(contentKey);
-    if (!content) {
-      const file = await open(absolute, 'r');
-      let prefix: Uint8Array;
-      try {
-        const buffer = new Uint8Array(4096);
-        const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
-        prefix = buffer.subarray(0, bytesRead);
-      } finally {
-        await file.close();
-      }
-      content = await inspectContent(absolute, prefix);
-      contentByHash.set(contentKey, content);
-    }
+    const content = contentByHash.get(contentKey)!;
     const kind = pathKind(path, content);
     const owner = owners.get(sha256)!;
     const duplicateOf = owner === path ? null : owner;

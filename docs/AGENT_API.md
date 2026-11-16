@@ -202,7 +202,7 @@ A person approves the preview hash (`actions.approve`); segregation of duties ho
 | `determinations.evaluate` | read | yes | — | `{ year }`: the year's determinations (micro or profit tax, VAT period, D112 period, size category, VAT thresholds) with their computation, inputs, clauses and fingerprint, against what is recorded; the thresholds reached. |
 | `determinations.propose` | write | yes | — | `{ year }`: opens the questions a person answers: `determination.confirm` for each computed determination not recorded or contradicted, and each unknown input's question; withdraws one about an older computation. |
 | `closure.evaluate` | read | yes | — | `{ from, to }` (months, at most three years): `ELIGIBLE`, `NEEDS_EVIDENCE` (each need with its question) or `UNSUPPORTED` (each case with its missing capabilities and evidence), the returns with the rule and facts behind each, the gaps and the trace ([CONFORMANCE.md](CONFORMANCE.md#the-closure-as-built-t1-30-october-2026)). |
-| `declarations.importSigned`, `declarations.recordOutcome` | write | yes | — | The signed PDF (must carry the authorized XML); ANAF's answer. |
+| `declarations.importSigned`, `declarations.recordOutcome` | write | yes | — | The signed PDF (must carry the authorized XML; refuses `NOT_EXPORTED`, `EVIDENCE`, `CONFLICT`, `SIGNED_PDF_UNREADABLE`, `SIGNED_PDF_AMBIGUOUS`, `SIGNED_MISMATCH`, `SIGNED_EXTRA_ATTACHMENT`, `NOT_SIGNED`); ANAF's answer. |
 | `declarations.recordSubmission` | write | no | human | The filing, with ANAF's registration number. |
 | `declarations.reopen.request` | review | no | — | Reviewed reopening of a filed tax period for rectification. |
 | `payroll.employees.record`, `payroll.contracts.record` | write | no | — | An employee (CNP kept encrypted); a contract or a new version of its terms. |
@@ -312,8 +312,9 @@ Agents read files with `evidence.read`; the whole file (`evidence.get`, the REST
   - runs in no reading direction are lines of their own, after the others;
   - empty lines are left out.
 
-**Limits and isolation.** PDFs are read in a separate Bun process (`adapters/pdf-text.worker.ts`), at most two at a time:
-- limits: 20 MiB in, 200 pages, 2 MiB of text, 512 MiB of resident memory (a watchdog thread kills the process past it: decompression bombs), and 10 s, after which the process is killed;
+**Limits and isolation.** PDFs are read in a separate Bun process (`adapters/pdf-text.worker.ts`), at most two text readers and up to four attachment readers at a time (each allowed 512 MiB of resident memory):
+- text reader limits: 20 MiB in, 200 pages, 2 MiB of text, 512 MiB of resident memory (a watchdog thread kills the process past it: decompression bombs), and 10 s, after which the process is killed;
+- attachment reader limits (`pdfAttachments`, used by `declarations.importSigned`): 64 MiB in, 200 pages, 100 attachments, 24 MiB total attachment bytes, 512 MiB of resident memory, and 10 s; both `pdf.js` and `pdf-lib` must agree on the multiset of `(name, sha256)` pairs (`ambiguous` otherwise);
 - a PDF past a limit fails whole, never partially;
 - the process gets the PDF on stdin and no environment, loads no `.env`, installs nothing, loads no native addon, and has no `fetch`, WebSocket or WebAssembly;
 - pdf.js gets no URL (fonts, CMaps, wasm), loads no fonts and runs its worker on the same thread. pdf.js 6 has no eval path left: its `isEvalSupported` option is gone.

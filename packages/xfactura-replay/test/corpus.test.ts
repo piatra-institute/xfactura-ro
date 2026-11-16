@@ -13,8 +13,9 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { PDFDocument, PDFName } from 'pdf-lib';
+import { PDFDocument, PDFHexString, PDFName, PDFString } from 'pdf-lib';
 import { inventorySummary } from '../../../scripts/differential/inventory';
+import { pdfAttachments } from '../../xfactura-api/source/engine/adapters/pdf-attachments';
 import { comparePaths } from '../src/corpus/files';
 import { copyCorpus } from '../src/corpus/copy';
 import { inventoryCorpus, type CorpusRecord } from '../src/corpus/inventory';
@@ -636,20 +637,31 @@ describe('classification boundaries', () => {
     expect(records.find((item) => item.path === 'internal-xfa.pdf')?.problems).toEqual([]);
   });
 
-  test('an attached PDF whose file specification is in an object stream has a distinct problem', async () => {
-    await put(
-      'envelope.pdf',
-      await pdf('Synthetic envelope', await pdf('Synthetic attachment'), false, {
-        objectStreams: true,
-        attachmentName: 'enclosed.pdf',
-      }),
-    );
+  test('an attached PDF whose file specification is in an object stream is readable', async () => {
+    const attachment = await pdf('Synthetic attachment');
+    const envelope = await pdf('Synthetic envelope', attachment, false, {
+      objectStreams: true,
+      attachmentName: 'enclosed.pdf',
+    });
+    expect(await pdfAttachments(envelope)).toEqual({
+      ok: true,
+      attachments: [{ name: 'enclosed.pdf', bytes: attachment, location: { kind: 'document' } }],
+    });
+    await put('envelope.pdf', envelope);
     const records = await inventoryCorpus(source);
     const item = records.find((item) => item.path === 'envelope.pdf');
     expect(item?.kind).toBe('other');
     expect(item?.returns).toEqual([]);
-    expect(item?.problems).toEqual(['PDF_ATTACHMENTS_IN_OBJECT_STREAM']);
-    expect(inventorySummary(records).problems).toEqual({ PDF_ATTACHMENTS_IN_OBJECT_STREAM: 1 });
+    expect(item?.problems).toEqual([]);
+    expect(inventorySummary(records).problems).toEqual({});
+  });
+
+  test('a signed return whose file specification is in an object stream is inventoried', async () => {
+    await put('signed.pdf', await pdf('Synthetic return', d300, true, { objectStreams: true }));
+    const [item] = await inventoryCorpus(source);
+    expect(item?.kind).toBe('signed-return-pdf');
+    expect(item?.returns).toEqual([{ ...expectedXml(), attachment: 'return.xml' }]);
+    expect(item?.problems).toEqual([]);
   });
 
   test('unsigned attached returns and statement PDFs without XML remain other', async () => {
@@ -683,6 +695,61 @@ describe('classification boundaries', () => {
       'PDF_ATTACHMENTS_UNREADABLE',
     );
     expect(records.find((item) => item.path === 'ok.xml')?.returns).toEqual([expectedXml()]);
+  });
+
+  test('ambiguous PDFs and attachment reader timeouts or crashes record problems instead of no attachments', async () => {
+    const ambigDoc = await PDFDocument.create();
+    ambigDoc.addPage();
+    const s1 = ambigDoc.context.register(
+      ambigDoc.context.flateStream(d300, { Type: 'EmbeddedFile' }),
+    );
+    const s2 = ambigDoc.context.register(
+      ambigDoc.context.flateStream(bytes('<other/>'), { Type: 'EmbeddedFile' }),
+    );
+    const fs1 = ambigDoc.context.register(
+      ambigDoc.context.obj({ Type: 'Filespec', F: PDFString.of('return.xml'), EF: { F: s1 } }),
+    );
+    const fs2 = ambigDoc.context.register(
+      ambigDoc.context.obj({ Type: 'Filespec', F: PDFString.of('return.xml'), EF: { F: s2 } }),
+    );
+    ambigDoc.catalog.set(
+      PDFName.of('Names'),
+      ambigDoc.context.obj({
+        EmbeddedFiles: {
+          Names: [PDFString.of('return.xml'), fs1, PDFHexString.fromText('return.xml'), fs2],
+        },
+      }),
+    );
+    await put('ambiguous.pdf', await ambigDoc.save({ useObjectStreams: true }));
+    const ambigRecords = await inventoryCorpus(source);
+    expect(ambigRecords.find((item) => item.path === 'ambiguous.pdf')?.problems).toEqual([
+      'PDF_ATTACHMENTS_AMBIGUOUS',
+    ]);
+
+    await put('plain.pdf', await pdf('Plain receipt'));
+    let calls = 0;
+    const timeoutOnce = await inventoryCorpus(source, {
+      readAttachments: async (input) => {
+        calls++;
+        if (calls === 1) return { ok: false, reason: 'timeout' };
+        return pdfAttachments(input);
+      },
+    });
+    expect(timeoutOnce.find((item) => item.path === 'plain.pdf')?.problems).toEqual([]);
+
+    const alwaysTimedOut = await inventoryCorpus(source, {
+      readAttachments: async () => ({ ok: false, reason: 'timeout' }),
+    });
+    expect(alwaysTimedOut.find((item) => item.path === 'plain.pdf')?.problems).toEqual([
+      'PDF_ATTACHMENTS_READER_FAILED',
+    ]);
+
+    const crashed = await inventoryCorpus(source, {
+      readAttachments: async () => ({ ok: false, reason: 'failed' }),
+    });
+    expect(crashed.find((item) => item.path === 'plain.pdf')?.problems).toEqual([
+      'PDF_ATTACHMENTS_READER_FAILED',
+    ]);
   });
 });
 

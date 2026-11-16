@@ -41,19 +41,49 @@ const installed =
   DukIntegrator.available(saftKit) &&
   Bun.which('java') !== null;
 
-/** A minimal PDF attaching `xml`, as ANAF's tool attaches it, `signed` with a signature
- * dictionary as a signer's incremental update appends it (declarations.integration.test.ts). */
+/** A minimal valid PDF attaching `xml`, as ANAF's tool attaches it, `signed` with a
+ * signature dictionary as a signer's incremental update appends it. */
 function pdfWith(xml: Uint8Array, signed = false) {
-  const head = `%PDF-1.4\n1 0 obj\n<< /Type /EmbeddedFile /Length ${xml.length} >>\nstream\n`;
-  const tail =
-    '\nendstream\nendobj\n2 0 obj\n<< /Type /Filespec /F (d.xml) /UF (d.xml) /EF << /F 1 0 R /UF 1 0 R >> >>\nendobj\n' +
-    (signed ? '3 0 obj\n<< /Type /Sig /ByteRange [0 0 0 0] /Contents <00> >>\nendobj\n' : '') +
-    '%%EOF\n';
-  return new Uint8Array([
-    ...new TextEncoder().encode(head),
-    ...xml,
-    ...new TextEncoder().encode(tail),
-  ]);
+  const objects = [
+    Buffer.concat([
+      Buffer.from(`1 0 obj\n<< /Type /EmbeddedFile /Length ${xml.length} >>\nstream\n`),
+      xml,
+      Buffer.from('\nendstream\nendobj\n'),
+    ]),
+    Buffer.from(
+      '2 0 obj\n<< /Type /Filespec /F (d.xml) /UF (d.xml) /EF << /F 1 0 R /UF 1 0 R >> >>\nendobj\n',
+    ),
+    Buffer.from('3 0 obj\n<< /Type /Pages /Kids [4 0 R] /Count 1 >>\nendobj\n'),
+    Buffer.from('4 0 obj\n<< /Type /Page /Parent 3 0 R /MediaBox [0 0 100 100] >>\nendobj\n'),
+    Buffer.from(
+      '5 0 obj\n<< /Type /Catalog /Pages 3 0 R /Names << /EmbeddedFiles << /Names [(d.xml) 2 0 R] >> >> >>\nendobj\n',
+    ),
+  ];
+  const header = Buffer.from('%PDF-1.4\n');
+  let offset = header.length;
+  const offsets: number[] = [];
+  for (const obj of objects) {
+    offsets.push(offset);
+    offset += obj.length;
+  }
+  const xref =
+    `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n` +
+    offsets.map((at) => `${String(at).padStart(10, '0')} 00000 n \n`).join('') +
+    `trailer\n<< /Size ${objects.length + 1} /Root 5 0 R >>\nstartxref\n${offset}\n%%EOF\n`;
+  return new Uint8Array(
+    Buffer.concat([
+      header,
+      ...objects,
+      Buffer.from(xref),
+      ...(signed
+        ? [
+            Buffer.from(
+              '\n99 0 obj\n<< /Type /Sig /ByteRange [0 0 0 0] /Contents <00> >>\nendobj\n%%EOF\n',
+            ),
+          ]
+        : []),
+    ]),
+  );
 }
 /** ANAF's validator for each kind; the PDF to sign is the stand-in above (what is checked here is
  * the XML, not ANAF's rendering of it). */

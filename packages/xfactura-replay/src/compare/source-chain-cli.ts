@@ -114,13 +114,9 @@ export async function sourceChainCounts(input: string, fiscalCode?: string) {
       const bytes = await readFile(path);
       if (extname(path).toLowerCase() === '.xml') read(bytes);
       else {
-        let attachments: ReturnType<typeof pdfAttachments>;
-        try {
-          attachments = pdfAttachments(bytes);
-        } catch {
-          fail('SOURCE_CHAIN_PDF', 'Anexele unui fișier PDF nu au putut fi citite.');
-        }
-        for (const attachment of attachments) read(attachment.bytes);
+        const result = await pdfAttachments(bytes);
+        if (!result.ok) fail('SOURCE_CHAIN_PDF', 'Anexele unui fișier PDF nu au putut fi citite.');
+        for (const attachment of result.attachments) read(attachment.bytes);
       }
     }
   };
@@ -136,14 +132,10 @@ export async function sourceChainCounts(input: string, fiscalCode?: string) {
           fail('SOURCE_CHAIN_MANIFEST', 'Manifestul atribuie o anexă unui fișier XML.');
         read(bytes);
       } else if (extname(file.path).toLowerCase() === '.pdf') {
-        let attachments: ReturnType<typeof pdfAttachments>;
-        try {
-          attachments = pdfAttachments(bytes);
-        } catch {
-          fail('SOURCE_CHAIN_PDF', 'Anexele unui fișier PDF nu au putut fi citite.');
-        }
+        const result = await pdfAttachments(bytes);
+        if (!result.ok) fail('SOURCE_CHAIN_PDF', 'Anexele unui fișier PDF nu au putut fi citite.');
         for (const name of file.attachments) {
-          const matching = attachments.filter((attachment) => attachment.name === name);
+          const matching = result.attachments.filter((attachment) => attachment.name === name);
           if (matching.length !== 1)
             fail(
               'SOURCE_CHAIN_MANIFEST_ATTACHMENT',

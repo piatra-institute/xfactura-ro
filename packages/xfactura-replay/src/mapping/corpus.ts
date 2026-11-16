@@ -3,7 +3,10 @@ import { lstat, readFile, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { readD406, type D406Filed } from 'xfactura-core/ro/saft/read';
-import { pdfAttachments } from '../../../xfactura-api/source/engine/adapters/pdf-attachments';
+import {
+  pdfAttachments,
+  type PdfAttachment,
+} from '../../../xfactura-api/source/engine/adapters/pdf-attachments';
 import { comparePaths } from '../corpus/files';
 import { MappingError } from './schema';
 import { filedCompany } from './propose';
@@ -135,7 +138,7 @@ async function manifestFilings(
     return record;
   };
   const files = new Map<string, Uint8Array>();
-  const attachments = new Map<string, ReturnType<typeof pdfAttachments>>();
+  const attachments = new Map<string, PdfAttachment[]>();
   const documents = new Map<string, CompanyFiling>();
   for (const record of [...records.values()].sort((a, b) => comparePaths(a.path, b.path))) {
     const matching = record.returns.filter(
@@ -157,7 +160,9 @@ async function manifestFilings(
       if (item.attachment !== null) {
         let extracted = attachments.get(owner.path);
         if (!extracted) {
-          extracted = pdfAttachments(bytes);
+          const result = await pdfAttachments(bytes);
+          if (!result.ok) throw new MappingError('MAPPING_CORPUS_ATTACHMENT');
+          extracted = result.attachments;
           attachments.set(owner.path, extracted);
         }
         const matches = extracted.filter((attachment) => attachment.name === item.attachment);

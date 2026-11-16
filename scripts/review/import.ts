@@ -42,7 +42,7 @@ export async function importAnswered(
     context?: ReviewContext;
   },
 ) {
-  const { packet, packetSha256, context: packetContext } = attachedPacket(bytes);
+  const { packet, packetSha256, context: packetContext } = await attachedPacket(bytes);
   const signed = pdfHasSignature(bytes);
   const coverage = signed ? signatureCoverage(bytes) : null;
   if (options.tier === 'signed') {

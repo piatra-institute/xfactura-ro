@@ -97,8 +97,18 @@ export async function formAnswers(bytes: Uint8Array, packet: ReviewPacket) {
 
 /** The packet and context attached to the file; refuses a packet that is not exactly the
  * canonical JSON of a valid packet. */
-export function attachedPacket(bytes: Uint8Array) {
-  const files = pdfAttachments(bytes);
+export async function attachedPacket(bytes: Uint8Array) {
+  const read = await pdfAttachments(bytes);
+  if (!read.ok) {
+    throw new ImportRefused(
+      read.reason === 'encrypted'
+        ? 'The PDF is encrypted and cannot be read.'
+        : read.reason === 'too_large'
+          ? 'The PDF exceeds the attachment reading limits.'
+          : `The PDF attachments could not be read (${read.reason}).`,
+    );
+  }
+  const files = read.attachments;
   const packetFile = files.filter((file) => file.name === 'packet.json').at(-1);
   if (!packetFile) throw new ImportRefused('The PDF carries no packet.json attachment.');
   const json = new TextDecoder().decode(packetFile.bytes);

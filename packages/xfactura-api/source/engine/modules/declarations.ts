@@ -7,15 +7,16 @@ import type { Transaction } from '../db/database';
 import {
   artifactEvents,
   artifacts,
+  commands,
   evidence,
   taxPeriodEvents,
   type artifactStates,
 } from '../db/schema';
 import type { DeclarationValidator } from '../adapters/declaration-validator';
-import { pdfAttachments, pdfHasSignature } from '../adapters/pdf-attachments';
+import { pdfAttachments, pdfHasSignature, type PdfAttachments } from '../adapters/pdf-attachments';
 import { sha256, type ObjectStore } from '../adapters/object-store';
 import type { ActionHandler } from '../kernel/actions';
-import { appendAudit, type Actor, type Commands } from '../kernel/commands';
+import { appendAudit, commandKey, type Actor, type Commands } from '../kernel/commands';
 import { maskCnpText } from '../kernel/personal';
 
 type State = (typeof artifactStates)[number];
@@ -570,10 +571,64 @@ export class Declarations {
   }
 
   /**
-   * The PDF the company signed: it must carry, as an attachment, exactly the XML that was
-   * authorized, and a signature. The signature itself is verified by ANAF on filing.
+   * Forms whose official ANAF PDF tool attaches supporting files alongside the return XML.
+   * Any form not listed here takes the strict rule (only the authorized XML may be attached).
    */
-  importSigned(actor: Actor, key: string, input: z.infer<typeof signedInput>) {
+  private static readonly allowedExtraAttachments: Record<
+    string,
+    { extensions: readonly string[] }
+  > = {
+    // ANAF's tool may attach a compressed archive of accompanying documents alongside the XML.
+    S1005: { extensions: ['.zip'] },
+    // ANAF's tool attaches a compressed archive of accompanying documents alongside the XML.
+    S1003: { extensions: ['.zip'] },
+  };
+
+  /**
+   * The PDF the company signed: it must carry, as an attachment, one file byte-equal to the
+   * authorized XML, and a signature. Extra attachments are refused unless the form is listed in
+   * `allowedExtraAttachments`, in which case their names and SHA-256 hashes are recorded. The
+   * signature itself is verified by ANAF on filing.
+   */
+  async importSigned(actor: Actor, key: string, input: z.infer<typeof signedInput>) {
+    commandKey(key);
+    const storedKey = actor.agentId ? `agent/${actor.agentId}/${key}` : key;
+    const pre = await this.commands.read(actor, 'declarations.importSigned', async (tx) => {
+      const [previous] = await tx
+        .select({ key: commands.key })
+        .from(commands)
+        .where(
+          and(
+            eq(commands.companyId, actor.companyId),
+            eq(commands.actorId, actor.actorId),
+            eq(commands.key, storedKey),
+          ),
+        );
+      if (previous) return { replay: true as const };
+      const row = await this.artifact(tx, actor.companyId, input.artifactId);
+      requireCondition(
+        (await latestStep(tx, actor.companyId, row.id))?.state === 'exported_for_signing',
+        'NOT_EXPORTED',
+        'Se importă semnat doar PDF-ul exportat pentru semnare.',
+      );
+      const [file] = await tx
+        .select()
+        .from(evidence)
+        .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.id, input.evidenceId)));
+      requireCondition(file, 'EVIDENCE', 'Documentul justificativ nu este disponibil.', 404);
+      return { replay: false as const, fileId: file.id, fileHash: file.hash, xmlHash: row.xmlHash };
+    });
+
+    let attachmentResult: PdfAttachments | undefined;
+    let authorizedXml: Uint8Array | undefined;
+    let hasSignature = false;
+    if (!pre.replay) {
+      const bytes = await this.objects.get(actor.companyId, pre.fileHash);
+      authorizedXml = await this.objects.get(actor.companyId, pre.xmlHash);
+      attachmentResult = await pdfAttachments(bytes);
+      hasSignature = pdfHasSignature(bytes);
+    }
+
     return this.commands.run(
       actor,
       key,
@@ -592,17 +647,83 @@ export class Declarations {
           .from(evidence)
           .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.id, input.evidenceId)));
         requireCondition(file, 'EVIDENCE', 'Documentul justificativ nu este disponibil.', 404);
-        const bytes = await this.objects.get(actor.companyId, file.hash);
         requireCondition(
-          pdfAttachments(bytes).some((attachment) => sha256(attachment.bytes) === row.xmlHash),
+          !pre.replay &&
+            file.id === pre.fileId &&
+            file.hash === pre.fileHash &&
+            row.xmlHash === pre.xmlHash &&
+            attachmentResult !== undefined &&
+            authorizedXml !== undefined,
+          'CONFLICT',
+          'Documentul justificativ s-a schimbat în timpul verificării; reîncercați.',
+          409,
+        );
+        if (!attachmentResult.ok) {
+          requireCondition(
+            false,
+            attachmentResult.reason === 'ambiguous'
+              ? 'SIGNED_PDF_AMBIGUOUS'
+              : 'SIGNED_PDF_UNREADABLE',
+            attachmentResult.reason === 'ambiguous'
+              ? 'Atașamentele PDF-ului semnat sunt ambigue și nu pot fi verificate sigur.'
+              : attachmentResult.reason === 'encrypted'
+                ? 'PDF-ul semnat este criptat și nu poate fi citit.'
+                : attachmentResult.reason === 'too_large'
+                  ? 'PDF-ul semnat depășește limitele de citire.'
+                  : 'Atașamentele PDF-ului semnat nu au putut fi citite.',
+          );
+        }
+        // A file reached from both the EmbeddedFiles tree and a page annotation with the same
+        // name and bytes is the same attachment, not an extra one.
+        const inNameTree = attachmentResult.attachments.filter(
+          (attachment) => attachment.location.kind === 'document',
+        );
+        const attachments = attachmentResult.attachments.filter(
+          (attachment) =>
+            attachment.location.kind === 'document' ||
+            !inNameTree.some(
+              (docItem) =>
+                docItem.name === attachment.name &&
+                Buffer.from(docItem.bytes).equals(Buffer.from(attachment.bytes)),
+            ),
+        );
+        const expected = Buffer.from(authorizedXml);
+        const matching = attachments.filter((attachment) =>
+          Buffer.from(attachment.bytes).equals(expected),
+        );
+        requireCondition(
+          matching.length > 0,
           'SIGNED_MISMATCH',
           'PDF-ul semnat nu conține exact XML-ul autorizat al declarației.',
         );
-        requireCondition(pdfHasSignature(bytes), 'NOT_SIGNED', 'PDF-ul nu poartă o semnătură.');
+        const extras = [
+          ...matching.slice(1),
+          ...attachments.filter((attachment) => !Buffer.from(attachment.bytes).equals(expected)),
+        ];
+        const allowed = Declarations.allowedExtraAttachments[row.kind];
+        const unexpected = allowed
+          ? extras.filter(
+              (extra) =>
+                !allowed.extensions.some((ext) => extra.name.toLowerCase().endsWith(ext)) ||
+                !hasArchiveSignature(extra.bytes),
+            )
+          : extras;
+        requireCondition(
+          unexpected.length === 0,
+          'SIGNED_EXTRA_ATTACHMENT',
+          `PDF-ul semnat conține ${unexpectedCountLabel(unexpected.length)}: ${unexpected.map((item) => item.name).join(', ')}.`,
+        );
+        requireCondition(hasSignature, 'NOT_SIGNED', 'PDF-ul nu poartă o semnătură.');
+        const extraDetail = extras
+          .map((attachment) => `${attachment.name} (sha256:${sha256(attachment.bytes)})`)
+          .join(', ');
         await appendStep(tx, actor, row.id, {
           state: 'signed_imported',
           evidenceId: file.id,
-          detail: 'XML-ul autorizat este atașat; semnătura se verifică de ANAF la depunere.',
+          detail:
+            extras.length > 0
+              ? `XML-ul autorizat este atașat împreună cu ${extras.length === 1 ? 'atașamentul admis' : 'atașamentele admise'}: ${extraDetail}; semnătura se verifică de ANAF la depunere.`
+              : 'XML-ul autorizat este atașat; semnătura se verifică de ANAF la depunere.',
         });
         return { artifactId: row.id };
       },
@@ -793,4 +914,17 @@ export class Declarations {
       })),
     };
   }
+}
+
+/** ZIP (`PK\x03\x04` or empty `PK\x05\x06`) or RAR (`Rar!\x1A\x07`) archive header. */
+function hasArchiveSignature(bytes: Uint8Array) {
+  const head = Buffer.from(bytes.subarray(0, 8)).toString('latin1');
+  return /^(?:PK\x03\x04|PK\x05\x06|Rar!\x1a\x07)/.test(head);
+}
+
+/** Romanian numeral agreement (`de` from 20 upwards mod 100, and for 0). */
+function unexpectedCountLabel(count: number) {
+  if (count === 1) return '1 atașament suplimentar nepermis';
+  const de = count % 100 === 0 || count % 100 >= 20 ? ' de' : '';
+  return `${count}${de} atașamente suplimentare nepermise`;
 }

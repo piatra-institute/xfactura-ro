@@ -17,7 +17,7 @@
     "worker": "bun run packages/xfactura-api/source/engine/worker.ts",
     "db:migrate": "bun run packages/xfactura-api/source/engine/migrate.ts",
     "account:create": "bun run packages/xfactura-api/source/engine/manage.ts create-user",
-    "test": "bun test packages/xfactura-core/test scripts/rules",
+    "test": "bun test packages/xfactura-core/test scripts/rules scripts/review",
     "test:integration": "bun scripts/test-integration.ts",
     "test:legacy": "bun test packages/xfactura-api/test/legacy",
     "test:replay": "bun test packages/xfactura-replay/test",
@@ -48,7 +48,6 @@
     "eslint": "9.39.5",
     "fast-check": "4.10.2",
     "node-firebird": "2.21.0",
-    "pdf-lib": "1.17.1",
     "prettier": "3.9.10",
     "typescript": "6.0.3",
     "typescript-eslint": "8.72.1"
