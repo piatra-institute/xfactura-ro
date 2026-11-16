@@ -39,6 +39,16 @@ export const kinds = [
   'replay-settlement-unallocated',
   'replay-opening-refused',
   'replay-invoice-key-reused',
+  // A field of a return the engine prepared against the filed one, by the return comparator's
+  // class; a return the engine could not prepare; one ANAF's validator refused.
+  'return-amount',
+  'return-rounding',
+  'return-text',
+  'return-cosmetic',
+  'return-structure',
+  'return-zero-omission',
+  'return-blocked',
+  'return-validation',
 ] as const;
 export type DifferenceKind = (typeof kinds)[number];
 export const order = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);

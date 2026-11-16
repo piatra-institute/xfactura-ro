@@ -7,20 +7,25 @@ import { proposeMapping } from '../../src/mapping/propose';
 
 // Invented identities, already used by core's synthetic D406 tests, and invented amounts.
 export const companyCui = '18547290';
-const customer = d406PartyId({ kind: 'ro', cui: '14399840' });
+export const customer = d406PartyId({ kind: 'ro', cui: '14399840' });
 const supplier = d406PartyId({ kind: 'ro', cui: '31552803' });
-const euSupplier = d406PartyId({ kind: 'eu', country: 'DE', vat: '123456789' });
+export const euSupplier = d406PartyId({ kind: 'eu', country: 'DE', vat: '123456789' });
 
-const line = (
+export const line = (
   id: string,
   account: string,
   side: D406Line['side'],
   amount: string,
   extra: Partial<D406Line> = {},
 ): D406Line => ({ id, account, side, amount, description: `Linia ${id}`, ...extra });
-const vat = (code: string, base: string, amount: string) => ({ type: '300', code, base, amount });
-const marker = (code: string) => ({ type: '300', code, amount: '0' });
-const service = (account: string, amount: string, tax: ReturnType<typeof vat>[]) => ({
+export const vat = (code: string, base: string, amount: string) => ({
+  type: '300',
+  code,
+  base,
+  amount,
+});
+export const marker = (code: string) => ({ type: '300', code, amount: '0' });
+export const service = (account: string, amount: string, tax: ReturnType<typeof vat>[]) => ({
   account,
   product: 'SRV',
   description: 'Servicii',
@@ -30,7 +35,8 @@ const service = (account: string, amount: string, tax: ReturnType<typeof vat>[])
   tax,
 });
 
-const model = (
+/** A synthetic month of the company's books, as the D406 writer takes it. */
+export const replayModel = (
   month: number,
   opening: Record<string, string>,
   partners: { customer: string; supplier: string },
@@ -95,7 +101,7 @@ const model = (
   ...rest,
 });
 
-const january = model(
+const january = replayModel(
   1,
   { '1012': '-1000.00', '5121': '1500.00', '401.01': '-800.00', '4111.01': '300.00' },
   { customer: '300.00', supplier: '-800.00' },
@@ -191,7 +197,7 @@ const january = model(
   },
 );
 
-const february = model(
+const february = replayModel(
   2,
   {
     '1012': '-1000.00',
@@ -290,11 +296,14 @@ const february = model(
   },
 );
 
-/** The two synthetic months as the corpus reader gives them: model, payload and hash. The
- * writer refuses SAGA's closing-note code 380200, so it is added to the read model of the
- * January closing as SAGA writes it, on its 4427 and 4426 lines. */
-export function replayFilings(): CompanyFiling[] {
-  return [january, february].map((value) => {
+/** The two synthetic months' models, each call a fresh copy. */
+export const replayModels = (): D406[] => structuredClone([january, february]);
+
+/** Synthetic months as the corpus reader gives them: model, payload and hash. The writer
+ * refuses SAGA's closing-note code 380200, so it is added to the read model of the January
+ * closing as SAGA writes it, on its 4427 and 4426 lines. */
+export function replayFilings(models: readonly D406[] = [january, february]): CompanyFiling[] {
+  return models.map((value) => {
     const xml = new TextEncoder().encode(writeD406(value));
     const filed = readD406(xml);
     for (const transaction of filed.generalLedgerEntries.journals[0]!.transactions)

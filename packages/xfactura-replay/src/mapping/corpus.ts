@@ -95,22 +95,44 @@ export async function readCompanyFilings(
 /** A selected filing with its XML payload, as the manifest's owner file holds it. */
 export type CompanyFiling = { filed: D406Filed; xml: Uint8Array; sha256: string };
 
+async function manifestContent(manifestPath: string): Promise<string> {
+  try {
+    const info = await lstat(manifestPath);
+    if (!info.isFile() || info.isSymbolicLink()) throw new MappingError('MAPPING_CORPUS_PATH');
+    return await readFile(manifestPath, 'utf8');
+  } catch (error: unknown) {
+    if (error instanceof MappingError) throw error;
+    throw new MappingError('MAPPING_CORPUS_MANIFEST_REQUIRED');
+  }
+}
+
 /** Every D406 payload the corpus manifest holds for a fiscal code, with its bytes. Identical
  * payloads collapse; the order follows the manifest's sorted paths. */
 export async function readCompanyFilingDocuments(
   company: string,
   manifestPath = resolve('.private/corpus/manifest.json'),
 ): Promise<CompanyFiling[]> {
-  let content: string;
-  try {
-    const info = await lstat(manifestPath);
-    if (!info.isFile() || info.isSymbolicLink()) throw new MappingError('MAPPING_CORPUS_PATH');
-    content = await readFile(manifestPath, 'utf8');
-  } catch (error: unknown) {
-    if (error instanceof MappingError) throw error;
-    throw new MappingError('MAPPING_CORPUS_MANIFEST_REQUIRED');
-  }
+  const content = await manifestContent(manifestPath);
   return manifestFilings(companyCode(company), dirname(manifestPath), content);
+}
+
+/** A return's XML payload as the manifest's owner file holds it: the file itself, or the
+ * attachment of a signed return or an annual statement PDF. */
+export type CompanyReturnPayload = { form: string; xml: Uint8Array; sha256: string };
+
+/**
+ * Every payload of the given forms (D300, D394, S1005, …) the corpus manifest holds for a fiscal
+ * code, selected as `readCompanyFilingDocuments` selects D406: by the manifest's normalized fiscal
+ * code and form, duplicates resolved to their owner, hashes verified. Identical payloads collapse;
+ * a company without any is an empty list. The caller reads and checks each declaration.
+ */
+export async function readCompanyReturnPayloads(
+  company: string,
+  forms: readonly string[],
+  manifestPath = resolve('.private/corpus/manifest.json'),
+): Promise<CompanyReturnPayload[]> {
+  const content = await manifestContent(manifestPath);
+  return manifestPayloads(companyCode(company), dirname(manifestPath), content, new Set(forms));
 }
 
 async function manifestFilings(
@@ -118,6 +140,22 @@ async function manifestFilings(
   root: string,
   content: string,
 ): Promise<CompanyFiling[]> {
+  const documents: CompanyFiling[] = [];
+  for (const { xml, sha256 } of await manifestPayloads(company, root, content, new Set(['D406']))) {
+    const filed = readD406(xml);
+    if (filedCompany([filed]) !== company) throw new MappingError('MAPPING_COMPANY_MISMATCH');
+    documents.push({ filed, xml, sha256 });
+  }
+  if (!documents.length) throw new MappingError('MAPPING_CORPUS_COMPANY_UNKNOWN');
+  return documents;
+}
+
+async function manifestPayloads(
+  company: string,
+  root: string,
+  content: string,
+  forms: ReadonlySet<string>,
+): Promise<CompanyReturnPayload[]> {
   const parsed = manifestSchema.safeParse(JSON.parse(content));
   if (!parsed.success) throw new MappingError('MAPPING_CORPUS_SCHEMA');
   const records = new Map(parsed.data.map((record) => [record.path, record]));
@@ -139,11 +177,11 @@ async function manifestFilings(
   };
   const files = new Map<string, Uint8Array>();
   const attachments = new Map<string, PdfAttachment[]>();
-  const documents = new Map<string, CompanyFiling>();
+  const documents = new Map<string, CompanyReturnPayload>();
   for (const record of [...records.values()].sort((a, b) => comparePaths(a.path, b.path))) {
     const matching = record.returns.filter(
       (item) =>
-        item.form === 'D406' &&
+        forms.has(item.form) &&
         item.fiscalCode !== null &&
         companyCode(item.fiscalCode) === company,
     );
@@ -171,12 +209,9 @@ async function manifestFilings(
       }
       const hash = digest(xml);
       if (documents.has(hash)) continue;
-      const filed = readD406(xml);
-      if (filedCompany([filed]) !== company) throw new MappingError('MAPPING_COMPANY_MISMATCH');
-      documents.set(hash, { filed, xml, sha256: hash });
+      documents.set(hash, { form: item.form, xml, sha256: hash });
     }
   }
-  if (!documents.size) throw new MappingError('MAPPING_CORPUS_COMPANY_UNKNOWN');
   return [...documents.values()];
 }
 

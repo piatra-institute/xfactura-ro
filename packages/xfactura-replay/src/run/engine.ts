@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { ParameterRegister } from 'xfactura-core/rules';
+import type { DeclarationValidator } from '../../../xfactura-api/source/engine/adapters/declaration-validator';
 import { Database } from '../../../xfactura-api/source/engine/db/database';
 import { user } from '../../../xfactura-api/source/engine/db/schema';
 import { LocalObjectStore } from '../../../xfactura-api/source/engine/adapters/object-store';
@@ -22,6 +23,8 @@ export function seededIds(seed: string): () => string {
 export type ReplayEngine = {
   engine: Engine;
   db: Database;
+  /** The engine's files: the evidence recorded and the returns it writes, by hash. */
+  objects: LocalObjectStore;
   /** The person who owns the replayed books, proposes, approves and posts. */
   person: string;
   ids: () => string;
@@ -29,21 +32,31 @@ export type ReplayEngine = {
 };
 
 /**
- * A private engine on a new database in `directory`, with `migration.journal` injected and an
- * empty rule register (the replay reads no legal parameter). Its clock is fixed and its
- * identifiers seeded, so the same inputs give the same records; audit `created_at` columns keep
- * the database's wall time.
+ * A private engine on a new database in `directory`, with `migration.journal` injected. Its rule
+ * register is empty unless one is given: the journal replay reads no legal parameter, while the
+ * return replay runs with the register the engine uses in production. ANAF's validator, when
+ * given, checks every return the engine prepares. Its clock is fixed and its identifiers seeded,
+ * so the same inputs give the same records; audit `created_at` columns keep the database's wall
+ * time.
  */
 export async function openReplayEngine(
   directory: string,
-  options: { secret: string; seed: string; clock: number },
+  options: {
+    secret: string;
+    seed: string;
+    clock: number;
+    register?: ParameterRegister;
+    declarationValidator?: DeclarationValidator;
+  },
 ): Promise<ReplayEngine> {
   const db = new Database(`file:${join(directory, 'books.db')}`);
   await db.migrate();
   const ids = seededIds(options.seed);
-  const engine = new Engine(db, new LocalObjectStore(join(directory, 'objects')), options.secret, {
+  const objects = new LocalObjectStore(join(directory, 'objects'));
+  const engine = new Engine(db, objects, options.secret, {
     treatments: [migrationJournal],
-    register: new ParameterRegister([], []),
+    register: options.register ?? new ParameterRegister([], []),
+    ...(options.declarationValidator ? { declarationValidator: options.declarationValidator } : {}),
     clock: () => options.clock,
     ids,
   });
@@ -58,5 +71,5 @@ export async function openReplayEngine(
       updatedAt: now,
     }),
   );
-  return { engine, db, person, ids, close: () => db.close() };
+  return { engine, db, objects, person, ids, close: () => db.close() };
 }

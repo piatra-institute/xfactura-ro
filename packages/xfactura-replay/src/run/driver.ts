@@ -116,6 +116,40 @@ export type RunManifest = {
   assumptions: { statedBy: string; applied: AppliedAssumption[] } | null;
 };
 
+/** A transaction the translation or the engine refused, as the return replay attributes it. */
+export type RefusedTransaction = {
+  /** The transaction's month (its Period and PeriodYear), else its filing's period. */
+  month: string;
+  subject: string;
+  /** `<stage>:<code>`, as the summary counts it. */
+  reason: string;
+  /** Engine accounts of its mapped lines. */
+  accounts: string[];
+  /** The filed TaxInformation blocks of its lines. */
+  taxes: { type: string; code: string }[];
+};
+
+/**
+ * The replayed books, still open, for work that reads them after the journal: the return replay
+ * prepares the company's returns from them. The engine closes when `after` returns.
+ */
+export type ReplaySession = {
+  books: ReplayEngine;
+  companyId: string;
+  owner: Actor;
+  invoke: <T>(operation: string, body: unknown) => Promise<T>;
+  periods: readonly ReplayPeriod[];
+  /** The evidence recorded for each kept filing, by its period. */
+  evidence: ReadonlyMap<string, string>;
+  view: ReplayMapping;
+  /** The engine party of each mapping party key. */
+  partyIds: ReadonlyMap<string, string>;
+  /** Which treatment took the opening (`migration.journal` carries VAT balances as `CARRIED`),
+   * null when it was refused. */
+  opening: { date: string; treatment: string | null; carriedVatAccounts: string[] };
+  refused: readonly RefusedTransaction[];
+};
+
 export type ReplayInput = {
   alias: string;
   filings: readonly CompanyFiling[];
@@ -128,6 +162,8 @@ export type ReplayInput = {
   store: DifferenceStore;
   causes?: readonly Cause[];
   readings?: ReadingTable;
+  /** Work on the replayed books before the engine closes, once the journal is compared. */
+  after?: (session: ReplaySession) => Promise<void>;
 };
 
 const count = (map: Record<string, number>, key: string, by = 1) => {
@@ -495,6 +531,7 @@ async function run(
     importMarkersAttached: 0,
   };
   const refusals: { reason: string; period: number; accounts: string[] }[] = [];
+  const refusedTransactions: RefusedTransaction[] = [];
   const postings = new Map<string, 'posted' | 'refused'>();
   /** Engine accounts a refused transaction touched, and those a filed chain break moved. */
   const refusedAccounts = new Set<string>();
@@ -589,6 +626,17 @@ async function run(
           const reason = `${refusal.stage}:${refusal.code}`;
           count(transactions.refusedByReason, reason);
           refusals.push({ reason, period: index, accounts: translated.accounts });
+          refusedTransactions.push({
+            month: transactionMonth(transaction) ?? period.start.slice(0, 7),
+            subject,
+            reason,
+            accounts: translated.accounts,
+            taxes: transaction.lines.flatMap((line) =>
+              (line.tax ?? []).flatMap((block) =>
+                block.code ? [{ type: block.type ?? '', code: block.code }] : [],
+              ),
+            ),
+          });
         }
       }
 
@@ -754,6 +802,24 @@ async function run(
       journalDifferences: journalDifferences.length,
     });
   }
+
+  if (input.after)
+    await input.after({
+      books,
+      companyId: company.id,
+      owner,
+      invoke,
+      periods,
+      evidence: new Map(periods.map((item) => [item.period, evidence.get(item)!])),
+      view,
+      partyIds,
+      opening: {
+        date: openingDate,
+        treatment: typeof opening.treatment === 'string' ? opening.treatment : null,
+        carriedVatAccounts: (opening.carriedVatAccounts as string[] | undefined) ?? [],
+      },
+      refused: refusedTransactions,
+    });
 
   // Which refusals touched accounts whose balances diverged then or later.
   const refusalsAndBalances: Record<
