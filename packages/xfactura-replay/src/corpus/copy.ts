@@ -10,7 +10,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { comparePaths, fileSha256 } from './files';
+import { comparePaths, fileSha256, ownerPath } from './files';
 import type { CorpusRecord } from './inventory';
 
 async function statOrNull(path: string) {
@@ -102,6 +102,45 @@ export class OutputConflict extends Error {
   }
 }
 
+/** The existing output chose a duplicate group's owner by another rule, so copies at paths the
+ * current rule gives to duplicates are still in it. Repair never deletes files, so even
+ * `repair` refuses: the output folder has to be removed and the corpus copied again. */
+export class OwnerRuleChanged extends Error {
+  readonly code = 'OWNER_RULE_CHANGED';
+
+  constructor() {
+    super(
+      'OWNER_RULE_CHANGED: the output was made by a different duplicate owner rule and must be rebuilt: remove the output folder and copy again',
+    );
+    this.name = 'OwnerRuleChanged';
+  }
+}
+
+/** True when a previous manifest names, for some content hash, an owner other than the one the
+ * current rule picks among that manifest's own paths. A manifest that cannot be read this way
+ * is left to the ordinary manifest comparison. */
+function ownersFollowOtherRule(previous: Buffer): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(previous.toString('utf8'));
+  } catch {
+    return false;
+  }
+  if (!Array.isArray(parsed)) return false;
+  const groups = new Map<string, { paths: string[]; owners: string[] }>();
+  for (const item of parsed as unknown[]) {
+    const entry = item as { path?: unknown; sha256?: unknown; duplicateOf?: unknown } | null;
+    if (typeof entry?.path !== 'string' || typeof entry.sha256 !== 'string') return false;
+    const group = groups.get(entry.sha256) ?? { paths: [], owners: [] };
+    group.paths.push(entry.path);
+    if (entry.duplicateOf === null) group.owners.push(entry.path);
+    groups.set(entry.sha256, group);
+  }
+  return [...groups.values()].some(
+    ({ paths, owners }) => owners.length === 1 && owners[0] !== ownerPath(paths),
+  );
+}
+
 /** The manifest has no run-specific fields. Replacements use fresh files so an existing
  * hardlink cannot modify the source. Different output bytes require explicit repair; all
  * conflicts are checked before writing, and matching files and manifests are left alone. */
@@ -132,6 +171,9 @@ export async function copyCorpus(
     await checkPath(targetRoot, record.path, false);
   }
   await checkPath(targetRoot, 'manifest.json', false);
+  const manifest = join(targetRoot, 'manifest.json');
+  const previous = (await statOrNull(manifest)) ? await readFile(manifest) : null;
+  if (previous !== null && ownersFollowOtherRule(previous)) throw new OwnerRuleChanged();
   const pending = new Set<string>();
   for (const record of sorted) {
     if (record.excluded.length) continue;
@@ -142,9 +184,7 @@ export async function copyCorpus(
     if (existing && !matches && !options.repair) throw new OutputConflict(record.path);
     if (!matches) pending.add(record.path);
   }
-  const manifest = join(targetRoot, 'manifest.json');
   const serialized = Buffer.from(`${JSON.stringify(sorted, null, 2)}\n`, 'utf8');
-  const previous = (await statOrNull(manifest)) ? await readFile(manifest) : null;
   const manifestChanged = previous === null || !previous.equals(serialized);
   if (previous !== null && manifestChanged && !options.repair)
     throw new OutputConflict('manifest.json');

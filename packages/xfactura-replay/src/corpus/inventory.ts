@@ -6,7 +6,7 @@ import {
   pdfAttachments,
   pdfHasSignature,
 } from '../../../xfactura-api/source/engine/adapters/pdf-attachments';
-import { comparePaths, fileSha256 } from './files';
+import { comparePaths, fileSha256, ownerPath } from './files';
 import { readReturnXml, xmlChunks, type ReturnXml } from './xml';
 
 export const corpusKinds = [
@@ -190,18 +190,29 @@ async function walk(root: string, relative = ''): Promise<string[]> {
   return files;
 }
 
-/** No writes, dates or filename-derived fiscal facts. Duplicate ownership follows the
- * sorted relative paths, including when the first occurrence is itself a validator file. */
+/** No writes, dates or filename-derived fiscal facts. A duplicate group is owned by its path
+ * with the fewest segments, then the first in code-unit order, including when that owner is
+ * itself a validator file. Records stay in path order. */
 export async function inventoryCorpus(source: string): Promise<CorpusRecord[]> {
   const root = await realpath(source);
   const paths = (await walk(root)).sort(comparePaths);
-  const firstByHash = new Map<string, string>();
   const contentByHash = new Map<string, Content>();
-  const records: CorpusRecord[] = [];
+  const facts = new Map<string, { size: number; sha256: string }>();
+  const groups = new Map<string, string[]>();
   for (const path of paths) {
     const absolute = join(root, path);
     const size = (await lstat(absolute)).size;
     const sha256 = await fileSha256(absolute);
+    facts.set(path, { size, sha256 });
+    const group = groups.get(sha256);
+    if (group) group.push(path);
+    else groups.set(sha256, [path]);
+  }
+  const owners = new Map([...groups].map(([sha256, group]) => [sha256, ownerPath(group)]));
+  const records: CorpusRecord[] = [];
+  for (const path of paths) {
+    const absolute = join(root, path);
+    const { size, sha256 } = facts.get(path)!;
     const contentKey = `${sha256}:${extname(path).toLowerCase() === '.pdf' ? 'pdf' : ''}`;
     let content = contentByHash.get(contentKey);
     if (!content) {
@@ -218,8 +229,8 @@ export async function inventoryCorpus(source: string): Promise<CorpusRecord[]> {
       contentByHash.set(contentKey, content);
     }
     const kind = pathKind(path, content);
-    const duplicateOf = firstByHash.get(sha256) ?? null;
-    if (!duplicateOf) firstByHash.set(sha256, path);
+    const owner = owners.get(sha256)!;
+    const duplicateOf = owner === path ? null : owner;
     const excluded: ExclusionReason[] = [];
     if (kind === 'validator-kit') excluded.push('validator-kit');
     if (duplicateOf) excluded.push('duplicate');

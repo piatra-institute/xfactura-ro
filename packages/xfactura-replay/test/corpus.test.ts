@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { PDFDocument, PDFName } from 'pdf-lib';
 import { inventorySummary } from '../../../scripts/differential/inventory';
+import { comparePaths } from '../src/corpus/files';
 import { copyCorpus } from '../src/corpus/copy';
 import { inventoryCorpus, type CorpusRecord } from '../src/corpus/inventory';
 import { readReturnXml, xmlChunks, type ReturnXml } from '../src/corpus/xml';
@@ -682,6 +683,166 @@ describe('classification boundaries', () => {
       'PDF_ATTACHMENTS_UNREADABLE',
     );
     expect(records.find((item) => item.path === 'ok.xml')?.returns).toEqual([expectedXml()]);
+  });
+});
+
+describe('duplicate owner', () => {
+  const nested = 'Alfa X/Alfa/406';
+  const canonical = 'Alfa/406';
+  const d300Other = bytes(
+    '<declaratie300 xmlns="mfp:anaf:dgti:d300:declaratie:v12" cui="90000001" an="2026" luna="03"/>',
+  );
+
+  /** The previous rule: the first path in code-unit order owns the group. */
+  function oldRuleRecords(records: readonly CorpusRecord[]): CorpusRecord[] {
+    const owner = new Map<string, string>();
+    for (const item of records) if (!owner.has(item.sha256)) owner.set(item.sha256, item.path);
+    return records.map((item) => {
+      const first = owner.get(item.sha256)!;
+      const excluded: CorpusRecord['excluded'] = item.excluded.filter(
+        (reason) => reason !== 'duplicate',
+      );
+      if (first !== item.path) excluded.push('duplicate');
+      return { ...item, duplicateOf: first === item.path ? null : first, excluded };
+    });
+  }
+
+  async function nestedTree() {
+    await put(`${nested}/f.xml`, d300);
+    await put(`${canonical}/f.xml`, d300);
+    await put(`${nested}/only-nested.xml`, d390);
+  }
+
+  test('the old order would pick the nested copy, the shallow path owns the group', async () => {
+    await nestedTree();
+    expect(comparePaths(`${nested}/f.xml`, `${canonical}/f.xml`)).toBeLessThan(0);
+    const records = await inventoryCorpus(source);
+    const byPath = new Map(records.map((item) => [item.path, item]));
+    expect(byPath.get(`${canonical}/f.xml`)).toMatchObject({ duplicateOf: null, excluded: [] });
+    expect(byPath.get(`${nested}/f.xml`)).toMatchObject({
+      duplicateOf: `${canonical}/f.xml`,
+      excluded: ['duplicate'],
+    });
+  });
+
+  test('equal depths fall back to code-unit order, whatever the folder names', async () => {
+    await put('B/406/f.xml', d300);
+    await put('A/406/f.xml', d300);
+    await put('A b/406/f.xml', d300);
+    await put('A/406/deeper/f.xml', d300);
+    const records = await inventoryCorpus(source);
+    const owners = records.filter((item) => item.duplicateOf === null);
+    expect(owners.map((item) => item.path)).toEqual(['A b/406/f.xml']);
+    for (const item of records.filter((entry) => entry.duplicateOf !== null))
+      expect(item.duplicateOf).toBe('A b/406/f.xml');
+  });
+
+  test('a file only in the nested copy is kept and duplicateOf chains end at the owner', async () => {
+    await nestedTree();
+    await put('Alfa X/Alfa/406/third.xml', d300Other);
+    await put('Alfa/406/third.xml', d300Other);
+    await put('Beta/406/third.xml', d300Other);
+    const records = await inventoryCorpus(source);
+    const byPath = new Map(records.map((item) => [item.path, item]));
+    expect(byPath.get(`${nested}/only-nested.xml`)).toMatchObject({
+      duplicateOf: null,
+      excluded: [],
+    });
+    for (const item of records) {
+      let current = item;
+      for (let hops = 0; current.duplicateOf !== null; hops++) {
+        expect(hops).toBeLessThan(2);
+        current = byPath.get(current.duplicateOf)!;
+      }
+      expect(current.excluded).not.toContain('duplicate');
+      expect(current.sha256).toBe(item.sha256);
+    }
+    expect(byPath.get(`${nested}/third.xml`)?.duplicateOf).toBe(`${canonical}/third.xml`);
+    expect(byPath.get('Beta/406/third.xml')?.duplicateOf).toBe(`${canonical}/third.xml`);
+    const included = records.filter((item) => item.excluded.length === 0).map((item) => item.path);
+    expect(included).toEqual([
+      `${nested}/only-nested.xml`,
+      `${canonical}/f.xml`,
+      `${canonical}/third.xml`,
+    ]);
+    await copyCorpus(source, output, records);
+    expect((await tree(output)).filter((path) => path !== 'manifest.json')).toEqual(included);
+  });
+
+  test('an output whose owners were chosen by the old rule must be rebuilt, even with repair', async () => {
+    await nestedTree();
+    const records = await inventoryCorpus(source);
+    const old = oldRuleRecords(records);
+    expect(old.find((item) => item.path === `${nested}/f.xml`)?.duplicateOf).toBeNull();
+    await copyCorpus(source, output, old);
+    const before = await tree(output);
+    expect(before).toContain(`${nested}/f.xml`);
+    const manifest = await readFile(join(output, 'manifest.json'));
+    for (const options of [{}, { repair: true }]) {
+      await expect(copyCorpus(source, output, records, options)).rejects.toMatchObject({
+        code: 'OWNER_RULE_CHANGED',
+        message: expect.stringContaining('different duplicate owner rule and must be rebuilt'),
+      });
+      expect(await tree(output)).toEqual(before);
+      expect(await readFile(join(output, 'manifest.json'))).toEqual(manifest);
+    }
+    await rm(output, { recursive: true });
+    expect((await copyCorpus(source, output, records)).copied).toBe(2);
+    expect(await tree(output)).toEqual([
+      `${nested}/only-nested.xml`,
+      `${canonical}/f.xml`,
+      'manifest.json',
+    ]);
+    expect(await copyCorpus(source, output, records)).toMatchObject({
+      copied: 0,
+      manifestChanged: false,
+    });
+  });
+
+  test('the CLI reports the owner rule change and writes nothing', async () => {
+    await nestedTree();
+    await copyCorpus(source, output, oldRuleRecords(await inventoryCorpus(source)));
+    const before = await tree(output);
+    const args = [process.execPath, resolve('scripts/differential/inventory.ts'), source, output];
+    for (const extra of [[], ['--repair']]) {
+      const child = Bun.spawn([...args, ...extra], { stdout: 'pipe', stderr: 'pipe' });
+      expect(await new Response(child.stdout).text()).toBe('');
+      expect(await new Response(child.stderr).text()).toContain('OWNER_RULE_CHANGED');
+      expect(await child.exited).toBe(1);
+      expect(await tree(output)).toEqual(before);
+    }
+  });
+
+  test('a manifest whose owners follow the current rule is not an owner rule change', async () => {
+    await put('A/f.xml', d300);
+    await put('B/f.xml', d300);
+    await copyCorpus(source, output, await inventoryCorpus(source));
+    await put('A/new.xml', d390);
+    await expect(copyCorpus(source, output, await inventoryCorpus(source))).rejects.toThrow(
+      'OUTPUT_CONFLICT: manifest.json',
+    );
+  });
+
+  test.each([
+    ['a doubled separator', 'A//f.xml'],
+    ['a trailing separator', 'A/f.xml/'],
+  ])('%s adds no segment when a manifest on disk is read', async (_name, odd) => {
+    await put('A/f.xml', d300);
+    await put('B/f.xml', d300);
+    const records = await inventoryCorpus(source);
+    const sha256 = records[0]!.sha256;
+    await mkdir(output);
+    const manifest = join(output, 'manifest.json');
+    const entry = (path: string, duplicateOf: string | null) => ({ path, sha256, duplicateOf });
+    // Both paths have two segments, so the code-unit order picks the odd one as owner.
+    await writeFile(manifest, JSON.stringify([entry(odd, null), entry('B/f.xml', odd)]));
+    await expect(copyCorpus(source, output, records)).rejects.toThrow('OUTPUT_CONFLICT');
+    // An owner that is not the first of the two is another rule, and is refused even with repair.
+    await writeFile(manifest, JSON.stringify([entry(odd, 'B/f.xml'), entry('B/f.xml', null)]));
+    for (const options of [{}, { repair: true }])
+      await expect(copyCorpus(source, output, records, options)).rejects.toMatchObject({
+        code: 'OWNER_RULE_CHANGED',
+      });
   });
 });
 
