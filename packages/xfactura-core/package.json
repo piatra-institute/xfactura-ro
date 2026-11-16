@@ -89,6 +89,7 @@
     "./ro/annual/half-year": "./src/ro/annual/half-year.ts",
     "./ro/annual/agent": "./src/ro/annual/agent.ts",
     "./ro/saft/d406": "./src/ro/saft/d406.ts",
+    "./ro/saft/read": "./src/ro/saft/read.ts",
     "./ro/saft/accounts": "./src/ro/saft/accounts.ts",
     "./ro/saft/tax-codes": "./src/ro/saft/tax-codes.ts",
     "./ro/saft/tax-code-readings": "./src/ro/saft/tax-code-readings.ts",

@@ -24,6 +24,8 @@ export type XmlElement = {
 export type SourceXmlOptions = {
   /** A positive finite integer; maximum attributes per element, including namespace declarations. */
   maxAttributes?: number;
+  /** A positive finite integer; maximum elements in the document. */
+  maxNodes?: number;
   /** Retain namespaced content attributes separately from un-namespaced attributes. */
   namespacedAttributes?: boolean;
 };
@@ -33,6 +35,9 @@ export function sourceXml(bytes: Uint8Array, options: SourceXmlOptions = {}): Xm
   const maxAttributes = options.maxAttributes === undefined ? 100 : options.maxAttributes;
   if (!Number.isInteger(maxAttributes) || maxAttributes <= 0)
     throw new TypeError('Limita atributelor XML trebuie să fie un număr întreg pozitiv și finit.');
+  const maxNodes = options.maxNodes === undefined ? 100000 : options.maxNodes;
+  if (!Number.isInteger(maxNodes) || maxNodes <= 0)
+    throw new TypeError('Limita elementelor XML trebuie să fie un număr întreg pozitiv și finit.');
   requireCondition(
     bytes.length > 0 && bytes.length <= 10 * 1024 * 1024,
     'XML_SIZE',
@@ -54,7 +59,9 @@ export function sourceXml(bytes: Uint8Array, options: SourceXmlOptions = {}): Xm
   });
   parser.on('opentag', (tag) => {
     requireCondition(
-      ++nodes <= 100000 && stack.length < 64 && Object.keys(tag.attributes).length <= maxAttributes,
+      ++nodes <= maxNodes &&
+        stack.length < 64 &&
+        Object.keys(tag.attributes).length <= maxAttributes,
       'XML_COMPLEXITY',
       'Structura XML depășește limita.',
     );

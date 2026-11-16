@@ -95,6 +95,27 @@ describe('sourceXml options', () => {
       }).namespacedAttributes,
     ).toEqual([{ uri: 'urn:x', local: 'a', value: '01' }]);
   });
+
+  test('the default still accepts 100,000 elements and rejects 100,001', () => {
+    expect(sourceXml(bytes(`<r>${'<c/>'.repeat(99999)}</r>`)).children).toHaveLength(99999);
+    expect(errorCode(bytes(`<r>${'<c/>'.repeat(100000)}</r>`))).toBe('XML_COMPLEXITY');
+    expect(errorCode(bytes(`<r>${'<c/>'.repeat(100000)}</r>`), {})).toBe('XML_COMPLEXITY');
+  });
+
+  test('maxNodes changes only the element count bound', () => {
+    const root = sourceXml(bytes(`<r>${'<c/>'.repeat(100000)}</r>`), { maxNodes: 100001 });
+    expect(root.children).toHaveLength(100000);
+    expect(Object.hasOwn(root, 'namespacedAttributes')).toBe(false);
+    expect(errorCode(bytes('<r><c/></r>'), { maxNodes: 1 })).toBe('XML_COMPLEXITY');
+  });
+
+  test('maxNodes must be a positive finite integer', () => {
+    for (const maxNodes of [Infinity, -Infinity, NaN, 0, -1, 1.5, null, '101', false]) {
+      expect(() => sourceXml(bytes('<r/>'), { maxNodes: maxNodes as number })).toThrow(TypeError);
+    }
+    expect(sourceXml(bytes('<r/>'), { maxNodes: 1 }).local).toBe('r');
+    expect(sourceXml(bytes('<r/>'), { maxNodes: undefined }).local).toBe('r');
+  });
 });
 
 describe('sourceXml limits with declaration options', () => {
