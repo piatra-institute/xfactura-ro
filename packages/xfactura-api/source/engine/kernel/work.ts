@@ -87,6 +87,7 @@ import {
   documentKindName,
   formatObligationKey,
   idLabel,
+  minorLabel,
   obligationStatusName,
   operationName,
   parameterName,
@@ -2393,7 +2394,7 @@ const bankDetector: Detector = {
           labels: {
             treasuryAccountId: idLabel('Cont de trezorerie', 'treasuryAccount'),
             bookingDate: dateLabel('Data operațiunii'),
-            amountMinor: { label: 'Sumă', type: 'minor', currencyKey: 'currency' },
+            amountMinor: minorLabel('Sumă', { currencyKey: 'currency' }),
             currency: textLabel('Monedă'),
             reference: textLabel('Referință'),
             counterparty: textLabel('Partener'),
@@ -2422,7 +2423,7 @@ const bankDetector: Detector = {
                   labels: {
                     treasuryAccountId: idLabel('Cont de trezorerie', 'treasuryAccount'),
                     bookingDate: dateLabel('Data operațiunii'),
-                    amountMinor: { label: 'Sumă', type: 'minor', currencyKey: 'currency' },
+                    amountMinor: minorLabel('Sumă', { currencyKey: 'currency' }),
                     currency: textLabel('Monedă'),
                     reference: textLabel('Referință'),
                     counterparty: textLabel('Partener'),

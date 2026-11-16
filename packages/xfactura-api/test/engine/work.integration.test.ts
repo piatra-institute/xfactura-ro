@@ -11,6 +11,12 @@ import { defaultRegister } from '../../source/engine/engine';
 import type { ActionView } from '../../source/engine/kernel/actions';
 import type { Actor } from '../../source/engine/kernel/commands';
 import { Work, type Detector, type Draft, type WorkItem } from '../../source/engine/kernel/work';
+import {
+  amountLabel,
+  completeLabels,
+  genericDetailLabel,
+  minorLabel,
+} from '../../source/engine/kernel/work-names';
 import { iban, mt940 } from './fixtures/bank';
 import { invoiceXml, type XmlInput } from './fixtures/invoice';
 import { journal, scenario, type Scenario } from './scenario';
@@ -33,8 +39,11 @@ async function agent(s: Scenario, scopes: string[]): Promise<Actor> {
   });
   return s.engine.agents.authenticate(grant.token, s.company.id);
 }
-const list = (s: Scenario, actor: Actor, input: Record<string, unknown> = {}) =>
-  s.invoke<Page>(actor, 'work.list', { limit: 200, ...input });
+const list = async (s: Scenario, actor: Actor, input: Record<string, unknown> = {}) => {
+  const page = await s.invoke<Page>(actor, 'work.list', { limit: 200, ...input });
+  for (const item of page.items) expectCompleteLabels(item);
+  return page;
+};
 const items = async (s: Scenario, actor: Actor, input: Record<string, unknown> = {}) =>
   (await list(s, actor, input)).items;
 const kinds = (found: WorkItem[]) => [...new Set(found.map((item) => item.kind))].sort();
@@ -60,6 +69,8 @@ function expectCompleteLabels(item: WorkItem) {
     const entry = item.labels[key];
     expect(entry).toBeDefined();
     expect(entry!.label.length).toBeGreaterThan(0);
+    expect(entry!.label).not.toBe(key);
+    if (key !== 'detail') expect(entry!.label).not.toBe(genericDetailLabel.label);
     if (entry!.type === 'amount' || entry!.type === 'minor')
       expect(entry!.currency !== undefined || entry!.currencyKey !== undefined).toBe(true);
     if (entry!.type === 'id') expect(entry!.kind.length).toBeGreaterThan(0);
@@ -1444,5 +1455,48 @@ describe('returns, the closure and the months on the worklist', () => {
       complete: false,
       missing: ['operation'],
     });
+  });
+
+  test('rejects unlabelled detail keys in tests and falls back to generic Romanian text in production', () => {
+    expect(() => completeLabels({ unlabelledKey: 'valoare' })).toThrow(
+      'Missing detail label for key "unlabelledKey"',
+    );
+    const previousEnv = process.env.NODE_ENV;
+    try {
+      process.env.NODE_ENV = 'production';
+      const labels = completeLabels({ unlabelledKey: '100.00' });
+      expect(labels.unlabelledKey).toEqual({ label: 'Detaliu', type: 'text' });
+      expect(() =>
+        expectCompleteLabels({
+          id: 'test:test:1',
+          kind: 'document.unproposed',
+          subject: { kind: 'document', id: '1' },
+          severity: 'warn',
+          due: null,
+          period: null,
+          message: 'Test.',
+          details: { unlabelledKey: '100.00' },
+          labels,
+          fingerprint: '0'.repeat(64),
+          next: [],
+          asOfSeq: 1,
+        }),
+      ).toThrow();
+    } finally {
+      if (previousEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousEnv;
+    }
+    expect(amountLabel('Total', { currency: 'EUR' })).toEqual({
+      label: 'Total',
+      type: 'amount',
+      currency: 'EUR',
+    });
+    expect(minorLabel('Sumă', { currencyKey: 'currency' })).toEqual({
+      label: 'Sumă',
+      type: 'minor',
+      currencyKey: 'currency',
+    });
+    expect(() => amountLabel('Total', { currency: '' })).toThrow();
+    expect(() => minorLabel('Sumă', { currencyKey: '' })).toThrow();
   });
 });

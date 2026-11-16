@@ -515,15 +515,22 @@ export const textLabel = (label: string): DetailLabel => ({ label, type: 'text' 
 export const dateLabel = (label: string): DetailLabel => ({ label, type: 'date' });
 export const periodLabel = (label: string): DetailLabel => ({ label, type: 'period' });
 export const countLabel = (label: string): DetailLabel => ({ label, type: 'count' });
-export const amountLabel = (
-  label: string,
-  currency: { currencyKey?: string; currency?: string } = { currency: 'RON' },
-): DetailLabel => ({ label, type: 'amount', ...currency });
-export const minorLabel = (
-  label: string,
-  currency: { currencyKey?: string; currency?: string } = { currencyKey: 'currency' },
-): DetailLabel => ({ label, type: 'minor', ...currency });
+export type CurrencyLabelSource =
+  { currencyKey: string; currency?: never } | { currency: string; currencyKey?: never };
+export const amountLabel = (label: string, currency: CurrencyLabelSource): DetailLabel => {
+  if (!currency.currency && !currency.currencyKey)
+    throw new Error('amountLabel requires a currency code or currencyKey');
+  return { label, type: 'amount', ...currency };
+};
+export const minorLabel = (label: string, currency: CurrencyLabelSource): DetailLabel => {
+  if (!currency.currency && !currency.currencyKey)
+    throw new Error('minorLabel requires a currency code or currencyKey');
+  return { label, type: 'minor', ...currency };
+};
 export const idLabel = (label: string, kind: string): DetailLabel => ({ label, type: 'id', kind });
+
+/** Generic Romanian label used only in production when a detector omits a key's label. */
+export const genericDetailLabel: DetailLabel = { label: 'Detaliu', type: 'text' };
 
 /** Known detail keys across modules, used as a backstop so no detail key is ever unlabelled. */
 export const fallbackLabels: DetailLabels = {
@@ -664,7 +671,16 @@ export function completeLabels(
 ): DetailLabels {
   const result: DetailLabels = { ...(explicit ?? {}) };
   for (const key of Object.keys(details)) {
-    if (!result[key]) result[key] = fallbackLabels[key] ?? textLabel(key);
+    if (Object.hasOwn(result, key) && result[key]) continue;
+    if (Object.hasOwn(fallbackLabels, key)) {
+      result[key] = fallbackLabels[key]!;
+      continue;
+    }
+    if (process.env.NODE_ENV === 'production') {
+      result[key] = genericDetailLabel;
+      continue;
+    }
+    throw new Error(`Missing detail label for key "${key}"`);
   }
   return result;
 }

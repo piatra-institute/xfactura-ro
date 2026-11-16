@@ -12,9 +12,11 @@ import { entryStands } from '../kernel/ledger';
 import { loadState } from '../kernel/state';
 import type { ProfitWorkItem, WorkStep } from '../kernel/work';
 import {
+  amountLabel,
   causeFromQuestion,
   dateLabel,
   idLabel,
+  periodLabel,
   textLabel,
   type DetailLabels,
   type WorkCause,
@@ -362,7 +364,7 @@ export async function profitWork(
         message,
         causes: [causeFromQuestion(request, message)],
         details: { account, year, ...details },
-        labels: { account: textLabel('Cont'), year: { label: 'An', type: 'period' }, ...labels },
+        labels: { account: textLabel('Cont'), year: periodLabel('An'), ...labels },
         next: [agent('questions.ask', request), human('questions.answer')],
       });
     };
@@ -489,8 +491,8 @@ export async function profitWork(
       ...(causes ? { causes } : {}),
       details: { year, change: posting.position.change, inBooks },
       labels: {
-        year: { label: 'An', type: 'period' },
-        change: { label: 'Diferență', type: 'amount', currency: 'RON' },
+        year: periodLabel('An'),
+        change: amountLabel('Diferență', { currency: 'RON' }),
         inBooks: textLabel('An în registre'),
       },
       next: inBooks
