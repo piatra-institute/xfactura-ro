@@ -82,6 +82,15 @@
         "zod": "4.6.7",
       },
     },
+    "packages/xfactura-replay": {
+      "name": "xfactura-replay",
+      "version": "0.0.1",
+      "dependencies": {
+        "pdf-lib": "1.17.1",
+        "saxes": "6.0.0",
+        "xfactura-core": "workspace:*",
+      },
+    },
     "packages/xfactura-web": {
       "name": "xfactura-web",
       "version": "0.0.1",
@@ -1590,6 +1599,8 @@
     "xfactura-core": ["xfactura-core@workspace:packages/xfactura-core"],
 
     "xfactura-eval": ["xfactura-eval@workspace:packages/xfactura-eval"],
+
+    "xfactura-replay": ["xfactura-replay@workspace:packages/xfactura-replay"],
 
     "xfactura-web": ["xfactura-web@workspace:packages/xfactura-web"],
 
