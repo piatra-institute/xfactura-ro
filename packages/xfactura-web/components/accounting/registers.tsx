@@ -1,167 +1,124 @@
 'use client';
 
-import { useState } from 'react';
-import { formatMoney } from './api';
-import { useLoad, useWorkspace } from './workspace';
+import AccountSheet from './account-sheet';
+import Assets from './assets';
+import Inventory from './inventory';
+import Journal from './journal';
+import { useAccountingNavigation } from './navigation';
+import Payroll from './payroll';
+import { RecordNames } from './record-names';
+import { EntryDetail, MonthChoice, useRegisterMonth } from './register-common';
+import Stock from './stock';
+import TrialBalance from './trial-balance';
+import VatJournals from './vat-journals';
+import { useWorkspace } from './workspace';
 
-type Pair = { debit: string; credit: string };
-type TrialBalance = {
-  rows: {
-    account: string;
-    name: string;
-    opening: Pair;
-    previous: Pair;
-    current: Pair;
-    total: Pair;
-    closing: Pair;
-  }[];
-  totals: { opening: Pair; previous: Pair; current: Pair; total: Pair; closing: Pair };
-};
-type Journal = {
-  entries: {
-    id: string;
-    number: number;
-    date: string;
-    journalCode: string;
-    description: string;
-    /** A line's amount is null in a payment of one person's pay, to a reader who may not read
-     * pay. */
-    lines: { account: string; side: 'D' | 'C'; amount: string | null }[];
-  }[];
-};
-type VatJournal = {
-  rows: {
-    entry: number;
-    date: string;
-    document: string | null;
-    counterparty: string | null;
-    code: string;
-    base: string;
-    vat: string;
-  }[];
-  totals: { code: string; base: string; vat: string; deductible: string }[];
-};
-
-const columns = ['opening', 'previous', 'current', 'total', 'closing'] as const;
-const headings = {
-  opening: 'Sold inițial',
-  previous: 'Rulaje precedente',
-  current: 'Rulaje curente',
-  total: 'Total sume',
-  closing: 'Sold final',
-};
+/** Each register, the read operation it rests on, and whether it is read for a month. */
+const registers = [
+  {
+    id: 'balanta',
+    label: 'Balanța de verificare',
+    operation: 'ledger.trialBalance',
+    monthly: true,
+  },
+  { id: 'fisa', label: 'Fișa contului', operation: 'ledger.generalLedger', monthly: true },
+  { id: 'jurnal', label: 'Registrul jurnal', operation: 'ledger.journal', monthly: true },
+  { id: 'tva', label: 'Jurnale de TVA', operation: 'vat.journal', monthly: false },
+  {
+    id: 'inventar',
+    label: 'Registrul inventar',
+    operation: 'ledger.inventoryRegister',
+    monthly: true,
+  },
+  { id: 'stocuri', label: 'Stocuri', operation: 'stock.register', monthly: true },
+  { id: 'mijloace', label: 'Mijloace fixe', operation: 'assets.list', monthly: false },
+  { id: 'salarii', label: 'Salarii', operation: 'payroll.runs.list', monthly: false },
+] as const;
+type RegisterId = (typeof registers)[number]['id'];
 
 export default function Registers() {
-  const { year } = useWorkspace();
-  const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
-  const range = year ? { from: year.from, to: year.to } : null;
-  const { data: balance } = useLoad<TrialBalance>(
-    'ledger.trialBalance',
-    { financialYearId: year?.id },
-    Boolean(year),
+  return (
+    <RecordNames>
+      <RegisterView />
+    </RecordNames>
   );
-  const { data: journal } = useLoad<Journal>(
-    'ledger.journal',
-    { ...range, limit: 200 },
-    Boolean(range),
-  );
-  const { data: sales } = useLoad<VatJournal>('vat.journal', {
-    direction: 'output',
-    from: month,
-    to: month,
-  });
-  const { data: purchases } = useLoad<VatJournal>('vat.journal', {
-    direction: 'input',
-    from: month,
-    to: month,
-  });
+}
+
+function RegisterView() {
+  const { year, can } = useWorkspace();
+  const { params, filter } = useAccountingNavigation();
+  const { month, first, last } = useRegisterMonth();
+  const visible = registers.filter((register) => can(register.operation));
+  const active = visible.find((register) => register.id === params.get('register')) ?? visible[0];
+  const entryId = params.get('registerEntry');
   return (
     <>
       <div className="acc-section-heading">
-        <h2>Balanța de verificare</h2>
-        <p>{year ? `${year.from} – ${year.to}` : ''}</p>
+        <h2>Registre</h2>
+        <p>{year ? `Exercițiul ${year.from} – ${year.to}` : ''}</p>
       </div>
-      <div className="acc-table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">Cont</th>
-              {columns.map((column) => (
-                <th key={column} scope="col" colSpan={2}>
-                  {headings[column]}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {(balance?.rows ?? []).map((row) => (
-              <tr key={row.account}>
-                <td title={row.name}>{row.account}</td>
-                {columns.flatMap((column) => [
-                  <td key={`${column}D`}>{row[column].debit}</td>,
-                  <td key={`${column}C`}>{row[column].credit}</td>,
-                ])}
-              </tr>
+      {!year || !month || !first || !last ? (
+        <p aria-busy="true">Se încarcă registrele…</p>
+      ) : !active ? (
+        <p className="acc-empty">Niciun registru disponibil pentru rolul dumneavoastră.</p>
+      ) : (
+        <>
+          <nav className="acc-subnav acc-register-nav" aria-label="Registre">
+            {visible.map((register) => (
+              <button
+                key={register.id}
+                aria-pressed={active.id === register.id && !entryId}
+                onClick={() =>
+                  filter({
+                    register: register.id,
+                    registerEntry: null,
+                    registerEntryDate: null,
+                    stockItem: null,
+                    stockWarehouse: null,
+                    registerAsset: null,
+                    payrollRun: null,
+                  })
+                }
+              >
+                {register.label}
+              </button>
             ))}
-            {balance ? (
-              <tr>
-                <th scope="row">Total</th>
-                {columns.flatMap((column) => [
-                  <td key={`${column}D`}>{balance.totals[column].debit}</td>,
-                  <td key={`${column}C`}>{balance.totals[column].credit}</td>,
-                ])}
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
-      <h2>Registrul-jurnal</h2>
-      {journal && journal.entries.length === 0 ? (
-        <p className="acc-empty">Nu există înregistrări în acest exercițiu.</p>
-      ) : null}
-      {(journal?.entries ?? []).map((entry) => (
-        <details key={entry.id} className="acc-journal">
-          <summary>
-            {entry.number}. {entry.date} · {entry.journalCode} · {entry.description}
-          </summary>
-          <ul>
-            {entry.lines.map((line, index) => (
-              <li key={index}>
-                {line.side === 'D' ? 'Debit' : 'Credit'} {line.account} ·{' '}
-                {line.amount === null ? 'sumă ascunsă (date salariale)' : formatMoney(line.amount)}
-              </li>
-            ))}
-          </ul>
-        </details>
-      ))}
-      <div className="acc-section-heading">
-        <h2>Jurnale de TVA</h2>
-        <label>
-          Luna
-          <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} />
-        </label>
-      </div>
-      <p className="acc-hint">
-        Registre de lucru din înregistrările fiscale; nu sunt declarații depuse.
-      </p>
-      {(
-        [
-          ['Jurnal de vânzări', sales],
-          ['Jurnal de cumpărări', purchases],
-        ] as const
-      ).map(([title, register]) => (
-        <section key={title}>
-          <h3>{title}</h3>
-          {register && register.rows.length === 0 ? (
-            <p className="acc-empty">Nicio operațiune în această lună.</p>
-          ) : null}
-          {register?.totals.map((total) => (
-            <p key={total.code}>
-              {total.code}: bază {formatMoney(total.base)}, TVA {formatMoney(total.vat)}
-            </p>
-          ))}
-        </section>
-      ))}
+          </nav>
+          {entryId ? (
+            <EntryDetail
+              entryId={entryId}
+              entryDate={params.get('registerEntryDate')}
+              month={month}
+            />
+          ) : (
+            <>
+              {active.monthly ? <MonthChoice month={month} first={first} last={last} /> : null}
+              <Register id={active.id} month={month} />
+            </>
+          )}
+        </>
+      )}
     </>
   );
+}
+
+function Register({ id, month }: { id: RegisterId; month: string }) {
+  switch (id) {
+    case 'balanta':
+      return <TrialBalance month={month} />;
+    case 'fisa':
+      return <AccountSheet month={month} />;
+    case 'jurnal':
+      return <Journal month={month} />;
+    case 'tva':
+      return <VatJournals month={month} />;
+    case 'inventar':
+      return <Inventory month={month} />;
+    case 'stocuri':
+      return <Stock month={month} />;
+    case 'mijloace':
+      return <Assets />;
+    case 'salarii':
+      return <Payroll />;
+  }
 }

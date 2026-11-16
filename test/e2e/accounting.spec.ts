@@ -38,7 +38,9 @@ test('a reviewed opening is posted, reported and closed', async ({ page }, info)
   await expect(page.locator('.acc-balances')).toContainText('1 000,00 RON');
 
   await page.getByRole('button', { name: 'Registre', exact: true }).click();
-  await expect(page.getByRole('cell', { name: '5121', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: /5121/ }).first()).toBeVisible();
+  await page.getByRole('button', { name: 'Registrul jurnal', exact: true }).click();
+  await page.getByLabel('Luna', { exact: true }).fill('2026-01');
   await expect(page.getByText(/1\. 2026-01-01 · DESCHIDERE · Sold inițial la bancă/)).toBeVisible();
 
   await page.getByRole('button', { name: 'Setări', exact: true }).click();

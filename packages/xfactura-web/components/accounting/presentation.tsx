@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import { formatMoney } from './api';
 
 const bucharestTime = new Intl.DateTimeFormat('ro-RO', {
   dateStyle: 'short',
@@ -33,4 +34,17 @@ export function useOpenedHeading(open: boolean) {
     if (open) heading.current?.focus();
   }, [open]);
   return heading;
+}
+
+/** An engine amount without its currency, for a table whose caption names the currency. */
+export function formatAmount(value: string) {
+  return formatMoney(value, '').trim();
+}
+
+/** An engine quantity (`12.500`, thousandths) with the Romanian decimal comma. */
+export function formatQuantity(value: string) {
+  const negative = value.startsWith('-');
+  const [whole = '0', fraction = ''] = value.replace('-', '').split('.');
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  return `${negative ? '−' : ''}${grouped}${fraction ? `,${fraction}` : ''}`;
 }

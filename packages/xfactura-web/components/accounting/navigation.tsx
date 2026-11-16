@@ -45,7 +45,18 @@ export const accountingViews = [
     id: 'registers',
     label: 'Registre',
     navigationLabel: 'Secțiuni registre',
-    filters: [],
+    filters: [
+      'register',
+      'registerMonth',
+      'vatPeriod',
+      'registerAccount',
+      'registerEntry',
+      'registerEntryDate',
+      'stockItem',
+      'stockWarehouse',
+      'registerAsset',
+      'payrollRun',
+    ],
     sections: [
       { id: 'registers', label: 'Registre contabile' },
       { id: 'documents', label: 'Documente' },
@@ -75,11 +86,15 @@ export function useAccountingNavigation() {
     accountingViews.find((choice) => choice.id === params.get('view')) ?? accountingViews[0];
   const section =
     view.sections.find((choice) => choice.id === params.get('section')) ?? view.sections[0];
-  const url = (target: Section, changes: Record<string, string | null> = {}) => {
+  const url = (
+    target: Section,
+    changes: Record<string, string | null> = {},
+    current = params.toString(),
+  ) => {
     const owner = accountingViews.find((choice) =>
       choice.sections.some((child) => child.id === target),
     )!;
-    const next = new URLSearchParams(params.toString());
+    const next = new URLSearchParams(current);
     for (const choice of accountingViews)
       for (const key of choice.filters)
         if (!(owner.filters as readonly string[]).includes(key)) next.delete(key);
@@ -102,8 +117,18 @@ export function useAccountingNavigation() {
     params,
     href,
     navigate: (target: Section) => window.history.pushState(null, '', href(target)),
+    /** Changes filters on the address as it is now, not as it was at the last render, so a change
+     * made before the view re-renders (a register chosen, then a month) is kept. */
     filter: (changes: Record<string, string | null>) =>
-      window.history.pushState(null, '', url(section.id, changes)),
+      window.history.pushState(null, '', url(section.id, changes, window.location.search.slice(1))),
+    /** Writes a value the view already shows into the address, without a history entry, on the
+     * address as it is now, so several views may write in the same render. */
+    replace: (changes: Record<string, string | null>) =>
+      window.history.replaceState(
+        null,
+        '',
+        url(section.id, changes, window.location.search.slice(1)),
+      ),
   };
 }
 
