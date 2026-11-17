@@ -1,10 +1,11 @@
 'use client';
 
 import { useAccountingNavigation } from './navigation';
-import { formatAmount, useOpenedHeading } from './presentation';
+import { useOpenedHeading } from './presentation';
 import { State } from './register-common';
 import { useAccountingData } from './use-data';
 import { useWorkspace } from './workspace';
+import { formatAmount } from './format';
 
 type PayrollRun = {
   id: string;
@@ -39,7 +40,7 @@ export default function Payroll() {
   const runId = params.get('payrollRun') ?? '';
   return (
     <section>
-      <h3>Salarii</h3>
+      <h2>Salarii</h2>
       <State
         loading={list.loading}
         error={list.error}
@@ -105,9 +106,9 @@ function Run({ runId }: { runId: string }) {
   const heading = useOpenedHeading(Boolean(run));
   return (
     <section>
-      <h4 ref={heading} tabIndex={-1} className="acc-opened-heading">
+      <h3 ref={heading} tabIndex={-1} className="acc-opened-heading">
         Stat de plată{run ? ` ${run.month}, runda ${run.round}` : ''}
-      </h4>
+      </h3>
       <State loading={detail.loading} error={detail.error} />
       {run ? (
         <>

@@ -7,6 +7,8 @@ const nextConfig = {
       : 'tsconfig.json',
   },
   transpilePackages: ['xfactura-api', 'xfactura-core'],
+  // The accounting sidebar's account menu sits at the bottom left.
+  devIndicators: { position: 'bottom-right' },
   experimental: {
     agentUpgrade: 'security',
   },

@@ -1,21 +1,18 @@
 'use client';
 
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { ApiError, formatMoney, invoke, upload } from './api';
+import { ApiError, invoke, upload } from './api';
 import Worklist from './worklist';
-import {
-  accountingViews,
-  useAccountingNavigation,
-  yearForReturn,
-  type Section,
-} from './navigation';
+import { useAccountingNavigation, yearForReturn, type Section } from './navigation';
+import Home from './home';
 import Documents from './documents';
 import Bank from './bank';
-import Registers from './registers';
+import Registers, { registerReset, registerTabs } from './registers';
 import Periods from './periods';
 import Settings from './settings';
 import Questions from './questions';
 import Deadlines from './deadlines';
+import { Feedback, LinkButton, Select, Tabs, icons } from './ui';
 
 export type Company = { id: string; name: string; cui: string };
 export type Year = {
@@ -35,7 +32,6 @@ export type Evidence = {
 type Capability = { id: string };
 /** What every list operation returns: one page of items, and the cursor of the next or null. */
 export type List<T> = { items: T[]; next: string | null };
-type Balance = { rows: { account: string; closing: { debit: string; credit: string } }[] };
 
 /** What every section needs: the company, its capabilities and a way to act and report. */
 export type Workspace = {
@@ -63,6 +59,7 @@ export function useWorkspace() {
 }
 
 const sectionComponents: Record<Section, typeof Documents> = {
+  home: Home,
   review: Worklist,
   questions: Questions,
   deadlines: Deadlines,
@@ -73,27 +70,11 @@ const sectionComponents: Record<Section, typeof Documents> = {
   periods: Periods,
 };
 
-/** The net closing balance of accounts with a prefix, positive on their normal side. */
-const net = (balance: Balance | null, prefix: string, normal: 'debit' | 'credit' = 'debit') => {
-  let bani = 0n;
-  for (const row of balance?.rows ?? [])
-    if (row.account.startsWith(prefix)) {
-      const toBani = (value: string) => BigInt(value.replace('.', ''));
-      bani += toBani(row.closing.debit) - toBani(row.closing.credit);
-    }
-  if (normal === 'credit') bani = -bani;
-  const negative = bani < 0n;
-  const digits = (negative ? -bani : bani).toString().padStart(3, '0');
-  return `${negative ? '-' : ''}${digits.slice(0, -2)}.${digits.slice(-2)}`;
-};
-
 export default function WorkspaceView({ company }: { company: Company }) {
-  const { section, view, navigate, params, href } = useAccountingNavigation();
-  const Content = sectionComponents[section];
+  const { section, params, href } = useAccountingNavigation();
   const [capabilities, setCapabilities] = useState<Set<string>>(new Set());
   const [years, setYears] = useState<Year[]>([]);
   const [evidence, setEvidence] = useState<Evidence[]>([]);
-  const [balance, setBalance] = useState<Balance | null>(null);
   const [version, setVersion] = useState(0);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -102,7 +83,6 @@ export default function WorkspaceView({ company }: { company: Company }) {
     financial.find((year) => year.id === params.get('year')) ??
     yearForReturn(financial, params.get('return')) ??
     financial.at(-1);
-  const yearId = year?.id ?? '';
 
   const chooseYear = (id: string) => {
     const selected = financial.find((year) => year.id === id);
@@ -146,23 +126,6 @@ export default function WorkspaceView({ company }: { company: Company }) {
       active = false;
     };
   }, [call, version]);
-  useEffect(() => {
-    if (!yearId) return;
-    let active = true;
-    call<Balance>('ledger.trialBalance', { financialYearId: yearId })
-      .then((balance) => {
-        if (active) setBalance(balance);
-      })
-      .catch((reason: unknown) => {
-        if (active)
-          setError(
-            reason instanceof Error ? reason.message : 'Soldurile nu au putut fi încărcate.',
-          );
-      });
-    return () => {
-      active = false;
-    };
-  }, [call, yearId, version]);
 
   const act = useCallback(
     async (
@@ -206,75 +169,87 @@ export default function WorkspaceView({ company }: { company: Company }) {
 
   return (
     <Context.Provider value={workspace}>
-      <div className="acc-workspace-title">
-        <div>
-          <h1>{company.name}</h1>
-          <p>CUI {company.cui}</p>
-        </div>
-        <div className="acc-workspace-tools">
-          <button onClick={() => navigate('documents')}>Adaugă documente</button>
-          <label>
-            Exercițiu
-            <select value={yearId} onChange={(event) => chooseYear(event.target.value)}>
-              {years
-                .filter((year) => year.kind === 'financial')
-                .map((year) => (
-                  <option key={year.id} value={year.id}>
-                    {year.label}
-                  </option>
-                ))}
-            </select>
-          </label>
-        </div>
-      </div>
-      <div className="acc-feedback" aria-live="polite">
-        {error ? (
-          <p role="alert" className="acc-error">
-            {error}
-          </p>
-        ) : notice ? (
-          <p role="status">{notice}</p>
-        ) : null}
-      </div>
-      <dl className="acc-balances" aria-label="Solduri contabile">
-        <div>
-          <dt>Bancă și casă</dt>
-          <dd>{formatMoney(net(balance, '5'))}</dd>
-        </div>
-        <div>
-          <dt>De încasat de la clienți</dt>
-          <dd>{formatMoney(net(balance, '411'))}</dd>
-        </div>
-        <div>
-          <dt>De plătit furnizorilor</dt>
-          <dd>{formatMoney(net(balance, '401', 'credit'))}</dd>
-        </div>
-      </dl>
-      <nav className="acc-tabs" aria-label="Secțiuni contabilitate">
-        {accountingViews.map(({ id, label, sections }) => (
-          <button
-            key={id}
-            className={view.id === id ? 'acc-active' : ''}
-            aria-pressed={view.id === id}
-            onClick={() => navigate(sections[0].id)}
-          >
-            {label}
-          </button>
-        ))}
-      </nav>
-      {view.sections.length > 1 ? (
-        <nav className="acc-subnav" aria-label={view.navigationLabel}>
-          {view.sections.map(({ id, label }) => (
-            <button key={id} aria-pressed={section === id} onClick={() => navigate(id)}>
-              {label}
-            </button>
-          ))}
-        </nav>
-      ) : null}
-      <section className="acc-content">
+      <SectionFrame financial={financial} chooseYear={chooseYear} error={error} notice={notice} />
+    </Context.Provider>
+  );
+}
+
+/**
+ * A section in the shell: the context bar with the section's title, the financial year and the
+ * section's primary action; the section's parts as tabs; then the last outcome and the content.
+ */
+function SectionFrame({
+  financial,
+  chooseYear,
+  error,
+  notice,
+}: {
+  financial: Year[];
+  chooseYear: (id: string) => void;
+  error: string;
+  notice: string;
+}) {
+  const { can, year } = useWorkspace();
+  const { view, section, params, href, navigate, filter } = useAccountingNavigation();
+  const Content = sectionComponents[section];
+  const registers = registerTabs(can, params.get('register'));
+  const tabs =
+    view.id === 'registers' && registers.active
+      ? {
+          label: 'Registre',
+          items: registers.items,
+          selectedKey: registers.active,
+          onSelect: (id: string) => filter({ register: id, ...registerReset }),
+        }
+      : view.sections.length > 1
+        ? {
+            label: view.navigationLabel,
+            items: view.sections,
+            selectedKey: section as string,
+            onSelect: (id: string) => navigate(id as Section),
+          }
+        : null;
+  const body = (
+    <div className="acc-body">
+      <Feedback error={error} notice={notice} />
+      <section className="acc-content" aria-label={view.label}>
         <Content />
       </section>
-    </Context.Provider>
+    </div>
+  );
+  return (
+    <>
+      <div className="acc-contextbar">
+        <h1>{view.label}</h1>
+        <div className="acc-contextbar-tools">
+          <Select
+            label="Exercițiu"
+            className="acc-year"
+            options={financial.map((choice) => ({ id: choice.id, label: choice.label }))}
+            value={year?.id ?? null}
+            onChange={(id) => id && chooseYear(id)}
+          />
+          {view.id !== 'documents' ? (
+            <LinkButton href={href('documents')} variant="primary">
+              {icons.plus}
+              Adaugă documente
+            </LinkButton>
+          ) : null}
+        </div>
+      </div>
+      {tabs ? (
+        <Tabs
+          label={tabs.label}
+          items={tabs.items}
+          selectedKey={tabs.selectedKey}
+          onSelect={tabs.onSelect}
+        >
+          {body}
+        </Tabs>
+      ) : (
+        body
+      )}
+    </>
   );
 }
 

@@ -2,13 +2,15 @@
 
 import { useState } from 'react';
 import type { ActionView, ProposalView } from 'xfactura-api/contracts';
-import { ApiError, amountField, companyPath, field, formatMoney } from './api';
+import { ApiError, amountField, companyPath, field } from './api';
 import { useLoad, useWorkspace } from './workspace';
 import { treatmentLabels, type WorkStepView } from './work-model';
 export { treatmentLabels } from './work-model';
 import { SectionLink } from './navigation';
 import { useAccountingData } from './use-data';
 import { WorkDetails } from './work-details';
+import { formatMoney } from './format';
+import { DateField } from './ui';
 
 /** A person's decision is bound to the preview actually displayed. Execution remains a
  * separate action, which the engine re-evaluates against the same hash. */
@@ -57,7 +59,7 @@ export function ReviewedDeclarationAction({
       className="acc-review"
       aria-label={authorization ? 'Revizuirea autorizării' : 'Revizuirea redeschiderii'}
     >
-      <h4>{authorization ? 'Autorizează XML-ul verificat' : 'Redeschide perioada fiscală'}</h4>
+      <h5>{authorization ? 'Autorizează XML-ul verificat' : 'Redeschide perioada fiscală'}</h5>
       {action.loading ? (
         <p className="acc-hint" aria-busy="true">
           Se încarcă previzualizarea…
@@ -150,9 +152,9 @@ export function ProposalCard({
     <article className="acc-review" aria-label={effect?.description ?? proposal.subject}>
       <div className="acc-review-heading">
         <div>
-          <h4 className="acc-proposal-title">
+          <h3 className="acc-proposal-title">
             {treatmentLabels[proposal.treatment] ?? 'Propunere contabilă'}
-          </h4>
+          </h3>
           <p>
             {effect ? `${effect.description} · ${effect.date}` : proposal.subject} · versiunea{' '}
             {proposal.version}
@@ -203,7 +205,7 @@ export function ProposalCard({
       <div className="acc-review-columns">
         <ProposalEvidence proposal={proposal} />
         <div className="acc-review-effect">
-          <h5>Efectul exact</h5>
+          <h4>Efectul exact</h4>
           {effect ? (
             <div className="acc-table-scroll">
               <table>
@@ -415,7 +417,7 @@ function ProposalEvidence({ proposal }: { proposal: ProposalView }) {
   const movementId = typeof input.movementId === 'string' ? input.movementId : null;
   return (
     <aside className="acc-review-source" aria-label="Documente justificative">
-      <h5>Documente justificative</h5>
+      <h4>Documente justificative</h4>
       {proposal.redacted ? (
         <p className="acc-hint">Documentele necesită acces la datele acestei propuneri.</p>
       ) : (
@@ -469,10 +471,7 @@ export function JournalForm() {
         }}
       >
         <div className="acc-form-grid">
-          <label>
-            Data
-            <input name="date" type="date" required />
-          </label>
+          <DateField label="Data" name="date" isRequired />
           <label>
             Tip
             <select name="purpose" defaultValue="general">

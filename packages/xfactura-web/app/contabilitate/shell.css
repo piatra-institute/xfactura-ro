@@ -1,0 +1,424 @@
+/* The shell: a fixed sidebar, the context bar, Acasă, the login and the new company page. */
+
+.acc-app {
+  display: grid;
+  grid-template-columns: var(--acc-sidebar-width) minmax(0, 1fr);
+  min-height: 100svh;
+}
+
+/* Sidebar */
+.acc-sidebar {
+  background: var(--acc-sidebar);
+  border-right: 1px solid var(--acc-border);
+}
+/* The sidebar keeps to the viewport while the content scrolls with the page; its own list
+ * scrolls when the viewport is shorter than the list. */
+.acc-sidebar-body {
+  position: sticky;
+  top: 0;
+  height: 100svh;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 10px;
+  gap: 12px;
+  overflow-y: auto;
+}
+.acc-drawer .acc-sidebar-body {
+  position: static;
+  height: 100%;
+  padding-top: 60px;
+}
+.acc-switcher {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 52px;
+  padding: 7px 8px;
+  border: 1px solid var(--acc-border);
+  border-radius: var(--acc-radius-lg);
+  background: var(--acc-raised);
+  color: var(--acc-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.acc-switcher[data-hovered] {
+  border-color: var(--acc-border-strong);
+}
+.acc-switcher[data-pressed] {
+  background: var(--acc-sunken);
+}
+.acc-monogram {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--acc-radius);
+  background: var(--acc-accent-subtle);
+  color: var(--acc-accent-text);
+  font-size: var(--acc-text-sm);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.acc-switcher-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.acc-switcher-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.acc-switcher-meta {
+  font-size: var(--acc-text-xs);
+  color: var(--acc-text-muted);
+  font-variant-numeric: tabular-nums slashed-zero;
+}
+.acc-switcher > .acc-icon {
+  color: var(--acc-text-muted);
+  width: 16px;
+  height: 16px;
+}
+.acc-nav {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.acc-nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.acc-nav-foot {
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--acc-border);
+}
+a.acc-nav-link {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: var(--acc-radius);
+  color: var(--acc-text-secondary);
+  font-weight: 500;
+  text-decoration: none;
+}
+a.acc-nav-link:hover {
+  background: var(--acc-hover);
+  color: var(--acc-text);
+}
+a.acc-nav-link[aria-current='page'] {
+  background: var(--acc-raised);
+  color: var(--acc-text);
+  font-weight: 600;
+  box-shadow: 0 0 0 1px var(--acc-border);
+}
+a.acc-nav-link[aria-current='page']::before {
+  content: '';
+  position: absolute;
+  left: -10px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--acc-accent);
+}
+.acc-nav-link .acc-icon {
+  color: var(--acc-text-muted);
+}
+.acc-nav-link[aria-current='page'] .acc-icon {
+  color: var(--acc-accent-text);
+}
+.acc-nav-link .acc-badge {
+  margin-left: auto;
+}
+.acc-account {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  margin-top: 6px;
+  padding: 4px 10px 4px 6px;
+  border: 0;
+  border-radius: var(--acc-radius);
+  background: transparent;
+  color: var(--acc-text-secondary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.acc-account[data-hovered] {
+  background: var(--acc-hover);
+  color: var(--acc-text);
+}
+.acc-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--acc-sunken);
+  border: 1px solid var(--acc-border-strong);
+  color: var(--acc-text-secondary);
+  font-size: var(--acc-text-xs);
+  font-weight: 700;
+}
+.acc-account-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.acc-account > .acc-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--acc-text-muted);
+}
+
+/* Top bar on narrow screens */
+.acc-topbar {
+  display: none;
+}
+
+/* The content column */
+.acc-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.acc-contextbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  min-height: 64px;
+  padding: 12px 32px;
+  background: var(--acc-canvas);
+  border-bottom: 1px solid var(--acc-border);
+}
+.acc-contextbar:has(+ .acc-tabs) {
+  border-bottom: 0;
+  padding-bottom: 4px;
+}
+.acc-tabs {
+  display: contents;
+}
+.acc-tabs > .acc-tab-list {
+  position: sticky;
+  top: 64px;
+  z-index: 4;
+  background: var(--acc-canvas);
+}
+.acc-contextbar-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.acc-year {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+.acc-year .acc-select-trigger {
+  min-width: 112px;
+}
+.acc-body {
+  width: 100%;
+  max-width: calc(var(--acc-content-width) + 64px);
+  padding: 20px 32px 72px;
+}
+.acc-body > .acc-feedback {
+  margin-bottom: 16px;
+}
+.acc-content > :first-child {
+  margin-top: 0;
+}
+
+/* Acasă */
+.acc-home {
+  display: grid;
+  gap: 28px;
+}
+.acc-balances {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+.acc-balances > div {
+  padding: 16px 18px;
+  background: var(--acc-raised);
+  border: 1px solid var(--acc-border);
+  border-radius: var(--acc-radius-lg);
+}
+.acc-balances dt {
+  font-size: var(--acc-text-sm);
+  color: var(--acc-text-muted);
+  margin-bottom: 6px;
+}
+.acc-balances dd {
+  margin: 0;
+  font-size: var(--acc-text-2xl);
+  font-weight: 620;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  color: var(--acc-amount);
+}
+.acc-home-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Login and the new company page: one centred form. */
+.acc-center {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 12vh 20px 48px;
+  min-height: 100svh;
+}
+.acc-card {
+  width: min(420px, 100%);
+  padding: 28px;
+  background: var(--acc-raised);
+  border: 1px solid var(--acc-border);
+  border-radius: var(--acc-radius-lg);
+  box-shadow: var(--acc-shadow);
+}
+.acc-brand {
+  display: inline-block;
+  margin-bottom: 18px;
+  font-weight: 700;
+  font-size: var(--acc-text-md);
+  letter-spacing: -0.02em;
+}
+.accounting a.acc-brand {
+  color: var(--acc-text);
+  text-decoration: none;
+}
+.acc-card h1 {
+  margin-bottom: 20px;
+}
+.acc-stack {
+  display: grid;
+  gap: 16px;
+}
+.acc-stack > .acc-button {
+  justify-self: start;
+}
+.acc-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.acc-stack > .acc-error {
+  margin: 0;
+}
+.acc-company-form {
+  max-width: 520px;
+}
+.acc-company-form .acc-form-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 140px;
+  gap: 16px;
+}
+.acc-boot {
+  padding: 40px 32px;
+}
+
+/* Narrow screens: the sidebar becomes a drawer behind a top bar. */
+@media (max-width: 899px) {
+  .acc-app {
+    display: block;
+  }
+  .acc-app > .acc-sidebar {
+    display: none;
+  }
+  .acc-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 56px;
+    padding: 0 12px 0 6px;
+    background: var(--acc-sidebar);
+    border-bottom: 1px solid var(--acc-border);
+  }
+  .acc-topbar-company {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+  }
+  .acc-contextbar {
+    position: static;
+    padding: 14px 16px;
+    min-height: 0;
+  }
+  .acc-contextbar-tools {
+    width: 100%;
+  }
+  .acc-tabs > .acc-tab-list {
+    position: static;
+    padding: 0 8px;
+  }
+  .acc-body {
+    padding: 16px 16px 56px;
+  }
+  .acc-balances {
+    grid-template-columns: 1fr;
+  }
+  .acc-balances dd {
+    font-size: var(--acc-text-xl);
+  }
+  .acc-company-form .acc-form-row {
+    grid-template-columns: 1fr;
+  }
+  .acc-card {
+    padding: 22px;
+  }
+  .acc-center {
+    padding-top: 8vh;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .acc-popover[data-entering],
+  .acc-overlay[data-entering],
+  .acc-overlay[data-exiting],
+  .acc-drawer[data-entering],
+  .acc-drawer[data-exiting] {
+    animation: none;
+  }
+}

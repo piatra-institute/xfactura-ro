@@ -1,6 +1,10 @@
 import { Suspense } from 'react';
 import AccountingPage from '@/components/accounting/page';
-import './accounting.css';
+import { ThemeScript } from '@/components/accounting/ui/theme';
+import './tokens.css';
+import './base.css';
+import './components.css';
+import './shell.css';
 
 export const metadata = {
   title: 'Contabilitate · xFactura',
@@ -8,14 +12,17 @@ export const metadata = {
 };
 export default function Page() {
   return (
-    <Suspense
-      fallback={
-        <div className="accounting acc-loading" lang="ro">
-          Se încarcă…
-        </div>
-      }
-    >
-      <AccountingPage />
-    </Suspense>
+    <>
+      <ThemeScript />
+      <Suspense
+        fallback={
+          <div className="accounting acc-boot" lang="ro">
+            Se încarcă…
+          </div>
+        }
+      >
+        <AccountingPage />
+      </Suspense>
+    </>
   );
 }

@@ -1,0 +1,733 @@
+/* The shared components in components/accounting/ui, drawn from the theme tokens. */
+
+.acc-icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+
+/* Buttons */
+.acc-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: var(--acc-control-height);
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: var(--acc-radius);
+  font: inherit;
+  font-size: var(--acc-text-base);
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+a.acc-button {
+  text-decoration: none;
+}
+.acc-button--small {
+  min-height: var(--acc-control-height-small);
+  padding: 0 10px;
+  font-size: var(--acc-text-sm);
+}
+.acc-button--primary,
+a.acc-button--primary {
+  background: var(--acc-accent);
+  color: var(--acc-on-accent);
+}
+.acc-button--primary[data-hovered],
+a.acc-button--primary:hover {
+  background: var(--acc-accent-hover);
+}
+.acc-button--secondary,
+a.acc-button--secondary {
+  background: var(--acc-raised);
+  border-color: var(--acc-border-control);
+  color: var(--acc-text);
+}
+.acc-button--secondary[data-hovered],
+a.acc-button--secondary:hover {
+  background: var(--acc-hover);
+}
+.acc-button--quiet {
+  background: transparent;
+  color: var(--acc-text-secondary);
+}
+.acc-button--quiet[data-hovered] {
+  background: var(--acc-hover);
+  color: var(--acc-text);
+}
+.acc-button--danger {
+  background: var(--acc-danger);
+  color: var(--acc-text-inverse);
+}
+.acc-button--danger[data-hovered] {
+  background: var(--acc-danger-hover);
+}
+.acc-button[data-pressed] {
+  filter: brightness(0.96);
+}
+.acc-button[data-disabled] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.acc-icon-button {
+  width: var(--acc-control-height);
+  padding: 0;
+}
+.acc-icon-button.acc-button--small {
+  width: var(--acc-control-height-small);
+}
+
+/* Fields */
+.acc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  position: relative;
+}
+.acc-field-label {
+  font-size: var(--acc-text-sm);
+  font-weight: 600;
+  color: var(--acc-text-secondary);
+  cursor: default;
+}
+.acc-field-description {
+  font-size: var(--acc-text-sm);
+  color: var(--acc-text-muted);
+  margin: 0;
+}
+.acc-field-error {
+  font-size: var(--acc-text-sm);
+  color: var(--acc-danger);
+  margin: 0;
+}
+.acc-input {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: var(--acc-control-height);
+  padding: 0 10px;
+  margin: 0;
+  background: var(--acc-raised);
+  color: var(--acc-text);
+  border: 1px solid var(--acc-border-control);
+  border-radius: var(--acc-radius);
+  font: inherit;
+  font-size: var(--acc-text-base);
+  font-weight: 400;
+  text-align: left;
+}
+input.acc-input,
+textarea.acc-input {
+  display: block;
+}
+.acc-input::placeholder,
+.acc-money-input::placeholder,
+.acc-combo-input::placeholder {
+  color: var(--acc-text-muted);
+}
+.acc-input[data-focused],
+.acc-input[data-focus-within],
+.acc-input:focus,
+.acc-input:focus-within {
+  border-color: var(--acc-accent);
+}
+.acc-input[data-focus-visible],
+.acc-input:has(:focus-visible),
+.acc-date-input[data-focus-within] {
+  outline: 2px solid var(--acc-focus);
+  outline-offset: 1px;
+}
+.acc-field[data-invalid] .acc-input,
+.acc-field:has(> .acc-field-error) .acc-input,
+.acc-input[data-invalid] {
+  border-color: var(--acc-danger);
+}
+.acc-field[data-disabled] .acc-input,
+.acc-input[data-disabled] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.acc-textarea {
+  min-height: 86px;
+  padding: 8px 10px;
+  resize: vertical;
+  line-height: 1.5;
+}
+.acc-number-input {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Money: typed and shown with Romanian separators, aligned like a ledger column. */
+.acc-money {
+  gap: 8px;
+  padding-right: 10px;
+}
+.acc-money-input {
+  flex: 1;
+  min-width: 0;
+  min-height: calc(var(--acc-control-height) - 2px);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.acc-money-input:focus-visible,
+.acc-combo-input:focus-visible {
+  outline: none;
+}
+.acc-money-currency {
+  color: var(--acc-text-muted);
+  font-size: var(--acc-text-sm);
+}
+
+/* Dates: segments typed in place, day first. */
+.acc-date-input {
+  gap: 0;
+  font-variant-numeric: tabular-nums;
+  cursor: text;
+}
+.acc-date-segment {
+  padding: 1px;
+  border-radius: var(--acc-radius-sm);
+  caret-color: transparent;
+}
+.acc-date-segment[data-type='literal'] {
+  color: var(--acc-text-muted);
+  padding: 0;
+}
+.acc-date-segment[data-placeholder] {
+  color: var(--acc-text-muted);
+}
+.acc-date-segment[data-focused] {
+  background: var(--acc-accent);
+  color: var(--acc-on-accent);
+  outline: none;
+}
+
+/* Month: a button showing the month by name, opening a year of months. */
+.acc-month-trigger {
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.acc-month-trigger[data-empty] > span {
+  color: var(--acc-text-muted);
+}
+.acc-month-trigger[data-hovered] {
+  background: var(--acc-sunken);
+}
+.acc-month-trigger .acc-icon {
+  color: var(--acc-text-muted);
+}
+.acc-month-dialog {
+  padding: 10px;
+  width: 248px;
+  outline: none;
+}
+.acc-month-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.acc-month-year {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.acc-month-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+.acc-month-option {
+  min-height: 34px;
+  border: 0;
+  border-radius: var(--acc-radius);
+  background: transparent;
+  color: var(--acc-text);
+  font: inherit;
+  cursor: pointer;
+}
+.acc-month-option[data-hovered] {
+  background: var(--acc-hover);
+}
+.acc-month-option[aria-pressed='true'] {
+  background: var(--acc-accent);
+  color: var(--acc-on-accent);
+  font-weight: 600;
+}
+.acc-month-option[data-disabled] {
+  color: var(--acc-text-muted);
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.acc-month-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--acc-border);
+}
+.acc-validation-input {
+  position: absolute;
+  inset: auto 0 0 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Select and combobox */
+.acc-select-trigger {
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+}
+.acc-select-trigger[data-hovered] {
+  background: var(--acc-sunken);
+}
+.acc-select-trigger .acc-icon {
+  color: var(--acc-text-muted);
+  width: 16px;
+  height: 16px;
+}
+.acc-select-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.acc-select-value[data-placeholder] {
+  color: var(--acc-text-muted);
+}
+.acc-combo {
+  padding: 0 0 0 10px;
+}
+.acc-combo-input {
+  flex: 1;
+  min-width: 0;
+  min-height: calc(var(--acc-control-height) - 2px);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+.acc-combo-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  align-self: stretch;
+  border: 0;
+  background: transparent;
+  color: var(--acc-text-muted);
+  cursor: pointer;
+}
+
+/* Popovers, list boxes and menus */
+.acc-popover {
+  background: var(--acc-raised);
+  color: var(--acc-text);
+  border: 1px solid var(--acc-border-strong);
+  border-radius: var(--acc-radius-lg);
+  box-shadow: var(--acc-shadow);
+  outline: none;
+  overflow: auto;
+  max-height: min(420px, var(--visual-viewport-height, 100vh));
+}
+.acc-listbox-popover {
+  min-width: var(--trigger-width);
+}
+.acc-popover[data-entering] {
+  animation: acc-pop 120ms ease-out;
+}
+@keyframes acc-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+.acc-listbox,
+.acc-menu {
+  padding: 4px;
+  outline: none;
+}
+.acc-option,
+.acc-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: var(--acc-radius);
+  color: var(--acc-text);
+  text-decoration: none;
+  cursor: pointer;
+  outline: none;
+}
+a.acc-menu-item {
+  color: var(--acc-text);
+  text-decoration: none;
+}
+.acc-option[data-focused],
+.acc-menu-item[data-focused] {
+  background: var(--acc-hover);
+}
+.acc-option[data-focus-visible],
+.acc-menu-item[data-focus-visible] {
+  outline: 2px solid var(--acc-focus);
+  outline-offset: -2px;
+}
+.acc-option[data-selected] {
+  font-weight: 600;
+}
+.acc-option .acc-icon,
+.acc-menu-check .acc-icon {
+  margin-left: auto;
+  width: 16px;
+  height: 16px;
+  color: var(--acc-accent-text);
+}
+.acc-menu-check {
+  margin-left: auto;
+  display: inline-flex;
+}
+.acc-option-label,
+.acc-menu-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.acc-option-code {
+  min-width: 4ch;
+  color: var(--acc-text-secondary);
+  font-variant-numeric: tabular-nums slashed-zero;
+}
+.acc-listbox-empty {
+  padding: 8px 10px;
+  margin: 0;
+  color: var(--acc-text-muted);
+}
+.acc-menu-popover {
+  min-width: 220px;
+}
+.acc-menu-section + .acc-menu-section,
+.acc-menu-separator {
+  border-top: 1px solid var(--acc-border);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+.acc-menu-separator {
+  height: 0;
+  margin: 4px 0;
+  padding: 0;
+}
+.acc-menu-header {
+  padding: 6px 10px 2px;
+  font-size: var(--acc-text-xs);
+  font-weight: 600;
+  color: var(--acc-text-muted);
+}
+.acc-menu-item .acc-icon {
+  color: var(--acc-text-muted);
+}
+
+/* Dialog and drawer */
+.acc-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: var(--acc-scrim);
+}
+.acc-overlay[data-entering] {
+  animation: acc-fade 160ms ease-out;
+}
+.acc-overlay[data-exiting] {
+  animation: acc-fade 120ms ease-in reverse;
+}
+@keyframes acc-fade {
+  from {
+    opacity: 0;
+  }
+}
+.acc-dialog-modal {
+  width: min(560px, 100%);
+  max-height: calc(100svh - 32px);
+  overflow: auto;
+  background: var(--acc-raised);
+  border: 1px solid var(--acc-border-strong);
+  border-radius: var(--acc-radius-lg);
+  box-shadow: var(--acc-shadow);
+}
+.acc-dialog {
+  outline: none;
+}
+.acc-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 14px 0 20px;
+}
+.acc-dialog-title {
+  margin: 0;
+  font-size: var(--acc-text-lg);
+  font-weight: 620;
+}
+.acc-dialog-body {
+  padding: 12px 20px 20px;
+}
+.acc-dialog-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--acc-border);
+}
+.acc-drawer-overlay {
+  justify-content: flex-start;
+  align-items: stretch;
+  padding: 0;
+}
+.acc-drawer {
+  width: min(304px, 86vw);
+  height: 100%;
+  background: var(--acc-sidebar);
+  border-right: 1px solid var(--acc-border);
+  box-shadow: var(--acc-shadow);
+  outline: none;
+}
+.acc-drawer[data-entering] {
+  animation: acc-slide 180ms ease-out;
+}
+.acc-drawer[data-exiting] {
+  animation: acc-slide 140ms ease-in reverse;
+}
+@keyframes acc-slide {
+  from {
+    transform: translateX(-100%);
+  }
+}
+.acc-drawer-dialog {
+  position: relative;
+  height: 100%;
+  outline: none;
+}
+.acc-drawer-close {
+  position: absolute;
+  top: 12px;
+  right: 10px;
+  z-index: 1;
+}
+
+/* Tabs: the parts of a section, under the context bar. */
+.acc-tab-list {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  border-bottom: 1px solid var(--acc-border);
+  padding: 0 32px;
+}
+.acc-tab {
+  position: relative;
+  padding: 10px 10px 11px;
+  color: var(--acc-text-muted);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  outline: none;
+  border-radius: var(--acc-radius) var(--acc-radius) 0 0;
+}
+.acc-tab[data-hovered] {
+  color: var(--acc-text);
+}
+.acc-tab[data-selected] {
+  color: var(--acc-text);
+  font-weight: 600;
+}
+.acc-tab[data-selected]::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--acc-accent);
+}
+.acc-tab[data-focus-visible] {
+  outline: 2px solid var(--acc-focus);
+  outline-offset: -2px;
+}
+.acc-tab-panel {
+  outline: none;
+}
+.acc-tab-panel[data-focus-visible] {
+  outline: 2px solid var(--acc-focus);
+  outline-offset: -2px;
+}
+
+/* Badges and chips */
+.acc-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: var(--acc-text-xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  background: var(--acc-sunken);
+  color: var(--acc-text-secondary);
+}
+.acc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 0 9px;
+  border-radius: var(--acc-radius-sm);
+  font-size: var(--acc-text-sm);
+  font-variant-numeric: tabular-nums;
+  background: var(--acc-sunken);
+  color: var(--acc-text-secondary);
+  border: 1px solid var(--acc-border);
+}
+.acc-tone--accent {
+  background: var(--acc-accent-subtle);
+  color: var(--acc-accent-text);
+}
+.acc-tone--info {
+  background: var(--acc-info-subtle);
+  color: var(--acc-info);
+}
+.acc-tone--success {
+  background: var(--acc-success-subtle);
+  color: var(--acc-success);
+}
+.acc-tone--warning {
+  background: var(--acc-warning-subtle);
+  color: var(--acc-warning);
+}
+.acc-tone--danger {
+  background: var(--acc-danger-subtle);
+  color: var(--acc-danger);
+}
+.acc-chip.acc-tone--accent,
+.acc-chip.acc-tone--info,
+.acc-chip.acc-tone--success,
+.acc-chip.acc-tone--warning,
+.acc-chip.acc-tone--danger {
+  border-color: transparent;
+}
+
+/* Empty state: one line and its one action. */
+.acc-empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  padding: 18px 20px;
+  border: 1px dashed var(--acc-border-strong);
+  border-radius: var(--acc-radius-lg);
+  color: var(--acc-text-secondary);
+}
+.acc-empty-state p {
+  margin: 0;
+}
+
+/* Feedback of the last action */
+.acc-feedback {
+  font-size: var(--acc-text-base);
+}
+.acc-feedback:empty {
+  display: none;
+}
+.acc-feedback p {
+  margin: 0;
+  max-width: none;
+  padding: 10px 14px;
+  border-radius: var(--acc-radius);
+}
+.acc-feedback .acc-notice {
+  background: var(--acc-success-subtle);
+  color: var(--acc-success);
+}
+.acc-feedback .acc-error {
+  background: var(--acc-danger-subtle);
+  color: var(--acc-danger);
+}
+
+/* Dense tables */
+.acc-table-frame {
+  overflow: auto;
+  border: 1px solid var(--acc-border);
+  border-radius: var(--acc-radius-lg);
+  background: var(--acc-raised);
+}
+.acc-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--acc-text-sm);
+  font-variant-numeric: tabular-nums;
+}
+.acc-table-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.acc-table-column {
+  padding: 8px 12px;
+  text-align: left;
+  font-size: var(--acc-text-xs);
+  font-weight: 600;
+  color: var(--acc-text-muted);
+  background: var(--acc-sunken);
+  border-bottom: 1px solid var(--acc-border-strong);
+  white-space: nowrap;
+  outline: none;
+}
+.acc-table-cell {
+  height: 36px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--acc-border);
+  outline: none;
+}
+.acc-table-row:last-child .acc-table-cell {
+  border-bottom: 0;
+}
+.acc-table-row[data-hovered] {
+  background: var(--acc-sunken);
+}
+.acc-table-row[data-focus-visible],
+.acc-table-cell[data-focus-visible],
+.acc-table-column[data-focus-visible] {
+  outline: 2px solid var(--acc-focus);
+  outline-offset: -2px;
+}
+.acc-table .acc-numeric {
+  text-align: right;
+  white-space: nowrap;
+}

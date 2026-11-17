@@ -3,6 +3,7 @@ import type { Declaration } from '../../packages/xfactura-web/components/account
 import type { Question } from '../../packages/xfactura-web/components/accounting/questions';
 import type { ActionView } from '../../packages/xfactura-api/source/engine/contracts';
 import { mockWorklist } from './support/worklist';
+import { openSection, typeDate } from './support/shell';
 
 const capabilities = [
   'questions.list',
@@ -144,7 +145,7 @@ test('questions retain pagination, open-first chronology, filters, names and uns
   await expect(page).toHaveURL(/questionStatus=withdrawn/);
   await page.reload();
   await expect(page.locator('[data-question-id]')).toHaveCount(1);
-  await page.getByRole('button', { name: 'Termene', exact: true }).click();
+  await openSection(page, 'Declarații');
   await expect(page).not.toHaveURL(/questionStatus=|question=/);
 });
 
@@ -242,7 +243,7 @@ test('a changed answer rechecks citations and reports engine-marked stale propos
   await page
     .getByRole('combobox', { name: 'Folosirea vehiculului', exact: true })
     .selectOption('mixed');
-  await page.getByLabel('De la', { exact: true }).fill('2026-01-03');
+  await typeDate(page, 'De la', '03.01.2026');
   await page.getByRole('button', { name: 'Păstrează răspunsul', exact: true }).click();
   await expect(
     page.getByText(
@@ -320,7 +321,7 @@ test('question and deadline reads show loading, empty and retryable error states
     'Întrebările nu pot fi citite.',
   );
   await expect(page.getByText('Nu sunt întrebări.', { exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Termene', exact: true }).click();
+  await openSection(page, 'Declarații');
   await expect(
     page.getByText('Nimic de depus pentru perioadele alese.', { exact: true }),
   ).toBeVisible();
@@ -523,7 +524,7 @@ test('a return follows exact-preview authorization, PDF download, signed import,
     .getByRole('button', { name: 'Păstrează și importă PDF-ul semnat', exact: true })
     .click();
   await page.getByLabel('Număr de înregistrare', { exact: true }).fill('REG-SINTETIC');
-  await page.getByLabel('Data depunerii', { exact: true }).fill('2026-02-03');
+  await typeDate(page, 'Data depunerii', '03.02.2026');
   await page.getByLabel('Recipisa depunerii', { exact: true }).setInputFiles({
     name: 'recipisa.pdf',
     mimeType: 'application/pdf',

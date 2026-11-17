@@ -1,8 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { companyPath, field, formatMoney } from './api';
+import { companyPath, field } from './api';
 import { useList, useWorkspace } from './workspace';
+import { formatMoney } from './format';
 
 type Document = {
   id: string;
@@ -30,10 +31,6 @@ export default function Documents() {
   };
   return (
     <>
-      <div className="acc-section-heading">
-        <h2>Documente</h2>
-        <p>Originalele se păstrează neschimbate; importul nu dovedește acceptarea în SPV.</p>
-      </div>
       {can('evidence.record') ? (
         <form
           className="acc-inline-form"

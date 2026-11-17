@@ -1,4 +1,5 @@
 import { expect, type Page, type TestInfo } from '@playwright/test';
+import { createCompany, expectTheme, openSection, typeDate } from './shell';
 
 /** Signs in the person seeded for this spec and browser project, and creates their company. */
 export async function signInWithCompany(
@@ -12,25 +13,23 @@ export async function signInWithCompany(
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('/contabilitate');
   await expect(page.getByRole('heading', { name: 'Autentificare', exact: true })).toBeVisible();
-  await expect(page.locator('.accounting')).toHaveCSS('background-color', 'rgb(0, 0, 0)');
+  // The browser reports a light system theme unless a test asks otherwise.
+  await expectTheme(page, 'light');
   await page.getByLabel('Email', { exact: true }).fill(`${spec}-${info.project.name}@example.test`);
   await page.getByLabel('Parolă', { exact: true }).fill('synthetic-browser-password');
   await page.getByRole('button', { name: 'Intră în cont', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Deconectare', exact: true })).toBeVisible();
-  if (!(await page.getByRole('heading', { name: 'Companie nouă', exact: true }).isVisible()))
-    await page.getByText('Adaugă o companie', { exact: true }).click();
-  await page.getByLabel('Denumire companie', { exact: true }).fill(name);
-  await page.getByLabel('CUI', { exact: true }).fill(cui);
-  await page.getByLabel('An contabil', { exact: true }).fill('2026');
-  await page.getByRole('button', { name: 'Adaugă compania', exact: true }).click();
-  await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
-  const companyForm = page.locator('.acc-company-toolbar > details[open] > summary');
-  if (await companyForm.isVisible()) await companyForm.click();
+  await expect(page.locator('.acc-app')).toBeVisible();
+  await createCompany(page, name, cui);
   return errors;
 }
 
+/** Keeps an original document through the context bar's primary action. */
 export async function keep(page: Page, name: string, content: string, mimeType = 'text/plain') {
-  await page.getByRole('button', { name: 'Adaugă documente', exact: true }).click();
+  const add = page.getByRole('link', { name: 'Adaugă documente', exact: true });
+  if (await add.isVisible()) await add.click();
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'Documente', exact: true }),
+  ).toBeVisible();
   await page
     .getByLabel('Document original', { exact: true })
     .setInputFiles({ name, mimeType, buffer: Buffer.from(content) });
@@ -39,10 +38,10 @@ export async function keep(page: Page, name: string, content: string, mimeType =
 }
 
 export async function recordVatPayer(page: Page, evidence: string) {
-  await page.getByRole('button', { name: 'Setări', exact: true }).click();
+  await openSection(page, 'Setări');
   await page.getByRole('combobox', { name: 'Axă', exact: true }).selectOption('vat.status');
   await page.getByRole('combobox', { name: 'Valoare', exact: true }).selectOption('normal_vat');
-  await page.getByLabel('De la', { exact: true }).fill('2026-01-01');
+  await typeDate(page, 'De la', '01.01.2026');
   await page
     .getByRole('combobox', { name: 'Document justificativ', exact: true })
     .selectOption({ label: evidence });
@@ -52,7 +51,7 @@ export async function recordVatPayer(page: Page, evidence: string) {
 
 /** Opens the first proposal from the worklist, preserving the human decision and exact hash. */
 export async function openProposal(page: Page) {
-  await page.getByRole('button', { name: 'De verificat', exact: true }).click();
+  await openSection(page, 'De verificat');
   await page.getByRole('combobox', { name: 'Familie', exact: true }).selectOption('proposals');
   const item = page.locator('[data-work-kind="proposal.awaitingApproval"]').first();
   await expect(item).toBeVisible();

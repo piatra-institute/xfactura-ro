@@ -6,6 +6,7 @@ import type { WorkItem } from '../../packages/xfactura-web/components/accounting
 import { invoiceXml } from '../../packages/xfactura-api/test/engine/fixtures/invoice';
 import { capability, evidence } from './support/books';
 import { approveAndPost, signInWithCompany } from './support/session';
+import { chooseMonth, openSection, typeDate } from './support/shell';
 
 test('a vehicle purchase asks a person, retains the answer and is revised by an agent before human approval', async ({
   page,
@@ -74,6 +75,7 @@ test('a vehicle purchase asks a person, retains the answer and is revised by an 
     .find((item) => item.subject.id === blocked.id)!
     .next.find((step) => step.operation === 'questions.ask')!;
   const question = await capability<Question>(page, 'questions.ask', ask.inputHint, agent.token);
+  await openSection(page, 'De verificat');
   await page.getByRole('button', { name: 'Reîncarcă lista', exact: true }).click();
   await page.getByRole('combobox', { name: 'Familie', exact: true }).selectOption('proposals');
   const work = page.locator('[data-work-kind="question.needed"]');
@@ -89,7 +91,7 @@ test('a vehicle purchase asks a person, retains the answer and is revised by an 
   await card
     .getByRole('combobox', { name: 'Folosirea vehiculului', exact: true })
     .selectOption('mixed');
-  await card.getByLabel('De la', { exact: true }).fill('2026-01-01');
+  await typeDate(card, 'De la', '01.01.2026');
   await expect(card.getByRole('link', { name: 'AUTO-10.xml', exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
@@ -121,7 +123,7 @@ test('a vehicle purchase asks a person, retains the answer and is revised by an 
   await approveAndPost(page);
   const posted = await capability<ProposalView>(page, 'proposals.get', { id: revised.id });
   expect(posted.status).toBe('posted');
-  await page.getByRole('button', { name: 'Întrebări', exact: true }).click();
+  await openSection(page, 'Întrebări');
   await page
     .getByRole('combobox', { name: 'Starea întrebării', exact: true })
     .selectOption('answered');
@@ -170,18 +172,19 @@ test('a VAT deadline prepares D300, shows the validator response and retains the
       },
     },
   });
+  await openSection(page, 'De verificat');
   await page.getByRole('button', { name: 'Reîncarcă lista', exact: true }).click();
   await page.getByRole('combobox', { name: 'Familie', exact: true }).selectOption('deadlines');
   const work = page
     .locator('[data-work-kind="obligation.due"]')
     .filter({ hasText: 'Decontul de TVA (D300) pentru octombrie 2026' });
   await work.locator(':scope > summary').click();
-  await work.getByRole('link', { name: 'Deschide declarația în Termene', exact: true }).click();
+  await work.getByRole('link', { name: 'Deschide declarația în Declarații', exact: true }).click();
   await expect(page).toHaveURL(/view=deadlines/);
   const card = page.locator('[data-return="D300|2026-10"]');
   await expect(card).toContainText('2026-11-25');
   await expect(card).toContainText('Regula obligației');
-  await page.getByLabel('Luna încheierii perioadei', { exact: true }).fill('2026-10');
+  await chooseMonth(page, 'Luna încheierii perioadei', '2026-10');
   await card.locator(':scope > summary').click();
   await card.getByLabel('Nume declarant', { exact: true }).fill('Popescu');
   await card.getByLabel('Prenume declarant', { exact: true }).fill('Ana');

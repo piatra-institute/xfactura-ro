@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { formatMoney } from './api';
 import {
   EntryLink,
   failure,
@@ -12,6 +11,7 @@ import {
   type JournalPage,
 } from './register-common';
 import { useWorkspace } from './workspace';
+import { formatMoney } from './format';
 
 type Loaded = {
   key: string;
@@ -83,7 +83,7 @@ export default function Journal({ month }: { month: string }) {
 
   return (
     <section>
-      <h3>Registrul jurnal</h3>
+      <h2>Registrul jurnal</h2>
       <State
         loading={!current}
         error={current?.error ?? ''}

@@ -8,6 +8,7 @@ import {
   recordVatPayer,
   signInWithCompany,
 } from './support/session';
+import { chooseCompany, currentCompany, openSection } from './support/shell';
 import { mockWorklist, workItem } from './support/worklist';
 import type { WorkItem } from '../../packages/xfactura-web/components/accounting/work-model';
 
@@ -32,6 +33,7 @@ test('an unbooked document reaches approval and posting from the worklist', asyn
     'accounting',
     `Verificare ${info.project.name} SRL`,
   );
+  await openSection(page, 'De verificat');
   await expect(page.locator('.acc-worklist')).toHaveAttribute('aria-busy', 'false');
   const more = page.getByRole('button', { name: 'Mai multe elemente', exact: true });
   for (let count = 0; count < 20 && (await more.isVisible()); count++) {
@@ -49,7 +51,7 @@ test('an unbooked document reaches approval and posting from the worklist', asyn
     .click();
   await expect(page.getByRole('status')).toContainText('Documentul e-Factura a fost importat.');
 
-  await page.getByRole('button', { name: 'De verificat', exact: true }).click();
+  await openSection(page, 'De verificat');
   await page.getByRole('combobox', { name: 'Familie', exact: true }).selectOption('documents');
   await page.getByRole('combobox', { name: 'Severitate', exact: true }).selectOption('warn');
   await expect(page).toHaveURL(/family=documents/);
@@ -211,7 +213,7 @@ test('worklist pages prioritize people, explain access and require a dismissal r
     if (operation === 'actions.approve') approved = true;
     return { body: {} };
   });
-  await page.goto('/contabilitate');
+  await page.goto('/contabilitate?view=review');
   await expect(page.locator('.acc-work-message')).toHaveText([
     'Document de clasat',
     'Extras de explicat',
@@ -262,7 +264,7 @@ test('worklist pages prioritize people, explain access and require a dismissal r
   await page.getByRole('button', { name: 'Mai multe elemente' }).click();
   const actionRow = page.locator('.acc-work-item', { hasText: 'Lună de închis' });
   await actionRow.locator('summary').click();
-  await expect(actionRow.getByText('1 000,00 RON', { exact: true })).toBeVisible();
+  await expect(actionRow.getByText('1.000,00 RON', { exact: true })).toBeVisible();
   await actionRow.getByRole('button', { name: 'Aprobă această previzualizare' }).click();
   await expect(actionRow).toHaveCount(0);
   expect(calls.find((call) => call.operation === 'actions.approve')).toMatchObject({
@@ -280,7 +282,7 @@ test('worklist pages prioritize people, explain access and require a dismissal r
     .toBe(true);
   await page.goBack();
   await expect(page.getByRole('combobox', { name: 'Severitate' })).toHaveValue('');
-  await expect(page.getByRole('button', { name: 'Adaugă documente' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Adaugă documente' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
@@ -363,7 +365,7 @@ test('a stale approval reloads the exact version and acknowledgements before pos
     if (operation === 'ledger.post') posted = true;
     return { body: {} };
   });
-  await page.goto('/contabilitate');
+  await page.goto('/contabilitate?view=review');
   await page.locator('.acc-work-item > summary').click();
   const approve = page.getByRole('button', { name: 'Aprobă această versiune', exact: true });
   await expect(approve).toBeDisabled();
@@ -376,7 +378,7 @@ test('a stale approval reloads the exact version and acknowledgements before pos
   await expect(page.locator('.acc-warning label')).toHaveCSS('text-decoration-line', 'underline');
   await expect(page.getByRole('heading', { name: 'Notă contabilă', exact: true })).toHaveJSProperty(
     'tagName',
-    'H4',
+    'H3',
   );
   await page.getByRole('checkbox', { name: 'Confirmă documentul justificativ.' }).check();
   await approve.click();
@@ -427,7 +429,7 @@ test('worklist loading, engine errors and empty state are explicit', async ({ pa
     }
     return { body: {} };
   });
-  await page.goto('/contabilitate');
+  await page.goto('/contabilitate?view=review');
   await expect(page.getByText('Se încarcă lista…', { exact: true })).toBeVisible();
   release();
   await expect(page.locator('.accounting').getByRole('alert')).toHaveText(
@@ -452,18 +454,27 @@ test('browser history keeps the company and its worklist together', async ({ pag
       ],
     }),
   );
-  await page.goto('/contabilitate?company=company-a');
+  await page.goto('/contabilitate?company=company-a&view=review');
   await expect(page.getByText('Nimic nu așteaptă verificare.')).toBeVisible();
-  await page.getByRole('button', { name: 'Registre', exact: true }).click();
-  await page.getByRole('button', { name: 'De verificat', exact: true }).click();
-  await page.getByRole('combobox', { name: 'Companie', exact: true }).selectOption('company-b');
-  await expect(page.getByRole('heading', { name: 'Compania B SRL', exact: true })).toBeVisible();
+  await openSection(page, 'Registre');
+  await openSection(page, 'De verificat');
+  // Each company is a link in the switcher: choosing one opens its Acasă as a new history entry.
+  await chooseCompany(page, 'Compania B SRL');
+  await expect(page).toHaveURL(/company=company-b/);
+  await expect(page.getByRole('heading', { level: 1, name: 'Acasă', exact: true })).toBeVisible();
+  await expect.poll(() => reads.length).toBeGreaterThan(0);
+  await page.goBack();
+  await expect(currentCompany(page)).toHaveText('Compania A SRL');
+  await expect(page.getByText('Nimic nu așteaptă verificare.')).toBeVisible();
+  await expect.poll(() => reads.at(-1)).toContain('/companies/company-a/');
+  await page.goForward();
+  await openSection(page, 'De verificat');
   await expect.poll(() => reads.at(-1)).toContain('/companies/company-b/');
   await page.goBack();
-  await expect(page.getByRole('heading', { name: 'Compania A SRL', exact: true })).toBeVisible();
   await page.goBack();
-  await expect(page.getByRole('combobox', { name: 'Companie', exact: true })).toHaveValue(
-    'company-a',
-  );
+  await expect(currentCompany(page)).toHaveText('Compania A SRL');
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'De verificat', exact: true }),
+  ).toBeVisible();
   await expect.poll(() => reads.at(-1)).toContain('/companies/company-a/');
 });

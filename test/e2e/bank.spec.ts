@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { iban, mt940 } from '../../packages/xfactura-api/test/engine/fixtures/bank';
 import { invoiceXml } from '../../packages/xfactura-api/test/engine/fixtures/invoice';
 import { approveAndPost, keep, recordVatPayer, signInWithCompany } from './support/session';
+import { openSection, typeDate } from './support/shell';
 
 test('an imported invoice is recognized and its payment explained', async ({ page }, info) => {
   const errors = await signInWithCompany(page, info, 'bank', `Banca ${info.project.name} SRL`);
@@ -18,12 +19,11 @@ test('an imported invoice is recognized and its payment explained', async ({ pag
   await expect(page.getByRole('status')).toContainText('pregătită pentru verificare');
   await approveAndPost(page);
 
-  await page.getByRole('button', { name: 'Registre', exact: true }).click();
-  await page.getByRole('button', { name: 'Bancă', exact: true }).click();
+  await openSection(page, 'Bancă');
   await page.getByText('Adaugă un cont bancar sau o casă', { exact: true }).click();
   await page.getByLabel('Denumire', { exact: true }).fill('Cont curent');
   await page.getByLabel('IBAN (gol pentru casă)', { exact: true }).fill(iban);
-  await page.getByLabel('Deschis la', { exact: true }).fill('2026-01-01');
+  await typeDate(page, 'Deschis la', '01.01.2026');
   await page.getByRole('button', { name: 'Configurează contul', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Contul a fost configurat.');
 
@@ -34,7 +34,7 @@ test('an imported invoice is recognized and its payment explained', async ({ pag
     .click();
   await expect(page.getByRole('status')).toContainText('Extrasul a fost importat.');
 
-  await page.getByRole('button', { name: 'Bancă', exact: true }).click();
+  await openSection(page, 'Bancă');
   const payment = page.locator('.acc-review', { hasText: '−100,00 RON' });
   await payment
     .getByRole('combobox', { name: 'Factură decontată', exact: true })
@@ -44,8 +44,7 @@ test('an imported invoice is recognized and its payment explained', async ({ pag
   await expect(page.getByRole('status')).toContainText('pregătită pentru verificare');
   await approveAndPost(page);
 
-  await page.getByRole('button', { name: 'Registre', exact: true }).click();
-  await page.getByRole('button', { name: 'Bancă', exact: true }).click();
+  await openSection(page, 'Bancă');
   await expect(page.locator('.acc-review', { hasText: '−100,00 RON' })).toHaveCount(0);
   await expect(page.locator('.acc-review', { hasText: '−2,03 RON' })).toHaveCount(1);
   expect(errors).toEqual([]);

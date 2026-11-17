@@ -11,6 +11,7 @@ import { AccountingTime, useOpenedHeading } from './presentation';
 import { readPages, useAccountingData } from './use-data';
 import { DocumentName, EvidenceName, WorkDetails } from './work-details';
 import { treatmentLabels, type WorkItem } from './work-model';
+import { DateField, MonthField } from './ui';
 import { useWorkspace } from './workspace';
 
 export type Question = {
@@ -96,16 +97,11 @@ export default function Questions() {
     );
   return (
     <RecordNames>
-      <div className="acc-section-heading">
-        <h2>Întrebări</h2>
+      <div className="acc-section-tools">
         <button className="acc-secondary" onClick={refresh}>
           Reîncarcă întrebările
         </button>
       </div>
-      <p className="acc-hint">
-        Răspunsul unei persoane se păstrează ca document justificativ. Propunerile care îl citează
-        se verifică din nou când răspunsul se schimbă.
-      </p>
       <div className="acc-work-filters">
         <label>
           Starea întrebării
@@ -169,9 +165,9 @@ export default function Questions() {
       {shown.map((question, index) => (
         <Fragment key={question.id}>
           {index === 0 || (question.status !== 'open' && shown[index - 1]?.status === 'open') ? (
-            <h3 className="acc-spaced">
+            <h2 className="acc-spaced">
               {question.status === 'open' ? 'Așteaptă răspuns' : 'Răspunsuri și retrageri'}
-            </h3>
+            </h2>
           ) : null}
           <QuestionCard
             question={question}
@@ -280,9 +276,9 @@ function QuestionCard({
   return (
     <article className="acc-question" data-question-id={question.id} aria-busy={busy}>
       <div className="acc-section-heading">
-        <h4 ref={heading} tabIndex={-1} className="acc-opened-heading">
+        <h3 ref={heading} tabIndex={-1} className="acc-opened-heading">
           {questionLabels[question.kind] ?? 'Întrebare pentru o persoană'}
-        </h4>
+        </h3>
         <span className="acc-status">{statuses[question.status]}</span>
       </div>
       <p>{prompt}</p>
@@ -538,10 +534,28 @@ function AnswerForm({
                   : field.type === 'item'
                     ? (items.data ?? []).map((item) => ({ value: item.id, label: item.name }))
                     : field.options;
+            const label = `${field.label}${!field.required ? ` (${field.condition ?? 'opțional'})` : ''}`;
+            if (field.type === 'date')
+              return (
+                <DateField
+                  key={field.name}
+                  label={label}
+                  name={field.name}
+                  isRequired={field.required}
+                />
+              );
+            if (field.type === 'month')
+              return (
+                <MonthField
+                  key={field.name}
+                  label={label}
+                  name={field.name}
+                  isRequired={field.required}
+                />
+              );
             return (
               <label key={field.name}>
-                {field.label}
-                {!field.required ? ` (${field.condition ?? 'opțional'})` : ''}
+                {label}
                 {options ? (
                   <select
                     name={field.name}

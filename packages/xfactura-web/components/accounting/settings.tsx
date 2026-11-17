@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import type { JobView } from 'xfactura-api/contracts';
 import { companyPath, field } from './api';
+import { DateField } from './ui';
 import { useList, useWorkspace } from './workspace';
 
 type Fact = { id: string; axis: string; value: string; effectiveFrom: string };
@@ -41,7 +42,6 @@ export default function Settings() {
     <>
       <div className="acc-section-heading">
         <h2>Profilul companiei</h2>
-        <p>Fapte datate, fiecare cu documentul care le dovedește.</p>
       </div>
       <div className="acc-table-scroll">
         <table>
@@ -102,10 +102,7 @@ export default function Settings() {
                 ))}
               </select>
             </label>
-            <label>
-              De la
-              <input name="effectiveFrom" type="date" required />
-            </label>
+            <DateField label="De la" name="effectiveFrom" isRequired />
             <label>
               Document justificativ
               <select name="evidenceId" required>

@@ -1,0 +1,100 @@
+/*
+ * Theme tokens of the accounting interface: the only file with literal colours.
+ *
+ * Every colour is a light-dark() pair, resolved by the element's color-scheme. The scheme follows
+ * the system unless the account menu stored a choice, which the theme script writes onto <html>
+ * as data-acc-theme before the first paint. `.acc-layer` marks popovers, menus, dialogs and the
+ * drawer, which render outside `.accounting`.
+ *
+ * Neutral greys carry the structure; one accent, the blue-violet of a registration stamp, marks
+ * the current place, the primary action and keyboard focus. Every text pair meets WCAG AA and
+ * every control border meets 3:1 in both themes.
+ */
+:root:has(.accounting),
+.accounting,
+.acc-layer {
+  color-scheme: light dark;
+
+  /* Surfaces */
+  --acc-canvas: light-dark(#f6f6f7, #161618);
+  --acc-raised: light-dark(#ffffff, #1e1e21);
+  --acc-sunken: light-dark(#eeeef0, #111113);
+  --acc-sidebar: light-dark(#efeff2, #121214);
+  --acc-hover: light-dark(#e6e6ea, #27272b);
+  --acc-pressed: light-dark(#dcdce1, #303035);
+  --acc-skeleton: light-dark(#e4e4e8, #26262a);
+  --acc-scrim: light-dark(rgb(24 24 27 / 0.38), rgb(0 0 0 / 0.6));
+  --acc-shadow-color: light-dark(rgb(24 24 27 / 0.14), rgb(0 0 0 / 0.55));
+
+  /* Text */
+  --acc-text: light-dark(#18181b, #ececef);
+  --acc-text-secondary: light-dark(#44444c, #c6c6ce);
+  --acc-text-muted: light-dark(#62626c, #9d9da8);
+  --acc-text-inverse: light-dark(#ffffff, #161618);
+
+  /* Borders: hairlines for structure, the control border for anything that takes input */
+  --acc-border: light-dark(#dedee3, #2c2c31);
+  --acc-border-strong: light-dark(#c4c4cc, #3d3d44);
+  --acc-border-control: light-dark(#8a8a94, #6c6c77);
+
+  /* Accent */
+  --acc-accent: light-dark(#4338a8, #a7a1f3);
+  --acc-accent-hover: light-dark(#372d8f, #bcb7f7);
+  --acc-accent-subtle: light-dark(#ecebf8, #262447);
+  --acc-accent-text: light-dark(#3f34a0, #b4aff6);
+  --acc-on-accent: light-dark(#ffffff, #15132d);
+  --acc-focus: light-dark(#4338a8, #b4aff6);
+
+  /* States, each with the background it sits on when it needs one */
+  --acc-danger: light-dark(#b42318, #f59a8d);
+  --acc-danger-hover: light-dark(#931c13, #f8b3aa);
+  --acc-danger-subtle: light-dark(#fdeceb, #3b1d1a);
+  --acc-warning: light-dark(#8a5300, #e8b860);
+  --acc-warning-subtle: light-dark(#fcf3dd, #34290f);
+  --acc-success: light-dark(#1b7042, #7cca9c);
+  --acc-success-subtle: light-dark(#e4f2e9, #16301f);
+  --acc-info: light-dark(#0b6283, #7ec4dd);
+  --acc-info-subtle: light-dark(#e2f0f6, #13303b);
+
+  /* Amounts */
+  --acc-amount: var(--acc-text);
+  --acc-amount-negative: var(--acc-danger);
+  --acc-amount-zero: var(--acc-text-muted);
+
+  /* Type */
+  --acc-font: 'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --acc-text-xs: 12px;
+  --acc-text-sm: 13px;
+  --acc-text-base: 14px;
+  --acc-text-md: 15px;
+  --acc-text-lg: 17px;
+  --acc-text-xl: 20px;
+  --acc-text-2xl: 24px;
+
+  /* Shape and rhythm */
+  --acc-radius-sm: 4px;
+  --acc-radius: 6px;
+  --acc-radius-lg: 10px;
+  --acc-control-height: 36px;
+  --acc-control-height-small: 30px;
+  --acc-shadow: 0 1px 2px var(--acc-shadow-color), 0 10px 28px -6px var(--acc-shadow-color);
+  --acc-sidebar-width: 244px;
+  --acc-content-width: 1200px;
+}
+
+:root[data-acc-theme='light']:has(.accounting),
+:root[data-acc-theme='light'] .accounting,
+:root[data-acc-theme='light'] .acc-layer {
+  color-scheme: light;
+}
+:root[data-acc-theme='dark']:has(.accounting),
+:root[data-acc-theme='dark'] .accounting,
+:root[data-acc-theme='dark'] .acc-layer {
+  color-scheme: dark;
+}
+
+/* The page behind the interface, seen when a browser scrolls past its edges. */
+:root:has(.accounting),
+:root:has(.accounting) body {
+  background: var(--acc-canvas);
+}

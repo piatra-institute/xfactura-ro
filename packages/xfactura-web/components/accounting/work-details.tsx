@@ -1,8 +1,9 @@
 'use client';
 
-import { companyPath, formatMoney } from './api';
+import { companyPath } from './api';
 import { operationLabel, treatmentLabels } from './work-model';
 import { useList, useLoad, useWorkspace } from './workspace';
+import { formatMoney } from './format';
 
 const labels: Record<string, string> = {
   treatment: 'Tratament',

@@ -2,10 +2,10 @@
 
 import { useEffect, useId } from 'react';
 import { useAccountingNavigation } from './navigation';
-import { formatAmount, monthLabel } from './presentation';
 import { EntryLink, State, useJournalBetween, type JournalEntry } from './register-common';
 import { useAccountingData } from './use-data';
 import { useWorkspace, type Year } from './workspace';
+import { formatAmount, formatMonth } from './format';
 
 type VatRow = {
   entry: number;
@@ -89,7 +89,7 @@ function firstMonthOf(period: string, year: Year) {
 const periodLabel = (period: string) =>
   period.includes('Q')
     ? `Trimestrul ${period.slice(-1)} ${period.slice(0, 4)}`
-    : monthLabel(period);
+    : formatMonth(period);
 
 /** A row's entry, found by its number and date: `vat.journal` gives no entry id. */
 type Match = { entry: JournalEntry } | { reason: string } | null;
@@ -156,10 +156,7 @@ export default function VatJournals({ month }: { month: string }) {
 
   return (
     <section>
-      <h3>Jurnale de TVA</h3>
-      <p className="acc-hint">
-        Registre de lucru din înregistrările fiscale; nu sunt declarații depuse.
-      </p>
+      <h2>Jurnale de TVA</h2>
       {!can('profile.read') ? (
         <p className="acc-empty">
           Rolul dumneavoastră nu poate citi perioada fiscală de TVA a companiei, deci nu se știe ce
@@ -226,7 +223,7 @@ function VatJournal({
   const heading = useId();
   return (
     <section aria-labelledby={heading}>
-      <h4 id={heading}>{title}</h4>
+      <h3 id={heading}>{title}</h3>
       <State
         loading={read.loading}
         error={read.error}

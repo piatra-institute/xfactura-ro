@@ -1,10 +1,10 @@
 'use client';
 
-import { formatMoney } from './api';
 import { useAccountingNavigation } from './navigation';
-import { formatAmount, useOpenedHeading } from './presentation';
+import { useOpenedHeading } from './presentation';
 import { State } from './register-common';
 import { useAccountingData } from './use-data';
+import { formatAmount, formatMoney } from './format';
 
 type Asset = {
   id: string;
@@ -43,7 +43,7 @@ export default function Assets() {
   const heading = useOpenedHeading(Boolean(asset));
   return (
     <section>
-      <h3>Mijloace fixe</h3>
+      <h2>Mijloace fixe</h2>
       <State
         loading={read.loading}
         error={read.error}
@@ -113,9 +113,9 @@ export default function Assets() {
       ) : null}
       {asset ? (
         <section>
-          <h4 ref={heading} tabIndex={-1} className="acc-opened-heading">
+          <h3 ref={heading} tabIndex={-1} className="acc-opened-heading">
             {asset.number} {asset.name}
-          </h4>
+          </h3>
           <dl className="acc-work-details">
             <div>
               <dt>Cod de clasificare</dt>

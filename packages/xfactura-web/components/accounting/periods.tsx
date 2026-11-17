@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import type { ActionView } from 'xfactura-api/contracts';
 import { field } from './api';
+import { MonthField } from './ui';
 import { useList, useWorkspace } from './workspace';
 
 type Finding = { code: string; severity: 'block' | 'warn'; message: string; count?: number };
@@ -23,10 +24,6 @@ export default function Periods() {
     <>
       <div className="acc-section-heading">
         <h2>Închiderea lunii</h2>
-        <p>
-          Previzualizarea arată toate verificările; închiderea se execută doar dacă nu s-a schimbat
-          nimic.
-        </p>
       </div>
       <ul>
         {(states ?? []).map((state) => (
@@ -47,10 +44,7 @@ export default function Periods() {
             );
           }}
         >
-          <label>
-            Luna
-            <input name="month" type="month" required />
-          </label>
+          <MonthField label="Luna" name="month" isRequired />
           <button>Verifică luna</button>
         </form>
       ) : null}

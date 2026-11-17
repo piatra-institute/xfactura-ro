@@ -8,7 +8,8 @@
     "dev": "next dev --webpack",
     "build": "next build --webpack",
     "start": "next start",
-    "lint": "eslint app/contabilitate components/accounting"
+    "lint": "eslint app/contabilitate components/accounting",
+    "test": "bun test test"
   },
   "dependencies": {
     "@m31coding/fuzzy-search": "^1.0.1",
@@ -33,7 +34,9 @@
     "flowbite": "^2.5.2",
     "better-auth": "1.7.13",
     "xfactura-api": "workspace:*",
-    "xfactura-core": "workspace:*"
+    "xfactura-core": "workspace:*",
+    "react-aria-components": "1.22.1",
+    "@internationalized/date": "3.12.4"
   },
   "devDependencies": {
     "@types/node": "26.6.5",

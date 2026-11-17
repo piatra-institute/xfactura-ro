@@ -5,7 +5,16 @@ import {
   type XmlInput,
 } from '../../packages/xfactura-api/test/engine/fixtures/invoice';
 import { capability, evidence } from './support/books';
+import { formatMonth } from '../../packages/xfactura-web/components/accounting/format';
 import { signInWithCompany } from './support/session';
+import {
+  chooseMonth,
+  chooseYear,
+  createCompany,
+  monthField,
+  openSection,
+  openTab,
+} from './support/shell';
 
 /** Books one proposal through the public contract, as a person approving its exact hash. */
 async function book(page: Page, treatment: string, input: Record<string, unknown>) {
@@ -34,17 +43,6 @@ async function bookInvoice(page: Page, xml: XmlInput, account: string) {
 async function recordFact(page: Page, axis: string, value: string, effectiveFrom: string) {
   const proof = await evidence(page, `${axis}.pdf`, 'Certificat sintetic');
   await capability(page, 'profile.record', { axis, value, effectiveFrom, evidenceId: proof.id });
-}
-
-async function addCompany(page: Page, name: string) {
-  await page.getByText('Adaugă o companie', { exact: true }).click();
-  await page.getByLabel('Denumire companie', { exact: true }).fill(name);
-  await page.getByLabel('CUI', { exact: true }).fill('12345678');
-  await page.getByLabel('An contabil', { exact: true }).fill('2026');
-  await page.getByRole('button', { name: 'Adaugă compania', exact: true }).click();
-  await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
-  const companyForm = page.locator('.acc-company-toolbar > details[open] > summary');
-  if (await companyForm.isVisible()) await companyForm.click();
 }
 
 /** The value of a term in the entry's details, by its label. */
@@ -99,13 +97,13 @@ test('the trial balance leads to the account sheet, an entry with its proposal a
   );
   const content = page.locator('.acc-content');
 
-  await page.getByRole('button', { name: 'Registre', exact: true }).click();
+  await openSection(page, 'Registre');
   await expect(content.getByRole('heading', { name: 'Balanța de verificare' })).toBeVisible();
-  const month = content.getByLabel('Luna', { exact: true });
-  await expect(month).not.toHaveValue('');
   // The month the view shows is in the address before anyone changes it.
-  await expect(page).toHaveURL(new RegExp(`registerMonth=${await month.inputValue()}`));
-  await month.fill('2026-01');
+  await expect(page).toHaveURL(/registerMonth=\d{4}-\d{2}/);
+  const shown = new URL(page.url()).searchParams.get('registerMonth')!;
+  await expect(monthField(content, 'Luna')).toContainText(formatMonth(shown));
+  await chooseMonth(content, 'Luna', '2026-01');
   await expect(page).toHaveURL(/registerMonth=2026-01/);
 
   const clients = content
@@ -178,7 +176,7 @@ test('the trial balance leads to the account sheet, an entry with its proposal a
   await expect(page).toHaveURL(/register=jurnal/);
   await expect(page).toHaveURL(/registerMonth=2026-01/);
 
-  await content.getByRole('button', { name: 'Jurnale de TVA', exact: true }).click();
+  await openTab(page, 'Jurnale de TVA');
   await expect(
     content.getByRole('combobox', { name: 'Perioada fiscală de TVA', exact: true }),
   ).toHaveValue('2026-01');
@@ -198,7 +196,7 @@ test('the trial balance leads to the account sheet, an entry with its proposal a
   await expect(detail(page, 'Document justificativ')).toContainText('FV-1');
   await content.getByRole('button', { name: 'Înapoi la registru', exact: true }).click();
 
-  await content.getByRole('button', { name: 'Registrul inventar', exact: true }).click();
+  await openTab(page, 'Registrul inventar');
   const receivable = content
     .locator('.acc-inventory-table tbody tr')
     .filter({ has: page.locator('td[data-label="Cont"]', { hasText: /^4111 / }) });
@@ -257,11 +255,9 @@ test('VAT rows open their own entries across financial years, and a quarterly pa
   const content = page.locator('.acc-content');
 
   await page.reload();
-  await page.getByRole('button', { name: 'Registre', exact: true }).click();
-  await page.getByRole('combobox', { name: 'Exercițiu', exact: true }).selectOption({
-    label: '2025',
-  });
-  await content.getByRole('button', { name: 'Jurnale de TVA', exact: true }).click();
+  await openSection(page, 'Registre');
+  await chooseYear(page, '2025');
+  await openTab(page, 'Jurnale de TVA');
   const period = content.getByRole('combobox', { name: 'Perioada fiscală de TVA', exact: true });
   await period.selectOption('2025-12');
   await expect(page).toHaveURL(/vatPeriod=2025-12/);
@@ -284,7 +280,7 @@ test('VAT rows open their own entries across financial years, and a quarterly pa
   await expect(detail(page, 'Document justificativ')).toContainText('V-2025');
   await noPageOverflow(page);
 
-  await addCompany(page, `Trimestrial ${info.project.name} SRL`);
+  await createCompany(page, `Trimestrial ${info.project.name} SRL`);
   await recordFact(page, 'vat.status', 'normal_vat', '2026-01-01');
   await recordFact(page, 'vat.period', 'quarterly', '2026-01-01');
   const quarterly = await bookInvoice(
@@ -299,10 +295,10 @@ test('VAT rows open their own entries across financial years, and a quarterly pa
     },
     '704',
   );
-  await page.getByRole('button', { name: 'Registre', exact: true }).click();
-  await content.getByLabel('Luna', { exact: true }).fill('2026-02');
+  await openSection(page, 'Registre');
+  await chooseMonth(content, 'Luna', '2026-02');
   await expect(page).toHaveURL(/registerMonth=2026-02/);
-  await content.getByRole('button', { name: 'Jurnale de TVA', exact: true }).click();
+  await openTab(page, 'Jurnale de TVA');
   // February lies in the first quarter, the company's VAT period.
   await expect(period).toHaveValue('2026-Q1');
   await expect(period.locator('option')).toHaveText([

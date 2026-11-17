@@ -74,7 +74,7 @@ function ActionDetail({ item }: DetailProps) {
         </p>
       ) : data ? (
         <>
-          <h4>Efectul acțiunii</h4>
+          <h3>Efectul acțiunii</h3>
           <WorkDetails value={data.preview} />
           {item.next.some(
             (step) =>
@@ -109,7 +109,7 @@ export function WorkItemDetail({ item }: DetailProps) {
           section="deadlines"
           filters={{ return: item.subject.id, month: null, declarationStatus: null }}
         >
-          Deschide declarația în Termene
+          Deschide declarația în Declarații
         </SectionLink>
       </>
     );

@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { chooseMonth, chooseYear, monthField, yearSelect } from './support/shell';
 import { mockWorklist, workItem } from './support/worklist';
 
 const capabilities = [
@@ -94,12 +95,10 @@ test('return links select the exercise and focus its heading; changing exercise 
     },
     { ...common, 'years.list': { items: years, next: null } },
   );
-  await page.goto('/contabilitate?company=company&year=year-2026');
+  await page.goto('/contabilitate?company=company&view=review&year=year-2026');
   await page.locator('[data-work-id="older-return"] > summary').click();
-  await page.getByRole('link', { name: 'Deschide declarația în Termene', exact: true }).click();
-  await expect(page.getByRole('combobox', { name: 'Exercițiu', exact: true })).toHaveValue(
-    'year-2025',
-  );
+  await page.getByRole('link', { name: 'Deschide declarația în Declarații', exact: true }).click();
+  await expect(yearSelect(page)).toContainText('2025');
   await expect(page.getByRole('heading', { name: 'D300 · 2025-10', exact: true })).toBeFocused();
   const summary = page.locator('[data-return="D300|2025-10"] > summary');
   await summary.focus();
@@ -109,11 +108,11 @@ test('return links select the exercise and focus its heading; changing exercise 
   await expect(summary).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(page.getByRole('heading', { name: 'D300 · 2025-10', exact: true })).toBeFocused();
-  await page.getByLabel('Luna încheierii perioadei', { exact: true }).fill('2025-10');
+  await chooseMonth(page, 'Luna încheierii perioadei', '2025-10');
   await page.locator('[data-return="D300|2025-10"] > summary').click();
-  await page.getByRole('combobox', { name: 'Exercițiu', exact: true }).selectOption('year-2026');
+  await chooseYear(page, '2026');
   await expect(page).not.toHaveURL(/return=|month=/);
-  await expect(page.getByLabel('Luna încheierii perioadei', { exact: true })).toHaveValue('');
+  await expect(monthField(page, 'Luna încheierii perioadei')).toContainText('Toate lunile');
   await expect.poll(() => calendarCalls.at(-1)).toEqual({ from: '2026-01', to: '2026-12' });
   await expect(
     page.getByText('Perioade încheiate între 2026-01-01 și 2026-12-31', { exact: true }),

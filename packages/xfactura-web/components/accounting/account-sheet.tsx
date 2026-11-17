@@ -1,10 +1,9 @@
 'use client';
 
-import { formatMoney } from './api';
 import { SectionLink, useAccountingNavigation } from './navigation';
-import { formatAmount } from './presentation';
 import { State, type Pair } from './register-common';
 import { useAccountingData } from './use-data';
+import { formatAmount, formatMoney } from './format';
 
 type Sheet = {
   account: string;
@@ -26,7 +25,7 @@ export default function AccountSheet({ month }: { month: string }) {
   const sheet = sheets.find((row) => row.account === account);
   return (
     <section>
-      <h3>Fișa contului</h3>
+      <h2>Fișa contului</h2>
       <State loading={read.loading} error={read.error} empty={!!read.data && !sheets.length}>
         Nu există înregistrări până la sfârșitul lunii alese.
       </State>
@@ -57,9 +56,9 @@ export default function AccountSheet({ month }: { month: string }) {
       ) : null}
       {sheet ? (
         <>
-          <h4>
+          <h3>
             {sheet.account} {sheet.name}
-          </h4>
+          </h3>
           <dl className="acc-review-meta">
             <div>
               <dt>Sold inițial debit</dt>

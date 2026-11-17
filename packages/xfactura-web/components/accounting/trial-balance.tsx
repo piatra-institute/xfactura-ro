@@ -2,10 +2,10 @@
 
 import { useState } from 'react';
 import { SectionLink } from './navigation';
-import { formatAmount } from './presentation';
 import { monthDays, State, syntheticOf, type Pair } from './register-common';
 import { useAccountingData } from './use-data';
 import { useWorkspace } from './workspace';
+import { formatAmount } from './format';
 
 type Columns = { opening: Pair; previous: Pair; current: Pair; total: Pair; closing: Pair };
 type TrialBalanceData = {
@@ -74,7 +74,7 @@ export default function TrialBalance({ month }: { month: string }) {
   const flip = (key: string) => setOpened((previous) => ({ ...previous, [key]: !previous[key] }));
   return (
     <section>
-      <h3>Balanța de verificare</h3>
+      <h2>Balanța de verificare</h2>
       <State
         loading={read.loading}
         error={read.error}

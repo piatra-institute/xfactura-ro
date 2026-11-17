@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { approveAndPost, keep, openProposal, signInWithCompany } from './support/session';
+import { chooseMonth, openSection, openTab, typeDate } from './support/shell';
 
 test('a reviewed opening is posted, reported and closed', async ({ page }, info) => {
   const errors = await signInWithCompany(
@@ -10,13 +11,13 @@ test('a reviewed opening is posted, reported and closed', async ({ page }, info)
   );
   await keep(page, 'balanta-deschidere.pdf', 'Balanța de deschidere 2026');
 
-  await page.getByRole('button', { name: 'De verificat', exact: true }).click();
+  await openSection(page, 'De verificat');
   await page.getByRole('combobox', { name: 'Familie', exact: true }).selectOption('proposals');
   await expect(
     page.getByText('Niciun element pentru filtrele alese.', { exact: true }),
   ).toBeVisible();
   await page.getByText('Notă contabilă nouă', { exact: true }).click();
-  await page.getByLabel('Data', { exact: true }).fill('2026-01-01');
+  await typeDate(page, 'Data', '01.01.2026');
   await page.getByRole('combobox', { name: 'Tip', exact: true }).selectOption('opening');
   await page.getByLabel('Referință', { exact: true }).fill('DESCHIDERE-2026');
   await page.getByLabel('Explicație', { exact: true }).fill('Sold inițial la bancă');
@@ -35,17 +36,18 @@ test('a reviewed opening is posted, reported and closed', async ({ page }, info)
   ).toBeVisible();
   await expect(proposal.getByRole('cell', { name: '5121', exact: true })).toBeVisible();
   await approveAndPost(page);
-  await expect(page.locator('.acc-balances')).toContainText('1 000,00 RON');
+  await openSection(page, 'Acasă');
+  await expect(page.locator('.acc-balances')).toContainText('1.000,00 RON');
 
-  await page.getByRole('button', { name: 'Registre', exact: true }).click();
+  await openSection(page, 'Registre');
   await expect(page.getByRole('link', { name: /5121/ }).first()).toBeVisible();
-  await page.getByRole('button', { name: 'Registrul jurnal', exact: true }).click();
-  await page.getByLabel('Luna', { exact: true }).fill('2026-01');
+  await openTab(page, 'Registrul jurnal');
+  await chooseMonth(page, 'Luna', '2026-01');
   await expect(page.getByText(/1\. 2026-01-01 · DESCHIDERE · Sold inițial la bancă/)).toBeVisible();
 
-  await page.getByRole('button', { name: 'Setări', exact: true }).click();
-  await page.getByRole('button', { name: 'Luni', exact: true }).click();
-  await page.getByLabel('Luna', { exact: true }).fill('2026-01');
+  await openSection(page, 'Setări');
+  await openTab(page, 'Luni');
+  await chooseMonth(page, 'Luna', '2026-01');
   await page.getByRole('button', { name: 'Verifică luna', exact: true }).click();
   await expect(page.getByText('Nicio constatare.', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Aprobă închiderea', exact: true }).click();

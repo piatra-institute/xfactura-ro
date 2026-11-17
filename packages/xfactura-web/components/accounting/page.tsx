@@ -2,34 +2,54 @@
 
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { I18nProvider, RouterProvider } from 'react-aria-components';
 import { ApiError, command, field, get, signIn, signOut } from './api';
+import { sectionUrl, useAccountingNavigation, useMovedSections } from './navigation';
+import { Shell, companyUrl, type Company, type Person } from './shell';
+import { Button, Feedback, LinkButton, NumberField, TextField } from './ui';
 import Workspace from './workspace';
 
-type Person = { id: string; name: string; email: string };
-type Company = { id: string; name: string; cui: string };
-
+/** Every widget reads the Romanian locale; links inside widgets move through the history. */
 export default function AccountingPage() {
+  return (
+    <I18nProvider locale="ro-RO">
+      <RouterProvider navigate={(href) => window.history.pushState(null, '', href)}>
+        <Accounting />
+      </RouterProvider>
+    </I18nProvider>
+  );
+}
+
+function Accounting() {
   const [person, setPerson] = useState<Person | null>(null);
   const [loading, setLoading] = useState(true);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [selected, setSelected] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const requestedCompany = useSearchParams()?.get('company');
+  const params = useSearchParams();
+  const { view } = useAccountingNavigation();
+  useMovedSections();
+  const requestedCompany = params?.get('company');
   const companyId = companies.some((company) => company.id === requestedCompany)
     ? requestedCompany!
     : selected;
+  const company = companies.find((choice) => choice.id === companyId);
+  const creating = requestedCompany === 'new' || !company;
+  // The company last opened, by the switcher or by an address: the new company page returns to it.
+  if (company && !creating && company.id !== selected) setSelected(company.id);
 
   async function createCompany(body: { name: string; cui: string; year: number }) {
     setBusy(true);
     setError('');
     try {
-      const company = await command<Company>('/api/accounting/v1/companies', body);
-      history.replaceState(null, '', `/contabilitate?company=${company.id}`);
+      const created = await command<Company>('/api/accounting/v1/companies', body);
+      // A new company opens on its settings, where its setup begins.
+      window.history.pushState(null, '', sectionUrl('settings', {}, `company=${created.id}`));
       await load();
-      setSelected(company.id);
-    } catch (error) {
-      setError(error instanceof Error ? error.message : 'Compania nu a putut fi creată.');
+      setSelected(created.id);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Compania nu a putut fi creată.');
     } finally {
       setBusy(false);
     }
@@ -39,10 +59,10 @@ export default function AccountingPage() {
     const user = await get<Person>('/api/accounting/v1/session');
     const invite = new URLSearchParams(location.hash.slice(1)).get('invite');
     if (invite) {
-      const company = await command<{ id: string }>('/api/accounting/v1/invitations/accept', {
+      const joined = await command<{ id: string }>('/api/accounting/v1/invitations/accept', {
         token: invite,
       });
-      setSelected(company.id);
+      setSelected(joined.id);
       history.replaceState(null, '', '/contabilitate');
     }
     const choices = await get<Company[]>('/api/accounting/v1/companies');
@@ -58,9 +78,9 @@ export default function AccountingPage() {
   useEffect(() => {
     let active = true;
     load()
-      .catch((error) => {
-        if (active && !(error instanceof ApiError && error.status === 401))
-          setError(error instanceof Error ? error.message : 'Conexiunea nu este disponibilă.');
+      .catch((reason) => {
+        if (active && !(reason instanceof ApiError && reason.status === 401))
+          setError(reason instanceof Error ? reason.message : 'Conexiunea nu este disponibilă.');
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -70,151 +90,125 @@ export default function AccountingPage() {
     };
   }, []);
 
-  return (
-    <div className="accounting" lang="ro">
-      <header className="acc-header">
-        <a href="/" className="acc-brand">
-          xfactura.ro
-        </a>
-        <span className="acc-header-section">Contabilitate</span>
-        {person ? (
-          <div className="acc-account">
-            <span>{person.name}</span>
-            <button
-              className="acc-header-button"
-              disabled={busy}
-              onClick={async () => {
-                setBusy(true);
-                try {
-                  await signOut();
-                  setPerson(null);
-                  setCompanies([]);
-                  setSelected('');
-                } catch (error) {
-                  setError(error instanceof Error ? error.message : 'Deconectarea nu a reușit.');
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            >
-              Deconectare
-            </button>
-          </div>
-        ) : (
-          <a href="/">Facturare</a>
-        )}
-      </header>
-      <main className="acc-main">
-        {loading ? (
-          <div className="acc-loading" aria-busy="true">
-            <div className="acc-skeleton" />
-            <p>Se verifică sesiunea…</p>
-          </div>
-        ) : !person ? (
-          <section className="acc-login">
-            <h1>Autentificare</h1>
+  if (loading)
+    return (
+      <div className="accounting acc-boot" lang="ro" aria-busy="true">
+        <div className="acc-skeleton" />
+        <div className="acc-skeleton" />
+        <p className="acc-hint">Se verifică sesiunea…</p>
+      </div>
+    );
 
-            <form
-              className="acc-form"
-              onSubmit={async (event) => {
-                event.preventDefault();
-                const data = new FormData(event.currentTarget);
-                setBusy(true);
-                setError('');
-                try {
-                  await signIn(field(data, 'email'), field(data, 'password'));
-                  await load();
-                } catch (error) {
-                  setError(error instanceof Error ? error.message : 'Autentificarea nu a reușit.');
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            >
-              <label>
-                Email
-                <input name="email" type="email" autoComplete="username" required />
-              </label>
-              <label>
-                Parolă
-                <input name="password" type="password" autoComplete="current-password" required />
-              </label>
-              {error ? (
-                <p role="alert" className="acc-error">
-                  {error}
-                </p>
-              ) : null}
-              <button disabled={busy} type="submit">
-                {busy ? 'Se verifică…' : 'Intră în cont'}
-              </button>
-            </form>
-          </section>
-        ) : (
-          <>
+  if (!person)
+    return (
+      <div className="accounting acc-center" lang="ro">
+        <main className="acc-card">
+          <a href="/" className="acc-brand">
+            xfactura.ro
+          </a>
+          <h1>Autentificare</h1>
+          <form
+            className="acc-stack"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              const data = new FormData(event.currentTarget);
+              setBusy(true);
+              setError('');
+              try {
+                await signIn(field(data, 'email'), field(data, 'password'));
+                await load();
+              } catch (reason) {
+                setError(reason instanceof Error ? reason.message : 'Autentificarea nu a reușit.');
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            <TextField label="Email" name="email" type="email" autoComplete="username" isRequired />
+            <TextField
+              label="Parolă"
+              name="password"
+              type="password"
+              autoComplete="current-password"
+              isRequired
+            />
             {error ? (
               <p role="alert" className="acc-error">
                 {error}
               </p>
             ) : null}
-            {companies.length > 0 ? (
-              <div className="acc-company-toolbar">
-                <label>
-                  Companie
-                  <select
-                    value={companyId}
-                    onChange={(event) => {
-                      setSelected(event.target.value);
-                      history.replaceState(
-                        null,
-                        '',
-                        `/contabilitate?company=${event.target.value}`,
-                      );
-                    }}
-                  >
-                    <option value="" disabled>
-                      Alege compania
-                    </option>
-                    {companies.map((company) => (
-                      <option key={company.id} value={company.id}>
-                        {company.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <details>
-                  <summary>Adaugă o companie</summary>
-                  <CompanyForm busy={busy} create={createCompany} />
-                </details>
-              </div>
-            ) : null}
-            {companies.some((company) => company.id === companyId) ? (
-              <Workspace
-                key={companyId}
-                company={companies.find((company) => company.id === companyId)!}
-              />
-            ) : (
-              <section className="acc-onboarding">
-                <h1>Companie nouă</h1>
+            <Button type="submit" variant="primary" isDisabled={busy}>
+              {busy ? 'Se verifică…' : 'Intră în cont'}
+            </Button>
+          </form>
+        </main>
+      </div>
+    );
 
-                <CompanyForm busy={busy} create={createCompany} />
-              </section>
-            )}
-          </>
-        )}
-      </main>
-    </div>
+  // The new company page belongs to no company: the sidebar offers no company's sections there.
+  const back = companies.find((choice) => choice.id === selected);
+  return (
+    <Shell
+      person={person}
+      companies={companies}
+      company={creating ? undefined : company}
+      current={creating ? null : view.id}
+      search={params?.toString() ?? ''}
+      onSignOut={async () => {
+        setBusy(true);
+        try {
+          await signOut();
+          setPerson(null);
+          setCompanies([]);
+          setSelected('');
+        } catch (reason) {
+          setError(reason instanceof Error ? reason.message : 'Deconectarea nu a reușit.');
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      {creating ? (
+        <>
+          <div className="acc-contextbar">
+            <h1>Companie nouă</h1>
+          </div>
+          <div className="acc-body">
+            <Feedback error={error} />
+            <CompanyForm
+              busy={busy}
+              create={createCompany}
+              back={back ? companyUrl(back.id) : undefined}
+            />
+          </div>
+        </>
+      ) : (
+        <>
+          {error ? (
+            <div className="acc-body acc-shell-error">
+              <Feedback error={error} />
+            </div>
+          ) : null}
+          <Workspace key={company.id} company={company} />
+        </>
+      )}
+    </Shell>
   );
 }
+
 function CompanyForm({
   busy,
   create,
+  back,
 }: {
   busy: boolean;
   create: (body: { name: string; cui: string; year: number }) => Promise<void>;
+  /** The company the person came from, when there is one. */
+  back?: string;
 }) {
   return (
     <form
-      className="acc-form"
+      className="acc-stack acc-company-form"
       onSubmit={(event) => {
         event.preventDefault();
         const data = new FormData(event.currentTarget);
@@ -225,28 +219,30 @@ function CompanyForm({
         });
       }}
     >
-      <label>
-        Denumire companie
-        <input name="name" required minLength={2} />
-      </label>
-      <div className="acc-form-grid">
-        <label>
-          CUI
-          <input name="cui" inputMode="numeric" pattern="[0-9]{2,10}" required />
-        </label>
-        <label>
-          An contabil
-          <input
-            name="year"
-            type="number"
-            min="2020"
-            max="2100"
-            defaultValue={new Date().getFullYear()}
-            required
-          />
-        </label>
+      <TextField
+        label="Denumire"
+        name="name"
+        isRequired
+        minLength={2}
+        autoComplete="organization"
+      />
+      <div className="acc-form-row">
+        <TextField label="CUI" name="cui" inputMode="numeric" pattern="[0-9]{2,10}" isRequired />
+        <NumberField
+          label="An contabil"
+          name="year"
+          defaultValue={new Date().getFullYear()}
+          minValue={2020}
+          maxValue={2100}
+          isRequired
+        />
       </div>
-      <button disabled={busy}>Adaugă compania</button>
+      <div className="acc-form-actions">
+        <Button type="submit" variant="primary" isDisabled={busy}>
+          Adaugă compania
+        </Button>
+        {back ? <LinkButton href={back}>Renunță</LinkButton> : null}
+      </div>
     </form>
   );
 }

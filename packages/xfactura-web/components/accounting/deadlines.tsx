@@ -9,8 +9,10 @@ import { ReviewedDeclarationAction } from './review';
 import { useAccountingData } from './use-data';
 import { EvidenceName, WorkDetails } from './work-details';
 import { useWorkspace } from './workspace';
-import { AccountingTime, monthLabel, useOpenedHeading } from './presentation';
+import { AccountingTime, useOpenedHeading } from './presentation';
 import { D300Summary } from './d300-summary';
+import { formatMonth } from './format';
+import { DateField, MonthField } from './ui';
 
 type Obligation = {
   kind: string;
@@ -106,23 +108,17 @@ export default function Deadlines() {
           Reîncarcă termenele
         </button>
       </div>
-      <p className="acc-hint">
-        Termenele și stările vin din motor. Pregătești declarația aici; semnarea și depunerea la
-        ANAF au loc în afara aplicației.
-      </p>
       <div className="acc-work-filters">
         <div className="acc-month-filter">
-          <label>
-            Luna încheierii perioadei
-            <input
-              type="month"
-              value={month}
-              onChange={(event) => filter({ month: event.target.value, return: null })}
-            />
-          </label>
+          <MonthField
+            label="Luna încheierii perioadei"
+            value={month || null}
+            placeholder="Toate lunile"
+            onChange={(chosen) => filter({ month: chosen, return: null })}
+          />
           {month ? (
             <p className="acc-hint">
-              Luna selectată: <time dateTime={month}>{monthLabel(month)}</time>
+              Luna selectată: <time dateTime={month}>{formatMonth(month)}</time>
             </p>
           ) : null}
         </div>
@@ -425,7 +421,7 @@ function ReturnLife({
       aria-label={`Parcursul declarației ${item.kind} ${item.period}`}
       aria-busy={busy}
     >
-      <h3>Parcursul declarației</h3>
+      <h4>Parcursul declarației</h4>
       {problem ? (
         <div className="acc-filing-note">
           <p role="alert" className="acc-error">
@@ -625,10 +621,7 @@ function ReturnLife({
             Număr de înregistrare
             <input name="registrationNumber" required maxLength={60} />
           </label>
-          <label>
-            Data depunerii
-            <input name="submittedOn" type="date" required />
-          </label>
+          <DateField label="Data depunerii" name="submittedOn" isRequired />
           <label>
             Recipisa depunerii
             <input name="receipt" type="file" required />
@@ -856,7 +849,7 @@ function DeclarationHistory({ artifact }: { artifact: Declaration }) {
       <ol className="acc-declaration-history" aria-label="Etapele declarației">
         {artifact.steps.map((step, index) => (
           <li key={index} data-declaration-state={step.state}>
-            <h4>{states[step.state] ?? step.state}</h4>
+            <h5>{states[step.state] ?? step.state}</h5>
             <p className="acc-hint">
               <AccountingTime instant={step.at} /> ·{' '}
               {step.state === 'submitted' && step.actor ? (

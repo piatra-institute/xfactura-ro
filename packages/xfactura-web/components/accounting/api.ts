@@ -101,11 +101,6 @@ export async function signOut() {
     throw new ApiError('Deconectarea nu a reușit. Încercați din nou.', response.status);
   pending.clear();
 }
-export function formatMoney(value: string, currency = 'RON') {
-  const negative = value.startsWith('-');
-  const [whole, fraction = '00'] = value.replace('-', '').split('.');
-  return `${negative ? '−' : ''}${whole!.replace(/\B(?=(\d{3})+(?!\d))/g, ' ')},${fraction.padEnd(2, '0')} ${currency}`;
-}
 export function field(data: FormData, name: string) {
   return String(data.get(name) ?? '').trim();
 }

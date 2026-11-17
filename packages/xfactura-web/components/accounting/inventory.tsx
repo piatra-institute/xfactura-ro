@@ -1,9 +1,9 @@
 'use client';
 
-import { formatAmount } from './presentation';
 import { monthDays, State, type Pair } from './register-common';
 import { useAccountingData } from './use-data';
 import { useWorkspace } from './workspace';
+import { formatAmount } from './format';
 
 type InventoryRow = {
   account: string;
@@ -21,7 +21,7 @@ export default function Inventory({ month }: { month: string }) {
   const read = useAccountingData<InventoryRow[]>('ledger.inventoryRegister', { date }, true, true);
   return (
     <section>
-      <h3>Registrul inventar</h3>
+      <h2>Registrul inventar</h2>
       <State
         loading={read.loading}
         error={read.error}

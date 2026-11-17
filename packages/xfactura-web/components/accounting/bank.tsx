@@ -1,7 +1,9 @@
 'use client';
 
-import { amountField, field, formatMoney } from './api';
+import { amountField, field } from './api';
+import { DateField } from './ui';
 import { useList, useWorkspace } from './workspace';
+import { formatMoney } from './format';
 
 type TreasuryAccount = {
   id: string;
@@ -39,10 +41,6 @@ export default function Bank() {
   const unsettled = (movements ?? []).filter((movement) => !movement.settled);
   return (
     <>
-      <div className="acc-section-heading">
-        <h2>Bancă</h2>
-        <p>Fiecare mișcare raportată se explică integral înainte de închiderea lunii.</p>
-      </div>
       <div className="acc-table-scroll">
         <table>
           <thead>
@@ -105,10 +103,7 @@ export default function Bank() {
                 Cont contabil
                 <input name="ledgerAccount" defaultValue="5121" required />
               </label>
-              <label>
-                Deschis la
-                <input name="openedOn" type="date" required />
-              </label>
+              <DateField label="Deschis la" name="openedOn" isRequired />
             </div>
             <button>Configurează contul</button>
           </form>

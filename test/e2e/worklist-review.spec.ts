@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { openSection } from './support/shell';
 import { mockWorklist, workItem } from './support/worklist';
 
 test('a padded dismissal reason reaches the engine and shows its error', async ({ page }) => {
@@ -35,7 +36,7 @@ test('a padded dismissal reason reaches the engine and shows its error', async (
     }
     return { body: {} };
   });
-  await page.goto('/contabilitate');
+  await page.goto('/contabilitate?view=review');
   await page.locator('.acc-work-item > summary').click();
   const reason = '     scurt     ';
   await page.getByLabel('Motivul închiderii').fill(reason);
@@ -125,7 +126,7 @@ test('matching structured causes collapse across pages and keep each return and 
       };
     return { body: {} };
   });
-  await page.goto('/contabilitate');
+  await page.goto('/contabilitate?view=review');
   const group = page.locator('.acc-work-cause');
   await expect(group).toHaveCount(1);
   await expect(group).not.toHaveAttribute('open');
@@ -149,9 +150,9 @@ test('matching structured causes collapse across pages and keep each return and 
   const row = page.locator('[data-work-id="D300|2026-01"]');
   await row.locator(':scope > summary').click();
   await expect(row.getByText(first.message, { exact: true })).toBeVisible();
-  // Obligation actions now open the return's complete lifecycle in Termene.
+  // Obligation actions open the return's complete lifecycle in Declarații.
   await expect(
-    row.getByRole('link', { name: 'Deschide declarația în Termene', exact: true }),
+    row.getByRole('link', { name: 'Deschide declarația în Declarații', exact: true }),
   ).toHaveAttribute('href', /view=deadlines.*return=D300%7C2026-01/);
   await expect(row.getByRole('button')).toHaveCount(0);
 });
@@ -213,7 +214,7 @@ test('document details show names and exact decimals while identifiers and minor
       },
     },
   );
-  await page.goto('/contabilitate');
+  await page.goto('/contabilitate?view=review');
   const row = page.locator('.acc-work-item');
   await row.locator(':scope > summary').click();
   await expect(row.getByText('Furnizor Sintetic SRL', { exact: true })).toBeVisible();
@@ -221,9 +222,9 @@ test('document details show names and exact decimals while identifiers and minor
   await expect(row.getByText('Cont curent EUR', { exact: true })).toBeVisible();
   await expect(row.getByText('Fișier XML încărcat', { exact: true })).toBeVisible();
   await expect(row.locator('.acc-work-amount')).toHaveText([
-    '1 000,01 EUR',
+    '1.000,01 EUR',
     '234,56 EUR',
-    '1 234,57 EUR',
+    '1.234,57 EUR',
   ]);
   await expect(row.locator('.acc-work-amount').first()).toHaveCSS('text-align', 'right');
   await expect(row.getByText('Verifică răspunsurile din SPV', { exact: true })).toBeVisible();
@@ -302,7 +303,7 @@ test('incomplete steps have no button, mismatched previews stay disabled and blo
     writes.push(operation);
     return { body: {} };
   });
-  await page.goto('/contabilitate');
+  await page.goto('/contabilitate?view=review');
   for (const item of items) await page.locator(`[data-work-id="${item.id}"] > summary`).click();
   const incompleteRow = page.locator('[data-work-id="Acțiune incompletă"]');
   await expect(
@@ -358,7 +359,7 @@ for (const state of ['resolved', 'disposed'] as const)
       }
       return { body: {} };
     });
-    await page.goto('/contabilitate');
+    await page.goto('/contabilitate?view=review');
     await page.locator('.acc-work-item > summary').click();
     await expect(page.getByLabel('Motivul închiderii')).toBeVisible();
     current = state;
@@ -412,7 +413,7 @@ test('refresh after a decision uses fresh cursors and retains items from the sec
     if (operation === 'work.dispose') changed = true;
     return { body: {} };
   });
-  await page.goto('/contabilitate');
+  await page.goto('/contabilitate?view=review');
   await page.getByRole('button', { name: 'Mai multe elemente' }).click();
   await expect(page.locator('[data-work-id="Document din a doua pagină"]')).toBeVisible();
   const row = page.locator('[data-work-id="Document din prima pagină"]');
@@ -426,26 +427,29 @@ test('refresh after a decision uses fresh cursors and retains items from the sec
   await expect(page.getByRole('button', { name: 'Mai multe elemente' })).toHaveCount(0);
 });
 
-test('filters belong to De verificat and selected sub-navigation has keyboard focus', async ({
+test('filters belong to De verificat and the selected tab shows keyboard focus', async ({
   page,
 }) => {
   await mockWorklist(page, () => ({ body: { items: [], next: null, asOfSeq: 1 } }));
-  await page.goto('/contabilitate?company=company&family=documents&severity=warn');
+  await page.goto('/contabilitate?company=company&view=review&family=documents&severity=warn');
   await expect(page.getByRole('combobox', { name: 'Familie' })).toHaveValue('documents');
-  await page.getByRole('button', { name: 'Registre', exact: true }).click();
+  await openSection(page, 'Registre');
   await expect(page).not.toHaveURL(/family=|severity=/);
-  await page.getByRole('button', { name: 'Documente', exact: true }).focus();
-  await page.keyboard.press('Shift+Tab');
-  const selected = page.getByRole('button', { name: 'Registre contabile', exact: true });
-  await expect(selected).toBeFocused();
-  await expect(selected).toHaveCSS('border-bottom-color', 'rgb(170, 170, 170)');
-  await page.getByRole('button', { name: 'Documente', exact: true }).click();
-  await expect(page).toHaveURL(/view=registers&section=documents/);
-  await expect(page).not.toHaveURL(/family=|severity=/);
-  await page.getByRole('button', { name: 'De verificat', exact: true }).click();
+  await openSection(page, 'Documente');
+  await expect(page).toHaveURL(/view=documents/);
+  await expect(page).not.toHaveURL(/family=|severity=|section=/);
+  await openSection(page, 'De verificat');
   await expect(page.getByRole('combobox', { name: 'Familie' })).toHaveValue('');
-  await page.getByRole('button', { name: 'Setări', exact: true }).click();
-  await page.getByRole('button', { name: 'Luni', exact: true }).click();
+  await openSection(page, 'Setări');
+  // The keyboard reaches the selected part after the context bar's action, with a visible ring.
+  await page.getByRole('link', { name: 'Adaugă documente', exact: true }).focus();
+  await page.keyboard.press('Tab');
+  const selected = page.getByRole('tab', { name: 'Profil și acces', exact: true });
+  await expect(selected).toBeFocused();
+  await expect(selected).toHaveCSS('outline-style', 'solid');
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('tab', { name: 'Luni', exact: true })).toBeFocused();
+  await page.keyboard.press('Enter');
   await expect(page).toHaveURL(/view=settings&section=periods/);
   await expect(page).not.toHaveURL(/family=|severity=/);
 });

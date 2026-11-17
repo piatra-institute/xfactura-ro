@@ -17,7 +17,7 @@
     "worker": "bun run packages/xfactura-api/source/engine/worker.ts",
     "db:migrate": "bun run packages/xfactura-api/source/engine/migrate.ts",
     "account:create": "bun run packages/xfactura-api/source/engine/manage.ts create-user",
-    "test": "bun test packages/xfactura-core/test scripts/rules scripts/review",
+    "test": "bun test packages/xfactura-core/test packages/xfactura-web/test scripts/rules scripts/review",
     "test:integration": "bun scripts/test-integration.ts",
     "test:legacy": "bun test packages/xfactura-api/test/legacy",
     "test:replay": "bun test packages/xfactura-replay/test",

@@ -35,8 +35,7 @@ export default function Worklist() {
     : '';
   return (
     <>
-      <div className="acc-section-heading">
-        <h2>De verificat</h2>
+      <div className="acc-section-tools">
         <button className="acc-secondary" onClick={refresh}>
           Reîncarcă lista
         </button>
@@ -172,7 +171,7 @@ function WorkPages({
         const items = (page?.items ?? []).filter((item) => priority(item) === index);
         return items.length ? (
           <section key={label} className="acc-work-group" aria-label={label}>
-            <h3>{label}</h3>
+            <h2>{label}</h2>
             {groupCauses(items).map((group) => {
               const rows = group.items.map((item) => {
                 const key =

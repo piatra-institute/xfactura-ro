@@ -1,11 +1,11 @@
 'use client';
 
-import { formatMoney } from './api';
 import { useAccountingNavigation } from './navigation';
-import { formatAmount, formatQuantity, useOpenedHeading } from './presentation';
+import { useOpenedHeading } from './presentation';
 import { EntryLink, monthDays, State } from './register-common';
 import { useAccountingData } from './use-data';
 import { useWorkspace } from './workspace';
+import { formatAmount, formatMoney, formatQuantity } from './format';
 
 type StockRegister = {
   positions: {
@@ -50,7 +50,7 @@ export default function Stock({ month }: { month: string }) {
     filter({ stockItem: item, stockWarehouse: warehouse });
   return (
     <section>
-      <h3>Stocuri</h3>
+      <h2>Stocuri</h2>
       <State loading={read.loading} error={read.error} empty={!!read.data && !positions.length}>
         Nu există poziții de stoc la {to}.
       </State>
@@ -156,9 +156,9 @@ function Card({
   const data = card.data;
   return (
     <section>
-      <h4 ref={heading} tabIndex={-1} className="acc-opened-heading">
+      <h3 ref={heading} tabIndex={-1} className="acc-opened-heading">
         Fișa de magazie{data ? ` · ${data.item.code} ${data.item.name}` : ''}
-      </h4>
+      </h3>
       <State loading={card.loading} error={card.error} />
       {data ? (
         <>

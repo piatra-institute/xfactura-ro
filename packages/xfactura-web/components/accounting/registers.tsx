@@ -36,6 +36,26 @@ const registers = [
 ] as const;
 type RegisterId = (typeof registers)[number]['id'];
 
+/** The filters that belong to one register's own view; choosing another register drops them. */
+export const registerReset = {
+  registerEntry: null,
+  registerEntryDate: null,
+  stockItem: null,
+  stockWarehouse: null,
+  registerAsset: null,
+  payrollRun: null,
+};
+
+/** The registers a person may read, as tabs, and the one the address selects. */
+export function registerTabs(can: (operation: string) => boolean, requested: string | null) {
+  const visible = registers.filter((register) => can(register.operation));
+  const active = visible.find((register) => register.id === requested) ?? visible[0];
+  return {
+    items: visible.map(({ id, label }) => ({ id, label })),
+    active: active?.id ?? null,
+  };
+}
+
 export default function Registers() {
   return (
     <RecordNames>
@@ -46,58 +66,22 @@ export default function Registers() {
 
 function RegisterView() {
   const { year, can } = useWorkspace();
-  const { params, filter } = useAccountingNavigation();
+  const { params } = useAccountingNavigation();
   const { month, first, last } = useRegisterMonth();
-  const visible = registers.filter((register) => can(register.operation));
-  const active = visible.find((register) => register.id === params.get('register')) ?? visible[0];
+  const active = registers.find(
+    (register) => register.id === registerTabs(can, params.get('register')).active,
+  );
   const entryId = params.get('registerEntry');
-  return (
+  return !year || !month || !first || !last ? (
+    <p aria-busy="true">Se încarcă registrele…</p>
+  ) : !active ? (
+    <p className="acc-empty">Niciun registru disponibil pentru rolul dumneavoastră.</p>
+  ) : entryId ? (
+    <EntryDetail entryId={entryId} entryDate={params.get('registerEntryDate')} month={month} />
+  ) : (
     <>
-      <div className="acc-section-heading">
-        <h2>Registre</h2>
-        <p>{year ? `Exercițiul ${year.from} – ${year.to}` : ''}</p>
-      </div>
-      {!year || !month || !first || !last ? (
-        <p aria-busy="true">Se încarcă registrele…</p>
-      ) : !active ? (
-        <p className="acc-empty">Niciun registru disponibil pentru rolul dumneavoastră.</p>
-      ) : (
-        <>
-          <nav className="acc-subnav acc-register-nav" aria-label="Registre">
-            {visible.map((register) => (
-              <button
-                key={register.id}
-                aria-pressed={active.id === register.id && !entryId}
-                onClick={() =>
-                  filter({
-                    register: register.id,
-                    registerEntry: null,
-                    registerEntryDate: null,
-                    stockItem: null,
-                    stockWarehouse: null,
-                    registerAsset: null,
-                    payrollRun: null,
-                  })
-                }
-              >
-                {register.label}
-              </button>
-            ))}
-          </nav>
-          {entryId ? (
-            <EntryDetail
-              entryId={entryId}
-              entryDate={params.get('registerEntryDate')}
-              month={month}
-            />
-          ) : (
-            <>
-              {active.monthly ? <MonthChoice month={month} first={first} last={last} /> : null}
-              <Register id={active.id} month={month} />
-            </>
-          )}
-        </>
-      )}
+      {active.monthly ? <MonthChoice month={month} first={first} last={last} /> : null}
+      <Register id={active.id} month={month} />
     </>
   );
 }

@@ -4,11 +4,13 @@ import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 import type { ProposalView } from 'xfactura-api/contracts';
 import { companyPath } from './api';
 import { useAccountingNavigation } from './navigation';
-import { AccountingTime, formatAmount, useOpenedHeading } from './presentation';
+import { AccountingTime, useOpenedHeading } from './presentation';
 import { ActorName } from './record-names';
 import { useAccountingData } from './use-data';
 import { treatmentLabels } from './work-model';
 import { useWorkspace, type Workspace, type Year } from './workspace';
+import { formatAmount } from './format';
+import { MonthField } from './ui';
 
 export type Pair = { debit: string; credit: string };
 export type JournalLine = { account: string; side: 'D' | 'C'; amount: string | null };
@@ -129,20 +131,16 @@ export function MonthChoice({
   const { filter } = useAccountingNavigation();
   return (
     <div className="acc-work-filters">
-      <label>
-        Luna
-        <input
-          type="month"
-          value={month}
-          min={first}
-          max={last}
-          onChange={(event) => {
-            const chosen = event.target.value;
-            if (chosen && first <= chosen && chosen <= last)
-              filter({ registerMonth: chosen, vatPeriod: null });
-          }}
-        />
-      </label>
+      <MonthField
+        label="Luna"
+        value={month}
+        minValue={first}
+        maxValue={last}
+        onChange={(chosen) => {
+          if (chosen && first <= chosen && chosen <= last)
+            filter({ registerMonth: chosen, vatPeriod: null });
+        }}
+      />
     </div>
   );
 }
@@ -346,7 +344,7 @@ function OriginalDocument({
 
   return (
     <section>
-      <h4>Document original</h4>
+      <h3>Document original</h3>
       {notice ? <p className="acc-empty">{notice}</p> : null}
       {!notice && evidenceId ? (
         <>
@@ -429,9 +427,9 @@ export function EntryDetail({
       )}
       {entry ? (
         <>
-          <h3 ref={heading} tabIndex={-1} className="acc-opened-heading">
+          <h2 ref={heading} tabIndex={-1} className="acc-opened-heading">
             Înregistrarea {entry.number} · {entry.date}
-          </h3>
+          </h2>
           <dl className="acc-work-details">
             <div>
               <dt>Jurnal</dt>
@@ -475,7 +473,7 @@ export function EntryDetail({
             </table>
           </div>
           <section>
-            <h4>Propunere și aprobare</h4>
+            <h3>Propunere și aprobare</h3>
             {!can('proposals.get') ? (
               <p className="acc-empty">
                 Rolul dumneavoastră nu poate citi propunerea acestei înregistrări.
