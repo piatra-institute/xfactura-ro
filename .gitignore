@@ -54,3 +54,6 @@ coverage/
 
 # Generated rule review packets (scripts/review/packet.ts); records are committed in xfactura-core
 .reviews/
+
+
+SCRATCH.md
