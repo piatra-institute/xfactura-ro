@@ -164,8 +164,10 @@ import {
   trialBalanceInput,
   trialBalanceView,
 } from './kernel/reports';
-import { proposalView } from './kernel/views';
+import { issueView as proposalIssueView, previewEffectView, proposalView } from './kernel/views';
 import { Agents, grantView, issueAgentInput } from './modules/agents';
+import { entryInput, entryView, ledgerEntry } from './modules/entries';
+import { companySummary, summaryInput, summaryView } from './modules/summary';
 import {
   accountInput,
   accountQuery,
@@ -173,6 +175,8 @@ import {
   Configuration,
   inviteInput,
   partyInput,
+  profileCurrentInput,
+  profileCurrentView,
   profileInput,
   yearInput,
 } from './modules/company';
@@ -187,6 +191,7 @@ import {
 import { importInput, Invoices } from './modules/invoices';
 import {
   documentDetail,
+  documentListItem,
   Documents,
   documentView,
   linkInput,
@@ -419,6 +424,8 @@ import {
 const id = z.uuid();
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const reason = z.string().trim().min(10).max(1000);
+/** An amount in a currency's minor units (bani for lei), as an integer string. */
+const minor = z.string().regex(/^-?\d+$/);
 const ok = <T extends z.ZodRawShape>(shape: T) => z.object(shape);
 /** What a proposal relies on beyond the books: answered questions, and the template whose input
  * it is (kept at the template's current version, refused unless the input conforms). On a
@@ -824,7 +831,7 @@ export class Engine {
       this.proposals.ruleContext(tx, companyId),
     );
     this.companies = new Companies(this.commands, secret);
-    this.configuration = new Configuration(this.commands, new PartyIdentities(secret));
+    this.configuration = new Configuration(this.commands, new PartyIdentities(secret), objects);
     this.agents = new Agents(this.commands, secret, () =>
       this.operations
         .grantable()
@@ -1421,6 +1428,46 @@ export class Engine {
         run: (actor, key, input) => this.proposals.revise(actor, key, input),
       }),
       define({
+        id: 'proposals.preview',
+        description:
+          'Ce ar propune un tratament contabil acum, fără să înregistreze nimic: efectul, problemele și totalurile debit și credit pe monede, cu diferența.',
+        summary:
+          "Evaluates a treatment's input against the books and records nothing: the effect and issues proposals.propose would store, with debit, credit and difference per currency in minor units.",
+        toolset: 'books',
+        dataClasses: ['books'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'write',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: ok({
+          treatment: z.string().min(1).max(100),
+          input: z.record(z.string(), z.unknown()),
+          basis: basisInput.optional(),
+        }).strict(),
+        output: ok({
+          treatment: z.string(),
+          /** The subject a proposal of this input would hold. */
+          subject: z.string(),
+          effect: previewEffectView.nullable(),
+          issues: z.array(proposalIssueView),
+          blocking: z.boolean(),
+          /** Per currency, the ledger's (RON) first: in minor units, as integer strings. */
+          totals: z
+            .array(
+              z.object({
+                currency: z.string(),
+                debit: minor,
+                credit: minor,
+                difference: minor,
+              }),
+            )
+            .nullable(),
+        }),
+        run: (actor, _, input) => this.proposals.preview(actor, input),
+      }),
+      define({
         id: 'work.list',
         description:
           'Lista de lucru: tot ce așteaptă un agent sau o persoană (propuneri, întrebări, declarații, verificări de închidere, documente, mișcări bancare, mesaje SPV), cu pașii următori și dacă cel care o citește îi poate face.',
@@ -1610,6 +1657,24 @@ export class Engine {
         input: journalInput,
         output: ok({ entries: z.array(z.unknown()), next: z.number().nullable() }),
         run: (actor, _, input) => this.reports.journal(actor, input),
+      }),
+      define({
+        id: 'ledger.entry',
+        description:
+          'O notă contabilă înregistrată: antetul, liniile cu conturile și partenerii lor, documentele justificative, aprobarea și contabilizarea, stornările legate de ea.',
+        summary:
+          'Reads one posted journal entry: header, lines with account and partner names and amounts in minor units, evidence, proposal version, who approved and posted it and when, and linked reversals.',
+        toolset: 'books',
+        dataClasses: ['books', 'evidence'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: entryInput,
+        output: entryView,
+        run: (actor, _, input) => ledgerEntry(this.commands, actor, input),
       }),
       define({
         id: 'ledger.generalLedger',
@@ -3938,9 +4003,9 @@ export class Engine {
       define({
         id: 'documents.list',
         description:
-          'Documentele (facturi, note de credit, bonuri, contracte), după dată, cu sursa, verificările și grupul copiilor lor.',
+          'Documentele (facturi, note de credit, bonuri, contracte), după dată, cu sursa, verificările, grupul copiilor, partenerul și nota contabilă care le înregistrează; după tip, sursă, perioadă și înregistrare, pe pagini.',
         summary:
-          'Lists documents (invoices, credit notes, receipts, contracts) by date with their source (authority), checks and group of copies, optionally by kind or authority.',
+          'Lists documents by date with their source, checks, group of copies, partner and the posted entry that books them; filter by kind, authority, date range or booking, a page at a time with limit and after.',
         toolset: 'inbox',
         dataClasses: ['books', 'evidence'],
         reversible: true,
@@ -3950,8 +4015,8 @@ export class Engine {
         effect: 'read',
         approval: 'none',
         input: documentListInput,
-        output: page(documentView),
-        run: (actor, _, input) => whole(this.documents.list(actor, input)),
+        output: page(documentListItem),
+        run: (actor, _, input) => this.documents.list(actor, input),
       }),
       define({
         id: 'documents.get',
@@ -4250,9 +4315,57 @@ export class Engine {
         run: (actor) => whole(this.configuration.profile(actor)),
       }),
       define({
+        id: 'company.summary',
+        description:
+          'Situația companiei la o dată, calculată de motor: soldurile conturilor bancare și de casă, creanțele și datoriile deschise față de clienți și furnizori, poziția față de stat, lucrul care așteaptă și următoarele declarații.',
+        summary:
+          'Summarizes the company on a day in minor units per currency: bank and cash balances, open receivables and payables with what is past due, the tax position, the work waiting by who acts and severity, the next five returns.',
+        toolset: 'books',
+        dataClasses: ['books', 'evidence', 'tax'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: summaryInput,
+        output: summaryView,
+        run: (actor, _, input) =>
+          companySummary(
+            {
+              commands: this.commands,
+              work: this.work,
+              rules: (tx, companyId) => this.proposals.ruleContext(tx, companyId),
+              clock: this.clock,
+            },
+            actor,
+            input,
+          ),
+      }),
+      define({
+        id: 'profile.current',
+        description:
+          'Profilul companiei la o dată: fiecare axă cu denumirea, grupul, valorile permise și etichetele lor, valoarea în vigoare cu documentul ei și istoricul faptelor.',
+        summary:
+          'Reads the company profile on a day: each axis with its Romanian name, group, labelled values, whether it applies to the legal form, the value in effect with its fact, the implied default and its history.',
+        toolset: 'reference',
+        dataClasses: ['books', 'tax'],
+        reversible: true,
+        externalEffect: false,
+        permission: 'read',
+        agent: true,
+        effect: 'read',
+        approval: 'none',
+        input: profileCurrentInput,
+        output: profileCurrentView,
+        run: (actor, _, input) => this.configuration.profileCurrent(actor, input),
+      }),
+      define({
         id: 'profile.record',
-        description: 'Înregistrează un fapt datat al companiei, cu documentul justificativ.',
-        summary: 'A person records a dated fact about the company, with its supporting document.',
+        description:
+          'Înregistrează un fapt datat al companiei, cu documentul justificativ sau, fără el, cu declarația persoanei, păstrată ca document.',
+        summary:
+          'A person records a dated fact about the company, citing its supporting document or, without one, their own statement, which the engine keeps as evidence.',
         toolset: 'admin',
         dataClasses: ['books', 'tax', 'evidence'],
         reversible: true,
@@ -4262,7 +4375,12 @@ export class Engine {
         effect: 'authorize',
         approval: 'human',
         input: profileInput,
-        output: z.looseObject({ id: z.string(), axis: z.string(), effectiveFrom: z.string() }),
+        output: z.looseObject({
+          id: z.string(),
+          axis: z.string(),
+          effectiveFrom: z.string(),
+          evidenceId: z.string(),
+        }),
         run: (actor, key, input) => this.configuration.recordProfile(actor, key, input),
       }),
       define({

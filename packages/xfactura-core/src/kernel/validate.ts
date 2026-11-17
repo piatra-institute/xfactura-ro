@@ -501,3 +501,40 @@ function validateStock(effect: Effect, context: EffectContext): Issue[] {
   }
   return issues;
 }
+
+/** Debit and credit of one currency's lines, in its minor units, and debit less credit. */
+export interface CurrencyTotals {
+  currency: string;
+  debit: bigint;
+  credit: bigint;
+  difference: bigint;
+}
+
+/**
+ * An effect's totals as the balance check reads them: the ledger currency first, every line's
+ * signed amount in bani on its side (a red storno's negative amount lowers its side), then each
+ * foreign currency the lines carry, their amounts in that currency, in code order. An effect
+ * balances when the ledger currency's difference is zero; a foreign currency's totals are what
+ * its lines state, which an exchange difference in lei alone leaves unbalanced.
+ */
+export function effectTotals(effect: Pick<Effect, 'lines'>): CurrencyTotals[] {
+  const totals = new Map<string, { debit: bigint; credit: bigint }>([
+    [LEDGER_CURRENCY, { debit: 0n, credit: 0n }],
+  ]);
+  const add = (currency: string, side: Side, amount: bigint) => {
+    const sum = totals.get(currency) ?? { debit: 0n, credit: 0n };
+    if (side === 'D') sum.debit += amount;
+    else sum.credit += amount;
+    totals.set(currency, sum);
+  };
+  for (const line of effect.lines) {
+    add(LEDGER_CURRENCY, line.side, line.bani);
+    if (line.currency && line.currency.code !== LEDGER_CURRENCY)
+      add(line.currency.code, line.side, line.currency.minor);
+  }
+  const foreign = [...totals.keys()].filter((code) => code !== LEDGER_CURRENCY).sort();
+  return [LEDGER_CURRENCY, ...foreign].map((currency) => {
+    const { debit, credit } = totals.get(currency)!;
+    return { currency, debit, credit, difference: debit - credit };
+  });
+}

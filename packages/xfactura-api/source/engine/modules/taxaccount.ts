@@ -281,50 +281,73 @@ export class TaxAccount {
     return this.commands.read(actor, 'taxaccount.position', async (tx) => {
       const date = (input.date ?? new Date(this.clock()).toISOString().slice(0, 10)) as LocalDate;
       const rules = await this.ruleContext(tx, actor.companyId);
-      const items = await heldItems(tx, actor.companyId, date, input.authorityId);
-      const { catalogue, accounts } = taxRules(rules, date);
-      const rows = items
-        .filter((item) => item.asOf !== 0n)
-        .map((item) => {
-          if (item.kind === 'tax.receivable')
-            return {
-              openItem: item.id,
-              authorityId: item.partyId,
-              account: item.controlAccount,
-              claim: true,
-              type: item.origin?.tag === undistributedTag ? 'undistributed' : 'refundable',
-              period: null,
-              budget: null,
-              category: null,
-              due: null,
-              singleAccount: false,
-              designatable: false,
-              balance: lei(item.asOf),
-            };
-          const obligation = obligationOf(item, catalogue, accounts, rules);
-          return {
-            openItem: item.id,
-            authorityId: item.partyId,
-            account: item.controlAccount,
-            claim: false,
-            type: obligation.type,
-            period: obligation.period,
-            budget: obligation.budget,
-            category: obligation.category,
-            due: obligation.due,
-            singleAccount: !obligation.separate,
-            designatable: obligation.designatable,
-            balance: lei(-item.asOf),
-          };
-        });
+      const rows = await taxPosition(tx, actor.companyId, date, rules, input.authorityId);
       return {
         date,
-        items: rows,
+        items: rows.map(({ bani, ...row }) => ({ ...row, balance: lei(bani) })),
         next: null,
-        clauses: ['L207/2015:art.163(2)-(5)', 'OPANAF551/2021:anexa', 'L207/2015:art.165(1),(3)'],
+        clauses: positionClauses,
       };
     });
   }
+}
+
+/** The clauses `taxaccount.position` reads the obligations by. */
+export const positionClauses = [
+  'L207/2015:art.163(2)-(5)',
+  'OPANAF551/2021:anexa',
+  'L207/2015:art.165(1),(3)',
+];
+
+/**
+ * What the company owes the state and is owed by it on a day, per open item: an obligation's
+ * type, period, budget, category and due date by the rules (`obligationOf`), or a claim (a
+ * refund, a payment not yet distributed); `bani` positive owed by the company to the state on an
+ * obligation, by the state on a claim. Refused with the rule gap when a rule it reads is missing.
+ */
+export async function taxPosition(
+  tx: Transaction,
+  companyId: string,
+  date: LocalDate,
+  rules: RuleContext,
+  authorityId?: string,
+) {
+  const items = await heldItems(tx, companyId, date, authorityId);
+  const { catalogue, accounts } = taxRules(rules, date);
+  return items
+    .filter((item) => item.asOf !== 0n)
+    .map((item) => {
+      if (item.kind === 'tax.receivable')
+        return {
+          openItem: item.id,
+          authorityId: item.partyId,
+          account: item.controlAccount,
+          claim: true,
+          type: item.origin?.tag === undistributedTag ? 'undistributed' : 'refundable',
+          period: null,
+          budget: null,
+          category: null,
+          due: null,
+          singleAccount: false,
+          designatable: false,
+          bani: item.asOf,
+        };
+      const obligation = obligationOf(item, catalogue, accounts, rules);
+      return {
+        openItem: item.id,
+        authorityId: item.partyId,
+        account: item.controlAccount,
+        claim: false,
+        type: obligation.type,
+        period: obligation.period,
+        budget: obligation.budget,
+        category: obligation.category,
+        due: obligation.due,
+        singleAccount: !obligation.separate,
+        designatable: obligation.designatable,
+        bani: -item.asOf,
+      };
+    });
 }
 
 const agent = (operation: string, inputHint: WorkStep['inputHint'] = {}): WorkStep => ({
@@ -362,13 +385,8 @@ export async function taxAccountWork(
           subject: { kind: 'document', id: result.document.id },
           severity: 'warn',
           period: result.asOf.slice(0, 7),
-          message: `Fișa pe plătitor la ${result.asOf} diferă de registre la ${differing.length} ${differing.length === 1 ? 'obligație' : 'obligații'}: ${differing
-            .slice(0, 5)
-            .map(
-              (row) =>
-                `${row.label}${row.period ? ` ${row.period}` : ''} (fișa ${row.statement}, registrele ${row.books})`,
-            )
-            .join('; ')}.`,
+          // Each obligation that differs, with both amounts, is in `details.differences`.
+          message: `Fișa pe plătitor la ${result.asOf} diferă de registre la ${differing.length} ${differing.length === 1 ? 'obligație' : 'obligații'}.`,
           details: {
             asOf: result.asOf,
             differences: differing.map((row) => ({

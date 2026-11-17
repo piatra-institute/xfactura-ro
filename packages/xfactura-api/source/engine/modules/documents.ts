@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, or, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, gte, inArray, lte, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireCondition } from 'xfactura-core/errors';
 import { canonical, hashOf } from 'xfactura-core/hash';
@@ -45,6 +45,7 @@ import { companies, documentLinks, documents, evidence, parties, type Role } fro
 import type { Actor, Commands, Ids } from '../kernel/commands';
 import { documentBooked, documentBookingRows } from '../kernel/ledger';
 import { joinIdentityGroup, placesOf, rootOf, type DocumentPlace } from '../kernel/sources';
+import { q } from '../kernel/work';
 import type { Evidence, TextLayer } from './evidence';
 
 /*
@@ -110,8 +111,29 @@ export const listInput = z
     authority: z
       .enum(['efactura', 'issued', 'ubl_upload', 'invoicer', 'amef', 'extracted'])
       .optional(),
+    /** The documents dated in this range (the document's date), either end optional. */
+    from: z.iso.date().optional(),
+    to: z.iso.date().optional(),
+    /** Only those a posted entry that stands recognizes (or a standing opening carries), or only
+     * the others. */
+    booked: z.enum(['booked', 'unbooked']).optional(),
+    /** A page of at most this many; without it, every document at once. */
+    limit: z.number().int().min(1).max(500).optional(),
+    /** The `next` of the previous page. */
+    after: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}\|[0-9a-f-]{36}$/)
+      .optional(),
   })
   .strict();
+/** A document as `documents.list` shows it: with its partner's name and its booking. */
+export const documentListItem = documentView.extend({
+  party: z.object({ id: z.string(), name: z.string() }).nullable(),
+  /** Whether a posted entry that stands recognizes its group, or a standing opening carries it. */
+  booked: z.boolean(),
+  /** That entry. */
+  entryId: z.string().nullable(),
+});
 const part = z.number().int().min(1).max(1000);
 export const recordInput = z
   .object({
@@ -625,25 +647,70 @@ export class Documents {
     });
   }
 
+  /**
+   * Documents by date, then id: by kind, source, date range and booking, a page at a time with
+   * `limit` (`next` is the last one's `<date>|<id>`), else all at once. Each with its partner's
+   * name and the posted entry that books its group, if any.
+   */
   list(actor: Actor, input: z.infer<typeof listInput>) {
     return this.commands.read(actor, 'documents.list', async (tx) => {
+      const booking = sql<string | null>`(select entryId from (${documentBookingRows(
+        q(documents.companyId),
+        q(documents.id),
+        { postedOnly: true },
+      )}) limit 1)`;
+      const [afterDate, afterId] = input.after?.split('|') ?? [];
       const rows = await tx
-        .select()
+        .select({ document: documents, entryId: booking, partyName: parties.name })
         .from(documents)
+        .leftJoin(
+          parties,
+          and(eq(parties.companyId, documents.companyId), eq(parties.id, documents.partyId)),
+        )
         .where(
           and(
             eq(documents.companyId, actor.companyId),
             input.kinds?.length ? inArray(documents.kind, input.kinds) : undefined,
             input.authority ? eq(documents.authority, input.authority) : undefined,
+            input.from ? gte(documents.docDate, input.from) : undefined,
+            input.to ? lte(documents.docDate, input.to) : undefined,
+            input.booked === 'booked'
+              ? sql`${booking} is not null`
+              : input.booked === 'unbooked'
+                ? sql`${booking} is null`
+                : undefined,
+            afterDate && afterId
+              ? or(
+                  gt(documents.docDate, afterDate),
+                  and(eq(documents.docDate, afterDate), gt(documents.id, afterId)),
+                )
+              : undefined,
           ),
         )
-        .orderBy(asc(documents.docDate), asc(documents.id));
+        .orderBy(asc(documents.docDate), asc(documents.id))
+        .limit(input.limit === undefined ? -1 : input.limit + 1);
+      const page = input.limit === undefined ? rows : rows.slice(0, input.limit);
       const places = await placesOf(
         tx,
         actor.companyId,
-        rows.map((row) => row.id),
+        page.map((row) => row.document.id),
       );
-      return rows.map((row) => viewOf(row, places.get(row.id)));
+      const last = page.at(-1)?.document;
+      return {
+        items: page.map(({ document, entryId, partyName }) => ({
+          ...viewOf(document, places.get(document.id)),
+          party:
+            document.partyId && partyName !== null
+              ? { id: document.partyId, name: partyName }
+              : null,
+          booked: entryId !== null,
+          entryId,
+        })),
+        next:
+          input.limit !== undefined && rows.length > input.limit && last
+            ? `${last.docDate}|${last.id}`
+            : null,
+      };
     });
   }
 

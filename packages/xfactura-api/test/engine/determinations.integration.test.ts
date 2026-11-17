@@ -289,6 +289,24 @@ describe('determinations', () => {
       '300.000,00 lei, față de 100000 € × 5.0800',
     );
 
+    // The closure needs the yearly VAT period confirmed: an agent asks, and a person who knows
+    // the year's period may record it, from the day the determination starts.
+    const confirm = (
+      await s.invoke<{ items: WorkItem[] }>(s.owner, 'work.list', {
+        kinds: ['closure.need'],
+        limit: 200,
+      })
+    ).items.find((item) => item.subject.id === 'determination.confirm|profile:vat.period/2026')!;
+    expect(confirm.next.map((step) => [step.operation, step.by, step.allowed])).toEqual([
+      ['determinations.propose', 'agent', true],
+      ['profile.record', 'human', true],
+    ]);
+    expect(confirm.next[1]).toMatchObject({
+      inputHint: { axis: 'vat.period', effectiveFrom: '2026-01-01' },
+      complete: false,
+      missing: ['value'],
+    });
+
     // The owner records monthly from habit: the books contradict it, and the closure says so.
     await record('vat.period', 'monthly', '2026-01-01');
     const conflict = await closure('2026-07', '2026-09');

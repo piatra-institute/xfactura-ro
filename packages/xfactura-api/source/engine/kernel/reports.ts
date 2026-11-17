@@ -247,6 +247,48 @@ export async function justifyingDocuments(
   return found;
 }
 
+/** An entry's lines as the registers show them: amounts in lei, a foreign currency's beside. */
+function registerLines(rows: (typeof lines.$inferSelect)[]) {
+  return rows.map((row) => {
+    const { bani, currency, ...line } = lineSpec(row);
+    return {
+      ...line,
+      amount: ron(bani),
+      ...(currency
+        ? {
+            currency: {
+              code: currency.code,
+              amount: formatMoney(currency.minor, currency.code),
+              rate: currency.rate,
+            },
+          }
+        : {}),
+    };
+  });
+}
+
+/**
+ * An entry's lines as this reader may read them, as the journal shows them: a payment of pay
+ * to a reader who may not read pay with its pay lines summed and, for one person, without their
+ * amount (`paymentWithoutPersons`); other lines on personnel accounts summed without the person
+ * (`withoutPersons`); a payroll of one person with its sick pay folded into 641 for a reader who
+ * may not read health data (`sickClaimWithoutHealth`).
+ */
+export function linesAsShown(
+  rows: (typeof lines.$inferSelect)[],
+  reader: { pay: boolean; health: boolean },
+) {
+  const booked = registerLines(rows);
+  const salary = reader.pay ? null : payPayment(booked);
+  if (salary)
+    return { lines: paymentWithoutPersons(booked, salary.persons), salary: true as const };
+  const shown = reader.pay ? booked : withoutPersons(booked);
+  return {
+    lines: !reader.health && singlePayroll(booked) ? sickClaimWithoutHealth(shown) : shown,
+    salary: false as const,
+  };
+}
+
 const treasuryLine = or(
   ...treasuryAccounts.flatMap((account) => [
     eq(lines.account, account),
@@ -1052,25 +1094,10 @@ export class Reports {
       const justifying = await justifyingDocuments(tx, actor.companyId, page);
       return {
         entries: page.map((entry) => {
-          const booked = rows
-            .filter((row) => row.entryId === entry.id)
-            .map((row) => {
-              const { bani, currency, ...line } = lineSpec(row);
-              return {
-                ...line,
-                amount: ron(bani),
-                ...(currency
-                  ? {
-                      currency: {
-                        code: currency.code,
-                        amount: formatMoney(currency.minor, currency.code),
-                        rate: currency.rate,
-                      },
-                    }
-                  : {}),
-              };
-            });
-          const salary = pay ? null : payPayment(booked);
+          const shown = linesAsShown(
+            rows.filter((row) => row.entryId === entry.id),
+            { pay, health },
+          );
           const document = justifying.get(entry.id) ?? null;
           const view = {
             id: entry.id,
@@ -1083,19 +1110,15 @@ export class Reports {
             proposalId: entry.proposalId,
             binding: entry.approvalId ? ('approval' as const) : ('policy' as const),
           };
-          if (salary)
+          if (shown.salary)
             return {
               ...view,
               document: document && { ...document, number: null },
               description: salaryPayment,
-              lines: paymentWithoutPersons(booked, salary.persons),
+              lines: shown.lines,
               redacted: true as const,
             };
-          const lines = pay ? booked : withoutPersons(booked);
-          return {
-            ...view,
-            lines: !health && singlePayroll(booked) ? sickClaimWithoutHealth(lines) : lines,
-          };
+          return { ...view, lines: shown.lines };
         }),
         next: headers.length > input.limit ? page.at(-1)!.seq : null,
       };

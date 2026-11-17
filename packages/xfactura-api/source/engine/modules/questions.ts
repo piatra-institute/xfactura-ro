@@ -13,13 +13,12 @@ import {
   type QuestionSubject,
 } from 'xfactura-core/questions/kinds';
 import type { Transaction } from '../db/database';
-import { answerMediaType } from '../db/invariants';
 import { evidence, questionAnswers, questions, questionWithdrawals } from '../db/schema';
 import type { ObjectStore } from '../adapters/object-store';
 import { roleAllows, type Access, type Actor, type Commands } from '../kernel/commands';
 import { openAnswer, sealAnswer } from '../kernel/personal';
 import { q } from '../kernel/work';
-import { profileInput, writeProfileFact } from './company';
+import { keepStatement, profileFactInput, writeProfileFact } from './company';
 
 /*
  * Questions to people. An agent asks (`questions.ask`) what the books depend on and nobody
@@ -389,8 +388,13 @@ export class Questions {
         const seq = (asked.answer?.seq ?? 0) + 1;
         const subject = { kind: asked.row.subjectKind, id: asked.row.subjectId };
         // The answer as evidence: what was asked, what the person answered, and when.
-        const bytes = new TextEncoder().encode(
-          canonical({
+        const evidenceId = await keepStatement(
+          tx,
+          this.objects,
+          this.commands,
+          actor,
+          `raspuns-${asked.row.id}-${seq}.json`,
+          () => ({
             schema: 'xfactura.answer@1',
             answerId: id,
             questionId: asked.row.id,
@@ -405,18 +409,6 @@ export class Questions {
             answeredAt: new Date(this.clock()).toISOString(),
           }),
         );
-        const hash = await this.objects.put(actor.companyId, bytes);
-        const evidenceId = this.commands.ids();
-        await tx.insert(evidence).values({
-          id: evidenceId,
-          companyId: actor.companyId,
-          hash,
-          filename: `raspuns-${asked.row.id}-${seq}.json`,
-          mediaType: answerMediaType,
-          size: bytes.length,
-          createdBy: actor.actorId,
-          engineAt: this.commands.clock(),
-        });
         // A month's absences are kept sealed but for the certificates' files (`sealAnswer`); the
         // answer's own file, evidence of what the person answered, is health data.
         await tx.insert(questionAnswers).values({
@@ -442,7 +434,7 @@ export class Questions {
               await writeProfileFact(
                 tx,
                 actor,
-                profileInput.parse({ ...fact, evidenceId }),
+                profileFactInput.parse({ ...fact, evidenceId }),
                 this.commands.ids,
               )
             ).id,

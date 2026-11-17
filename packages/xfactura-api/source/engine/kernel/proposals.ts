@@ -3,6 +3,7 @@ import { ZodError } from 'zod';
 import { DomainError, requireCondition } from 'xfactura-core/errors';
 import { canonical, derivedId, hashOf } from 'xfactura-core/hash';
 import {
+  effectTotals,
   financialYearOf,
   validateEffect,
   type AnswerRecord,
@@ -65,7 +66,13 @@ import { closedMonths } from './periods';
 import { loadAccounts, loadState, mergeStates } from './state';
 import { auditHead } from './events';
 import { rootOf, sourceReview } from './sources';
-import { viewEffect, type ProposalChange, type ProposalView, type StoredEffect } from './views';
+import {
+  viewEffect,
+  type PreviewEffect,
+  type ProposalChange,
+  type ProposalView,
+  type StoredEffect,
+} from './views';
 import type { PostingPolicies } from './policies';
 
 const assurance: Record<string, UseMode> = {
@@ -208,18 +215,23 @@ export interface Evaluated {
   blocking: boolean;
 }
 
-/** Replaces the refs a treatment used for new open items and schedules with stable ids. */
-function resolveRefs(effect: Effect, proposalId: string): Effect {
-  const items = new Map(
-    effect.openItems.map((item) => [item.ref, derivedId(proposalId, 'openItem', item.ref)]),
-  );
+/** The prefix of the references a preview gives what an effect would create: never an id, so
+ * nothing can be booked against one, and never equal to one the engine assigns. */
+export const provisionalPrefix = 'provisional:';
+
+/**
+ * Replaces the refs a treatment used for new open items, stock layers and schedules with stable
+ * ids derived from the proposal; for a preview (`proposalId` null), with provisional references
+ * (`provisional:<kind>:<ref>`) that are no identifier at all.
+ */
+function resolveRefs(effect: Effect, proposalId: string | null): Effect {
+  const name = (kind: 'openItem' | 'stockLayer' | 'schedule', ref: string) =>
+    proposalId === null ? `${provisionalPrefix}${kind}:${ref}` : derivedId(proposalId, kind, ref);
+  const items = new Map(effect.openItems.map((item) => [item.ref, name('openItem', item.ref)]));
   const resolve = (reference: string | undefined) =>
     reference === undefined ? undefined : (items.get(reference) ?? reference);
   const layers = new Map(
-    (effect.stockLayers ?? []).map((layer) => [
-      layer.ref,
-      derivedId(proposalId, 'stockLayer', layer.ref),
-    ]),
+    (effect.stockLayers ?? []).map((layer) => [layer.ref, name('stockLayer', layer.ref)]),
   );
   return {
     ...effect,
@@ -246,11 +258,42 @@ function resolveRefs(effect: Effect, proposalId: string): Effect {
     openItems: effect.openItems.map((item) => ({ ...item, ref: items.get(item.ref)! })),
     schedules: effect.schedules.map((schedule) => ({
       ...schedule,
-      ref: schedule.version === 1 ? derivedId(proposalId, 'schedule', schedule.ref) : schedule.ref,
+      ref: schedule.version === 1 ? name('schedule', schedule.ref) : schedule.ref,
       openItem: resolve(schedule.openItem)!,
     })),
   };
 }
+
+const provisional = (id: string | undefined) => id?.startsWith(provisionalPrefix) === true;
+const marked = <T extends object>(item: T, ...ids: (string | undefined)[]) =>
+  ids.some(provisional) ? { ...item, provisional: true as const } : item;
+
+/** A preview's effect with what it would create marked `provisional: true`: the open items,
+ * stock layers and schedules it names by a provisional reference, and the lines and moves that
+ * name one. */
+export function markProvisional(effect: ProposalView['effect'] & object): PreviewEffect {
+  return {
+    ...effect,
+    lines: effect.lines.map((line) => marked(line, line.openItem)),
+    openItems: effect.openItems.map((item) => marked(item, item.id)),
+    schedules: effect.schedules.map((schedule) => marked(schedule, schedule.id, schedule.openItem)),
+    ...(effect.stockLayers
+      ? { stockLayers: effect.stockLayers.map((layer) => marked(layer, layer.id)) }
+      : {}),
+    ...(effect.stockMoves
+      ? { stockMoves: effect.stockMoves.map((move) => marked(move, move.layer)) }
+      : {}),
+  };
+}
+
+/** Lines' totals per currency in minor units, as integer strings (`effectTotals`). */
+const totalsView = (lines: Pick<Effect, 'lines'>['lines']) =>
+  effectTotals({ lines }).map((total) => ({
+    currency: total.currency,
+    debit: total.debit.toString(),
+    credit: total.credit.toString(),
+    difference: total.difference.toString(),
+  }));
 
 function accountCodes(effect: Effect) {
   return [
@@ -529,11 +572,13 @@ export class Proposals {
       : null;
   }
 
-  /** Evaluates a treatment for a proposal: deterministic for the same input and state. */
+  /** Evaluates a treatment for a proposal: deterministic for the same input and state. A preview
+   * of a subject no proposal holds evaluates for none (`proposalId` null): what the effect would
+   * create carries provisional references. */
   async evaluate(
     tx: Transaction,
     companyId: string,
-    proposalId: string,
+    proposalId: string | null,
     treatment: Treatment,
     input: unknown,
     basis: Basis | null = null,
@@ -638,6 +683,111 @@ export class Proposals {
     };
   }
 
+  /**
+   * What proposing checks before it writes anything, `proposals.preview` too, so that a preview
+   * is refused wherever proposing is. Copies of one document (a PDF read, then e-Factura) share
+   * their group's root as subject, so that one of them only is ever recognized. A payment of pay
+   * is proposed by a caller who may read pay (`PAY_DATA`); a document a standing opening carries
+   * is not recognized again (`DOCUMENT_IN_OPENING`). The proposal holding the subject, open or
+   * posted by an entry that stands, if any (a withdrawal frees the subject, and so does the
+   * reversal of its posted entry): a revision keeps it at its latest version (`SUBJECT_MISMATCH`,
+   * `STALE`); a new proposal of a held subject is refused unless its input is the holder's
+   * (`SUBJECT_EXISTS`), which is then returned as it stands.
+   */
+  private async admit(
+    tx: Transaction,
+    actor: Actor,
+    role: Role,
+    treatment: Treatment,
+    input: unknown,
+    revision?: { proposalId: string; version: number },
+  ) {
+    const declared = treatment.subject(input);
+    const subjectKey = declared.startsWith('document:')
+      ? `document:${await rootOf(tx, actor.companyId, declared.slice('document:'.length))}`
+      : declared;
+    const pay = await this.payReader(tx, actor, role);
+    if (!pay) await this.requirePay(subjectKey, salarySubjects(tx, actor.companyId, [subjectKey]));
+    if (declared.startsWith('document:')) {
+      const issue = await this.openingIssue(
+        tx,
+        actor.companyId,
+        declared.slice('document:'.length),
+      );
+      if (issue) throw new DomainError(issue.code, issue.message, 409, issue.details);
+    }
+    const [existing] = await tx
+      .select()
+      .from(proposals)
+      .where(
+        and(
+          eq(proposals.companyId, actor.companyId),
+          eq(proposals.subjectKey, subjectKey),
+          holdsSubject('"acc_proposals"'),
+        ),
+      );
+    const latest = existing
+      ? await this.latestVersion(tx, actor.companyId, existing.id)
+      : undefined;
+    if (revision) {
+      requireCondition(
+        existing && existing.id === revision.proposalId,
+        'SUBJECT_MISMATCH',
+        'Revizuirea trebuie să păstreze obiectul propunerii.',
+        409,
+      );
+      requireCondition(
+        latest?.version === revision.version,
+        'STALE',
+        'Propunerea s-a schimbat. Reîncărcați datele.',
+        409,
+      );
+    } else if (existing)
+      requireCondition(
+        latest?.input === canonical(input),
+        'SUBJECT_EXISTS',
+        'Există deja o propunere pentru acest obiect. Revizuiți propunerea existentă.',
+        409,
+        { proposalId: existing.id, version: latest?.version ?? 0 },
+      );
+    return { declared, subjectKey, pay, existing, latest };
+  }
+
+  /**
+   * The basis a version relies on: the answers named (or, on a revision without them, the
+   * previous version's), and the template its input conforms to, with the answer about a
+   * vehicle's use the template follows (the same answer an agent would reuse). Named answers
+   * must be the company's questions, answered.
+   */
+  private async basisFor(
+    tx: Transaction,
+    companyId: string,
+    treatment: Treatment,
+    input: unknown,
+    basisInput: BasisInput | undefined,
+    previous: Basis | null,
+  ) {
+    const template = await this.templateBasis(
+      tx,
+      companyId,
+      treatment.id,
+      input,
+      basisInput?.template,
+      basisInput === undefined ? previous?.template : undefined,
+    );
+    const held = template ? await this.templates!.answers(tx, companyId, template) : [];
+    const cited = basisInput ?? previous;
+    const basis = basisOf({ answers: [...(cited?.answers ?? []), ...held] }, template);
+    if (basisInput !== undefined) await this.requireAnswered(tx, companyId, basis);
+    return basis;
+  }
+
+  /** An effect paying pay is proposed by a caller who may read pay only (`PAY_DATA`). */
+  private async requirePayEffect(pay: boolean, subjectKey: string, evaluated: Evaluated) {
+    if (!pay && evaluated.effect && payPayment(evaluated.effect.lines))
+      await this.requirePay(subjectKey, Promise.resolve(new Set([subjectKey])));
+  }
+
   /** Proposes a treatment, or revises an open proposal of the same subject. */
   async propose(
     actor: Actor,
@@ -662,64 +812,18 @@ export class Proposals {
       },
       'write',
       async (tx, access) => {
-        // Copies of one document (a PDF read, then e-Factura) share their group's root as
-        // subject, so that one of them only is ever recognized.
-        const declared = treatment.subject(input);
-        const subjectKey = declared.startsWith('document:')
-          ? `document:${await rootOf(tx, actor.companyId, declared.slice('document:'.length))}`
-          : declared;
-        const pay = await this.payReader(tx, actor, access.role);
-        if (!pay)
-          await this.requirePay(subjectKey, salarySubjects(tx, actor.companyId, [subjectKey]));
-        if (declared.startsWith('document:')) {
-          const issue = await this.openingIssue(
-            tx,
-            actor.companyId,
-            declared.slice('document:'.length),
-          );
-          if (issue) throw new DomainError(issue.code, issue.message, 409, issue.details);
-        }
-        // The proposal holding this subject, open or posted, if any: a withdrawal frees the
-        // subject, and so does the reversal of its posted entry (a correction is a reversal and
-        // a new proposal).
-        const [existing] = await tx
-          .select()
-          .from(proposals)
-          .where(
-            and(
-              eq(proposals.companyId, actor.companyId),
-              eq(proposals.subjectKey, subjectKey),
-              holdsSubject('"acc_proposals"'),
-            ),
-          );
-        const latest = existing
-          ? await this.latestVersion(tx, actor.companyId, existing.id)
-          : undefined;
+        const { declared, subjectKey, pay, existing, latest } = await this.admit(
+          tx,
+          actor,
+          access.role,
+          treatment,
+          input,
+          revision,
+        );
         let proposalId: string;
-        if (revision) {
-          requireCondition(
-            existing && existing.id === revision.proposalId,
-            'SUBJECT_MISMATCH',
-            'Revizuirea trebuie să păstreze obiectul propunerii.',
-            409,
-          );
-          requireCondition(
-            latest?.version === revision.version,
-            'STALE',
-            'Propunerea s-a schimbat. Reîncărcați datele.',
-            409,
-          );
-          proposalId = existing.id;
-        } else if (existing) {
-          requireCondition(
-            latest?.input === canonical(input),
-            'SUBJECT_EXISTS',
-            'Există deja o propunere pentru acest obiect. Revizuiți propunerea existentă.',
-            409,
-            { proposalId: existing.id, version: latest?.version ?? 0 },
-          );
-          return this.view(tx, actor.companyId, existing.id);
-        } else {
+        if (revision) proposalId = existing!.id;
+        else if (existing) return this.view(tx, actor.companyId, existing.id);
+        else {
           proposalId = this.commands.ids();
           await tx.insert(proposals).values({
             id: proposalId,
@@ -732,20 +836,14 @@ export class Proposals {
         }
         const version = (latest?.version ?? 0) + 1;
         const previous = revision && latest?.basis ? (JSON.parse(latest.basis) as Basis) : null;
-        const template = await this.templateBasis(
+        const basis = await this.basisFor(
           tx,
           actor.companyId,
-          treatment.id,
+          treatment,
           input,
-          basisInput?.template,
-          basisInput === undefined ? previous?.template : undefined,
+          basisInput,
+          previous,
         );
-        // A proposal citing a template that names a vehicle cites the answer about its use that
-        // holds, as the template's input followed it (the same answer an agent would reuse).
-        const held = template ? await this.templates!.answers(tx, actor.companyId, template) : [];
-        const cited = basisInput ?? previous;
-        const basis = basisOf({ answers: [...(cited?.answers ?? []), ...held] }, template);
-        if (basisInput !== undefined) await this.requireAnswered(tx, actor.companyId, basis);
         const evaluated = await this.evaluate(
           tx,
           actor.companyId,
@@ -754,8 +852,7 @@ export class Proposals {
           input,
           basis,
         );
-        if (!pay && evaluated.effect && payPayment(evaluated.effect.lines))
-          await this.requirePay(subjectKey, Promise.resolve(new Set([subjectKey])));
+        await this.requirePayEffect(pay, subjectKey, evaluated);
         await tx.insert(proposalVersions).values({
           companyId: actor.companyId,
           proposalId,
@@ -806,6 +903,110 @@ export class Proposals {
       },
       this.present(actor),
     );
+  }
+
+  /**
+   * What proposing a treatment would evaluate against the books now, recording nothing (no
+   * proposal, command, event or evidence, and no identifier drawn): the effect and issues
+   * `proposals.propose` would store for the same input and basis, and the totals of its lines,
+   * debit and credit per currency in minor units with their difference (`effectTotals`). It is
+   * refused wherever proposing is, with the same checks (`admit`, `basisFor`, the pay of the
+   * effect), and the credential names the treatment's own `.propose` too. What the effect of a
+   * subject no proposal holds would create (open items, stock layers, schedules) carries
+   * provisional references (`provisional:<kind>:<ref>`, marked `provisional: true`). The holder's
+   * own input previews as proposing it returns the holder: its stored effect and issues, before
+   * any basis is checked or anything evaluated. The effect is shown as `proposals.get` shows it to
+   * this caller.
+   */
+  async preview(
+    actor: Actor,
+    request: { treatment: string; input: unknown; basis?: BasisInput | undefined },
+  ) {
+    const treatment = this.treatment(request.treatment);
+    const input = treatment.input.parse(request.input);
+    return this.commands.read(actor, 'proposals.preview', async (tx, access) => {
+      await this.commands.authorize(tx, actor, 'write', `${treatment.id}.propose`);
+      const { subjectKey, pay, existing, latest } = await this.admit(
+        tx,
+        actor,
+        access.role,
+        treatment,
+        input,
+      );
+      if (existing) {
+        // Proposing the holder's own input returns the holder as it stands, before any basis is
+        // checked or anything evaluated: so does its preview, the stored effect and issues as
+        // `proposals.get` shows them, with their totals.
+        const [held] = await this.disclosed(
+          tx,
+          actor,
+          [await this.view(tx, actor.companyId, existing.id)],
+          false,
+          access.role,
+        );
+        const stored = latest!.effect ? (JSON.parse(latest!.effect) as StoredEffect) : null;
+        return {
+          treatment: treatment.id,
+          subject: subjectKey,
+          effect: held!.effect && markProvisional(held!.effect),
+          issues: held!.issues,
+          blocking: latest!.blocking,
+          totals:
+            stored && held!.effect
+              ? totalsView(
+                  stored.lines.map((line) => ({
+                    account: line.account,
+                    side: line.side,
+                    bani: BigInt(line.bani),
+                    ...(line.currency
+                      ? { currency: { ...line.currency, minor: BigInt(line.currency.minor) } }
+                      : {}),
+                  })),
+                )
+              : null,
+        };
+      }
+      const basis = await this.basisFor(tx, actor.companyId, treatment, input, request.basis, null);
+      const evaluated = await this.evaluate(tx, actor.companyId, null, treatment, input, basis);
+      await this.requirePayEffect(pay, subjectKey, evaluated);
+      // Shown through the reads' own disclosure, as a version with this effect would be.
+      const [shown] = await this.disclosed(
+        tx,
+        actor,
+        [
+          {
+            id: 'preview',
+            treatment: treatment.id,
+            subject: subjectKey,
+            status: evaluated.blocking ? 'blocked' : 'proposed',
+            version: 0,
+            effectHash: evaluated.effectHash,
+            rulesHash: evaluated.rulesHash,
+            rules: evaluated.rules as ProposalView['rules'],
+            issues: evaluated.issues.map((issue) => ({ ...issue })),
+            effect: evaluated.effect
+              ? viewEffect(JSON.parse(canonical(evaluated.effect)) as StoredEffect)
+              : null,
+            approval: null,
+            entry: null,
+            createdBy: actor.actorId,
+            agentId: actor.agentId ?? null,
+            check: null,
+            basis: null,
+          },
+        ],
+        false,
+        access.role,
+      );
+      return {
+        treatment: treatment.id,
+        subject: subjectKey,
+        effect: shown!.effect && markProvisional(shown!.effect),
+        issues: shown!.issues,
+        blocking: evaluated.blocking,
+        totals: evaluated.effect ? totalsView(evaluated.effect.lines) : null,
+      };
+    });
   }
 
   /** Whether this caller may read pay (`Commands.disclosable` on `payroll` and `personal`). */

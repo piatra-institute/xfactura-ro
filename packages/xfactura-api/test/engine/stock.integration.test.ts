@@ -675,6 +675,12 @@ describe('a company at retail price keeping a warehouse at cost', () => {
             subject: { kind: 'profile', id: 'policy.stock.valuation' },
           },
         },
+        // A person who knows the policy records it from the books' first day.
+        {
+          operation: 'profile.record',
+          by: 'human',
+          inputHint: { axis: 'policy.stock.valuation', effectiveFrom: '2026-01-01' },
+        },
       ],
     });
     // The depot's receipt asked the same, by itself.

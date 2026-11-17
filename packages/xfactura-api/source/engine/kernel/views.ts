@@ -112,6 +112,26 @@ export const effectView = z.object({
   explanation: z.object({ summary: z.string(), details: z.unknown().optional() }),
 });
 
+/** `provisional: true` on what a preview's effect would create, or names that would be created. */
+const provisionalMark = { provisional: z.literal(true).optional() };
+/**
+ * A preview's effect (`proposals.preview`): the effect's view, with the open items, stock layers
+ * and schedules it would create named by provisional references (`provisional:<kind>:<ref>`) and
+ * marked `provisional: true`, as are the lines and moves that name them.
+ */
+export const previewEffectView = effectView.extend({
+  lines: z.array(effectView.shape.lines.element.extend(provisionalMark)),
+  openItems: z.array(effectView.shape.openItems.element.extend(provisionalMark)),
+  schedules: z.array(effectView.shape.schedules.element.extend(provisionalMark)),
+  stockLayers: z
+    .array(effectView.shape.stockLayers.unwrap().element.extend(provisionalMark))
+    .optional(),
+  stockMoves: z
+    .array(effectView.shape.stockMoves.unwrap().element.extend(provisionalMark))
+    .optional(),
+});
+export type PreviewEffect = z.infer<typeof previewEffectView>;
+
 /** The effect as callers see it: decimal amounts in RON and in the line currency. */
 export function viewEffect(effect: StoredEffect): z.infer<typeof effectView> {
   return {

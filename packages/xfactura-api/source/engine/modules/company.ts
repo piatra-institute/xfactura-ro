@@ -1,14 +1,15 @@
 import { createHmac } from 'node:crypto';
 import { and, asc, eq, gt, gte, lte, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { requireCondition } from 'xfactura-core/errors';
+import { DomainError, requireCondition } from 'xfactura-core/errors';
 import { canonical, hashOf } from 'xfactura-core/hash';
-import { accountCodePattern } from 'xfactura-core/kernel';
+import { accountCodePattern, factInEffect } from 'xfactura-core/kernel';
 import { chartAmendments, controlKindOf, referenceChart } from 'xfactura-core/ro/chart';
 import { impairmentPolicies } from 'xfactura-core/ro/yearend';
 import { stockPolicyAxes } from 'xfactura-core/ro/stock';
 import { productionPolicyAxes } from 'xfactura-core/ro/production';
 import {
+  booksSystemOf,
   booksSystems,
   entityFormOf,
   entityForms,
@@ -18,9 +19,11 @@ import {
 import { prorataValues } from 'xfactura-core/ro/exempt';
 import { taxpayerCategories } from 'xfactura-core/ro/saft/applicability';
 import { isValidCnp } from 'xfactura-core/ro/identifiers';
-import { addDays, type LocalDate } from 'xfactura-core/time';
+import { addDays, bucharestDate, type LocalDate } from 'xfactura-core/time';
 import type { Transaction } from '../db/database';
 import type { PartyIdentities } from '../db/identity';
+import { answerMediaType } from '../db/invariants';
+import type { ObjectStore } from '../adapters/object-store';
 import {
   commands,
   companies,
@@ -39,7 +42,16 @@ import {
 import { appendAudit, commandKey, type Actor, type Commands, type Ids } from '../kernel/commands';
 import { entryStands } from '../kernel/ledger';
 import { cnpMask } from '../kernel/personal';
-import { loadState } from '../kernel/state';
+import { loadState, profileRows } from '../kernel/state';
+import {
+  axisName,
+  axisValueName,
+  profileAxisGroups,
+  profileGroupNames,
+  profileGroups,
+  yearlyProfileAxes,
+  type ProfileGroup,
+} from '../kernel/work-names';
 import { sha256 } from '../adapters/object-store';
 
 const day = z.iso.date();
@@ -179,28 +191,98 @@ export const profileAxes = {
  * `retailMethodAt`; OMFP 1802/2014 pct. 286 alin. (8), 287 alin. (3)). */
 const warehouseRetailAxis =
   /^policy\.stock\.retail\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** The values an axis takes: a warehouse's own retail method takes the company's. */
+export const axisValues = (axis: string): readonly string[] =>
+  (profileAxes[axis as keyof typeof profileAxes] ??
+    (warehouseRetailAxis.test(axis)
+      ? profileAxes['policy.stock.retail']
+      : [])) as readonly string[];
+const factShape = {
+  axis: z.union([
+    z.enum(Object.keys(profileAxes) as [keyof typeof profileAxes, ...(keyof typeof profileAxes)[]]),
+    z.string().regex(warehouseRetailAxis),
+  ]),
+  value: z.string(),
+  effectiveFrom: day,
+  supersedesId: z.uuid().optional(),
+};
+const allowedValue = {
+  check: (fact: { axis: string; value: string }) => axisValues(fact.axis).includes(fact.value),
+  message: { message: 'Valoare nepermisă pentru această axă.', path: ['value'] },
+};
+/** A dated company fact as `profile.record` takes it: with the document that proves it, or,
+ * without one, the person's own statement, which the engine keeps as evidence. */
 export const profileInput = z
-  .object({
-    axis: z.union([
-      z.enum(
-        Object.keys(profileAxes) as [keyof typeof profileAxes, ...(keyof typeof profileAxes)[]],
-      ),
-      z.string().regex(warehouseRetailAxis),
-    ]),
-    value: z.string(),
-    effectiveFrom: day,
-    evidenceId: z.uuid(),
-    supersedesId: z.uuid().optional(),
-  })
+  .object({ ...factShape, evidenceId: z.uuid().optional() })
   .strict()
-  .refine(
-    (fact) =>
-      (
-        (profileAxes[fact.axis as keyof typeof profileAxes] ??
-          profileAxes['policy.stock.retail']) as readonly string[]
-      ).includes(fact.value),
-    { message: 'Valoare nepermisă pentru această axă.', path: ['value'] },
-  );
+  .refine(allowedValue.check, allowedValue.message);
+/** A fact as it is recorded: always citing its evidence. */
+export const profileFactInput = z
+  .object({ ...factShape, evidenceId: z.uuid() })
+  .strict()
+  .refine(allowedValue.check, allowedValue.message);
+type ProfileFactInput = z.infer<typeof profileFactInput>;
+
+export const profileCurrentInput = z
+  .object({
+    /** The day the values are read on; the engine's today in Bucharest by default. */
+    date: day.optional(),
+  })
+  .strict();
+const valueLabel = z.object({ value: z.string(), label: z.string() });
+export const profileAxisView = z.object({
+  axis: z.string(),
+  name: z.string(),
+  group: z.enum(profileGroups),
+  /** Whether any of its values applies to the company on the day (`values[].applies`). */
+  applies: z.boolean(),
+  /** The fact is stated for each year: the law decides it yearly. */
+  yearly: z.boolean(),
+  /** Each value with its label and whether `profile.record` would take it on the day, as it
+   * checks the legal form and the facts recorded (`formRefusal`): the owner's contributions and
+   * single entry for a PFA, II or IF, the profit or micro tax for a company, a form of the same
+   * kind of taxpayer as the one recorded. */
+  values: z.array(valueLabel.extend({ applies: z.boolean() })),
+  /** The fact in effect on the day, as treatments read it (`profileAt`): the last effective by
+   * the day, superseded facts left out. */
+  current: z
+    .object({
+      value: z.string(),
+      label: z.string(),
+      effectiveFrom: z.string(),
+      factId: z.string(),
+      evidenceId: z.string(),
+      recordedBy: z.string(),
+      /** On a yearly axis: the year the fact was stated for, and whether that is an earlier year
+       * than the day's, whose own fact is still to be stated or confirmed. */
+      confirmedFor: z.number().optional(),
+      needsConfirmation: z.boolean().optional(),
+    })
+    .nullable(),
+  /** The value the engine reads when nothing is recorded, where it reads one. */
+  impliedDefault: valueLabel.nullable(),
+  /** Every fact recorded on the axis in effect order, the superseded ones included. */
+  history: z.array(
+    z.object({
+      value: z.string(),
+      label: z.string(),
+      effectiveFrom: z.string(),
+      factId: z.string(),
+      evidenceId: z.string(),
+      supersedesId: z.string().nullable(),
+      superseded: z.boolean(),
+      recordedBy: z.string(),
+      recordedAt: z.string(),
+    }),
+  ),
+});
+export const profileCurrentView = z.object({
+  date: z.string(),
+  items: z.array(profileAxisView),
+  next: z.string().nullable(),
+  /** The groups in the order shown, with their Romanian names. */
+  groups: z.array(z.object({ group: z.enum(profileGroups), name: z.string() })),
+});
 /** A partner's identifier as a caller sees it: an individual's (the keyed hash of a CNP) is
  * masked for agents, to whom it is no use and who never read a CNP. */
 export const maskedTaxId = (
@@ -275,7 +357,7 @@ async function initializeCompany(
 export async function writeProfileFact(
   tx: Transaction,
   actor: Actor,
-  input: z.infer<typeof profileInput>,
+  input: ProfileFactInput,
   ids: Ids,
 ) {
   const [source] = await tx
@@ -283,6 +365,17 @@ export async function writeProfileFact(
     .from(evidence)
     .where(and(eq(evidence.companyId, actor.companyId), eq(evidence.id, input.evidenceId)));
   requireCondition(source, 'EVIDENCE', 'Documentul justificativ nu este disponibil.', 404);
+  await checkFact(tx, actor, input);
+  return insertFact(tx, actor, input, ids);
+}
+
+/** The checks a fact passes before it is recorded: its warehouse, the legal form, what it
+ * supersedes. */
+async function checkFact(
+  tx: Transaction,
+  actor: Actor,
+  input: Omit<ProfileFactInput, 'evidenceId'>,
+) {
   if (warehouseRetailAxis.test(input.axis)) {
     const [store] = await tx
       .select({ id: warehouses.id })
@@ -309,6 +402,9 @@ export async function writeProfileFact(
       'Faptul înlocuit aparține altei axe.',
     );
   }
+}
+
+async function insertFact(tx: Transaction, actor: Actor, input: ProfileFactInput, ids: Ids) {
   const id = ids();
   await tx
     .insert(profileFacts)
@@ -317,60 +413,114 @@ export async function writeProfileFact(
 }
 
 /**
- * The legal form decides which axes apply. An SRL and a PFA, II or IF are different taxpayers:
- * the form does not move between them. Single-entry books are a PFA's, II's or IF's; whether
- * they may opt for double entry is open (OUG nr. 44/2008 art. 15 against OMFP nr. 170/2015 art.
- * 3), so the option is refused until an expert contabil answers. The owner's contributions
- * concern a PFA, II or IF; the profit or micro tax regime an SRL.
+ * What a person stated, kept as evidence: the canonical JSON of it, of the kind an answer to a
+ * question is kept as (`application/vnd.xfactura.answer+json`), which proposals and profile facts
+ * cite. The body names its own evidence id, so two statements alike stay two files.
  */
-async function checkForm(tx: Transaction, companyId: string, input: z.infer<typeof profileInput>) {
+export async function keepStatement(
+  tx: Transaction,
+  objects: ObjectStore,
+  commands: Commands,
+  actor: Actor,
+  filename: string,
+  body: (evidenceId: string) => Record<string, unknown>,
+) {
+  const id = commands.ids();
+  const bytes = new TextEncoder().encode(canonical(body(id)));
+  const hash = await objects.put(actor.companyId, bytes);
+  await tx.insert(evidence).values({
+    id,
+    companyId: actor.companyId,
+    hash,
+    filename,
+    mediaType: answerMediaType,
+    size: bytes.length,
+    createdBy: actor.actorId,
+    engineAt: commands.clock(),
+  });
+  return id;
+}
+
+/**
+ * The legal form decides which axes and values apply. An SRL and a PFA, II or IF are different
+ * taxpayers: the form does not move between them. Single-entry books are a PFA's, II's or IF's;
+ * whether they may opt for double entry is open (OUG nr. 44/2008 art. 15 against OMFP nr.
+ * 170/2015 art. 3), so the option is recorded as the person states it, with its document; the
+ * obligation closure reports it UNSUPPORTED (PFA_DOUBLE_ENTRY) and the single-entry registers
+ * refuse it. The owner's contributions concern a PFA, II or IF; the profit or micro tax regime an
+ * SRL.
+ */
+async function checkForm(
+  tx: Transaction,
+  companyId: string,
+  input: Pick<ProfileFactInput, 'axis' | 'value' | 'effectiveFrom'>,
+) {
   const { loaded } = await loadState(tx, companyId, { profile: true });
   const facts = loaded.profile;
-  const form = entityFormOf(facts, input.effectiveFrom as LocalDate);
-  const individual = (value: EntityForm) => individualForms.includes(value);
-  if (input.axis === 'entity.form') {
-    const recorded = facts.filter((fact) => fact.axis === 'entity.form');
-    requireCondition(
-      recorded.every(
-        (fact) => individual(fact.value as EntityForm) === individual(input.value as EntityForm),
-      ),
-      'ENTITY_FORM_CHANGE',
-      'O societate și o PFA, II sau IF sunt contribuabili diferiți: forma juridică nu trece de la una la alta.',
-    );
-    requireCondition(
-      !individual(input.value as EntityForm) ||
-        !facts.some(
-          (fact) =>
-            fact.axis === 'income_tax' || (fact.axis === 'books.system' && fact.value === 'double'),
-        ),
-      'ENTITY_FORM_CHANGE',
-      'Compania are deja un regim de impozit pe profit sau micro ori partida dublă, ale unei societăți.',
-    );
-    return;
+  const refused = formRefusal(
+    input.axis,
+    input.value,
+    facts,
+    entityFormOf(facts, input.effectiveFrom as LocalDate),
+  );
+  if (refused) throw new DomainError(refused.code, refused.message, 422);
+}
+
+/**
+ * Why a value may not be recorded on an axis given the facts recorded and the legal form on its
+ * day, or null when it may (`checkForm`, and `profile.current`'s `applies`).
+ */
+export function formRefusal(
+  axis: string,
+  value: string,
+  facts: readonly { axis: string; value: string }[],
+  form: EntityForm,
+): { code: string; message: string } | null {
+  const individual = (of: string) => individualForms.includes(of as EntityForm);
+  if (axis === 'entity.form') {
+    if (
+      !facts.every(
+        (fact) => fact.axis !== 'entity.form' || individual(fact.value) === individual(value),
+      )
+    )
+      return {
+        code: 'ENTITY_FORM_CHANGE',
+        message:
+          'O societate și o PFA, II sau IF sunt contribuabili diferiți: forma juridică nu trece de la una la alta.',
+      };
+    if (
+      individual(value) &&
+      facts.some(
+        (fact) =>
+          fact.axis === 'income_tax' || (fact.axis === 'books.system' && fact.value === 'double'),
+      )
+    )
+      return {
+        code: 'ENTITY_FORM_CHANGE',
+        message:
+          'Compania are deja un regim de impozit pe profit sau micro ori partida dublă, ale unei societăți.',
+      };
+    return null;
   }
-  if (input.axis === 'books.system') {
-    // A PFA's, II's or IF's option for double entry is recorded as the person states it, with its
-    // document; the obligation closure reports it UNSUPPORTED (PFA_DOUBLE_ENTRY) and the
-    // single-entry registers refuse it: OUG nr. 44/2008 art. 15 against OMFP nr. 170/2015 art. 3.
-    requireCondition(
-      input.value === 'double' || individual(form),
-      'BOOKS_SYSTEM_FORM',
-      'Contabilitatea în partidă simplă se ține de PFA, II și IF (entity.form).',
-    );
-    return;
-  }
-  if (input.axis.startsWith('cas.') || input.axis.startsWith('cass.'))
-    requireCondition(
-      individual(form),
-      'PROFILE_FORM',
-      'Contribuțiile titularului se înregistrează pentru o PFA, II sau IF (entity.form).',
-    );
-  if (input.axis === 'income_tax')
-    requireCondition(
-      !individual(form),
-      'PROFILE_FORM',
-      'Impozitul pe profit sau pe veniturile microîntreprinderilor nu se aplică unei PFA, II sau IF.',
-    );
+  if (axis === 'books.system')
+    return value === 'double' || individual(form)
+      ? null
+      : {
+          code: 'BOOKS_SYSTEM_FORM',
+          message: 'Contabilitatea în partidă simplă se ține de PFA, II și IF (entity.form).',
+        };
+  if ((axis.startsWith('cas.') || axis.startsWith('cass.')) && !individual(form))
+    return {
+      code: 'PROFILE_FORM',
+      message: 'Contribuțiile titularului se înregistrează pentru o PFA, II sau IF (entity.form).',
+    };
+  if (axis === 'income_tax' && individual(form))
+    return {
+      code: 'PROFILE_FORM',
+      message:
+        'Impozitul pe profit sau pe veniturile microîntreprinderilor nu se aplică unei PFA, II sau IF.',
+    };
+  return null;
 }
 
 export class Companies {
@@ -582,6 +732,8 @@ export class Configuration {
     private readonly commands: Commands,
     /** Individuals' party identifiers (`parties.create`). */
     private readonly identities: PartyIdentities,
+    /** Where a person's statement of a fact is kept (`profile.record` without a document). */
+    private readonly objects: ObjectStore,
   ) {}
 
   years(actor: Actor) {
@@ -758,10 +910,149 @@ export class Configuration {
     );
   }
 
+  /**
+   * Records a dated fact. With a document, the fact cites it; without one, the person's statement
+   * (who, when, the axis, the value and its date) is kept as evidence first and the fact cites
+   * that, as an answer to a `profile.fact` question does. The checks are the same either way.
+   */
   recordProfile(actor: Actor, key: string, input: z.infer<typeof profileInput>) {
-    return this.commands.run(actor, key, 'profile.record', input, 'review', (tx) =>
-      writeProfileFact(tx, actor, input, this.commands.ids),
-    );
+    return this.commands.run(actor, key, 'profile.record', input, 'review', async (tx) => {
+      const { evidenceId, ...fact } = input;
+      if (evidenceId)
+        return writeProfileFact(tx, actor, { ...fact, evidenceId }, this.commands.ids);
+      await checkFact(tx, actor, fact);
+      const statement = await keepStatement(
+        tx,
+        this.objects,
+        this.commands,
+        actor,
+        `declaratie-${fact.axis}-${fact.effectiveFrom}.json`,
+        (id) => ({
+          schema: 'xfactura.statement@1',
+          statementId: id,
+          kind: 'profile.fact',
+          axis: fact.axis,
+          value: fact.value,
+          effectiveFrom: fact.effectiveFrom,
+          supersedesId: fact.supersedesId ?? null,
+          statedBy: actor.actorId,
+          statedAt: new Date(this.commands.clock()).toISOString(),
+        }),
+      );
+      return insertFact(tx, actor, { ...fact, evidenceId: statement }, this.commands.ids);
+    });
+  }
+
+  /**
+   * Every profile axis on a day, grouped for people: its Romanian name, its values with their
+   * labels, whether it applies to the company's legal form, the fact in effect (`factInEffect` on
+   * the facts the state loader reads, a yearly axis's only within its year), the value the engine
+   * reads when none is recorded, and every fact recorded on it. A warehouse's own retail method
+   * follows the company's.
+   */
+  profileCurrent(actor: Actor, input: z.infer<typeof profileCurrentInput>) {
+    return this.commands.read(actor, 'profile.current', async (tx) => {
+      const date = input.date ?? bucharestDate(this.commands.clock());
+      const recorded = await tx
+        .select()
+        .from(profileFacts)
+        .where(eq(profileFacts.companyId, actor.companyId))
+        .orderBy(
+          asc(profileFacts.effectiveFrom),
+          asc(profileFacts.createdAt),
+          asc(profileFacts.id),
+        );
+      const standing = await profileRows(tx, actor.companyId);
+      const kept = new Set(standing.map((row) => row.id));
+      const facts = standing.map((row) => ({
+        axis: row.axis,
+        value: row.value,
+        effectiveFrom: row.effectiveFrom as LocalDate,
+      }));
+      const form = entityFormOf(facts, date as LocalDate);
+      const stores = await tx
+        .select({ id: warehouses.id, code: warehouses.code, name: warehouses.name })
+        .from(warehouses)
+        .where(eq(warehouses.companyId, actor.companyId))
+        .orderBy(asc(warehouses.code), asc(warehouses.id));
+      const axes: { axis: string; name: string; group: ProfileGroup }[] = [
+        ...profileAxisGroups.flatMap(([axis, group]) => [
+          { axis, name: axisName(axis), group },
+          ...(axis === 'policy.stock.retail'
+            ? stores.map((store) => ({
+                axis: `policy.stock.retail.${store.id}`,
+                name: `${axisName(`policy.stock.retail.${store.id}`)} ${store.code} ${store.name}`,
+                group,
+              }))
+            : []),
+        ]),
+      ];
+      const labelled = (axis: string, value: string) => ({
+        value,
+        label: axisValueName(axis, value) ?? value,
+      });
+      // What the engine reads when nothing is recorded: an SRL (`entityFormOf`), the form's own
+      // books (`booksSystemOf`), preview rules (`Proposals.mode`), segregation off
+      // (`segregationOn`).
+      const implied: Record<string, string> = {
+        'entity.form': 'srl',
+        'books.system': booksSystemOf(
+          facts.filter((fact) => fact.axis !== 'books.system'),
+          date as LocalDate,
+        ),
+        'books.assurance': 'preview',
+        'controls.segregation': 'off',
+      };
+      const items = axes.map(({ axis, name, group }) => {
+        const yearly = yearlyProfileAxes.has(axis);
+        const current = factInEffect(standing, axis, date);
+        const values = axisValues(axis).map((value) => ({
+          ...labelled(axis, value),
+          applies: formRefusal(axis, value, facts, form) === null,
+        }));
+        const statedFor = current ? Number(current.effectiveFrom.slice(0, 4)) : null;
+        return {
+          axis,
+          name,
+          group,
+          applies: values.some((value) => value.applies),
+          yearly,
+          values,
+          current: current && {
+            ...labelled(axis, current.value),
+            effectiveFrom: current.effectiveFrom,
+            factId: current.id,
+            evidenceId: current.evidenceId,
+            recordedBy: current.createdBy,
+            ...(yearly
+              ? {
+                  confirmedFor: statedFor!,
+                  needsConfirmation: statedFor! < Number(date.slice(0, 4)),
+                }
+              : {}),
+          },
+          impliedDefault: implied[axis] ? labelled(axis, implied[axis]) : null,
+          history: recorded
+            .filter((row) => row.axis === axis)
+            .map((row) => ({
+              ...labelled(axis, row.value),
+              effectiveFrom: row.effectiveFrom,
+              factId: row.id,
+              evidenceId: row.evidenceId,
+              supersedesId: row.supersedesId ?? null,
+              superseded: !kept.has(row.id),
+              recordedBy: row.createdBy,
+              recordedAt: row.createdAt,
+            })),
+        };
+      });
+      return {
+        date,
+        items,
+        next: null,
+        groups: profileGroups.map((group) => ({ group, name: profileGroupNames[group] })),
+      };
+    });
   }
 
   /** The company's partners; an individual's identifier (the keyed hash of a CNP) is masked

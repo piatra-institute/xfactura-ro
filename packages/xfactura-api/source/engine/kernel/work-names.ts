@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { Treatment } from 'xfactura-core/kernel';
+import { yearlyAxes } from 'xfactura-core/ro/determinations';
 import type { ParameterRegister } from 'xfactura-core/rules';
 import type { Permission } from './commands';
 import type { OperationRegistry } from './operations';
@@ -52,7 +53,7 @@ export const axisNames: Record<string, string> = {
   'books.system': 'Sistemul de contabilitate',
   'cas.status': 'Statutul privind contribuția de asigurări sociale (CAS)',
   'cas.option': 'Opțiunea pentru plata CAS',
-  'cass.exception': 'Excepția pentru contribuția de asigurări sociale de sănătate (CASS)',
+  'cass.exception': 'Excepția de la CASS minimă',
   'vat.status': 'Regimul de TVA',
   'vat.period': 'Perioada fiscală de TVA',
   'vat.cash': 'Sistemul TVA la încasare',
@@ -92,6 +93,220 @@ export function axisName(axis: string): string {
   const base = axis.split('/')[0]!;
   if (base.startsWith('policy.stock.retail.')) return 'Metoda de evidență a gestiunii';
   return axisNames[base] ?? axisNames[axis] ?? base;
+}
+
+/** The axes whose fact the law decides each year (the yearly determinations, `recordedInYear`,
+ * and the provisional pro-rata, `provisionalProrata`): stated or confirmed for every year. */
+export const yearlyProfileAxes: ReadonlySet<string> = new Set([...yearlyAxes, 'vat.prorata']);
+
+/** How the profile's axes are grouped for people, in the order they are shown. */
+export const profileGroups = [
+  'firma',
+  'tva',
+  'impozit',
+  'salariati',
+  'activitate',
+  'politici',
+  'verificare',
+] as const;
+export type ProfileGroup = (typeof profileGroups)[number];
+
+export const profileGroupNames: Record<ProfileGroup, string> = {
+  firma: 'Firma',
+  tva: 'TVA',
+  impozit: 'Impozite și contribuții',
+  salariati: 'Salariați',
+  activitate: 'Activitate',
+  politici: 'Politici contabile',
+  verificare: 'Verificare și control',
+};
+
+/** Every profile axis with its group, in the order people read them. */
+export const profileAxisGroups: readonly (readonly [string, ProfileGroup])[] = [
+  ['entity.form', 'firma'],
+  ['books.system', 'firma'],
+  ['size.category', 'firma'],
+  ['taxpayer.category', 'firma'],
+  ['vat.status', 'tva'],
+  ['vat.period', 'tva'],
+  ['vat.cash', 'tva'],
+  ['vat.threshold', 'tva'],
+  ['vat.eu', 'tva'],
+  ['vat.prorata', 'tva'],
+  ['vat.distance', 'tva'],
+  ['vat.oss', 'tva'],
+  ['vat.ioss', 'tva'],
+  ['vat.agriculture', 'tva'],
+  ['income_tax', 'impozit'],
+  ['profit.system', 'impozit'],
+  ['tax.facilities', 'impozit'],
+  ['cas.status', 'impozit'],
+  ['cas.option', 'impozit'],
+  ['cass.exception', 'impozit'],
+  ['employer', 'salariati'],
+  ['payroll.period', 'salariati'],
+  ['activity.goods', 'activitate'],
+  ['activity.none', 'activitate'],
+  ['regime.excluded', 'activitate'],
+  ['intrastat.arrivals', 'activitate'],
+  ['intrastat.dispatches', 'activitate'],
+  ['policy.storno', 'politici'],
+  ['policy.payroll.employer_share', 'politici'],
+  ['policy.assets.disposal_month', 'politici'],
+  ['policy.impairment.receivables', 'politici'],
+  ['policy.stock.valuation', 'politici'],
+  ['policy.stock.inventory', 'politici'],
+  ['policy.stock.negative', 'politici'],
+  ['policy.stock.retail', 'politici'],
+  ['policy.production.cost', 'politici'],
+  ['books.assurance', 'verificare'],
+  ['controls.segregation', 'verificare'],
+];
+
+const yesNo = (no: string, yes: string) => ({ no, yes });
+const percents = Object.fromEntries(
+  Array.from({ length: 101 }, (_, value) => [String(value), `${value}%`]),
+);
+
+/**
+ * Each profile value in Romanian, short, in the Codul fiscal's terms where it has one. A warehouse's
+ * own retail method (`policy.stock.retail.<id>`) reads as `policy.stock.retail`.
+ */
+export const axisValueNames: Record<string, Record<string, string>> = {
+  'entity.form': {
+    srl: 'Societate cu răspundere limitată (SRL)',
+    pfa: 'Persoană fizică autorizată (PFA)',
+    ii: 'Întreprindere individuală (II)',
+    if: 'Întreprindere familială (IF)',
+  },
+  'books.system': { double: 'Partidă dublă', single: 'Partidă simplă' },
+  'cas.status': {
+    liable: 'Datorează CAS',
+    pensioner: 'Pensionar',
+    own_system: 'Asigurat într-un sistem propriu de pensii',
+  },
+  'cas.option': yesNo('Fără opțiune', 'Optează pentru plata CAS'),
+  // Art. 174 alin. (7)–(8): below 6 minimum wages, CASS is due on the minimum base, except for
+  // those with these situations (the source register's summary of `art.174(1)-(8)`).
+  'cass.exception': {
+    none: 'Fără excepție de la CASS minimă',
+    salary: 'Exceptat: salarii de cel puțin 6 salarii minime',
+    other_income: 'Exceptat: alte venituri cu CASS la cel puțin 6 salarii minime',
+    pension: 'Exceptat: venituri din pensii',
+    previous_year: 'Exceptat: exceptat sau cu opțiune în anul precedent',
+  },
+  'vat.status': { non_vat: 'Neplătitor de TVA', normal_vat: 'Plătitor de TVA' },
+  'vat.period': { monthly: 'Lunară', quarterly: 'Trimestrială' },
+  'vat.cash': yesNo('Fără TVA la încasare', 'TVA la încasare'),
+  'vat.eu': { none: 'Fără cod special', special: 'Cod de TVA special (art. 317)' },
+  'vat.prorata': {
+    ...percents,
+    special: 'Pro rata specială (art. 300 alin. (16))',
+    opted_out: 'Fără deducere pentru achizițiile mixte (art. 300 alin. (20))',
+  },
+  'vat.distance': {
+    origin: 'În România',
+    destination: 'În statul membru de destinație',
+    option: 'În statul membru de destinație, prin opțiune',
+  },
+  'vat.oss': {
+    none: 'Fără regim special',
+    union: 'Regimul din Uniune (OSS)',
+    non_union: 'Regimul din afara Uniunii',
+  },
+  'vat.ioss': {
+    none: 'Fără regim de import',
+    registered: 'Regimul de import (IOSS)',
+    intermediary: 'Regimul de import, prin intermediar',
+  },
+  'intrastat.arrivals': { none: 'Nu este furnizor de date', provider: 'Furnizor de date' },
+  'intrastat.dispatches': { none: 'Nu este furnizor de date', provider: 'Furnizor de date' },
+  income_tax: {
+    micro: 'Impozit pe veniturile microîntreprinderilor',
+    profit: 'Impozit pe profit',
+  },
+  'profit.system': {
+    quarterly: 'Trimestrial',
+    annual: 'Anual, cu plăți anticipate trimestriale',
+  },
+  'tax.facilities': {
+    none: 'Fără înlesniri',
+    rescheduling: 'Eșalonare la plată',
+    deferral: 'Amânare la plată',
+    insolvency: 'Insolvență',
+    restructuring: 'Prevenirea insolvenței',
+    state_aid: 'Ajutor de stat de restituit',
+  },
+  employer: yesNo('Fără salariați', 'Angajator'),
+  'payroll.period': { monthly: 'Lunară', quarterly: 'Trimestrială' },
+  'size.category': {
+    micro: 'Microentitate',
+    small: 'Entitate mică',
+    medium_large: 'Entitate mijlocie sau mare',
+  },
+  'vat.threshold': { under: 'Sub plafonul de scutire', exceeded: 'Plafonul de scutire depășit' },
+  'activity.goods': {
+    no: 'Numai servicii',
+    yes: 'Bunuri și stocuri',
+    margin_goods: 'Bunuri second-hand în regimul marjei (art. 312)',
+  },
+  'vat.agriculture': {
+    none: 'Fără regim special',
+    special: 'Regimul special pentru agricultori (art. 315^1)',
+  },
+  'activity.none': yesNo('Cu activitate', 'Fără activitate de la înființare'),
+  'regime.excluded': {
+    none: 'Niciunul',
+    excise: 'Produse accizabile',
+    fiscal_group: 'Grup fiscal',
+    ifrs: 'IFRS',
+  },
+  'taxpayer.category': {
+    large: 'Contribuabil mare',
+    medium: 'Contribuabil mijlociu',
+    small: 'Contribuabil mic',
+  },
+  'books.assurance': {
+    preview: 'Previzualizare',
+    shadow: 'În paralel',
+    live: 'Registre oficiale',
+  },
+  'controls.segregation': { off: 'Fără separare', on: 'Separare', strict: 'Separare strictă' },
+  'policy.storno': { red: 'Stornare în roșu', black: 'Stornare în negru' },
+  'policy.payroll.employer_share': {
+    '635': 'Contul 635 (alte impozite și taxe)',
+    '6458': 'Contul 6458 (alte cheltuieli sociale)',
+  },
+  'policy.assets.disposal_month': {
+    included: 'Se amortizează luna ieșirii',
+    excluded: 'Nu se amortizează luna ieșirii',
+  },
+  'policy.impairment.receivables': {
+    individual: 'Fiecare creanță, individual',
+    overdue_90: 'Restante de peste 90 de zile',
+    overdue_180: 'Restante de peste 180 de zile',
+    overdue_270: 'Restante de peste 270 de zile',
+    overdue_365: 'Restante de peste 365 de zile',
+  },
+  'policy.stock.valuation': {
+    fifo: 'FIFO (primul intrat, primul ieșit)',
+    lifo: 'LIFO (ultimul intrat, primul ieșit)',
+    average: 'Cost mediu ponderat după fiecare intrare',
+    periodic: 'Cost mediu ponderat lunar',
+  },
+  'policy.stock.inventory': {
+    permanent: 'Inventar permanent',
+    intermittent: 'Inventar intermitent',
+  },
+  'policy.stock.negative': { refuse: 'Fără stoc negativ', allow: 'Stoc negativ permis' },
+  'policy.stock.retail': { cost: 'La cost de achiziție', retail: 'La preț cu amănuntul' },
+  'policy.production.cost': { standard: 'Cost standard', actual: 'Cost efectiv' },
+};
+
+/** A profile value in Romanian; null for a value the axis does not take. */
+export function axisValueName(axis: string, value: string): string | null {
+  const base = axis.startsWith('policy.stock.retail.') ? 'policy.stock.retail' : axis;
+  return axisValueNames[base]?.[value] ?? null;
 }
 
 /** Document kinds in Romanian. */

@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import fc from 'fast-check';
 import {
+  effectTotals,
+  factInEffect,
   validateEffect,
   type AccountInfo,
   type ControlKind,
@@ -326,5 +328,65 @@ describe('a storno’s tax entries', () => {
     // A credit note points to its original too, but is no storno.
     const credit = entry('e4', 'vat', 'e0:vat');
     expect(standingTaxEntries([adjusted, storno, again, credit])).toEqual([again, credit]);
+  });
+});
+
+describe('effectTotals', () => {
+  test('sums each side in lei, then each foreign currency in its own minor units', () => {
+    const lines: LineSpec[] = [
+      {
+        account: '5124',
+        side: 'D',
+        bani: 497_500n,
+        currency: { code: 'EUR', minor: 100_000n, rate: '4.975', rateId: 'BNR/EUR/2026-03-10/1' },
+      },
+      {
+        account: '4111',
+        side: 'C',
+        bani: 490_000n,
+        currency: { code: 'EUR', minor: 100_000n, rate: '4.9', rateId: 'BNR/EUR/2026-03-01/1' },
+      },
+      { account: '765', side: 'C', bani: 7_500n },
+      // A red storno lowers its own side.
+      { account: '628', side: 'D', bani: -1_000n },
+      { account: '5121', side: 'C', bani: -1_000n },
+    ];
+    expect(effectTotals({ lines })).toEqual([
+      { currency: 'RON', debit: 496_500n, credit: 496_500n, difference: 0n },
+      { currency: 'EUR', debit: 100_000n, credit: 100_000n, difference: 0n },
+    ]);
+  });
+
+  test('states the difference of an unbalanced entry, and lei even without lines', () => {
+    expect(
+      effectTotals({
+        lines: [
+          { account: '628', side: 'D', bani: 12_345n },
+          { account: '5121', side: 'C', bani: 12_300n },
+        ],
+      }),
+    ).toEqual([{ currency: 'RON', debit: 12_345n, credit: 12_300n, difference: 45n }]);
+    expect(effectTotals({ lines: [] })).toEqual([
+      { currency: 'RON', debit: 0n, credit: 0n, difference: 0n },
+    ]);
+  });
+});
+
+describe('factInEffect', () => {
+  const fact = (axis: string, value: string, effectiveFrom: string) => ({
+    axis,
+    value,
+    effectiveFrom: parseLocalDate(effectiveFrom),
+  });
+  const facts = [
+    fact('vat.status', 'non_vat', '2026-01-01'),
+    fact('employer', 'no', '2026-01-01'),
+    fact('vat.status', 'normal_vat', '2026-05-14'),
+  ];
+  test('is the last fact on the axis effective by the date', () => {
+    expect(factInEffect(facts, 'vat.status', '2026-05-13')).toBe(facts[0]!);
+    expect(factInEffect(facts, 'vat.status', '2026-05-14')).toBe(facts[2]!);
+    expect(factInEffect(facts, 'vat.status', '2025-12-31')).toBeNull();
+    expect(factInEffect(facts, 'vat.period', '2026-12-31')).toBeNull();
   });
 });

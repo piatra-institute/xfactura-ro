@@ -135,6 +135,25 @@ test('lists the work of a 100,000-line year in pages under 300 ms', async () => 
     id: seen.find((item) => item.kind === 'close.finding')!.id,
   });
   const single = performance.now() - singleStarted;
+  // The home screen's summary of the same books stays within a page's time: the money, what is
+  // owed, the tax position, the next returns, and the work counted until its budget runs out.
+  const summaryStarted = performance.now();
+  const summary = await s.invoke<{
+    cash: { accounts: { balance: { minor: string } }[] };
+    work: { total: number; complete: boolean; next: string | null };
+    deadlines: unknown[];
+  }>(s.owner, 'company.summary');
+  const summaryTime = performance.now() - summaryStarted;
+  expect(summary.cash.accounts).toHaveLength(1);
+  expect(summary.deadlines).toHaveLength(5);
+  expect(summary.work.total).toBeGreaterThan(0);
+  expect(summary.work.complete).toBe(summary.work.next === null);
+  if (summary.work.complete) expect(summary.work.total).toBe(seen.length);
+  else expect(summary.work.total).toBeLessThanOrEqual(seen.length);
+  console.log(
+    `company.summary ${summaryTime.toFixed(0)} ms, work ${summary.work.total} of ${seen.length} items${summary.work.complete ? '' : ' (stopped at its budget)'}`,
+  );
+  expect(summaryTime).toBeLessThan(300);
   console.log(
     `posted ${lines} lines in ${(loading / 1000).toFixed(1)} s; ${seen.length} items in ${timings.length} pages: ` +
       `max ${Math.max(...timings).toFixed(0)} ms, mean ${(timings.reduce((a, b) => a + b, 0) / timings.length).toFixed(0)} ms, ` +

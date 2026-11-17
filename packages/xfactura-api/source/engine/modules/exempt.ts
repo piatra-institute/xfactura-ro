@@ -423,6 +423,8 @@ export async function vatAdjustmentWork(
           }),
           step('vat.proRata.compute', 'agent', { year: year - 1 }),
           step('questions.answer', 'human'),
+          // A person who knows the provisional pro-rata records it, from the year's start.
+          step('profile.record', 'human', { axis: 'vat.prorata', effectiveFrom: `${year}-01-01` }),
         ],
       });
     }

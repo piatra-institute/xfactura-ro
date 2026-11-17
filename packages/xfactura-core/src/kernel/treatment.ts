@@ -657,12 +657,24 @@ export interface Loaded {
   production?: ProductionState;
 }
 
+/**
+ * The fact in effect on an axis at a date: of the facts in effect order (superseded ones left
+ * out, as the state loader gives them), the last on the axis effective on or before the date;
+ * null when none is.
+ */
+export function factInEffect<Fact extends { axis: string; effectiveFrom: string }>(
+  facts: readonly Fact[],
+  axis: string,
+  date: string,
+): Fact | null {
+  let found: Fact | null = null;
+  for (const fact of facts) if (fact.axis === axis && fact.effectiveFrom <= date) found = fact;
+  return found;
+}
+
 /** The company profile value on an axis at a date, or null when nothing is recorded. */
 export function profileAt(loaded: Loaded, axis: string, date: LocalDate): string | null {
-  let value: string | null = null;
-  for (const fact of loaded.profile)
-    if (fact.axis === axis && fact.effectiveFrom <= date) value = fact.value;
-  return value;
+  return factInEffect(loaded.profile, axis, date)?.value ?? null;
 }
 
 /**

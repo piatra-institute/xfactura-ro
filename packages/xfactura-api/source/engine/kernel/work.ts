@@ -2,7 +2,13 @@ import { and, asc, eq, getTableName, inArray, sql, type Column } from 'drizzle-o
 import { z } from 'zod';
 import { requireCondition } from 'xfactura-core/errors';
 import { canonical, hashOf } from 'xfactura-core/hash';
-import type { DataClass, Issue, JsonValue, Treatment } from 'xfactura-core/kernel';
+import {
+  factInEffect,
+  type DataClass,
+  type Issue,
+  type JsonValue,
+  type Treatment,
+} from 'xfactura-core/kernel';
 import { documentTotals, normalizedNumber } from 'xfactura-core/documents/schemas';
 import { questionOf, type QuestionRequest } from 'xfactura-core/questions/kinds';
 import { euVatPrefixes } from 'xfactura-core/ro/geo';
@@ -63,6 +69,7 @@ import type { Actor, Commands } from './commands';
 import { roleAllows } from './commands';
 import { maskCnps, maskCnpText, payClasses, salaryPayment } from './personal';
 import { salaryMovements, salarySubjects } from './salaries';
+import { profileRows } from './state';
 import { pausedScopes } from './automation';
 import { auditHead } from './events';
 import { documentBooked, entryStands, holdsSubject } from './ledger';
@@ -72,6 +79,7 @@ import { closedMonths, type CloseCheck } from './periods';
 import { groupLinkKinds } from './sources';
 import type { ProposalChange } from './views';
 import {
+  asSentence,
   authorityName,
   axisName,
   causeFromFact,
@@ -85,7 +93,6 @@ import {
   dedupeCauses,
   detailLabelView,
   documentKindName,
-  formatObligationKey,
   idLabel,
   minorLabel,
   obligationStatusName,
@@ -101,6 +108,7 @@ import {
   textLabel,
   treatmentName,
   workCauseView,
+  yearlyProfileAxes,
   type DetailLabels,
   type PermissionKind,
   type StepRefusal,
@@ -506,6 +514,7 @@ function proposalsDetector(
           effectHash: proposalVersions.effectHash,
           entryDate: proposalVersions.entryDate,
           basis: proposalVersions.basis,
+          versionAt: proposalVersions.createdAt,
           approved: sql<number>`exists (select 1 from ${approvals} a
             where a.company_id = ${q(proposals.companyId)} and a.proposal_id = ${q(proposals.id)}
               and a.version = ${q(proposalVersions.version)}
@@ -543,6 +552,9 @@ function proposalsDetector(
       const { page: chosen, next } = paged(rows, page.limit, (row) => row.id);
       const treatmentMap = byId();
       const items: Draft[] = [];
+      // The company's facts, read once when a question about one may have been settled by a
+      // person recording it.
+      let facts: Awaited<ReturnType<typeof profileRows>> | undefined;
       for (const row of chosen) {
         const treatmentLabel = treatmentName(row.treatment, treatmentMap);
         const issues = JSON.parse(row.issues) as Issue[];
@@ -572,6 +584,13 @@ function proposalsDetector(
           const states = [];
           for (const { issue, question } of asked) {
             const state = await questionState(tx, companyId, question);
+            // A company fact nobody was asked about, which a person recorded after this version:
+            // the revision reads it (`settledBy`).
+            const recorded =
+              !state.answered &&
+              !state.open &&
+              question.kind === 'profile.fact' &&
+              settledBy(question, (facts ??= await profileRows(tx, companyId)), row.versionAt);
             states.push({
               code: issue.code,
               kind: question.kind,
@@ -583,26 +602,38 @@ function proposalsDetector(
                   : 'answered'
                 : state.open
                   ? 'open'
-                  : 'unasked',
+                  : recorded
+                    ? 'recorded'
+                    : 'unasked',
               questionId: state.answered?.questionId ?? state.open,
             });
           }
-          const answered = states.every((item) => item.state === 'answered');
+          const answered = states.every(
+            (item) => item.state === 'answered' || item.state === 'recorded',
+          );
+          const answers = [
+            ...new Set(
+              states.flatMap((item) => (item.state === 'answered' ? [item.questionId!] : [])),
+            ),
+          ];
           const next: WorkStep[] = answered
-            ? [revise({ basis: { answers: [...new Set(states.map((item) => item.questionId!))] } })]
-            : states.flatMap((item) =>
-                item.state === 'unasked'
-                  ? [
-                      agent('questions.ask', {
-                        kind: item.kind,
-                        subject: item.subject,
-                        params: item.params,
-                      }),
-                    ]
-                  : item.state === 'open' || item.state === 'unsettled'
-                    ? [human('questions.answer', { questionId: item.questionId })]
-                    : [],
-              );
+            ? [revise(answers.length ? { basis: { answers } } : {})]
+            : states.flatMap((item) => {
+                if (item.state === 'open' || item.state === 'unsettled')
+                  return [human('questions.answer', { questionId: item.questionId })];
+                if (item.state !== 'unasked') return [];
+                // A company fact: a person who knows it records it, from the day the question
+                // names (else the entry's); an agent asks.
+                const record = factStep(item, row.entryDate);
+                return [
+                  agent('questions.ask', {
+                    kind: item.kind,
+                    subject: item.subject,
+                    params: item.params,
+                  }),
+                  ...(record ? [record] : []),
+                ];
+              });
           const questionCauses = dedupeCauses([
             ...asked.map(({ issue, question }) => causeFromQuestion(question, issue.message)),
             ...blocks
@@ -617,7 +648,9 @@ function proposalsDetector(
             kind: 'question.needed',
             severity: 'block',
             message: answered
-              ? `S-a răspuns la întrebările propunerii ${treatmentLabel}: revizuiți-o citând răspunsurile.`
+              ? answers.length
+                ? `S-a răspuns la întrebările propunerii ${treatmentLabel}: revizuiți-o citând răspunsurile.`
+                : `Faptele de care depinde propunerea ${treatmentLabel} sunt înregistrate: revizuiți-o.`
               : `Propunerea ${treatmentLabel} așteaptă un răspuns: ${questionCauses.map((cause) => cause.message).join(' ')}`,
             causes: questionCauses,
             details: {
@@ -757,6 +790,26 @@ function proposalsDetector(
       return { items, next };
     },
   };
+}
+
+/**
+ * Whether a person recorded the company fact a `profile.fact` question asks after the version
+ * that raised it: the fact in effect on the question's own day (`params.from`; none without one)
+ * on its axis was recorded after the version was, and, on a yearly axis, is stated for the
+ * question's year (`<axis>/<year>`, else the day's). A fact recorded on another axis, or one of
+ * an earlier year still in effect, settles nothing; the worklist evaluates no treatment.
+ */
+function settledBy(
+  question: QuestionRequest,
+  facts: readonly { axis: string; effectiveFrom: string; createdAt: string }[],
+  versionAt: string,
+) {
+  const { axis, from } = question.params;
+  if (typeof axis !== 'string' || typeof from !== 'string') return false;
+  const fact = factInEffect(facts, axis, from);
+  if (!fact || fact.createdAt <= versionAt) return false;
+  const year = /\/(\d{4})$/.exec(question.subject.id)?.[1] ?? from.slice(0, 4);
+  return !yearlyProfileAxes.has(axis) || fact.effectiveFrom.slice(0, 4) === year;
 }
 
 /** Where a question a treatment needs stands: the question whose answer holds, or the one open. */
@@ -968,7 +1021,7 @@ export type ObligationsOf = (
 /** The months the worklist reads the calendar and the closure over: from the first month of the
  * company's books (its first financial year), or three months back without one, to two months
  * ahead. */
-async function worklistRange(tx: Transaction, companyId: string, today: LocalDate) {
+export async function worklistRange(tx: Transaction, companyId: string, today: LocalDate) {
   const month = today.slice(0, 7) as Month;
   const [first] = await tx
     .select({ from: sql<string | null>`min(${fiscalYears.from})` })
@@ -1160,6 +1213,8 @@ export type ClosureNeed = {
   question: NonNullable<Obligation['question']>;
   /** The returns it leaves blocked, `<return>|<period>`. */
   blocks: string[];
+  /** The first day of the earliest period it leaves blocked, or null when it blocks none. */
+  blockedFrom: string | null;
   /** The year whose rules every return it blocks waits for, or null. */
   waiting: number | null;
   /** The deadline rule gap when `waiting` is set, if known. */
@@ -1185,12 +1240,15 @@ function needsDetector(source: NeedsOf): Detector {
             ? need.id === page.only
             : page.after === null || need.id > page.after,
         );
+      const first = found.length ? await firstYearStart(tx, companyId) : null;
       const items = found.slice(0, page.limit).map((need): Draft => {
         // A yearly fact (`vat.period/2027`) of a year not begun, or one only that year's rules
         // can settle, waits: nobody can answer it yet.
         const year = /\/(\d{4})$/.exec(need.fact)?.[1];
         const waits = need.waiting ?? (year && `${year}-01-01` > today ? Number(year) : null);
-        const cleanNeed = cleanIdentifierText(need.message);
+        // The need alone: the returns it blocks are in `details.blocks`, the year it waits for in
+        // `details.waiting`.
+        const cleanNeed = asSentence(need.message);
         const causes = dedupeCauses([
           causeFromFact(need.fact, cleanNeed),
           ...(waits && need.waitingRule
@@ -1203,20 +1261,14 @@ function needsDetector(source: NeedsOf): Detector {
               ]
             : []),
         ]);
-        const formattedBlocks = need.blocks.slice(0, 6).map(formatObligationKey).join(', ');
+        const record = waits ? null : factStep(need.question, need.blockedFrom ?? first);
         return {
           kind: 'closure.need',
           subject: { kind: 'need', id: need.id },
           severity: waits ? 'info' : 'warn',
           due: null,
           period: year ?? null,
-          message: waits
-            ? `${cleanNeed} Se stabilește după începutul anului ${waits}, cu regulile lui.`
-            : `${cleanNeed}${
-                need.blocks.length
-                  ? ` Afectează declarațiile: ${formattedBlocks}${need.blocks.length > 6 ? ` și încă ${need.blocks.length - 6}` : ''}.`
-                  : ' Închiderea obligațiilor nu poate confirma ce declarații se datorează.'
-              }`,
+          message: cleanNeed,
           causes,
           details: {
             code: need.code,
@@ -1232,7 +1284,12 @@ function needsDetector(source: NeedsOf): Detector {
             blocks: textLabel('Declarații afectate'),
             ...(waits ? { waiting: periodLabel('An așteptat') } : {}),
           },
-          next: waits ? [] : askSteps(need.question, Number(year ?? today.slice(0, 4))),
+          next: waits
+            ? []
+            : [
+                ...askSteps(need.question, Number(year ?? today.slice(0, 4))),
+                ...(record ? [record] : []),
+              ],
           cursor: need.id,
         };
       });
@@ -1240,6 +1297,49 @@ function needsDetector(source: NeedsOf): Detector {
     },
   };
 }
+
+/** The first day of the company's books: its first financial year's, or null without one. */
+async function firstYearStart(tx: Transaction, companyId: string) {
+  const [first] = await tx
+    .select({ from: sql<string | null>`min(${fiscalYears.from})` })
+    .from(fiscalYears)
+    .where(and(eq(fiscalYears.companyId, companyId), eq(fiscalYears.kind, 'financial')));
+  return first?.from ?? null;
+}
+
+/**
+ * A person records a missing company fact themselves (`profile.record`): a `profile.fact`, or a
+ * yearly determination to confirm (`determination.confirm` of `<axis>/<year>`), which a person
+ * who knows the year's value may state. From the date its question names (a yearly fact's 1
+ * January, the day a threshold was crossed, the determination's start), else from `from` (the
+ * first day of the earliest period it blocks, of the books, of the entry), whichever is later;
+ * the value is theirs to give. None for any other question.
+ */
+function factStep(
+  question: { kind: string; subject: { id: string }; params: { [key: string]: unknown } },
+  from: string | null,
+): WorkStep | null {
+  const axis = question.params.axis;
+  const day = (value: unknown) =>
+    typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
+  if (typeof axis !== 'string') return null;
+  const named =
+    question.kind === 'profile.fact'
+      ? day(question.params.from)
+      : question.kind === 'determination.confirm' && question.subject.id.includes('/')
+        ? day(question.params.effectiveFrom)
+        : undefined;
+  if (named === undefined) return null;
+  const effectiveFrom = [named, from]
+    .filter((date): date is string => date !== null)
+    .sort()
+    .at(-1);
+  return effectiveFrom ? recordFact(axis, effectiveFrom) : null;
+}
+
+/** The person step that records a fact on an axis from a date, its value to be given. */
+export const recordFact = (axis: string, effectiveFrom: string): WorkStep =>
+  human('profile.record', { axis, effectiveFrom });
 
 // Yearly determinations not recorded or contradicted by the books, and thresholds approached
 // (core ro/determinations/agent.ts).
@@ -1287,7 +1387,15 @@ function determinationsDetector(source: DeterminationsOf): Detector {
         ...(item.causes ? { causes: item.causes } : {}),
         details: item.details,
         ...(item.labels ? { labels: item.labels } : {}),
-        next: [agent('determinations.propose', { year: item.year })],
+        next: [
+          agent('determinations.propose', { year: item.year }),
+          // A yearly fact nobody recorded: a person who knows it may record it for the year.
+          ...(item.kind === 'determination.missing' &&
+          item.details.conflict === false &&
+          typeof item.details.axis === 'string'
+            ? [recordFact(item.details.axis, `${item.year}-01-01`)]
+            : []),
+        ],
         cursor: cursorOf(item),
       }));
       return { items, next: found.length > page.limit ? items.at(-1)!.cursor : null };
@@ -3271,6 +3379,52 @@ export class Work {
       }
       return { items, next: null, asOfSeq };
     });
+  }
+
+  /**
+   * How many items wait now, as `work.list` lists them to this caller (dispositions hide theirs):
+   * by who acts, as the interface groups them (`person`: a step by a person the caller may take;
+   * `agent`: else a step by an agent the caller may take; `neither`), and by severity. The
+   * detectors run in the worklist's order until `deadline` (`performance.now()`), the first call
+   * always: `complete` is false when it ran out first, the counts are those of the items before
+   * `next`, the `work.list` cursor the rest is listed from.
+   */
+  async tally(tx: Transaction, actor: Actor, role: Role, deadline: number) {
+    const context = this.context(tx, actor.companyId);
+    const caller = await this.caller(tx, actor, role);
+    const asOfSeq = await auditHead(tx, actor.companyId);
+    const by = { person: 0, agent: 0, neither: 0 };
+    const severity: Record<WorkSeverity, number> = { block: 0, warn: 0, info: 0 };
+    const counted = (next: string | null) => ({
+      total: by.person + by.agent + by.neither,
+      by: { ...by },
+      severity: { ...severity },
+      complete: next === null,
+      next,
+      asOfSeq,
+    });
+    let calls = 0;
+    for (const detector of this.detectors) {
+      let after: string | null = null;
+      for (;;) {
+        if (calls > 0 && performance.now() > deadline)
+          return counted(`${detector.id}:${after ?? ''}`);
+        calls++;
+        const batch = await detector.list(context, { after, limit: 200 });
+        const finished = this.finish(batch.items, asOfSeq, caller);
+        const hidden = await this.disposed(tx, actor.companyId, finished);
+        for (const item of finished) {
+          if (hidden.has(item.id)) continue;
+          severity[item.severity]++;
+          if (item.next.some((step) => step.by === 'human' && step.allowed)) by.person++;
+          else if (item.next.some((step) => step.by === 'agent' && step.allowed)) by.agent++;
+          else by.neither++;
+        }
+        if (batch.next === null) break;
+        after = batch.next;
+      }
+    }
+    return counted(null);
   }
 
   /** The item of this kind about this subject, if it still waits. */

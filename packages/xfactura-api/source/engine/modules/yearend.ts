@@ -904,6 +904,11 @@ export async function yearEndReview(
             axis: 'policy.impairment.receivables',
           },
         ),
+        // A person who knows the policy records it, from the year's start.
+        human('profile.record', {
+          axis: 'policy.impairment.receivables',
+          effectiveFrom: year.from,
+        }),
       ],
     });
   } else if (policy && (impairmentPolicies as readonly string[]).includes(policy)) {

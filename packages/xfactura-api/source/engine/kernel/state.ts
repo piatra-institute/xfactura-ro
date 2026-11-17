@@ -596,24 +596,55 @@ async function loadProduction(tx: Transaction, companyId: string, query: Product
   return { state, readSet };
 }
 
-/** Open items with their balances, as of everything posted so far. */
-export async function loadOpenItems(tx: Transaction, companyId: string, where: SQL[]) {
+/**
+ * The company's profile facts in effect order (effective date, then recording), superseded ones
+ * left out: what treatments read as `Loaded.profile`, and what `factInEffect` resolves a value on.
+ */
+export async function profileRows(tx: Pick<Transaction, 'select'>, companyId: string) {
+  const rows = await tx
+    .select()
+    .from(profileFacts)
+    .where(eq(profileFacts.companyId, companyId))
+    .orderBy(asc(profileFacts.effectiveFrom), asc(profileFacts.createdAt), asc(profileFacts.id));
+  const superseded = new Set(rows.map((row) => row.supersedesId).filter(Boolean));
+  return rows.filter((row) => !superseded.has(row.id));
+}
+
+/** Open items with their balances, as of everything posted so far; with `asOf`, as of the
+ * entries dated on or before that day, and only the items opened by then. */
+export async function loadOpenItems(
+  tx: Transaction,
+  companyId: string,
+  where: SQL[],
+  asOf?: string,
+) {
+  const dated = (entryId: SQL | typeof lines.entryId) =>
+    sql`(select de.date from ${entries} de where de.company_id = ${openItems.companyId} and de.id = ${entryId})`;
+  const counted = asOf === undefined ? sql`1` : sql`${dated(lines.entryId)} <= ${asOf}`;
   const rows = await tx
     .select({
       item: openItems,
-      bani: sql<bigint>`coalesce(sum(${sign} * ${lines.bani}), 0)`.mapWith(BigInt),
+      bani: sql<bigint>`coalesce(sum(case when ${counted} then ${sign} * ${lines.bani} else 0 end), 0)`.mapWith(
+        BigInt,
+      ),
       minor:
-        sql<bigint>`coalesce(sum(${sign} * coalesce(${lines.currencyMinor}, ${lines.bani})), 0)`.mapWith(
+        sql<bigint>`coalesce(sum(case when ${counted} then ${sign} * coalesce(${lines.currencyMinor}, ${lines.bani}) else 0 end), 0)`.mapWith(
           BigInt,
         ),
-      movements: sql<number>`count(${lines.lineNo})`.mapWith(Number),
+      movements: sql<number>`count(case when ${counted} then ${lines.lineNo} end)`.mapWith(Number),
     })
     .from(openItems)
     .leftJoin(
       lines,
       and(eq(lines.companyId, openItems.companyId), eq(lines.openItemId, openItems.id)),
     )
-    .where(and(eq(openItems.companyId, companyId), ...where))
+    .where(
+      and(
+        eq(openItems.companyId, companyId),
+        ...where,
+        asOf === undefined ? undefined : sql`${dated(sql`${openItems.originEntryId}`)} <= ${asOf}`,
+      ),
+    )
     .groupBy(openItems.id)
     .orderBy(asc(openItems.id));
   return rows.map(({ item, bani, minor, movements }): OpenItemState => ({
@@ -950,15 +981,11 @@ export async function loadState(tx: Transaction, companyId: string, plan: ReadPl
 
   let profile: ProfileFact[] = [];
   if (plan.profile) {
-    const rows = await tx
-      .select()
-      .from(profileFacts)
-      .where(eq(profileFacts.companyId, companyId))
-      .orderBy(asc(profileFacts.effectiveFrom), asc(profileFacts.createdAt), asc(profileFacts.id));
-    const superseded = new Set(rows.map((row) => row.supersedesId).filter(Boolean));
-    profile = rows
-      .filter((row) => !superseded.has(row.id))
-      .map((row) => ({ axis: row.axis, value: row.value, effectiveFrom: date(row.effectiveFrom) }));
+    profile = (await profileRows(tx, companyId)).map((row) => ({
+      axis: row.axis,
+      value: row.value,
+      effectiveFrom: date(row.effectiveFrom),
+    }));
     readSet.push({ kind: 'profile', id: 'company', version: hashOf(profile) });
   }
 

@@ -193,6 +193,8 @@ export type ClosureNeedItem = {
   };
   /** The returns of the range it blocks, `<return>|<period>`, none due on another ground. */
   blocks: string[];
+  /** The first day of the earliest period it blocks, or null when it blocks none. */
+  blockedFrom: string | null;
   /** The year whose rules every return it blocks waits for, or null. */
   waiting: number | null;
   /** Structured rule cause when every blocked return waits for a rule beyond the horizon. */
@@ -236,6 +238,11 @@ export async function closureNeeds(
         params: { ...need.question.params },
       },
       blocks: [...new Set(blocked.map(key))],
+      blockedFrom:
+        blocked
+          .map((item) => bounds(item.period).start)
+          .sort()
+          .at(0) ?? null,
       waiting,
       waitingRule,
     };

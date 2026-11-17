@@ -993,11 +993,13 @@ describe('returns, the closure and the months on the worklist', () => {
     const found = await needs();
     for (const need of closure.needs)
       expect(found.map((item) => item.subject.id)).toContain(need.id);
-    // A scope fact no single return depends on: a warning, its question the next step.
+    // A scope fact no single return depends on: a warning, its question an agent's step, and the
+    // person's own: recording the fact from the books' first day, its value theirs to give.
     expect(
       found.find((item) => item.subject.id === 'profile.fact|profile:activity.goods'),
     ).toMatchObject({
       severity: 'warn',
+      message: 'Nu este înregistrat dacă firma vinde sau ține bunuri în stoc.',
       details: { fact: 'activity.goods', blocks: [] },
       next: [
         {
@@ -1005,12 +1007,69 @@ describe('returns, the closure and the months on the worklist', () => {
           by: 'agent',
           inputHint: { kind: 'profile.fact', subject: { kind: 'profile', id: 'activity.goods' } },
         },
+        {
+          operation: 'profile.record',
+          by: 'human',
+          allowed: true,
+          complete: false,
+          missing: ['value'],
+          inputHint: { axis: 'activity.goods', effectiveFrom: '2026-01-01' },
+        },
       ],
     });
-    // One that decides returns names them.
+    // One that decides returns names them in its details, never in its message, which is the
+    // need alone; the person records it from the first day of the earliest period it blocks.
+    const employer = found.find((item) => item.subject.id === 'profile.fact|profile:employer')!;
+    expect(employer.details.blocks).toContain('D112|2026-01');
+    expect(employer.message).toBe('Nu este înregistrat dacă firma are salariați.');
+    expect(employer.next.find((step) => step.operation === 'profile.record')).toEqual({
+      operation: 'profile.record',
+      by: 'human',
+      allowed: true,
+      complete: false,
+      missing: ['value'],
+      inputHint: { axis: 'employer', effectiveFrom: '2026-01-01' },
+    });
+    for (const item of found) {
+      expect(item.message).not.toContain('Afectează');
+      expect(item.message).not.toContain('nu poate confirma');
+    }
+    // A person who may record it finds it among the items waiting on people; one who may not
+    // (a viewer) sees why, and an agent keeps its own step.
     expect(
-      found.find((item) => item.subject.id === 'profile.fact|profile:employer')?.details.blocks,
-    ).toContain('D112|2026-01');
+      (await items(s, s.owner, { kinds: ['closure.need'], by: 'human' })).map(
+        (item) => item.subject.id,
+      ),
+    ).toContain('profile.fact|profile:employer');
+    const viewed = (await items(s, s.viewer, { kinds: ['closure.need'] })).find(
+      (item) => item.subject.id === 'profile.fact|profile:employer',
+    )!;
+    expect(viewed.next.find((step) => step.operation === 'profile.record')).toMatchObject({
+      allowed: false,
+      reason: { kind: 'role', permission: 'review' },
+    });
+    const assistant = await agent(s, ['work.list', 'questions.ask']);
+    const seen = (await items(s, assistant, { kinds: ['closure.need'] })).find(
+      (item) => item.subject.id === 'profile.fact|profile:employer',
+    )!;
+    expect(seen.next.map((step) => [step.operation, step.by, step.allowed])).toEqual([
+      ['questions.ask', 'agent', true],
+      ['profile.record', 'human', false],
+    ]);
+    // The person records it without a file: their statement is kept as the evidence, and the
+    // need leaves.
+    const recorded = await s.invoke<{ id: string; evidenceId: string }>(s.owner, 'profile.record', {
+      ...employer.next.find((step) => step.operation === 'profile.record')!.inputHint,
+      value: 'no',
+    });
+    expect(
+      (await s.list<{ id: string; mediaType: string }>(s.owner, 'evidence.list')).find(
+        (file) => file.id === recorded.evidenceId,
+      ),
+    ).toMatchObject({ mediaType: 'application/vnd.xfactura.answer+json' });
+    expect((await needs()).map((item) => item.subject.id)).not.toContain(
+      'profile.fact|profile:employer',
+    );
     // Next year's VAT period: nobody can answer it before 2027.
     expect(
       found.find((item) => item.subject.id === 'profile.fact|profile:vat.period/2027'),
