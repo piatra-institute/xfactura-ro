@@ -1,5 +1,6 @@
 import { expect, type Page, type TestInfo } from '@playwright/test';
-import { createCompany, expectTheme, openSection, typeDate } from './shell';
+import { changeFact, openProfile } from './profile';
+import { createCompany, expectTheme, openSection } from './shell';
 
 /** Signs in the person seeded for this spec and browser project, and creates their company. */
 export async function signInWithCompany(
@@ -25,8 +26,11 @@ export async function signInWithCompany(
 
 /** Keeps an original document through the context bar's primary action. */
 export async function keep(page: Page, name: string, content: string, mimeType = 'text/plain') {
+  // The company's setup has no context bar action: from it, Documente opens from the sidebar.
   const add = page.getByRole('link', { name: 'Adaugă documente', exact: true });
   if (await add.isVisible()) await add.click();
+  else if (!(await page.getByRole('heading', { level: 1, name: 'Documente' }).isVisible()))
+    await openSection(page, 'Documente');
   await expect(
     page.getByRole('heading', { level: 1, name: 'Documente', exact: true }),
   ).toBeVisible();
@@ -37,16 +41,10 @@ export async function keep(page: Page, name: string, content: string, mimeType =
   await expect(page.getByRole('status')).toContainText(`${name} a fost păstrat.`);
 }
 
+/** Records the company as a VAT payer from 1 January 2026, citing a kept document. */
 export async function recordVatPayer(page: Page, evidence: string) {
-  await openSection(page, 'Setări');
-  await page.getByRole('combobox', { name: 'Axă', exact: true }).selectOption('vat.status');
-  await page.getByRole('combobox', { name: 'Valoare', exact: true }).selectOption('normal_vat');
-  await typeDate(page, 'De la', '01.01.2026');
-  await page
-    .getByRole('combobox', { name: 'Document justificativ', exact: true })
-    .selectOption({ label: evidence });
-  await page.getByRole('button', { name: 'Înregistrează faptul', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('Faptul a fost înregistrat.');
+  await openProfile(page);
+  await changeFact(page, 'Regimul de TVA', 'Plătitor de TVA', '01.01.2026', evidence);
 }
 
 /** Opens the first proposal from the worklist, preserving the human decision and exact hash. */

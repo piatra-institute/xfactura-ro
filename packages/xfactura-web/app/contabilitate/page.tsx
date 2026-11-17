@@ -5,6 +5,7 @@ import './tokens.css';
 import './base.css';
 import './components.css';
 import './shell.css';
+import './settings.css';
 
 export const metadata = {
   title: 'Contabilitate · xFactura',

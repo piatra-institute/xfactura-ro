@@ -69,9 +69,9 @@ export async function createCompany(page: Page, name: string, cui = '12345678', 
   await page.getByRole('button', { name: 'Adaugă compania', exact: true }).click();
   await drawerClosed(page);
   await expect(currentCompany(page)).toHaveText(name);
-  // A new company opens on its settings, where its setup begins.
+  // A new company opens on its setup, a part of Setări.
   await expect(page.getByRole('heading', { level: 1, name: 'Setări', exact: true })).toBeVisible();
-  await expect(page).toHaveURL(/view=settings/);
+  await expect(page).toHaveURL(/view=settings&section=setup/);
 }
 
 /** The account menu at the foot of the sidebar. */
@@ -141,6 +141,8 @@ export const yearSelect = (page: Page) =>
 
 /** Chooses a financial year in the context bar by its label. */
 export async function chooseYear(page: Page, label: string) {
+  // A select without options does not open: wait until the company's years have loaded.
+  await expect(yearSelect(page)).not.toContainText('Alege');
   await yearSelect(page).click();
   await page.getByRole('option', { name: label, exact: true }).click();
   await expect(yearSelect(page)).toContainText(label);

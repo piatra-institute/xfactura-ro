@@ -9,6 +9,7 @@ import {
 import { iban } from '../../packages/xfactura-api/test/engine/fixtures/bank';
 import { capability, evidence } from './support/books';
 import { signInWithCompany } from './support/session';
+import { profileRow } from './support/profile';
 import { expectTheme, openMenu, openSection, openTab } from './support/shell';
 
 /**
@@ -70,6 +71,10 @@ test('every view, light and dark', async ({ page }, info) => {
   await shoot('login');
 
   await signInWithCompany(page, info, 'accounting', `Exemplu Ecrane ${info.project.name} SRL`);
+  // A new company opens on its setup's first question.
+  await expect(page.locator('.acc-setup')).toBeVisible();
+  await settled(page);
+  await shoot('Configurare');
   const proof = await evidence(page, 'certificat-tva.pdf', 'Certificat sintetic');
   for (const [axis, value] of Object.entries({
     'entity.form': 'srl',
@@ -153,11 +158,25 @@ test('every view, light and dark', async ({ page }, info) => {
     await shoot(`Registre ${tab}`);
   }
   await openSection(page, 'Setări');
-  for (const tab of ['Profil și acces', 'Luni']) {
+  for (const tab of ['Companie', 'Exerciții și luni', 'Membri', 'Export']) {
     await openTab(page, tab);
     await settled(page);
     await shoot(`Setări ${tab}`);
   }
+  // A fact's change form and its history open under its row; a month's close under the month.
+  await openTab(page, 'Companie');
+  const vat = profileRow(page, 'Regimul de TVA');
+  await vat.getByRole('button', { name: 'Schimbă', exact: true }).click();
+  await expect(page.locator('.acc-fact-editor')).toBeVisible();
+  await shoot('Setări Companie schimbare');
+  await vat.getByRole('button', { name: 'Istoric', exact: true }).click();
+  await expect(page.locator('.acc-history-table')).toBeVisible();
+  await shoot('Setări Companie istoric');
+  await openTab(page, 'Exerciții și luni');
+  await settled(page);
+  await page.getByRole('button', { name: 'Verifică luna octombrie 2026', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Închiderea lunii octombrie 2026' })).toBeVisible();
+  await shoot('Setări închiderea lunii');
   await page.goto('/contabilitate/componente');
   await expect(page.getByRole('heading', { level: 1, name: 'Componente' })).toBeVisible();
   await shoot('Componente');

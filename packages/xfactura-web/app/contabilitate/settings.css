@@ -1,0 +1,569 @@
+/* Setări: the company's profile, its setup, the years and months, members and the export. */
+
+.acc-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Actions at the end of a row: quiet, side by side, aligned to the row's end; the one whose
+ * panel is open below the row stays marked. */
+.acc-row-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.acc-row-actions > .acc-button[aria-expanded='true'] {
+  background: var(--acc-accent-subtle);
+  color: var(--acc-accent-text);
+}
+
+/* The shared tables of these views read as the shared component does, not as the older raw
+ * tables of the content area: cells aligned with their headers, numbers to the right. */
+:where(.acc-close, .acc-members) .acc-table-cell {
+  text-align: left;
+}
+:where(.acc-close, .acc-members) .acc-table :is(.acc-table-cell, .acc-table-column):first-child {
+  padding-left: 14px;
+}
+
+/* Companie: one table per group, one row per axis. */
+.acc-profile {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 28px;
+  max-width: 1040px;
+}
+.acc-profile-group h2 {
+  margin: 0 0 10px;
+}
+.accounting .acc-profile-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: var(--acc-raised);
+  border: 1px solid var(--acc-border);
+  border-radius: var(--acc-radius-lg);
+  font-size: var(--acc-text-base);
+  overflow: hidden;
+}
+.accounting .acc-profile-table :where(th, td) {
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--acc-border);
+  text-align: left;
+  vertical-align: middle;
+  white-space: normal;
+}
+.accounting .acc-profile-table > tbody > tr:last-child > :where(th, td) {
+  border-bottom: 0;
+}
+.accounting .acc-profile-table tbody tr:hover {
+  background: none;
+}
+.accounting .acc-profile-row > th {
+  width: 38%;
+  padding-left: 16px;
+  font-size: var(--acc-text-base);
+  font-weight: 500;
+  color: var(--acc-text-secondary);
+}
+.acc-profile-value {
+  font-weight: 560;
+  color: var(--acc-text);
+}
+.acc-profile-value .acc-chip {
+  margin-left: 6px;
+  vertical-align: 1px;
+}
+.acc-profile-none {
+  color: var(--acc-text-muted);
+  font-weight: 400;
+}
+.accounting .acc-profile-date {
+  width: 112px;
+  color: var(--acc-text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.accounting .acc-profile-actions {
+  width: 1%;
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+.acc-profile-actions > .acc-row-actions {
+  flex-wrap: nowrap;
+}
+.acc-profile-row[data-open] > :where(th, td) {
+  background: var(--acc-sunken);
+  border-bottom-color: transparent;
+}
+.accounting .acc-profile-panel > td {
+  padding: 4px 16px 18px;
+  background: var(--acc-sunken);
+}
+
+/* The change and correction form under its row. */
+.acc-fact-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+}
+.accounting .acc-fact-replaces {
+  margin: 4px 0 0;
+  font-size: var(--acc-text-sm);
+  color: var(--acc-text-secondary);
+}
+.acc-fact-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) 190px minmax(0, 1.3fr) auto;
+  align-items: end;
+  gap: 14px;
+}
+.acc-fact-fields .acc-field {
+  background: none;
+}
+.acc-fact-upload {
+  min-height: var(--acc-control-height);
+  display: flex;
+  align-items: center;
+}
+.acc-fact-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 260px;
+  font-size: var(--acc-text-sm);
+}
+.acc-fact-file > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.acc-fact-editor > .acc-field-error {
+  margin: -4px 0 0;
+}
+
+/* A fact's history under its row. */
+.accounting .acc-history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--acc-text-sm);
+}
+.accounting .acc-history-table :where(th, td) {
+  padding: 7px 12px 7px 0;
+  border-bottom: 1px solid var(--acc-border);
+  text-align: left;
+  white-space: normal;
+}
+.accounting .acc-history-table th {
+  font-size: var(--acc-text-xs);
+  font-weight: 500;
+  color: var(--acc-text-muted);
+}
+.accounting .acc-history-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.accounting .acc-history-table tbody tr:hover {
+  background: none;
+}
+.acc-history-value {
+  margin-right: 6px;
+}
+.acc-history-table .acc-chip + .acc-chip {
+  margin-left: 4px;
+}
+.accounting .acc-history-date {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.acc-history-table tr[data-superseded] .acc-history-value {
+  color: var(--acc-text-muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--acc-border-control);
+}
+
+/* The company's setup: one question, its date and its answers as large choices. */
+.acc-setup {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+  max-width: 600px;
+  padding-top: 8px;
+}
+.acc-setup-progress {
+  display: grid;
+  gap: 8px;
+  font-size: var(--acc-text-sm);
+  color: var(--acc-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.acc-setup-track {
+  display: flex;
+  gap: 4px;
+}
+.acc-setup-track > span {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--acc-border);
+}
+.acc-setup-track > span[data-state] {
+  background: var(--acc-accent);
+}
+.accounting .acc-setup-question {
+  margin: 6px 0 0;
+  font-size: var(--acc-text-2xl);
+  font-weight: 650;
+  letter-spacing: -0.016em;
+  line-height: 1.25;
+}
+.acc-setup-question:focus {
+  outline: none;
+}
+.acc-setup-question:focus-visible {
+  outline: 2px solid var(--acc-focus);
+  outline-offset: 4px;
+}
+.acc-setup-date {
+  max-width: 200px;
+}
+.acc-setup-choices {
+  display: grid;
+  gap: 8px;
+}
+.acc-setup-choice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  min-height: 56px;
+  padding: 12px 18px;
+  border: 1px solid var(--acc-border-strong);
+  border-radius: var(--acc-radius-lg);
+  background: var(--acc-raised);
+  color: var(--acc-text);
+  font: inherit;
+  font-size: var(--acc-text-md);
+  font-weight: 550;
+  text-align: left;
+  cursor: pointer;
+}
+.acc-setup-choice[data-hovered] {
+  border-color: var(--acc-border-control);
+  background: var(--acc-hover);
+}
+.acc-setup-choice[data-pressed] {
+  background: var(--acc-pressed);
+}
+.acc-setup-choice[aria-pressed='true'] {
+  border-color: var(--acc-accent);
+  background: var(--acc-accent-subtle);
+  color: var(--acc-accent-text);
+}
+.acc-setup-choice[data-disabled] {
+  cursor: default;
+  opacity: 0.55;
+}
+.acc-setup-choice .acc-icon {
+  flex: none;
+  color: var(--acc-accent-text);
+}
+.acc-setup > .acc-hint,
+.acc-setup > .acc-error {
+  margin: -6px 0 0;
+}
+.acc-setup-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 6px;
+  border-top: 1px solid var(--acc-border);
+}
+
+/* Acasă, while setup questions wait. */
+.acc-setup-prompt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 20px;
+  margin-bottom: 20px;
+  padding: 12px 14px 12px 18px;
+  border: 1px solid var(--acc-border);
+  border-radius: var(--acc-radius-lg);
+  background: var(--acc-raised);
+}
+.accounting .acc-setup-prompt p {
+  margin: 0;
+  font-weight: 560;
+}
+
+/* Exerciții și luni */
+.acc-periods {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 28px;
+  max-width: 880px;
+}
+.acc-periods h2 {
+  margin: 0 0 10px;
+}
+.acc-year-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.accounting a.acc-year-card {
+  display: grid;
+  gap: 2px;
+  min-width: 150px;
+  padding: 10px 16px;
+  border: 1px solid var(--acc-border);
+  border-radius: var(--acc-radius-lg);
+  background: var(--acc-raised);
+  color: var(--acc-text);
+  text-decoration: none;
+}
+.accounting a.acc-year-card:hover {
+  border-color: var(--acc-border-control);
+}
+.accounting a.acc-year-card[aria-current='true'] {
+  border-color: var(--acc-accent);
+  box-shadow: inset 0 0 0 1px var(--acc-accent);
+}
+.acc-year-label {
+  font-size: var(--acc-text-lg);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.acc-year-range {
+  font-size: var(--acc-text-sm);
+  color: var(--acc-text-secondary);
+}
+.acc-month-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--acc-raised);
+  border: 1px solid var(--acc-border);
+  border-radius: var(--acc-radius-lg);
+}
+.acc-month-row + .acc-month-row {
+  border-top: 1px solid var(--acc-border);
+}
+.acc-month-line {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 44px;
+  padding: 4px 10px 4px 16px;
+}
+.acc-month-name {
+  min-width: 150px;
+  font-weight: 560;
+}
+.acc-month-line > .acc-button {
+  margin-left: auto;
+}
+
+/* A month's close: its checks, its closing balances and the decision. */
+.acc-close {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  padding: 14px 16px 18px;
+  border-top: 1px solid var(--acc-border);
+  background: var(--acc-sunken);
+}
+.acc-close-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.accounting .acc-close-head h3 {
+  margin: 0;
+}
+.accounting .acc-close-clear {
+  margin: 0;
+  color: var(--acc-text-secondary);
+}
+.acc-close .acc-form-actions .acc-hint {
+  margin: 0;
+}
+.acc-close-currency {
+  display: block;
+  font-size: var(--acc-text-xs);
+  color: var(--acc-text-muted);
+}
+
+/* Membri */
+.acc-members {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 28px;
+  max-width: 880px;
+}
+.acc-invite h2 {
+  margin: 0 0 12px;
+}
+.acc-invite-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 200px auto;
+  align-items: end;
+  gap: 14px;
+}
+.acc-invitation {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px 12px;
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--acc-border);
+  border-radius: var(--acc-radius-lg);
+  background: var(--acc-raised);
+}
+.acc-invitation .acc-input {
+  font-variant-numeric: tabular-nums slashed-zero;
+  font-size: var(--acc-text-sm);
+}
+.accounting .acc-invitation .acc-hint {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+/* Export */
+.acc-export {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: start;
+  gap: 14px;
+  max-width: 720px;
+}
+.acc-export > .acc-empty-state {
+  justify-self: stretch;
+}
+.acc-export-state {
+  margin: 0;
+}
+.acc-export-state > div {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.acc-export-state dt {
+  font-weight: 600;
+}
+.acc-export-state dd {
+  margin: 0;
+}
+
+@media (max-width: 899px) {
+  /* A profile row becomes a block: the name, then the value and its date, then the actions. */
+  .acc-profile-table thead {
+    display: none;
+  }
+  .acc-profile-table,
+  .acc-profile-table tbody {
+    display: block;
+  }
+  .accounting .acc-profile-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    border-bottom: 1px solid var(--acc-border);
+  }
+  .accounting .acc-profile-table tbody > tr:last-child {
+    border-bottom: 0;
+  }
+  .accounting .acc-profile-row > :where(th, td) {
+    width: auto;
+    border-bottom: 0;
+  }
+  .accounting .acc-profile-row > th {
+    grid-column: 1 / -1;
+    width: auto;
+    padding: 10px 14px 0;
+    font-size: var(--acc-text-sm);
+  }
+  .accounting .acc-profile-row > .acc-profile-value {
+    padding: 2px 14px 10px;
+  }
+  .accounting .acc-profile-row > .acc-profile-date {
+    padding: 2px 14px 10px 0;
+    text-align: right;
+  }
+  .accounting .acc-profile-row > .acc-profile-actions {
+    grid-column: 1 / -1;
+    padding: 0 8px 8px;
+  }
+  .acc-profile-row > .acc-profile-actions:not(:has(.acc-button)) {
+    display: none;
+  }
+  .acc-profile-row > .acc-profile-actions .acc-row-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+  .accounting .acc-profile-panel {
+    display: block;
+    border-bottom: 1px solid var(--acc-border);
+  }
+  .accounting .acc-profile-panel > td {
+    display: block;
+    padding: 4px 12px 14px;
+  }
+  .acc-fact-fields,
+  .acc-invite-form,
+  .acc-invitation {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .acc-fact-upload {
+    min-height: 0;
+  }
+  .acc-history-table thead {
+    display: none;
+  }
+  .acc-history-table,
+  .acc-history-table tbody,
+  .acc-history-table tr {
+    display: block;
+  }
+  .accounting .acc-history-table tr {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--acc-border);
+  }
+  .accounting .acc-history-table td {
+    display: block;
+    padding: 1px 0;
+    border: 0;
+  }
+  .acc-history-table td[data-label]:empty {
+    display: none;
+  }
+  .acc-history-table td[data-label]::before {
+    content: attr(data-label) ': ';
+    color: var(--acc-text-muted);
+  }
+  .acc-month-name {
+    min-width: 0;
+    flex: 1;
+  }
+  .acc-month-line {
+    flex-wrap: wrap;
+    gap: 6px 12px;
+  }
+  .accounting .acc-setup-question {
+    font-size: var(--acc-text-xl);
+  }
+}

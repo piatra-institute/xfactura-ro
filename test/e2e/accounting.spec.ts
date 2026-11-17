@@ -46,13 +46,20 @@ test('a reviewed opening is posted, reported and closed', async ({ page }, info)
   await expect(page.getByText(/1\. 2026-01-01 · DESCHIDERE · Sold inițial la bancă/)).toBeVisible();
 
   await openSection(page, 'Setări');
-  await openTab(page, 'Luni');
-  await chooseMonth(page, 'Luna', '2026-01');
-  await page.getByRole('button', { name: 'Verifică luna', exact: true }).click();
-  await expect(page.getByText('Nicio constatare.', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Aprobă închiderea', exact: true }).click();
-  await page.getByRole('button', { name: 'Închide luna', exact: true }).click();
+  await openTab(page, 'Exerciții și luni');
+  const january = page.getByRole('listitem').filter({ hasText: /^ianuarie 2026/ });
+  await expect(january).toContainText('deschisă');
+  await january.getByRole('button', { name: 'Verifică luna ianuarie 2026', exact: true }).click();
+  const close = page.getByRole('region', { name: 'Închiderea lunii ianuarie 2026', exact: true });
+  await expect(close.getByText('Nicio constatare.', { exact: true })).toBeVisible();
+  await expect(close.getByRole('rowheader', { name: '5121', exact: true })).toBeVisible();
+  await close.getByRole('button', { name: 'Aprobă închiderea', exact: true }).click();
+  await expect(close).toContainText('Aprobată');
+  await close.getByRole('button', { name: 'Închide luna', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Luna a fost închisă.');
-  await expect(page.getByText('2026-01: închisă', { exact: true })).toBeVisible();
+  await expect(close).toContainText('Luna închisă');
+  await expect(january).toContainText('închisă');
+  await expect(january).not.toContainText('deschisă');
+  await expect(january.getByRole('button', { name: /Verifică luna/ })).toHaveCount(0);
   expect(errors).toEqual([]);
 });

@@ -2,7 +2,6 @@ import { expect, test } from '@playwright/test';
 import { signInWithCompany } from './support/session';
 import {
   chooseCompany,
-  chooseMonth,
   chooseTheme,
   clearSegment,
   closeMenu,
@@ -235,13 +234,10 @@ test('a date typed as 17.11.2026 and a month chosen by name reach the engine as 
   await expect(page.getByRole('status')).toContainText('pregătită pentru verificare');
   expect(inputs['ledger.general.propose']).toMatchObject({ date: '2026-11-17' });
 
+  // A month is chosen by its name in the year's list of months.
   await openSection(page, 'Setări');
-  await openTab(page, 'Luni');
-  await page.getByRole('button', { name: 'Verifică luna', exact: true }).click();
-  await expect(page.getByText('Alege luna.', { exact: true })).toBeVisible();
-  expect(inputs['periods.close.request']).toBeUndefined();
-  await chooseMonth(page, 'Luna', '2026-11');
-  await page.getByRole('button', { name: 'Verifică luna', exact: true }).click();
+  await openTab(page, 'Exerciții și luni');
+  await page.getByRole('button', { name: 'Verifică luna noiembrie 2026', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Verificările au fost rulate.');
   expect(inputs['periods.close.request']).toEqual({ month: '2026-11' });
 });
@@ -355,7 +351,7 @@ test('address values that name inherited properties fall back to a known view', 
   await expect(page.getByRole('heading', { level: 1, name: 'Acasă', exact: true })).toBeVisible();
   await page.goto('/contabilitate?company=company&view=settings&section=__proto__');
   await expect(page.getByRole('heading', { level: 1, name: 'Setări', exact: true })).toBeVisible();
-  await expect(page.getByRole('tab', { name: 'Profil și acces', exact: true })).toHaveAttribute(
+  await expect(page.getByRole('tab', { name: 'Companie', exact: true })).toHaveAttribute(
     'aria-selected',
     'true',
   );
@@ -399,8 +395,8 @@ test('a new company opens at once, while the company list is still reloading', a
   await page.getByRole('button', { name: 'Adaugă compania', exact: true }).click();
   // Before the list answers, the screen and every request already belong to the new company.
   await expect(currentCompany(page)).toHaveText(created.name);
-  await expect(page.getByRole('heading', { level: 1, name: 'Setări', exact: true })).toBeVisible();
-  await expect(page).toHaveURL(/company=company-c&view=settings/);
+  // It opens on its setup, which moves on to Acasă when no question applies (none here).
+  await expect(page).toHaveURL(/company=company-c(&|$)/);
   await expect.poll(() => reads.length).toBeGreaterThan(0);
   expect(reads.filter((url) => !url.includes('/companies/company-c/'))).toEqual([]);
   release();

@@ -87,10 +87,14 @@ export const accountingViews = [
     id: 'settings',
     label: 'Setări',
     navigationLabel: 'Părțile setărilor',
-    filters: [],
+    filters: ['export'],
+    // The company's setup is a part of Setări without a tab: „Companie nouă” and Acasă open it.
     sections: [
-      { id: 'settings', label: 'Profil și acces' },
-      { id: 'periods', label: 'Luni' },
+      { id: 'settings', label: 'Companie' },
+      { id: 'periods', label: 'Exerciții și luni' },
+      { id: 'members', label: 'Membri' },
+      { id: 'export', label: 'Export' },
+      { id: 'setup', label: 'Configurarea companiei', hidden: true },
     ],
   },
 ] as const;

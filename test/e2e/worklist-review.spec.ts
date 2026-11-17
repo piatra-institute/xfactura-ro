@@ -444,11 +444,11 @@ test('filters belong to De verificat and the selected tab shows keyboard focus',
   // The keyboard reaches the selected part after the context bar's action, with a visible ring.
   await page.getByRole('link', { name: 'Adaugă documente', exact: true }).focus();
   await page.keyboard.press('Tab');
-  const selected = page.getByRole('tab', { name: 'Profil și acces', exact: true });
+  const selected = page.getByRole('tab', { name: 'Companie', exact: true });
   await expect(selected).toBeFocused();
   await expect(selected).toHaveCSS('outline-style', 'solid');
   await page.keyboard.press('ArrowRight');
-  await expect(page.getByRole('tab', { name: 'Luni', exact: true })).toBeFocused();
+  await expect(page.getByRole('tab', { name: 'Exerciții și luni', exact: true })).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(page).toHaveURL(/view=settings&section=periods/);
   await expect(page).not.toHaveURL(/family=|severity=/);

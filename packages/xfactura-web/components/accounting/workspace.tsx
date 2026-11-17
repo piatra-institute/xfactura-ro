@@ -10,6 +10,9 @@ import Bank from './bank';
 import Registers, { registerReset, registerTabs } from './registers';
 import Periods from './periods';
 import Settings from './settings';
+import Members from './members';
+import Exports from './exports';
+import Setup, { SetupPrompt } from './setup';
 import Questions from './questions';
 import Deadlines from './deadlines';
 import { Feedback, LinkButton, Select, Tabs, icons } from './ui';
@@ -68,6 +71,9 @@ const sectionComponents: Record<Section, typeof Documents> = {
   bank: Bank,
   settings: Settings,
   periods: Periods,
+  members: Members,
+  export: Exports,
+  setup: Setup,
 };
 
 export default function WorkspaceView({ company }: { company: Company }) {
@@ -193,6 +199,9 @@ function SectionFrame({
   const { view, section, params, href, navigate, filter } = useAccountingNavigation();
   const Content = sectionComponents[section];
   const registers = registerTabs(can, params.get('register'));
+  // A part without a tab (the company's setup) is a flow of its own: no tabs, no year, no action.
+  const parts = view.sections.filter((part) => !('hidden' in part));
+  const flow = !parts.some((part) => part.id === section);
   const tabs =
     view.id === 'registers' && registers.active
       ? {
@@ -201,10 +210,10 @@ function SectionFrame({
           selectedKey: registers.active,
           onSelect: (id: string) => filter({ register: id, ...registerReset }),
         }
-      : view.sections.length > 1
+      : parts.length > 1 && !flow
         ? {
             label: view.navigationLabel,
-            items: view.sections,
+            items: parts,
             selectedKey: section as string,
             onSelect: (id: string) => navigate(id as Section),
           }
@@ -212,6 +221,7 @@ function SectionFrame({
   const body = (
     <div className="acc-body">
       <Feedback error={error} notice={notice} />
+      {section === 'home' ? <SetupPrompt /> : null}
       <section className="acc-content" aria-label={view.label}>
         <Content />
       </section>
@@ -221,21 +231,23 @@ function SectionFrame({
     <>
       <div className="acc-contextbar">
         <h1>{view.label}</h1>
-        <div className="acc-contextbar-tools">
-          <Select
-            label="Exercițiu"
-            className="acc-year"
-            options={financial.map((choice) => ({ id: choice.id, label: choice.label }))}
-            value={year?.id ?? null}
-            onChange={(id) => id && chooseYear(id)}
-          />
-          {view.id !== 'documents' ? (
-            <LinkButton href={href('documents')} variant="primary">
-              {icons.plus}
-              Adaugă documente
-            </LinkButton>
-          ) : null}
-        </div>
+        {flow ? null : (
+          <div className="acc-contextbar-tools">
+            <Select
+              label="Exercițiu"
+              className="acc-year"
+              options={financial.map((choice) => ({ id: choice.id, label: choice.label }))}
+              value={year?.id ?? null}
+              onChange={(id) => id && chooseYear(id)}
+            />
+            {view.id !== 'documents' ? (
+              <LinkButton href={href('documents')} variant="primary">
+                {icons.plus}
+                Adaugă documente
+              </LinkButton>
+            ) : null}
+          </div>
+        )}
       </div>
       {tabs ? (
         <Tabs
