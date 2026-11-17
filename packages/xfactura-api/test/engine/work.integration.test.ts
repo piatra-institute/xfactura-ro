@@ -13,9 +13,17 @@ import type { Actor } from '../../source/engine/kernel/commands';
 import { Work, type Detector, type Draft, type WorkItem } from '../../source/engine/kernel/work';
 import {
   amountLabel,
+  asSentence,
+  authorityNames,
+  axisNames,
+  cleanIdentifierText,
   completeLabels,
+  documentKindNames,
   genericDetailLabel,
   minorLabel,
+  questionKindNames,
+  returnNames,
+  treatmentShortNames,
 } from '../../source/engine/kernel/work-names';
 import { iban, mt940 } from './fixtures/bank';
 import { invoiceXml, type XmlInput } from './fixtures/invoice';
@@ -172,6 +180,55 @@ async function books(options: Parameters<typeof scenario>[0] = {}) {
   );
   return { s, awaiting, approved, blocked, unbooked, movements, unread, invoice, note };
 }
+
+describe('messages cleaned of identifiers', () => {
+  test('a feminine subject takes its "ă" once: cleaning again changes nothing', () => {
+    for (const agreed of [
+      'Forma juridică a companiei nu este înregistrată.',
+      'Perioada fiscală de TVA pentru 2026 nu este stabilită.',
+    ]) {
+      expect(cleanIdentifierText(agreed)).toBe(agreed);
+      expect(cleanIdentifierText(cleanIdentifierText(agreed))).toBe(agreed);
+      expect(asSentence(asSentence(agreed))).toBe(agreed);
+    }
+    // The case the rule exists for: an axis's masculine participle after a feminine name.
+    expect(cleanIdentifierText('Forma juridică a companiei nu este înregistrat.')).toBe(
+      'Forma juridică a companiei nu este înregistrată.',
+    );
+    expect(cleanIdentifierText('vat.period pentru 2026 nu este stabilit.')).toBe(
+      'Perioada fiscală de TVA pentru 2026 nu este stabilită.',
+    );
+    expect(cleanIdentifierText('employer: Calitatea de angajator nu este înregistrat.')).toBe(
+      'Calitatea de angajator nu este înregistrată.',
+    );
+    // A participle the rule does not concern stays masculine.
+    expect(cleanIdentifierText('Nu este înregistrat dacă firma are salariați (employer).')).toBe(
+      'Nu este înregistrat dacă firma are salariați.',
+    );
+  });
+
+  test('cleaning is idempotent for every name the engine replaces identifiers with', () => {
+    const samples = [
+      axisNames,
+      questionKindNames,
+      treatmentShortNames,
+      documentKindNames,
+      authorityNames,
+      returnNames,
+    ].flatMap((table) =>
+      Object.entries(table).flatMap(([key, name]) => [
+        name,
+        `${key} nu este înregistrat.`,
+        `${name} nu este stabilit pentru 2026.`,
+        `Lipsește ${key} (${key}).`,
+      ]),
+    );
+    for (const sample of samples) {
+      const once = cleanIdentifierText(sample);
+      expect(cleanIdentifierText(once), sample).toBe(once);
+    }
+  });
+});
 
 describe('the worklist', () => {
   test('lists what waits on agents and people, each with who moves it on and how', async () => {

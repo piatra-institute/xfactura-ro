@@ -662,8 +662,11 @@ export function cleanIdentifierText(text: string): string {
     .replace(/\bro\.[a-z0-9._]+\b/g, 'regula fiscală')
     .replace(/\bUNSUPPORTED:\s*/g, 'Caz neacoperit: ');
 
+  // A feminine subject takes the feminine participle: only a whole word gets its "ă", one not
+  // followed by a letter (Unicode-aware, as `\b` treats "ă" as a non-word character), so a
+  // participle already agreed stays as it is.
   result = result.replace(
-    /(Perioada fiscală de TVA|Forma juridică|Calitatea de angajator|Categoria de mărime a entității|Activitatea cu bunuri și stocuri)([^.\n]*)\bnu este (stabilit|înregistrat)\b/g,
+    /(Perioada fiscală de TVA|Forma juridică|Calitatea de angajator|Categoria de mărime a entității|Activitatea cu bunuri și stocuri)([^.\n]*)(?<!\p{L})nu este (stabilit|înregistrat)(?!\p{L})/gu,
     '$1$2nu este $3ă',
   );
   return result.trim();
