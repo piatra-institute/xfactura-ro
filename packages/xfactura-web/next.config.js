@@ -7,6 +7,9 @@ const nextConfig = {
       : 'tsconfig.json',
   },
   transpilePackages: ['xfactura-api', 'xfactura-core'],
+  experimental: {
+    agentUpgrade: 'security',
+  },
   outputFileTracingRoot: require('node:path').join(__dirname, '../..'),
   async rewrites() {
     const backend = process.env.ACCOUNTING_API_URL || 'http://127.0.0.1:8089';
