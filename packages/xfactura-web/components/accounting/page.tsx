@@ -44,10 +44,15 @@ function Accounting() {
     setError('');
     try {
       const created = await command<Company>('/api/accounting/v1/companies', body);
+      // The new company is known before the address names it, so the address never resolves to
+      // the company chosen before, and no write reaches that one while the list reloads.
+      setCompanies((known) =>
+        known.some((company) => company.id === created.id) ? known : [...known, created],
+      );
+      setSelected(created.id);
       // A new company opens on its settings, where its setup begins.
       window.history.pushState(null, '', sectionUrl('settings', {}, `company=${created.id}`));
       await load();
-      setSelected(created.id);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Compania nu a putut fi creată.');
     } finally {

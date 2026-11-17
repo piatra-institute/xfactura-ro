@@ -542,6 +542,7 @@ function AnswerForm({
                   label={label}
                   name={field.name}
                   isRequired={field.required}
+                  isDisabled={busy}
                 />
               );
             if (field.type === 'month')
@@ -551,6 +552,7 @@ function AnswerForm({
                   label={label}
                   name={field.name}
                   isRequired={field.required}
+                  isDisabled={busy}
                 />
               );
             return (

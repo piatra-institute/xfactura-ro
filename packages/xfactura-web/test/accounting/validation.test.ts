@@ -1,7 +1,13 @@
 /// <reference types="bun" />
 import { describe, expect, test } from 'bun:test';
 import { matchesOption } from '../../components/accounting/ui/fields';
-import { dateProblem, moneyProblem, monthProblem } from '../../components/accounting/ui/validation';
+import {
+  dateComplete,
+  dateProblem,
+  dateRangeProblem,
+  moneyProblem,
+  monthProblem,
+} from '../../components/accounting/ui/validation';
 
 const segment = (type: string, value: number | null) => ({
   type,
@@ -40,6 +46,30 @@ describe('a date field', () => {
       'Ziua scrisă nu există în calendar; verifică data.',
     );
     expect(dateProblem(date(31, 2, 2026), false, null)).not.toBe('');
+  });
+});
+
+describe('a date against its bounds', () => {
+  test('a day within the bounds, or no day, can be submitted', () => {
+    expect(dateRangeProblem('2027-03-01', { minValue: '2027-01-01' })).toBe('');
+    expect(dateRangeProblem(null, { minValue: '2027-01-01' })).toBe('');
+  });
+
+  test('a day outside the bounds is refused in Romanian, with the bounds as people read them', () => {
+    expect(dateRangeProblem('2026-11-17', { minValue: '2027-01-01' })).toBe(
+      'Alege o dată începând cu 01.01.2027.',
+    );
+    expect(dateRangeProblem('2028-01-01', { maxValue: '2027-12-31' })).toBe(
+      'Alege o dată până la 31.12.2027.',
+    );
+    expect(dateRangeProblem('2026-11-17', { minValue: '2027-01-01', maxValue: '2027-12-31' })).toBe(
+      'Alege o dată între 01.01.2027 și 31.12.2027.',
+    );
+  });
+
+  test('a date is complete when every part is filled', () => {
+    expect(dateComplete(date(17, 11, 2026))).toBe(true);
+    expect(dateComplete(date(17, null, 2026))).toBe(false);
   });
 });
 

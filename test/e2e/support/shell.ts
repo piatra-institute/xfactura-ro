@@ -3,6 +3,8 @@ import { formatMonth } from '../../../packages/xfactura-web/components/accountin
 
 /** On a narrow screen the sidebar sits in a drawer behind the menu button; this opens it. */
 export async function openMenu(page: Page) {
+  // The shell is there before its sidebar or the menu button can be looked for.
+  await expect(page.locator('.acc-app')).toBeVisible();
   const button = page.getByRole('button', { name: 'Meniu', exact: true });
   if (await button.isVisible()) {
     await button.click();
@@ -95,7 +97,10 @@ export async function menuClosed(page: Page) {
 
 /** Closes the drawer with Escape, when a narrow screen has it open. */
 export async function closeMenu(page: Page) {
-  if (await page.getByRole('dialog', { name: 'Meniu', exact: true }).isVisible()) {
+  const drawer = page.getByRole('dialog', { name: 'Meniu', exact: true });
+  if (await drawer.isVisible()) {
+    // Escape reaches the drawer once focus is back inside it, after a menu in it has closed.
+    await expect(drawer.locator(':focus')).toHaveCount(1);
     await page.keyboard.press('Escape');
     await drawerClosed(page);
   }

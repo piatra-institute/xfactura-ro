@@ -29,6 +29,14 @@ export default function Gallery() {
             <DateField label="Data obligatorie" name="required" isRequired />
             <DateField label="Data opțională" name="optional" defaultValue="2026-11-17" />
           </Sample>
+          <Sample title="Dată în afara limitelor">
+            <DateField
+              label="Data de dinainte"
+              name="early"
+              defaultValue="2026-11-17"
+              minValue="2027-01-01"
+            />
+          </Sample>
           <Sample title="Luni">
             <MonthField
               label="Luna limitată"

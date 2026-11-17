@@ -1,5 +1,5 @@
 import { currencyExponent } from 'xfactura-core/money';
-import { formatMonth, parseMoney } from '../format';
+import { formatDate, formatMonth, parseMoney } from '../format';
 
 /**
  * Why a field's value cannot be submitted, in Romanian, or an empty string when it can. The fields
@@ -62,4 +62,25 @@ export function dateProblem(
     String(segments.find((segment) => segment.type === type)?.value ?? '').padStart(2, '0');
   const shown = `${part('year').padStart(4, '0')}-${part('month')}-${part('day')}`;
   return value === shown ? '' : 'Ziua scrisă nu există în calendar; verifică data.';
+}
+
+/** Whether every part of a date is filled. */
+export function dateComplete(segments: readonly Segment[]) {
+  return segments.every((segment) => !segment.isEditable || !segment.isPlaceholder);
+}
+
+/** A whole date (`YYYY-MM-DD`) against its bounds, with the bounds written as people read them. */
+export function dateRangeProblem(
+  value: string | null | undefined,
+  { minValue, maxValue }: { minValue?: string; maxValue?: string } = {},
+) {
+  if (!value) return '';
+  const early = !!minValue && value < minValue;
+  const late = !!maxValue && value > maxValue;
+  if (!early && !late) return '';
+  if (minValue && maxValue)
+    return `Alege o dată între ${formatDate(minValue)} și ${formatDate(maxValue)}.`;
+  return early
+    ? `Alege o dată începând cu ${formatDate(minValue!)}.`
+    : `Alege o dată până la ${formatDate(maxValue!)}.`;
 }

@@ -19,7 +19,7 @@ import {
   type TextFieldProps as AriaTextFieldProps,
 } from 'react-aria-components';
 import { formatMoneyInput, parseMoney } from '../format';
-import { FormValue } from './form-value';
+import { FormValue, useFocusAfterRender } from './form-value';
 import { icons } from './icons';
 import { moneyProblem } from './validation';
 
@@ -152,6 +152,7 @@ export function MoneyField({
   const [focused, setFocused] = useState(false);
   const [touched, setTouched] = useState(false);
   const [attempted, setAttempted] = useState(false);
+  const focusInput = useFocusAfterRender(() => input.current);
   // A value set from outside replaces the text, unless the person is typing it.
   useEffect(() => {
     if (!focused && controlled) setText(value ? formatMoneyInput(value, currency) : '');
@@ -197,9 +198,9 @@ export function MoneyField({
         value={parsed ?? ''}
         problem={problem}
         isDisabled={isDisabled}
-        onInvalid={() => {
+        onInvalid={(first) => {
           setAttempted(true);
-          input.current?.focus();
+          if (first) focusInput();
         }}
       />
     </AriaTextField>

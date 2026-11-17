@@ -361,3 +361,49 @@ test('address values that name inherited properties fall back to a known view', 
   );
   expect(errors).toEqual([]);
 });
+
+test('a new company opens at once, while the company list is still reloading', async ({ page }) => {
+  const listed = [
+    { id: 'company-a', name: 'Compania A SRL', cui: '12345678' },
+    { id: 'company-b', name: 'Compania B SRL', cui: '87654321' },
+  ];
+  const created = { id: 'company-c', name: 'Compania C SRL', cui: '11223344' };
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let creating = false;
+  await mockWorklist(page, () => ({ body: { items: [], next: null, asOfSeq: 1 } }));
+  await page.route('**/api/accounting/v1/companies', async (route) => {
+    if (route.request().method() === 'POST') {
+      creating = true;
+      return route.fulfill({ json: created });
+    }
+    // The reload after the creation answers late.
+    if (creating) await held;
+    return route.fulfill({ json: creating ? [...listed, created] : listed });
+  });
+  await page.goto('/contabilitate?company=company-a');
+  await expect(currentCompany(page)).toHaveText('Compania A SRL');
+  await chooseCompany(page, 'Compania B SRL');
+  await openCompanies(page);
+  await page.getByRole('menuitem', { name: 'Companie nouă', exact: true }).click();
+  await drawerClosed(page);
+  await page.getByLabel('Denumire', { exact: true }).fill(created.name);
+  await page.getByLabel('CUI', { exact: true }).fill(created.cui);
+  await page.getByLabel('An contabil', { exact: true }).fill('2026');
+  const reads: string[] = [];
+  page.on('request', (request) => {
+    if (request.url().includes('/capabilities/')) reads.push(request.url());
+  });
+  await page.getByRole('button', { name: 'Adaugă compania', exact: true }).click();
+  // Before the list answers, the screen and every request already belong to the new company.
+  await expect(currentCompany(page)).toHaveText(created.name);
+  await expect(page.getByRole('heading', { level: 1, name: 'Setări', exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/company=company-c&view=settings/);
+  await expect.poll(() => reads.length).toBeGreaterThan(0);
+  expect(reads.filter((url) => !url.includes('/companies/company-c/'))).toEqual([]);
+  release();
+  await expect(currentCompany(page)).toHaveText(created.name);
+  expect(reads.filter((url) => !url.includes('/companies/company-c/'))).toEqual([]);
+});

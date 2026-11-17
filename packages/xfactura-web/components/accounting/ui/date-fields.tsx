@@ -1,7 +1,14 @@
 'use client';
 
 import { parseDate, type CalendarDate } from '@internationalized/date';
-import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import {
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react';
 import {
   Button as AriaButton,
   DateField as AriaDateField,
@@ -9,15 +16,16 @@ import {
   DateSegment,
   Dialog,
   DialogTrigger,
+  FieldError,
   Label,
   Popover,
   Text,
 } from 'react-aria-components';
 import { formatMonth, monthName } from '../format';
 import { Button, IconButton } from './button';
-import { FormValue } from './form-value';
+import { FormValue, useFocusAfterRender } from './form-value';
 import { icons } from './icons';
-import { dateProblem, monthProblem } from './validation';
+import { dateComplete, dateProblem, dateRangeProblem, monthProblem } from './validation';
 
 /** An ISO date as the widgets' calendar date; anything else is no date. */
 function calendarDate(value: string | null | undefined) {
@@ -48,8 +56,9 @@ export type DateFieldProps = {
 
 /**
  * A day, typed and shown as 17.11.2026 under the Romanian locale; its value is the ISO date. A
- * date with some parts left empty is no date: the field submits nothing and refuses the form,
- * with its reason beside it, until the date is complete or cleared.
+ * date with some parts left empty, a day that does not exist, or a day outside the bounds is no
+ * date to submit: the field refuses the form, with its reason beside it and on every part of the
+ * date, until the person corrects it or clears it.
  */
 export function DateField({
   label,
@@ -64,9 +73,17 @@ export function DateField({
   isRequired,
   isDisabled,
 }: DateFieldProps) {
-  const id = useId();
   const root = useRef<HTMLDivElement>(null);
   const [attempted, setAttempted] = useState(false);
+  const [report, setReport] = useState({ problem: '', settled: false });
+  // A wrong whole date is shown at once; a missing or partial one once the form is submitted.
+  const shown = report.problem && (attempted || report.settled) ? report.problem : '';
+  const focus = useFocusAfterRender(() => {
+    const parts = [
+      ...(root.current?.querySelectorAll<HTMLElement>('[contenteditable="true"]') ?? []),
+    ];
+    return parts.find((part) => part.hasAttribute('data-placeholder')) ?? parts[0];
+  });
   return (
     <AriaDateField
       ref={root}
@@ -77,37 +94,43 @@ export function DateField({
       onChange={(date: CalendarDate | null) => onChange?.(date ? date.toString() : null)}
       isRequired={isRequired}
       isDisabled={isDisabled}
+      // The field's own reason replaces React Aria's validation, whose messages follow the
+      // browser's language rather than the interface's.
+      isInvalid={!!shown}
       validationBehavior="aria"
-      aria-describedby={`${id}-problem`}
       shouldForceLeadingZeros
       className={['acc-field', className].filter(Boolean).join(' ')}
     >
       {({ state }) => {
         const entered = state.value ? state.value.toString() : null;
-        const problem =
-          dateProblem(state.segments, isRequired, entered) ||
-          (state.realtimeValidation.isInvalid
-            ? state.realtimeValidation.validationErrors.join(' ') || 'Data nu este validă.'
-            : '');
-        const complete = !dateProblem(state.segments, false, entered) && entered;
+        const parts = dateProblem(state.segments, isRequired, entered);
+        const problem = parts || dateRangeProblem(entered, { minValue, maxValue });
+        const complete = dateComplete(state.segments);
+        // React Aria clamps a day that does not exist (31.02) to a real one when focus leaves the
+        // field; the person's draft stays instead, refused, until they correct it.
+        const confirm = state.confirmPlaceholder;
+        state.confirmPlaceholder = () => {
+          if (!(complete && parts)) confirm();
+        };
         return (
           <>
+            <Report
+              problem={problem}
+              settled={complete && !!problem}
+              onReport={(problem, settled) => setReport({ problem, settled })}
+            />
             <Label className="acc-field-label">{label}</Label>
             <DateInput className="acc-input acc-date-input">
               {(segment) => <DateSegment segment={segment} className="acc-date-segment" />}
             </DateInput>
             <FormValue
               name={name}
-              value={complete || ''}
+              value={parts ? '' : (entered ?? '')}
               problem={problem}
               isDisabled={isDisabled}
-              onInvalid={() => {
+              onInvalid={(first) => {
                 setAttempted(true);
-                const segments = root.current?.querySelectorAll<HTMLElement>('[role="spinbutton"]');
-                const empty = [...(segments ?? [])].find((segment) =>
-                  segment.hasAttribute('data-placeholder'),
-                );
-                (empty ?? segments?.[0])?.focus();
+                if (first) focus();
               }}
             />
             {description ? (
@@ -115,16 +138,26 @@ export function DateField({
                 {description}
               </Text>
             ) : null}
-            {attempted && problem ? (
-              <p id={`${id}-problem`} className="acc-field-error">
-                {problem}
-              </p>
-            ) : null}
+            <FieldError className="acc-field-error">{shown}</FieldError>
           </>
         );
       }}
     </AriaDateField>
   );
+}
+
+/** Passes a problem found while rendering up to the field, after the render. */
+function Report({
+  problem,
+  settled,
+  onReport,
+}: {
+  problem: string;
+  settled: boolean;
+  onReport: (problem: string, settled: boolean) => void;
+}) {
+  useLayoutEffect(() => onReport(problem, settled), [problem, settled]);
+  return null;
 }
 
 const pad = (month: number) => String(month).padStart(2, '0');
@@ -176,6 +209,7 @@ export function MonthField({
   const current = controlled ? value : own;
   const [open, setOpen] = useState(false);
   const [attempted, setAttempted] = useState(false);
+  const focusTrigger = useFocusAfterRender(() => trigger.current);
   const problem = monthProblem(current, { minValue, maxValue, isRequired });
   // A wrong value is shown at once; a missing required one once the form is submitted.
   const shown = problem && (attempted || !!current) ? problem : '';
@@ -305,9 +339,9 @@ export function MonthField({
         value={current ?? ''}
         problem={problem}
         isDisabled={isDisabled}
-        onInvalid={() => {
+        onInvalid={(first) => {
           setAttempted(true);
-          trigger.current?.focus();
+          if (first) focusTrigger();
         }}
       />
       {description ? (

@@ -1,5 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
+import type { Question } from '../../packages/xfactura-web/components/accounting/questions';
 import { chooseMonth, clearSegment, typeDate } from './support/shell';
+import { mockWorklist } from './support/worklist';
 
 /** A form of the component page, its submit button and what it last submitted. */
 function sample(page: Page, title: string) {
@@ -33,6 +35,115 @@ test('a date field submits a whole date or nothing, never part of one', async ({
   for (const index of [0, 1, 2]) await clearSegment(form, 'Data opțională', index);
   await submit();
   await expect(sent).toHaveText(JSON.stringify({ required: '2026-11-17', optional: '' }));
+});
+
+test('a day that does not exist stays as typed and is refused, even after focus leaves', async ({
+  page,
+}) => {
+  const { form, submit, sent } = sample(page, 'Date');
+  const field = form.getByRole('group', { name: 'Data obligatorie', exact: true });
+  await field.getByRole('spinbutton').first().click();
+  await page.keyboard.type('31022026');
+  // Pressing the button moves focus out of the field first; the draft is not replaced by 28.02.
+  await submit();
+  await expect(field).toContainText('31.02.2026');
+  await expect(
+    form.getByText('Ziua scrisă nu există în calendar; verifică data.', { exact: true }),
+  ).toBeVisible();
+  await expect(sent).toHaveText('');
+  await typeDate(form, 'Data obligatorie', '28.02.2026');
+  await submit();
+  await expect(sent).toHaveText(JSON.stringify({ required: '2026-02-28', optional: '2026-11-17' }));
+});
+
+test('a refused date marks every part invalid, describes why and takes focus', async ({ page }) => {
+  const { form, submit } = sample(page, 'Date');
+  const field = form.getByRole('group', { name: 'Data obligatorie', exact: true });
+  await typeDate(form, 'Data obligatorie', '17.11.2026');
+  await clearSegment(form, 'Data obligatorie', 1);
+  await submit();
+  const reason = 'Data este incompletă: completează ziua, luna și anul sau golește câmpul.';
+  await expect(form.getByText(reason, { exact: true })).toBeVisible();
+  // Focus lands on an editable part, whatever its role (iOS renders the parts as text boxes).
+  const focused = page.locator(':focus');
+  await expect(focused).toHaveAttribute('contenteditable', 'true');
+  await expect(focused).toHaveAttribute('data-placeholder', 'true');
+  const parts = field.locator('[contenteditable="true"]');
+  await expect(parts).toHaveCount(3);
+  for (const part of await parts.all()) {
+    await expect(part).toHaveAttribute('aria-invalid', 'true');
+    await expect(part).toHaveAccessibleDescription(new RegExp(reason.replace(/[.:]/g, '\\$&')));
+  }
+});
+
+test.describe('with the browser in English', () => {
+  test.use({ locale: 'en-US' });
+
+  test('a date outside its bounds is refused in Romanian, with the bound', async ({ page }) => {
+    const { form, submit, sent } = sample(page, 'Dată în afara limitelor');
+    await expect(
+      form.getByText('Alege o dată începând cu 01.01.2027.', { exact: true }),
+    ).toBeVisible();
+    await expect(form.getByText(/Value must/)).toHaveCount(0);
+    await submit();
+    await expect(sent).toHaveText('');
+    await typeDate(form, 'Data de dinainte', '05.01.2027');
+    await submit();
+    await expect(sent).toHaveText(JSON.stringify({ early: '2027-01-05' }));
+  });
+});
+
+test('answer dates and months cannot be edited while the answer is being saved', async ({
+  page,
+}) => {
+  const question: Question = {
+    id: 'vehicle',
+    kind: 'vehicle.use',
+    subject: { kind: 'vehicle', id: 'B123XFA' },
+    params: {},
+    prompt: 'Vehiculul B123XFA este folosit exclusiv pentru activitatea economică?',
+    status: 'open',
+    askedBy: 'person',
+    agentId: null,
+    createdAt: '2026-01-01T09:00:00Z',
+    due: null,
+    answer: null,
+  };
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await mockWorklist(
+    page,
+    async (operation) => {
+      if (operation === 'questions.list') return { body: { items: [question], next: null } };
+      if (operation === 'questions.answer') {
+        await held;
+        return { body: question };
+      }
+      return { body: { items: [], next: null } };
+    },
+    {
+      'capabilities.list': {
+        capabilities: ['questions.list', 'questions.answer', 'proposals.list'].map((id) => ({
+          id,
+        })),
+      },
+    },
+  );
+  await page.goto('/contabilitate?company=company&view=questions&question=vehicle');
+  await page
+    .getByRole('combobox', { name: 'Folosirea vehiculului', exact: true })
+    .selectOption('mixed');
+  await typeDate(page, 'De la', '03.01.2026');
+  const field = page.getByRole('group', { name: 'De la', exact: true });
+  await expect(field.locator('[contenteditable="true"]')).toHaveCount(3);
+  await page.getByRole('button', { name: 'Păstrează răspunsul', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Se păstrează…', exact: true })).toBeVisible();
+  // While the answer is saved, no part of the date takes focus or text.
+  await expect(field.locator('[contenteditable="true"]')).toHaveCount(0);
+  await expect(field.locator('[tabindex="0"]')).toHaveCount(0);
+  release();
 });
 
 test('a month field refuses a value outside its bounds, set before or after', async ({ page }) => {
