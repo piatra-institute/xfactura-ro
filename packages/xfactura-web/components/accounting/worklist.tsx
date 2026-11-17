@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useAccountingNavigation } from './navigation';
-import { JournalForm } from './review';
 import { useLoad, useWorkspace } from './workspace';
 import { WorkItemDetail } from './work-item-detail';
 import { groupCauses } from './work-causes';
@@ -25,7 +24,7 @@ type ItemRead = {
 };
 
 export default function Worklist() {
-  const { can, refresh } = useWorkspace();
+  const { refresh } = useWorkspace();
   const { params, filter } = useAccountingNavigation();
   const familyParam = params.get('family') ?? '';
   const severityParam = params.get('severity') ?? '';
@@ -63,7 +62,6 @@ export default function Worklist() {
         </label>
       </div>
       <WorkPages key={`${family}:${severity}`} family={family} severity={severity} />
-      {can('ledger.general.propose') ? <JournalForm /> : null}
     </>
   );
 }

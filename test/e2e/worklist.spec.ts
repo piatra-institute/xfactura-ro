@@ -9,6 +9,7 @@ import {
   signInWithCompany,
 } from './support/session';
 import { chooseCompany, currentCompany, openSection } from './support/shell';
+import { choose } from './support/entry';
 import { mockWorklist, workItem } from './support/worklist';
 import type { WorkItem } from '../../packages/xfactura-web/components/accounting/work-model';
 
@@ -67,9 +68,11 @@ test('an unbooked document reaches approval and posting from the worklist', asyn
   await expect(document.getByText(/Așteaptă un agent/)).toBeVisible();
   await document.getByRole('link', { name: 'Deschide Documente', exact: true }).click();
   await page
-    .locator('.acc-review', { hasText: 'Factură primită LUCRU-1' })
-    .getByRole('button', { name: 'Pregătește înregistrarea', exact: true })
+    .getByRole('button', { name: 'Înregistrează Factură primită LUCRU-1', exact: true })
     .click();
+  const booking = page.getByRole('form', { name: 'Înregistrarea Factură primită LUCRU-1' });
+  await choose(booking, 'Cont de cheltuieli', '628');
+  await booking.getByRole('button', { name: 'Pregătește înregistrarea', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('pregătită pentru verificare');
 
   const proposal = await openProposal(page);

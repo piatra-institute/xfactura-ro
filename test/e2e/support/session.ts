@@ -24,20 +24,17 @@ export async function signInWithCompany(
   return errors;
 }
 
-/** Keeps an original document through the context bar's primary action. */
+/** Keeps an original document from Documente, reached by the context bar's primary action. */
 export async function keep(page: Page, name: string, content: string, mimeType = 'text/plain') {
   // The company's setup has no context bar action: from it, Documente opens from the sidebar.
   const add = page.getByRole('link', { name: 'Adaugă documente', exact: true });
+  const documents = page.getByRole('heading', { level: 1, name: 'Documente', exact: true });
   if (await add.isVisible()) await add.click();
-  else if (!(await page.getByRole('heading', { level: 1, name: 'Documente' }).isVisible()))
-    await openSection(page, 'Documente');
-  await expect(
-    page.getByRole('heading', { level: 1, name: 'Documente', exact: true }),
-  ).toBeVisible();
-  await page
-    .getByLabel('Document original', { exact: true })
-    .setInputFiles({ name, mimeType, buffer: Buffer.from(content) });
-  await page.getByRole('button', { name: 'Păstrează documentul', exact: true }).click();
+  else if (!(await documents.isVisible())) await openSection(page, 'Documente');
+  await expect(documents).toBeVisible();
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Alege fișiere', exact: true }).click();
+  await (await chooser).setFiles({ name, mimeType, buffer: Buffer.from(content) });
   await expect(page.getByRole('status')).toContainText(`${name} a fost păstrat.`);
 }
 

@@ -389,9 +389,14 @@ export function EntryDetail({
 }) {
   const { can, year } = useWorkspace();
   const { filter } = useAccountingNavigation();
-  const day = entryDate && /^\d{4}-\d{2}-\d{2}$/.test(entryDate) ? entryDate : null;
+  const linked = entryDate && /^\d{4}-\d{2}-\d{2}$/.test(entryDate) ? entryDate : null;
+  // A link that does not carry the entry's day (a document's booking) learns it from the entry.
+  const locate = !linked && can('ledger.entry');
+  const located = useAccountingData<{ date: string }>('ledger.entry', { entryId }, locate);
+  const day = linked ?? located.data?.date ?? null;
+  const locating = locate && !located.data && !located.error;
   const range = day ? { from: day, to: day } : monthDays(month, year);
-  const journal = useJournalBetween(range.from, range.to, can('ledger.journal'));
+  const journal = useJournalBetween(range.from, range.to, can('ledger.journal') && !locating);
   const entry = journal.entries.find((row) => row.id === entryId) ?? null;
   const heading = useOpenedHeading(Boolean(entry));
   const proposalRead = useAccountingData<ProposalView>(
@@ -416,9 +421,9 @@ export function EntryDetail({
         <p className="acc-empty">Rolul dumneavoastră nu poate citi registrul jurnal.</p>
       ) : (
         <State
-          loading={journal.loading}
+          loading={journal.loading || locating}
           error={journal.error}
-          empty={!journal.loading && !journal.error && !entry}
+          empty={!journal.loading && !locating && !journal.error && !entry}
         >
           {journal.complete
             ? `Înregistrarea nu se găsește în registrul jurnal${where}.`

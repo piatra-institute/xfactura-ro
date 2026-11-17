@@ -6,11 +6,12 @@ import {
   invoiceXml,
   type XmlInput,
 } from '../../packages/xfactura-api/test/engine/fixtures/invoice';
-import { iban } from '../../packages/xfactura-api/test/engine/fixtures/bank';
+import { iban, mt940 } from '../../packages/xfactura-api/test/engine/fixtures/bank';
 import { capability, evidence } from './support/books';
 import { signInWithCompany } from './support/session';
 import { profileRow } from './support/profile';
-import { expectTheme, openMenu, openSection, openTab } from './support/shell';
+import { cell, choose, openJournalEntry, select } from './support/entry';
+import { expectTheme, openMenu, openSection, openTab, typeDate } from './support/shell';
 
 /**
  * Saves every view in both themes for review, to test-results/screens (not committed). It runs
@@ -126,6 +127,12 @@ test('every view, light and dark', async ({ page }, info) => {
     ledgerAccount: '5121',
     openedOn: '2026-01-01',
   });
+  const years = await capability<{ items: { id: string; kind: string }[] }>(page, 'years.list');
+  const statement = await evidence(page, 'extras-octombrie.sta', mt940);
+  await capability(page, 'bank.import', {
+    evidenceId: statement.id,
+    financialYearId: years.items.find((year) => year.kind === 'financial')!.id,
+  });
   await page.reload();
   await openSection(page, 'Acasă');
   await settled(page);
@@ -157,6 +164,45 @@ test('every view, light and dark', async ({ page }, info) => {
     await settled(page);
     await shoot(`Registre ${tab}`);
   }
+  // The journal entry with a supplier's line on an open invoice, unbalanced: the engine's difference.
+  await openJournalEntry(page);
+  await typeDate(page, 'Data', '16.11.2026');
+  await page.getByRole('textbox', { name: 'Referință', exact: true }).fill('NC-14');
+  await page
+    .getByRole('textbox', { name: 'Explicație', exact: true })
+    .fill('Plată parțială furnizor prin compensare');
+  await choose(page, 'Document justificativ', 'certificat', /certificat-tva\.pdf/);
+  await choose(page, 'Cont, linia 1', '401');
+  await choose(page, 'Partener, linia 1', 'Companie', /Companie 87654321/);
+  await choose(page, 'Factură, linia 1', 'FP-202', /FP-202/);
+  await cell(page, 'Debit', 1).fill('1.000,00');
+  await cell(page, 'Explicație', 1).fill('Compensare FP-202');
+  await choose(page, 'Cont, linia 2', '4111');
+  await choose(page, 'Partener, linia 2', 'Companie', /Companie 87654321/);
+  await choose(page, 'Factură, linia 2', 'FV-101', /FV-101/);
+  await cell(page, 'Credit', 2).fill('900,00');
+  await expect(page.locator('.acc-entry-grid tfoot')).toContainText('Diferență 100,00 RON');
+  await settled(page);
+  await shoot('Notă contabilă nouă');
+
+  await openSection(page, 'Documente');
+  await select(page, 'Înregistrare', 'Neînregistrate');
+  await page
+    .getByRole('button', { name: 'Înregistrează Factură primită FP-203', exact: true })
+    .click();
+  await choose(page, 'Cont de cheltuieli', '628');
+  await settled(page);
+  await shoot('Documente înregistrare');
+
+  await openSection(page, 'Bancă');
+  await page
+    .locator('tr[data-movement]', { hasText: '−100,00 RON' })
+    .getByRole('button', { name: /^Explică / })
+    .click();
+  await choose(page, 'Factură decontată', 'FP-202', /FP-202/);
+  await settled(page);
+  await shoot('Bancă explicație');
+
   await openSection(page, 'Setări');
   for (const tab of ['Companie', 'Exerciții și luni', 'Membri', 'Export']) {
     await openTab(page, tab);

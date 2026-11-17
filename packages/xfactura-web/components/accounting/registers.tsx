@@ -4,6 +4,7 @@ import AccountSheet from './account-sheet';
 import Assets from './assets';
 import Inventory from './inventory';
 import Journal from './journal';
+import JournalEntryView from './journal-entry';
 import { useAccountingNavigation } from './navigation';
 import Payroll from './payroll';
 import { RecordNames } from './record-names';
@@ -44,6 +45,7 @@ export const registerReset = {
   stockWarehouse: null,
   registerAsset: null,
   payrollRun: null,
+  entry: null,
 };
 
 /** The registers a person may read, as tabs, and the one the address selects. */
@@ -72,10 +74,14 @@ function RegisterView() {
     (register) => register.id === registerTabs(can, params.get('register')).active,
   );
   const entryId = params.get('registerEntry');
+  // A journal entry being written (`entry=new`) or the proposal it became (`entry=<id>`).
+  const writing = active?.id === 'jurnal' ? params.get('entry') : null;
   return !year || !month || !first || !last ? (
     <p aria-busy="true">Se încarcă registrele…</p>
   ) : !active ? (
     <p className="acc-empty">Niciun registru disponibil pentru rolul dumneavoastră.</p>
+  ) : writing ? (
+    <JournalEntryView entry={writing} />
   ) : entryId ? (
     <EntryDetail entryId={entryId} entryDate={params.get('registerEntryDate')} month={month} />
   ) : (

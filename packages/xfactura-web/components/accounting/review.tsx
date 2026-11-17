@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import type { ActionView, ProposalView } from 'xfactura-api/contracts';
-import { ApiError, amountField, companyPath, field } from './api';
+import { ApiError, companyPath, field } from './api';
 import { useLoad, useWorkspace } from './workspace';
 import { treatmentLabels, type WorkStepView } from './work-model';
 export { treatmentLabels } from './work-model';
@@ -10,7 +10,6 @@ import { SectionLink } from './navigation';
 import { useAccountingData } from './use-data';
 import { WorkDetails } from './work-details';
 import { formatMoney } from './format';
-import { DateField } from './ui';
 
 /** A person's decision is bound to the preview actually displayed. Execution remains a
  * separate action, which the engine re-evaluates against the same hash. */
@@ -436,90 +435,5 @@ function ProposalEvidence({ proposal }: { proposal: ProposalView }) {
         <p className="acc-hint">{proposal.effect.explanation.summary}</p>
       ) : null}
     </aside>
-  );
-}
-
-const LINES = 4;
-
-export function JournalForm() {
-  const { evidence, invoke, act } = useWorkspace();
-  return (
-    <details className="acc-disclosure">
-      <summary>Notă contabilă nouă</summary>
-      <form
-        className="acc-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          const data = new FormData(event.currentTarget);
-          const lines = Array.from({ length: LINES }, (_, index) => ({
-            account: field(data, `account${index}`),
-            side: field(data, `side${index}`),
-            amount: amountField(data, `amount${index}`),
-          })).filter((line) => line.account && line.amount);
-          void act(
-            () =>
-              invoke('ledger.general.propose', {
-                date: field(data, 'date'),
-                purpose: field(data, 'purpose'),
-                reference: field(data, 'reference'),
-                description: field(data, 'description'),
-                evidenceId: field(data, 'evidenceId'),
-                lines,
-              }),
-            'Propunerea a fost pregătită pentru verificare.',
-          );
-        }}
-      >
-        <div className="acc-form-grid">
-          <DateField label="Data" name="date" isRequired />
-          <label>
-            Tip
-            <select name="purpose" defaultValue="general">
-              <option value="general">Înregistrare generală</option>
-              <option value="opening">Poziție de deschidere</option>
-              <option value="adjustment">Ajustare</option>
-            </select>
-          </label>
-          <label>
-            Referință
-            <input name="reference" required maxLength={100} />
-          </label>
-        </div>
-        <label>
-          Explicație
-          <input name="description" required minLength={3} />
-        </label>
-        <label>
-          Document justificativ
-          <select name="evidenceId" required>
-            {evidence.map((file) => (
-              <option key={file.id} value={file.id}>
-                {file.filename}
-              </option>
-            ))}
-          </select>
-        </label>
-        {Array.from({ length: LINES }, (_, index) => (
-          <div className="acc-form-grid" key={index}>
-            <label>
-              Cont
-              <input name={`account${index}`} inputMode="numeric" required={index < 2} />
-            </label>
-            <label>
-              Parte
-              <select name={`side${index}`} defaultValue={index % 2 ? 'C' : 'D'}>
-                <option value="D">Debit</option>
-                <option value="C">Credit</option>
-              </select>
-            </label>
-            <label>
-              Sumă (lei)
-              <input name={`amount${index}`} inputMode="decimal" required={index < 2} />
-            </label>
-          </div>
-        ))}
-        <button>Pregătește propunerea</button>
-      </form>
-    </details>
   );
 }

@@ -284,6 +284,8 @@ export type ComboBoxProps = FieldBase & {
   value?: string | null;
   defaultValue?: string;
   onChange?: (value: string | null) => void;
+  /** The text as typed, for a hint about what the person is searching for. */
+  onInputChange?: (text: string) => void;
   placeholder?: string;
   emptyMessage?: string;
 };

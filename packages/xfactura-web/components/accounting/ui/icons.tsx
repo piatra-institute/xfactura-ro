@@ -118,6 +118,18 @@ export const icons = {
       <path d="M10 4.5v11M4.5 10h11" />
     </Icon>
   ),
+  upload: (
+    <Icon>
+      <path d="M10 13V3.5M6.5 7 10 3.5 13.5 7" />
+      <path d="M3.5 12.5v4h13v-4" />
+    </Icon>
+  ),
+  trash: (
+    <Icon>
+      <path d="M3.5 5.5h13M8 5.5V3.5h4v2" />
+      <path d="M5 5.5l.8 11h8.4l.8-11" />
+    </Icon>
+  ),
   calendar: (
     <Icon>
       <path d="M3.5 5h13v11.5h-13z" />

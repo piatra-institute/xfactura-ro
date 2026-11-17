@@ -1,5 +1,13 @@
 import { expect, test } from '@playwright/test';
-import { approveAndPost, keep, openProposal, signInWithCompany } from './support/session';
+import {
+  approveInPlace,
+  cell,
+  choose,
+  entryTotals,
+  openJournalEntry,
+  select,
+} from './support/entry';
+import { keep, signInWithCompany } from './support/session';
 import { chooseMonth, openSection, openTab, typeDate } from './support/shell';
 
 test('a reviewed opening is posted, reported and closed', async ({ page }, info) => {
@@ -11,31 +19,30 @@ test('a reviewed opening is posted, reported and closed', async ({ page }, info)
   );
   await keep(page, 'balanta-deschidere.pdf', 'Balanța de deschidere 2026');
 
-  await openSection(page, 'De verificat');
-  await page.getByRole('combobox', { name: 'Familie', exact: true }).selectOption('proposals');
-  await expect(
-    page.getByText('Niciun element pentru filtrele alese.', { exact: true }),
-  ).toBeVisible();
-  await page.getByText('Notă contabilă nouă', { exact: true }).click();
+  await openJournalEntry(page);
   await typeDate(page, 'Data', '01.01.2026');
-  await page.getByRole('combobox', { name: 'Tip', exact: true }).selectOption('opening');
-  await page.getByLabel('Referință', { exact: true }).fill('DESCHIDERE-2026');
-  await page.getByLabel('Explicație', { exact: true }).fill('Sold inițial la bancă');
-  const accounts = page.getByLabel('Cont', { exact: true });
-  const amounts = page.getByLabel('Sumă (lei)', { exact: true });
-  await accounts.nth(0).fill('5121');
-  await amounts.nth(0).fill('1000,00');
-  await accounts.nth(1).fill('1012');
-  await amounts.nth(1).fill('1000,00');
-  await page.getByRole('button', { name: 'Pregătește propunerea', exact: true }).click();
+  await select(page, 'Tip', 'Deschidere');
+  await page.getByRole('textbox', { name: 'Referință', exact: true }).fill('DESCHIDERE-2026');
+  await page
+    .getByRole('textbox', { name: 'Explicație', exact: true })
+    .fill('Sold inițial la bancă');
+  await choose(page, 'Document justificativ', 'balanta', /balanta-deschidere\.pdf/);
+  await choose(page, 'Cont, linia 1', '5121');
+  await cell(page, 'Debit', 1).fill('1000,00');
+  await choose(page, 'Cont, linia 2', '1012');
+  await cell(page, 'Credit', 2).fill('1000,00');
+  await expect(entryTotals(page)).toContainText('Diferență 0,00 RON');
+  await page.getByRole('button', { name: 'Pregătește înregistrarea', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('pregătită pentru verificare');
 
-  const proposal = await openProposal(page);
+  // The proposal opens in place, for approval, at an address of its own.
+  await expect(page).toHaveURL(/entry=[0-9a-f-]{36}/);
+  const proposal = page.locator('.acc-review');
   await expect(
     proposal.getByRole('heading', { name: 'Notă contabilă', exact: true }),
   ).toBeVisible();
   await expect(proposal.getByRole('cell', { name: '5121', exact: true })).toBeVisible();
-  await approveAndPost(page);
+  await approveInPlace(proposal);
   await openSection(page, 'Acasă');
   await expect(page.locator('.acc-balances')).toContainText('1.000,00 RON');
 

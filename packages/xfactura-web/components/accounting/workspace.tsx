@@ -218,6 +218,21 @@ function SectionFrame({
             onSelect: (id: string) => navigate(id as Section),
           }
         : null;
+  // Registrul jurnal's primary action is a new journal entry; elsewhere it is adding documents.
+  const primary =
+    view.id === 'registers' && registers.active === 'jurnal' && can('ledger.general.propose')
+      ? {
+          label: 'Notă contabilă nouă',
+          href: href('registers', {
+            register: 'jurnal',
+            entry: 'new',
+            registerEntry: null,
+            registerEntryDate: null,
+          }),
+        }
+      : view.id !== 'documents'
+        ? { label: 'Adaugă documente', href: href('documents') }
+        : null;
   const body = (
     <div className="acc-body">
       <Feedback error={error} notice={notice} />
@@ -240,10 +255,10 @@ function SectionFrame({
               value={year?.id ?? null}
               onChange={(id) => id && chooseYear(id)}
             />
-            {view.id !== 'documents' ? (
-              <LinkButton href={href('documents')} variant="primary">
+            {primary ? (
+              <LinkButton href={primary.href} variant="primary">
                 {icons.plus}
-                Adaugă documente
+                {primary.label}
               </LinkButton>
             ) : null}
           </div>

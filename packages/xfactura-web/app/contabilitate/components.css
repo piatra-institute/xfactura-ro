@@ -186,6 +186,20 @@ textarea.acc-input {
 .acc-combo-input:focus-visible {
   outline: none;
 }
+/* The site's global form styles pad every text input and ring it on focus; inside a field's
+ * frame the input draws nothing of its own: the frame is its border and its focus ring. */
+.acc-money-input,
+.acc-combo-input,
+.acc-money-input:focus,
+.acc-combo-input:focus,
+input.acc-input:focus,
+textarea.acc-input:focus {
+  box-shadow: none;
+}
+.acc-money-input,
+.acc-combo-input {
+  padding: 0;
+}
 .acc-money-currency {
   color: var(--acc-text-muted);
   font-size: var(--acc-text-sm);

@@ -19,6 +19,7 @@ import {
   surfaceTheme,
   typeDate,
 } from './support/shell';
+import { cell, choose, openJournalEntry } from './support/entry';
 import { mockWorklist } from './support/worklist';
 
 const sectionNames = [
@@ -178,6 +179,36 @@ test('a date typed as 17.11.2026 and a month chosen by name reach the engine as 
   page,
 }) => {
   const inputs: Record<string, Record<string, unknown>> = {};
+  const line = (account: string, side: 'D' | 'C') => ({ account, side, amount: '10.00' });
+  const proposal = {
+    id: 'proposal',
+    treatment: 'ledger.general',
+    subject: 'journal:general:NC-1',
+    status: 'proposed',
+    version: 1,
+    effectHash: 'b'.repeat(64),
+    rulesHash: 'c'.repeat(64),
+    rules: { mode: 'preview', used: [] },
+    issues: [],
+    effect: {
+      date: '2026-11-17',
+      journalClass: 'general',
+      journalCode: 'DIVERSE',
+      description: 'Notă sintetică',
+      lines: [line('5121', 'D'), line('1012', 'C')],
+      openItems: [],
+      taxEntries: [],
+      schedules: [],
+      explanation: { summary: 'Notă sintetică' },
+    },
+    approval: null,
+    entry: null,
+    createdBy: 'person',
+    agentId: null,
+    check: null,
+    basis: null,
+    input: { evidenceId: 'proof' },
+  };
   await mockWorklist(
     page,
     (operation, input) => {
@@ -191,13 +222,32 @@ test('a date typed as 17.11.2026 and a month chosen by name reach the engine as 
             preview: { month: input.month, findings: [] },
           },
         };
+      if (operation === 'proposals.preview')
+        return {
+          body: {
+            treatment: 'ledger.general',
+            subject: 'journal:general:NC-1',
+            effect: null,
+            issues: [],
+            blocking: false,
+            totals: [{ currency: 'RON', debit: '1000', credit: '1000', difference: '0' }],
+          },
+        };
+      if (operation === 'ledger.general.propose' || operation === 'proposals.get')
+        return { body: proposal };
       return { body: { items: [], next: null, asOfSeq: 1 } };
     },
     {
       'capabilities.list': {
-        capabilities: ['ledger.general.propose', 'periods.close.request', 'periods.list'].map(
-          (id) => ({ id }),
-        ),
+        capabilities: [
+          'ledger.journal',
+          'ledger.general.propose',
+          'proposals.preview',
+          'proposals.get',
+          'accounts.list',
+          'periods.close.request',
+          'periods.list',
+        ].map((id) => ({ id })),
       },
       'evidence.list': {
         items: [
@@ -211,28 +261,45 @@ test('a date typed as 17.11.2026 and a month chosen by name reach the engine as 
         ],
         next: null,
       },
+      'accounts.list': {
+        items: ['5121', '1012'].map((code) => ({
+          code,
+          name: code === '5121' ? 'Conturi la bănci în lei' : 'Capital subscris vărsat',
+          postable: true,
+          controlKind: null,
+          validFrom: '2015-01-01',
+          validTo: null,
+        })),
+        next: null,
+      },
     },
   );
-  await page.goto('/contabilitate?company=company&view=review');
-  await page.getByText('Notă contabilă nouă', { exact: true }).click();
+  await page.goto('/contabilitate?company=company');
+  await expect(page.getByRole('heading', { level: 1, name: 'Acasă', exact: true })).toBeVisible();
+  await openJournalEntry(page);
   await typeDate(page, 'Data', '17.11.2026');
-  await page.getByLabel('Referință', { exact: true }).fill('NC-1');
-  await page.getByLabel('Explicație', { exact: true }).fill('Notă sintetică');
-  await page.getByLabel('Cont', { exact: true }).nth(0).fill('5121');
-  await page.getByLabel('Sumă (lei)', { exact: true }).nth(0).fill('10,00');
-  await page.getByLabel('Cont', { exact: true }).nth(1).fill('1012');
-  await page.getByLabel('Sumă (lei)', { exact: true }).nth(1).fill('10,00');
+  await page.getByRole('textbox', { name: 'Referință', exact: true }).fill('NC-1');
+  await page.getByRole('textbox', { name: 'Explicație', exact: true }).fill('Notă sintetică');
+  await choose(page, 'Document justificativ', 'nota', /nota-sintetica\.pdf/);
+  await choose(page, 'Cont, linia 1', '5121');
+  await cell(page, 'Debit', 1).fill('10,00');
+  await choose(page, 'Cont, linia 2', '1012');
+  await cell(page, 'Credit', 2).fill('10,00');
   // Part of a date is no date: the form is refused, with the reason on the field.
   await clearSegment(page, 'Data', 1);
-  await page.getByRole('button', { name: 'Pregătește propunerea', exact: true }).click();
+  await page.getByRole('button', { name: 'Pregătește înregistrarea', exact: true }).click();
   await expect(
     page.getByText('Data este incompletă: completează ziua, luna și anul sau golește câmpul.'),
   ).toBeVisible();
   expect(inputs['ledger.general.propose']).toBeUndefined();
   await typeDate(page, 'Data', '17.11.2026');
-  await page.getByRole('button', { name: 'Pregătește propunerea', exact: true }).click();
+  await page.getByRole('button', { name: 'Pregătește înregistrarea', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('pregătită pentru verificare');
-  expect(inputs['ledger.general.propose']).toMatchObject({ date: '2026-11-17' });
+  expect(inputs['ledger.general.propose']).toMatchObject({
+    date: '2026-11-17',
+    lines: [line('5121', 'D'), line('1012', 'C')],
+  });
+  await expect(page).toHaveURL(/entry=proposal/);
 
   // A month is chosen by its name in the year's list of months.
   await openSection(page, 'Setări');
