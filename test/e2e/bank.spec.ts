@@ -52,7 +52,7 @@ test('a document uploaded on Documente is imported and booked from its row', asy
   await booking.getByRole('button', { name: 'Pregătește înregistrarea', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('pregătită pentru verificare');
   const proposal = documents.locator('.acc-review');
-  await expect(proposal.getByRole('cell', { name: '4426', exact: true })).toBeVisible();
+  await expect(proposal.getByRole('rowheader', { name: '4426', exact: true })).toBeVisible();
   await approveInPlace(proposal);
 
   // Booked, it leaves the unbooked documents and links to its entry.
@@ -139,7 +139,7 @@ test('a bank movement is explained against an open invoice', async ({ page }, in
   await explanation.getByRole('button', { name: 'Pregătește explicația', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('pregătită pentru verificare');
   const proposal = movements.locator('.acc-review');
-  await expect(proposal.getByRole('cell', { name: '401', exact: true })).toBeVisible();
+  await expect(proposal.getByRole('rowheader', { name: '401', exact: true })).toBeVisible();
   await approveInPlace(proposal);
   await expect(payment).toContainText('Explicată');
 

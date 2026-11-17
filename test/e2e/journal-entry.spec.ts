@@ -78,9 +78,10 @@ test('a balanced entry with a supplier line, a new partner and a new invoice, is
   await expect(page.getByRole('status')).toContainText('pregătită pentru verificare');
   await expect(page).toHaveURL(/entry=[0-9a-f-]{36}/);
   const proposal = page.locator('.acc-review');
-  await expect(proposal.getByRole('cell', { name: '628', exact: true })).toBeVisible();
-  await expect(proposal.getByRole('cell', { name: '401', exact: true })).toBeVisible();
-  await expect(proposal.getByRole('cell', { name: 'Factura FC-31', exact: true })).toBeVisible();
+  await expect(proposal.getByRole('rowheader', { name: '628', exact: true })).toBeVisible();
+  await expect(proposal.getByRole('rowheader', { name: '401', exact: true })).toBeVisible();
+  // A line's explanation reads with its account, in the review's effect table.
+  await expect(proposal.getByRole('row', { name: /^401/ })).toContainText('Factura FC-31');
   await approveInPlace(proposal);
   await page.getByRole('link', { name: 'Deschide înregistrarea 1', exact: true }).click();
   await expect(page.getByRole('heading', { name: /^Înregistrarea 1 · / })).toBeVisible();

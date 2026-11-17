@@ -1,28 +1,33 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAccountingNavigation } from './navigation';
-import { useLoad, useWorkspace } from './workspace';
-import { WorkItemDetail } from './work-item-detail';
-import { groupCauses } from './work-causes';
+import { ProfileCard, useFactRows } from './profile-card';
+import { Button, EmptyState, Select } from './ui';
+import { useWorkspace } from './workspace';
+import { WorkGroups, useExpanded } from './work-rows';
 import {
-  deniedReason,
+  arrangeWork,
   families,
-  groups,
+  isFactItem,
   kindFamilies,
-  priority,
   severities,
   type Family,
   type WorkItem,
 } from './work-model';
 
 type Page = { items: WorkItem[]; next: string | null; asOfSeq: number };
-type ItemRead = {
-  state: 'open' | 'disposed' | 'resolved';
-  item: WorkItem | null;
-  disposition: { reason: string } | null;
-};
 
+/** The choice of every family or severity, which sets no filter. */
+const all = 'toate';
+const severityChoices = [
+  { id: all, label: 'Toate' },
+  { id: 'block', label: 'Doar blocante' },
+  { id: 'warn', label: 'Avertismente și blocante' },
+  { id: 'info', label: 'Informări, avertismente și blocante' },
+];
+
+/** De verificat: the facts to record first, then the worklist's rows by who acts. */
 export default function Worklist() {
   const { refresh } = useWorkspace();
   const { params, filter } = useAccountingNavigation();
@@ -32,57 +37,66 @@ export default function Worklist() {
   const severity = Object.hasOwn(severities, severityParam)
     ? (severityParam as WorkItem['severity'])
     : '';
+  const needs = useFactRows();
   return (
-    <>
-      <div className="acc-section-tools">
-        <button className="acc-secondary" onClick={refresh}>
+    <div className="acc-review-view">
+      <ProfileCard needs={needs} />
+      <div className="acc-work-toolbar">
+        <Select
+          label="Familie"
+          className="acc-filter"
+          options={[
+            { id: all, label: 'Toate' },
+            ...Object.entries(families).map(([id, label]) => ({ id, label })),
+          ]}
+          value={family || all}
+          onChange={(value) => filter({ family: value === all ? null : value })}
+        />
+        <Select
+          label="Severitate"
+          className="acc-filter"
+          options={severityChoices}
+          value={severity || all}
+          onChange={(value) => filter({ severity: value === all ? null : value })}
+        />
+        <Button variant="quiet" size="small" className="acc-work-reload" onPress={refresh}>
           Reîncarcă lista
-        </button>
+        </Button>
       </div>
-      <div className="acc-work-filters">
-        <label>
-          Familie
-          <select value={family} onChange={(event) => filter({ family: event.target.value })}>
-            <option value="">Toate</option>
-            {Object.entries(families).map(([id, label]) => (
-              <option key={id} value={id}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Severitate
-          <select value={severity} onChange={(event) => filter({ severity: event.target.value })}>
-            <option value="">Toate</option>
-            <option value="block">Doar blocante</option>
-            <option value="warn">Avertismente și blocante</option>
-            <option value="info">Informări, avertismente și blocante</option>
-          </select>
-        </label>
-      </div>
-      <WorkPages key={`${family}:${severity}`} family={family} severity={severity} />
-    </>
+      <WorkPages
+        key={`${family}:${severity}`}
+        family={family}
+        severity={severity}
+        facts={needs.facts}
+        withFacts={needs.rows.length > 0}
+      />
+    </div>
   );
 }
 
 function WorkPages({
   family,
   severity,
+  facts,
+  withFacts,
 }: {
   family: Family | '';
   severity: WorkItem['severity'] | '';
+  facts: ReadonlyMap<string, string>;
+  /** Whether „Profilul firmei” lists facts: the list is then not reported as empty. */
+  withFacts: boolean;
 }) {
   const { invoke, version } = useWorkspace();
+  const { filter, href } = useAccountingNavigation();
   const [page, setPage] = useState<Page | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const loadedPages = useRef(1);
   const generation = useRef(0);
+  // Rows collapse items by cause, so a page reads as many items as the engine gives at once.
   const input = JSON.stringify({
-    limit: 50,
+    limit: 200,
     ...(family
       ? {
           kinds: Object.entries(kindFamilies)
@@ -139,6 +153,16 @@ function WorkPages({
       if (generation.current === request) setLoading(false);
     }
   };
+  // Items a person settles by recording a fact are rows of „Profilul firmei”, above.
+  const groups = useMemo(
+    () =>
+      arrangeWork(
+        (page?.items ?? []).filter((item) => !isFactItem(item)),
+        facts,
+      ),
+    [page, facts],
+  );
+  const expanded = useExpanded();
   return (
     <div className="acc-worklist" aria-busy={loading}>
       {loading ? <p className="acc-hint">Se încarcă lista…</p> : null}
@@ -147,142 +171,35 @@ function WorkPages({
           <p role="alert" className="acc-error">
             {error}
           </p>
-          <button
-            className="acc-secondary"
-            disabled={loading}
-            onClick={() => setRetry((value) => value + 1)}
-          >
+          <Button size="small" isDisabled={loading} onPress={() => setRetry((value) => value + 1)}>
             Reîncearcă
-          </button>
+          </Button>
         </div>
       ) : null}
-      {!loading && !error && page?.items.length === 0 ? (
-        <p className="acc-empty">
-          {page.next
-            ? 'Continuă încărcarea listei.'
-            : family || severity
-              ? 'Niciun element pentru filtrele alese.'
-              : 'Nimic nu așteaptă verificare.'}
-        </p>
+      {!loading && !error && page && !groups.length && !(withFacts && !family && !severity) ? (
+        page.next ? (
+          <EmptyState message="Continuă încărcarea listei." />
+        ) : family || severity ? (
+          <EmptyState
+            message="Niciun element pentru filtrele alese."
+            action={{
+              label: 'Toate elementele',
+              onPress: () => filter({ family: null, severity: null }),
+            }}
+          />
+        ) : (
+          <EmptyState
+            message="Nimic nu așteaptă verificare."
+            action={{ label: 'Adaugă documente', href: href('documents') }}
+          />
+        )
       ) : null}
-      {groups.map((label, index) => {
-        const items = (page?.items ?? []).filter((item) => priority(item) === index);
-        return items.length ? (
-          <section key={label} className="acc-work-group" aria-label={label}>
-            <h2>{label}</h2>
-            {groupCauses(items).map((group) => {
-              const rows = group.items.map((item) => {
-                const key =
-                  item.subject.kind === 'proposal' ? `proposal:${item.subject.id}` : item.id;
-                return (
-                  <WorkRow
-                    key={key}
-                    item={item}
-                    grouped={!!group.label && group.items.length > 1}
-                    open={expanded.has(key)}
-                    toggle={(open) =>
-                      setExpanded((current) => {
-                        const next = new Set(current);
-                        if (open) next.add(key);
-                        else next.delete(key);
-                        return next;
-                      })
-                    }
-                  />
-                );
-              });
-              return group.label && group.items.length > 1 ? (
-                <details className="acc-work-cause" key={group.key}>
-                  <summary>
-                    <span className="acc-work-cause-label">{group.label}</span>
-                    <span className="acc-work-meta">
-                      {group.items.length} declarații · deschide pentru perioade și pași
-                    </span>
-                  </summary>
-                  {rows}
-                </details>
-              ) : (
-                rows
-              );
-            })}
-          </section>
-        ) : null;
-      })}
+      <WorkGroups groups={groups} expanded={expanded} />
       {page?.next ? (
-        <button className="acc-secondary" disabled={loading} onClick={more}>
+        <Button isDisabled={loading} onPress={more} className="acc-work-more">
           Mai multe elemente
-        </button>
+        </Button>
       ) : null}
     </div>
-  );
-}
-
-function WorkRow({
-  item,
-  open,
-  toggle,
-  grouped,
-}: {
-  item: WorkItem;
-  grouped: boolean;
-  open: boolean;
-  toggle: (open: boolean) => void;
-}) {
-  const { data, error } = useLoad<ItemRead>('work.get', { id: item.id }, open);
-  const shown = data?.item ?? item;
-  return (
-    <details
-      className="acc-work-item"
-      data-work-kind={item.kind}
-      data-work-id={item.id}
-      open={open}
-      onToggle={(event) => {
-        if (event.currentTarget.open !== open) toggle(event.currentTarget.open);
-      }}
-    >
-      <summary>
-        <span className="acc-work-message">
-          {grouped
-            ? `Declarația ${String(shown.details.kind)} · ${shown.period ?? 'perioadă nespecificată'}`
-            : shown.message}
-        </span>
-        <span className="acc-work-meta">
-          <span className={shown.severity === 'block' ? 'acc-error' : ''}>
-            {severities[shown.severity]}
-          </span>
-          <span>Termen: {shown.due ?? 'nespecificat'}</span>
-          <span>Perioadă: {shown.period ?? 'nespecificată'}</span>
-        </span>
-        {shown.next
-          .filter((step) => !step.allowed)
-          .map((step, index) => (
-            <span className="acc-work-access" key={index}>
-              {deniedReason(step)}
-            </span>
-          ))}
-      </summary>
-      {open ? (
-        <div className="acc-work-body">
-          {error ? (
-            <p role="alert" className="acc-error">
-              {error}
-            </p>
-          ) : !data ? (
-            <p className="acc-hint">Se încarcă elementul…</p>
-          ) : data.state !== 'open' ? (
-            <p>
-              {data.state === 'disposed'
-                ? `Elementul a fost închis. ${data.disposition?.reason ?? ''}`
-                : 'Elementul nu mai așteaptă verificare.'}
-            </p>
-          ) : data.item ? (
-            <>
-              {grouped ? <p>{data.item.message}</p> : null}
-              <WorkItemDetail item={data.item} />
-            </>
-          ) : null}
-        </div>
-      ) : null}
-    </details>
   );
 }

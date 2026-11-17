@@ -4,12 +4,14 @@ import { useState, type ComponentType } from 'react';
 import type { ActionView, ProposalView } from 'xfactura-api/contracts';
 import { SectionLink, sectionLabels, useAccountingNavigation } from './navigation';
 import { ProposalCard } from './review';
-import { WorkDetails } from './work-details';
+import { Button, TextField } from './ui';
+import { ItemDetails, WorkDetails } from './work-details';
 import {
-  deniedReason,
   directStep,
   hasCollector,
+  refusal,
   stepLabel,
+  stepFilters,
   stepSection,
   type WorkItem,
   type WorkStepView,
@@ -17,20 +19,6 @@ import {
 import { useLoad, useWorkspace } from './workspace';
 
 type DetailProps = { item: WorkItem };
-function ItemDetails({ item }: DetailProps) {
-  return (
-    <WorkDetails
-      value={item.details}
-      technical={{
-        id: item.id,
-        subject: item.subject,
-        fingerprint: item.fingerprint,
-        asOfSeq: item.asOfSeq,
-        next: item.next,
-      }}
-    />
-  );
-}
 function GenericDetail({ item }: DetailProps) {
   return (
     <>
@@ -74,7 +62,7 @@ function ActionDetail({ item }: DetailProps) {
         </p>
       ) : data ? (
         <>
-          <h3>Efectul acțiunii</h3>
+          <h4>Efectul acțiunii</h4>
           <WorkDetails value={data.preview} />
           {item.next.some(
             (step) =>
@@ -105,12 +93,14 @@ export function WorkItemDetail({ item }: DetailProps) {
     return (
       <>
         <ItemDetails item={item} />
-        <SectionLink
-          section="deadlines"
-          filters={{ return: item.subject.id, month: null, declarationStatus: null }}
-        >
-          Deschide declarația în Declarații
-        </SectionLink>
+        <p>
+          <SectionLink
+            section="deadlines"
+            filters={{ return: item.subject.id, month: null, declarationStatus: null }}
+          >
+            Deschide declarația în Declarații
+          </SectionLink>
+        </p>
       </>
     );
   const questionIds = item.kind.startsWith('question.')
@@ -155,28 +145,23 @@ function Steps({
   proposal = false,
   previewHash,
 }: DetailProps & { proposal?: boolean; previewHash?: string }) {
-  return (
-    <>
-      <ul className="acc-work-steps" aria-label="Pași următori">
-        {item.next.map((step, index) => (
-          <li key={`${step.operation}:${index}`}>
-            <WorkStep
-              item={item}
-              step={step}
-              proposal={proposal}
-              previewReady={
-                step.operation !== 'actions.approve' ||
-                (!!previewHash && previewHash === step.inputHint.previewHash)
-              }
-            />
-          </li>
-        ))}
-      </ul>
-      {item.next.length === 0 ? (
-        <p className="acc-hint">Acest element necesită verificarea persoanei responsabile.</p>
-      ) : null}
-    </>
-  );
+  return item.next.length ? (
+    <ul className="acc-work-steps" aria-label="Pași următori">
+      {item.next.map((step, index) => (
+        <li key={`${step.operation}:${index}`}>
+          <WorkStep
+            item={item}
+            step={step}
+            proposal={proposal}
+            previewReady={
+              step.operation !== 'actions.approve' ||
+              (!!previewHash && previewHash === step.inputHint.previewHash)
+            }
+          />
+        </li>
+      ))}
+    </ul>
+  ) : null;
 }
 
 function WorkStep({
@@ -204,7 +189,7 @@ function WorkStep({
     );
     setBusy(false);
   };
-  if (!step.allowed) return <p className="acc-hint">{deniedReason(step)}</p>;
+  if (!step.allowed) return <p className="acc-hint acc-work-refusal">{refusal(step)}</p>;
   if (step.operation === 'work.dispose') {
     if (item.severity === 'block')
       return (
@@ -220,20 +205,23 @@ function WorkStep({
     )
       return (
         <form
-          className="acc-inline-form"
+          className="acc-work-dispose"
           onSubmit={(event) => {
             event.preventDefault();
             const reason = String(new FormData(event.currentTarget).get('reason') ?? '');
             void run({ ...step.inputHint, reason });
           }}
         >
-          <label>
-            Motivul închiderii
-            <input name="reason" required minLength={10} maxLength={1000} />
-          </label>
-          <button className="acc-secondary" disabled={busy}>
+          <TextField
+            label="Motivul închiderii"
+            name="reason"
+            isRequired
+            minLength={10}
+            maxLength={1000}
+          />
+          <Button type="submit" isDisabled={busy}>
             Închide cu motiv
-          </button>
+          </Button>
         </form>
       );
   }
@@ -249,9 +237,13 @@ function WorkStep({
     ) : null;
   if (directStep(step))
     return (
-      <button disabled={busy || !previewReady} onClick={() => run(step.inputHint)}>
+      <Button
+        variant="primary"
+        isDisabled={busy || !previewReady}
+        onPress={() => run(step.inputHint)}
+      >
         {stepLabel(step)}
-      </button>
+      </Button>
     );
   return (
     <>
@@ -260,11 +252,11 @@ function WorkStep({
           ? `Așteaptă un agent: ${stepLabel(step)}.`
           : `${stepLabel(step)}: sunt necesare date suplimentare.`}
       </p>
-      {step.by === 'human' && !hasCollector(step) ? (
+      {step.by === 'human' && !hasCollector(step) && step.operation !== 'profile.record' ? (
         <p className="acc-hint">Datele acestui pas nu au un formular în această interfață.</p>
       ) : null}
       {section && section !== currentSection ? (
-        <SectionLink section={section}>
+        <SectionLink section={section} filters={stepFilters(step)}>
           {hasCollector(step) ? 'Deschide' : 'Vezi contextul în'} {sectionLabels[section]}
         </SectionLink>
       ) : null}

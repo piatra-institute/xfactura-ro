@@ -1,10 +1,22 @@
 'use client';
 
+import type { ReactNode } from 'react';
 import { companyPath } from './api';
-import { operationLabel, treatmentLabels } from './work-model';
+import { Chip } from './ui';
+import {
+  isReturnKey,
+  operationLabel,
+  returnChips,
+  treatmentLabels,
+  type WorkItem,
+} from './work-model';
 import { useList, useLoad, useWorkspace } from './workspace';
-import { formatMoney } from './format';
+import { formatCount, formatDate, formatMinor, formatMoney, formatPeriod } from './format';
 
+/**
+ * Labels for the generic value views of Declarații, Întrebări and the D300 summary, whose values
+ * carry no labels of their own. A work item's details are labelled by the engine (`ItemDetails`).
+ */
 const labels: Record<string, string> = {
   treatment: 'Tratament',
   version: 'Versiune',
@@ -282,7 +294,7 @@ export function DocumentName({ id }: { id: string }) {
     );
   return (
     <span>
-      {data.number ? `${data.number} · ${data.date}` : data.date}
+      {data.number ? `${data.number} · ${formatDate(data.date)}` : formatDate(data.date)}
       {data.evidenceId ? (
         <>
           {' '}
@@ -389,6 +401,200 @@ export function WorkDetails({
       ) : null}
     </>
   );
+}
+
+type DetailLabel = WorkItem['labels'][string];
+
+/** Detail keys that hold codes and internal references: they appear only under „Detalii tehnice”. */
+const technicalKeys = new Set([
+  'code',
+  'fact',
+  'question',
+  'deadline',
+  'params',
+  'subject',
+  'input',
+  'axis',
+  'key',
+  'rule',
+  'rules',
+  'fingerprint',
+]);
+/** An internal identifier written as a value: `vat.status`, `FACT_UNKNOWN`, `inventory.lists`. */
+const internalCode = /^(?:[a-z][a-zA-Z0-9]*(?:[._][a-zA-Z0-9]+)+|[A-Z][A-Z0-9]*_[A-Z0-9_]+)$/;
+
+/** Fields inside a detail's records, which the engine labels only at the top level. */
+const nestedFields: Record<string, DetailLabel> = {
+  net: { label: 'Fără TVA', type: 'amount' },
+  tax: { label: 'TVA', type: 'amount' },
+  gross: { label: 'Total', type: 'amount' },
+  amount: { label: 'Sumă', type: 'amount' },
+  message: { label: 'Mesaj', type: 'text' },
+  state: { label: 'Stare', type: 'text' },
+  field: { label: 'Câmp', type: 'text' },
+  value: { label: 'Valoare', type: 'text' },
+  values: { label: 'Valori', type: 'text' },
+  authority: { label: 'Sursă', type: 'text' },
+  number: { label: 'Număr', type: 'text' },
+  name: { label: 'Denumire', type: 'text' },
+  reason: { label: 'Motiv', type: 'text' },
+  date: { label: 'Dată', type: 'date' },
+  month: { label: 'Lună', type: 'period' },
+  period: { label: 'Perioadă', type: 'period' },
+};
+
+/** The name an identifier resolves to, by the kind the engine's label gives it; null for a kind
+ * no read names. */
+function idName(kind: string, id: string): ReactNode | null {
+  if (kind === 'party') return <PartyName id={id} />;
+  if (kind === 'evidence') return <EvidenceName id={id} />;
+  if (kind === 'document') return <DocumentName id={id} />;
+  if (kind === 'treasuryAccount') return <TreasuryName id={id} />;
+  return null;
+}
+
+/**
+ * A detail's value as a person reads it, by its label's type; null when it is a code or an
+ * identifier no read names, which only „Detalii tehnice” shows.
+ */
+function shownValue(
+  key: string,
+  value: unknown,
+  label: DetailLabel,
+  details: Record<string, unknown>,
+): ReactNode | null {
+  if (value === null || value === undefined || value === '') return null;
+  if (label.type === 'id') return typeof value === 'string' ? idName(label.kind, value) : null;
+  if (label.type === 'text' && (technicalKeys.has(key) || /(?:Id|Ids|Hash)$|^hash$/.test(key)))
+    return null;
+  const currency =
+    'currency' in label && label.currency
+      ? label.currency
+      : 'currencyKey' in label && label.currencyKey
+        ? String(details[label.currencyKey] ?? '')
+        : typeof details.currency === 'string'
+          ? details.currency
+          : '';
+  switch (label.type) {
+    case 'date':
+      return formatDate(String(value));
+    case 'period':
+      return formatPeriod(String(value));
+    case 'count':
+      return formatCount(String(value));
+    case 'amount':
+      return typeof value === 'string' && /^-?\d+(\.\d+)?$/.test(value) ? (
+        <span className="acc-work-amount">{formatMoney(value, currency)}</span>
+      ) : null;
+    case 'minor':
+      return typeof value === 'string' && /^-?\d+$/.test(value) && currency ? (
+        <span className="acc-work-amount">{formatMinor(value, currency)}</span>
+      ) : null;
+  }
+  if (typeof value === 'boolean') return value ? 'Da' : 'Nu';
+  if (typeof value === 'number') return formatCount(value);
+  if (typeof value === 'string') {
+    if (key === 'treatment') return treatmentLabels[value] ?? null;
+    if (key === 'operation') return operationLabel(value) ?? null;
+    if (valueLabels[value]) return valueLabels[value];
+    return uuid.test(value) || internalCode.test(value) ? null : value;
+  }
+  if (Array.isArray(value)) {
+    if (value.length && value.every(isReturnKey))
+      return (
+        <span className="acc-chips">
+          {returnChips(value).map((chip) => (
+            <Chip key={chip}>{chip}</Chip>
+          ))}
+        </span>
+      );
+    const parts = value
+      .map((entry) => shownValue('', entry, { label: '', type: 'text' }, details))
+      .filter((part) => part !== null);
+    return parts.length ? (
+      <ul>
+        {parts.map((part, index) => (
+          <li key={index}>{part}</li>
+        ))}
+      </ul>
+    ) : null;
+  }
+  if (isRecord(value)) {
+    const parts = Object.entries(value).flatMap(([name, entry]) => {
+      const field = nestedFields[name];
+      const part = field ? shownValue(name, entry, field, { currency, ...value }) : null;
+      return part === null ? [] : [[field!.label, part] as const];
+    });
+    return parts.length ? (
+      <dl className="acc-work-details">
+        {parts.map(([name, part]) => (
+          <div key={name}>
+            <dt>{name}</dt>
+            <dd>{part}</dd>
+          </div>
+        ))}
+      </dl>
+    ) : null;
+  }
+  return null;
+}
+
+/**
+ * A work item's details under the engine's labels and types: dates, periods, amounts and counts
+ * formatted, identifiers named where a read names them, returns as chips. Codes, identifiers and
+ * the item's own references stay under a collapsed „Detalii tehnice”.
+ */
+export function ItemDetails({ item }: { item: WorkItem }) {
+  const details = item.details ?? {};
+  const labels = item.labels ?? {};
+  const shown: { key: string; label: string; value: ReactNode }[] = [];
+  const technical: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(details)) {
+    const label = labels[key];
+    const part = label ? shownValue(key, value, label, details) : null;
+    if (part !== null) shown.push({ key, label: label!.label, value: part });
+    if (part === null || label?.type === 'id') technical[key] = value;
+  }
+  return (
+    <>
+      {shown.length ? (
+        <dl className="acc-work-details">
+          {shown.map((entry) => (
+            <div key={entry.key}>
+              <dt>{entry.label}</dt>
+              <dd>{entry.value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+      <details className="acc-disclosure acc-technical">
+        <summary>Detalii tehnice</summary>
+        <dl className="acc-work-details">
+          {Object.entries({
+            ...technical,
+            id: item.id,
+            subject: item.subject,
+            fingerprint: item.fingerprint,
+            asOfSeq: item.asOfSeq,
+            next: item.next,
+          }).map(([key, value]) => (
+            <div key={key}>
+              <dt>{labels[key]?.label ?? <code>{key}</code>}</dt>
+              <dd>
+                <code className="acc-technical-value">{technicalText(value)}</code>
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </details>
+    </>
+  );
+}
+
+/** A technical value verbatim: text as it is, structures as JSON. */
+function technicalText(value: unknown) {
+  if (value === null || value === undefined) return '—';
+  return typeof value === 'string' ? value : JSON.stringify(value);
 }
 
 /** Technical values stay verbatim; their known field names still use Romanian labels. */

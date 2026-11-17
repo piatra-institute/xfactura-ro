@@ -1,6 +1,7 @@
 import { expect, type Page, type TestInfo } from '@playwright/test';
 import { changeFact, openProfile } from './profile';
-import { createCompany, expectTheme, openSection } from './shell';
+import { chooseOption, createCompany, expectTheme, openSection } from './shell';
+import { openWorkRow } from './worklist';
 
 /** Signs in the person seeded for this spec and browser project, and creates their company. */
 export async function signInWithCompany(
@@ -47,10 +48,10 @@ export async function recordVatPayer(page: Page, evidence: string) {
 /** Opens the first proposal from the worklist, preserving the human decision and exact hash. */
 export async function openProposal(page: Page) {
   await openSection(page, 'De verificat');
-  await page.getByRole('combobox', { name: 'Familie', exact: true }).selectOption('proposals');
+  await chooseOption(page, 'Familie', 'Propuneri');
   const item = page.locator('[data-work-kind="proposal.awaitingApproval"]').first();
   await expect(item).toBeVisible();
-  if ((await item.getAttribute('open')) === null) await item.locator('summary').click();
+  await openWorkRow(item);
   return item.locator('.acc-review');
 }
 

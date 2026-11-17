@@ -304,18 +304,6 @@
   border-bottom: 1px solid var(--acc-border-strong);
   margin: 0;
 }
-.acc-work-cause {
-  border-bottom: 1px solid var(--acc-border);
-}
-.acc-work-cause > summary {
-  padding: 16px 0;
-}
-.acc-work-cause .acc-work-item {
-  margin-left: 18px;
-}
-.acc-work-cause .acc-work-item:last-child {
-  border-bottom: 0;
-}
 .acc-work-amount {
   display: block;
   text-align: right;

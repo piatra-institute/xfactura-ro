@@ -8,9 +8,15 @@ import {
   recordVatPayer,
   signInWithCompany,
 } from './support/session';
-import { chooseCompany, currentCompany, openSection } from './support/shell';
+import {
+  chooseCompany,
+  chooseOption,
+  currentCompany,
+  openSection,
+  selectButton,
+} from './support/shell';
 import { choose } from './support/entry';
-import { mockWorklist, workItem } from './support/worklist';
+import { mockWorklist, openWorkRow, workItem } from './support/worklist';
 import type { WorkItem } from '../../packages/xfactura-web/components/accounting/work-model';
 
 test('an unbooked document reaches approval and posting from the worklist', async ({
@@ -53,18 +59,16 @@ test('an unbooked document reaches approval and posting from the worklist', asyn
   await expect(page.getByRole('status')).toContainText('Documentul e-Factura a fost importat.');
 
   await openSection(page, 'De verificat');
-  await page.getByRole('combobox', { name: 'Familie', exact: true }).selectOption('documents');
-  await page.getByRole('combobox', { name: 'Severitate', exact: true }).selectOption('warn');
+  await chooseOption(page, 'Familie', 'Documente');
+  await chooseOption(page, 'Severitate', 'Avertismente și blocante');
   await expect(page).toHaveURL(/family=documents/);
   await expect(page).toHaveURL(/severity=warn/);
   await page.reload();
-  await expect(page.getByRole('combobox', { name: 'Familie', exact: true })).toHaveValue(
-    'documents',
-  );
-  await expect(page.getByRole('combobox', { name: 'Severitate', exact: true })).toHaveValue('warn');
+  await expect(selectButton(page, 'Familie')).toContainText('Documente');
+  await expect(selectButton(page, 'Severitate')).toContainText('Avertismente și blocante');
   const document = page.locator('[data-work-kind="document.unproposed"]', { hasText: 'LUCRU-1' });
   await expect(document).toBeVisible();
-  await document.locator('summary').click();
+  await openWorkRow(document);
   await expect(document.getByText(/Așteaptă un agent/)).toBeVisible();
   await document.getByRole('link', { name: 'Deschide Documente', exact: true }).click();
   await page
@@ -78,10 +82,16 @@ test('an unbooked document reaches approval and posting from the worklist', asyn
   const proposal = await openProposal(page);
   await expect(proposal.getByRole('link', { name: 'LUCRU-1.xml', exact: true })).toBeVisible();
   await expect(proposal.getByRole('heading', { name: 'Efectul exact', exact: true })).toBeVisible();
-  await expect(proposal.getByRole('cell', { name: '628', exact: true })).toBeVisible();
-  await expect(proposal.getByRole('cell', { name: '4426', exact: true })).toHaveCSS(
+  // The effect is a dense table: the account code heads each row, amounts align right.
+  const effect = proposal.getByRole('grid', { name: 'Efectul exact' });
+  await expect(effect.getByRole('rowheader', { name: '628', exact: true })).toBeVisible();
+  await expect(effect.getByRole('rowheader', { name: '4426', exact: true })).toHaveCSS(
     'white-space',
     'nowrap',
+  );
+  await expect(effect.getByRole('columnheader', { name: 'Debit', exact: true })).toHaveCSS(
+    'text-align',
+    'right',
   );
   await expect(proposal.getByRole('heading', { name: 'Factură', exact: true })).toHaveAttribute(
     'class',
@@ -91,7 +101,7 @@ test('an unbooked document reaches approval and posting from the worklist', asyn
   await expect(proposal.locator('code')).toContainText(/^[a-f0-9]{64}$/);
   await approveAndPost(page);
   await expect(page.locator('[data-work-kind^="proposal."]')).toHaveCount(0);
-  await page.getByRole('combobox', { name: 'Familie', exact: true }).selectOption('documents');
+  await chooseOption(page, 'Familie', 'Documente');
   await expect(document).toHaveCount(0);
   await expect(
     page.getByText('Niciun element pentru filtrele alese.', { exact: true }),
@@ -217,35 +227,35 @@ test('worklist pages prioritize people, explain access and require a dismissal r
     return { body: {} };
   });
   await page.goto('/contabilitate?view=review');
-  await expect(page.locator('.acc-work-message')).toHaveText([
+  await expect(page.locator('.acc-work-title')).toHaveText([
     'Document de clasat',
     'Extras de explicat',
     'Plată cu acces restricționat',
     'Document fără drept de închidere',
   ]);
   await expect(
-    page
-      .getByRole('region', { name: 'Așteaptă decizia ta', exact: true })
-      .locator('.acc-work-message'),
+    page.getByRole('region', { name: 'De făcut de tine', exact: true }).locator('.acc-work-title'),
   ).toHaveText(['Document de clasat']);
   await expect(
-    page
-      .getByRole('region', { name: 'Așteaptă un agent', exact: true })
-      .locator('.acc-work-message'),
+    page.getByRole('region', { name: 'Așteaptă un agent', exact: true }).locator('.acc-work-title'),
   ).toHaveText(['Extras de explicat']);
   await expect(
-    page
-      .getByRole('region', { name: 'Necesită alt acces sau ajutor', exact: true })
-      .locator('.acc-work-message'),
+    page.getByRole('region', { name: 'Necesită acces', exact: true }).locator('.acc-work-title'),
   ).toHaveText(['Plată cu acces restricționat', 'Document fără drept de închidere']);
+  // A refused step says why in one line on its row, before the row is opened.
   await expect(
     page.getByText('Lipsește accesul la: date salariale, date personale, date de sănătate.'),
   ).toBeVisible();
   await expect(page.getByText('Lipsește permisiunea pentru „Închide cu motiv”.')).toBeVisible();
-  const decisionRow = page.locator('.acc-work-item', { hasText: 'Document de clasat' });
-  await expect(decisionRow).toContainText('Termen: 2026-02-01');
-  await expect(decisionRow).toContainText('Perioadă: 2026-01');
-  await decisionRow.locator('summary').focus();
+  const decisionRow = page.locator('.acc-work-row', { hasText: 'Document de clasat' });
+  // Meta that has a value reads as dates and months; none of it is „nespecificat”.
+  await expect(decisionRow.locator('.acc-work-facts')).toContainText('Termen 01.02.2026');
+  await expect(decisionRow.locator('.acc-work-facts')).toContainText('ianuarie 2026');
+  await expect(page.locator('.acc-work-row', { hasText: 'Extras de explicat' })).not.toContainText(
+    'Termen',
+  );
+  await expect(page.getByText(/nespecificat/)).toHaveCount(0);
+  await decisionRow.locator('.acc-work-toggle').focus();
   await page.keyboard.press('Enter');
   const dismiss = decisionRow.getByRole('button', { name: 'Închide cu motiv', exact: true });
   await dismiss.click();
@@ -265,8 +275,10 @@ test('worklist pages prioritize people, explain access and require a dismissal r
   await page.getByRole('button', { name: 'Mai multe elemente' }).click();
   await expect.poll(() => calls.some((call) => call.input.after === 'page:2')).toBe(true);
   await page.getByRole('button', { name: 'Mai multe elemente' }).click();
-  const actionRow = page.locator('.acc-work-item', { hasText: 'Lună de închis' });
-  await actionRow.locator('summary').click();
+  const actionRow = page.locator('.acc-work-row', { hasText: 'Lună de închis' });
+  // The row's own action opens the exact preview to approve.
+  await actionRow.getByRole('button', { name: 'Aprobă', exact: true }).click();
+  await expect(actionRow.getByRole('region')).toBeFocused();
   await expect(actionRow.getByText('1.000,00 RON', { exact: true })).toBeVisible();
   await actionRow.getByRole('button', { name: 'Aprobă această previzualizare' }).click();
   await expect(actionRow).toHaveCount(0);
@@ -275,16 +287,16 @@ test('worklist pages prioritize people, explain access and require a dismissal r
     key: expect.any(String),
   });
   expect(calls.some((call) => call.operation === 'proposals.propose')).toBe(false);
-  await page.getByRole('combobox', { name: 'Familie' }).selectOption('bank');
-  await expect(page.locator('.acc-work-message')).toHaveText(['Extras de explicat']);
-  await page.getByRole('combobox', { name: 'Severitate' }).selectOption('block');
+  await chooseOption(page, 'Familie', 'Bancă');
+  await expect(page.locator('.acc-work-title')).toHaveText(['Extras de explicat']);
+  await chooseOption(page, 'Severitate', 'Doar blocante');
   await expect
     .poll(() =>
       calls.some((call) => call.operation === 'work.list' && call.input.severity === 'block'),
     )
     .toBe(true);
   await page.goBack();
-  await expect(page.getByRole('combobox', { name: 'Severitate' })).toHaveValue('');
+  await expect(selectButton(page, 'Severitate')).toContainText('Toate');
   await expect(page.getByRole('link', { name: 'Adaugă documente' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
@@ -369,7 +381,8 @@ test('a stale approval reloads the exact version and acknowledgements before pos
     return { body: {} };
   });
   await page.goto('/contabilitate?view=review');
-  await page.locator('.acc-work-item > summary').click();
+  // The row's action opens the review of this exact version.
+  await page.getByRole('button', { name: 'Aprobă', exact: true }).click();
   const approve = page.getByRole('button', { name: 'Aprobă această versiune', exact: true });
   await expect(approve).toBeDisabled();
   await page.getByRole('checkbox', { name: 'Confirmă documentul justificativ.' }).focus();
@@ -378,11 +391,16 @@ test('a stale approval reloads the exact version and acknowledgements before pos
   await expect(
     page.getByRole('checkbox', { name: 'Confirmă documentul justificativ.' }),
   ).toBeFocused();
-  await expect(page.locator('.acc-warning label')).toHaveCSS('text-decoration-line', 'underline');
+  await expect(page.locator('.acc-checklist label')).toHaveCSS('text-decoration-line', 'underline');
+  // The review sits under its row's heading (h3), so its own title is an h4.
   await expect(page.getByRole('heading', { name: 'Notă contabilă', exact: true })).toHaveJSProperty(
     'tagName',
-    'H3',
+    'H4',
   );
+  await expect(page.getByText('Sold inițial sintetic · 01.01.2026 · versiunea 1')).toBeVisible();
+  await expect(
+    page.getByRole('grid', { name: 'Efectul exact' }).getByRole('row', { name: /^5121/ }),
+  ).toContainText('1.000,00 RON');
   await page.getByRole('checkbox', { name: 'Confirmă documentul justificativ.' }).check();
   await approve.click();
   await expect(page.locator('.accounting').getByRole('alert')).toContainText(

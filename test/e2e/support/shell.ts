@@ -99,8 +99,11 @@ export async function menuClosed(page: Page) {
 export async function closeMenu(page: Page) {
   const drawer = page.getByRole('dialog', { name: 'Meniu', exact: true });
   if (await drawer.isVisible()) {
-    // Escape reaches the drawer once focus is back inside it, after a menu in it has closed.
-    await expect(drawer.locator(':focus')).toHaveCount(1);
+    // Escape reaches the drawer once focus is back inside it, after a menu in it has closed; just
+    // opened, the drawer holds focus itself.
+    await expect
+      .poll(() => drawer.evaluate((element) => element.contains(document.activeElement)))
+      .toBe(true);
     await page.keyboard.press('Escape');
     await drawerClosed(page);
   }
@@ -133,6 +136,19 @@ export async function surfaceTheme(page: Page, selector = '.accounting', token =
 /** The interface is painted in the theme: its canvas is opaque and the theme's canvas token. */
 export async function expectTheme(page: Page, theme: 'light' | 'dark') {
   await expect.poll(() => surfaceTheme(page)).toBe(theme);
+}
+
+/** A select by its label: its button is named by the value shown, then the label. */
+export const selectButton = (scope: Page | Locator, label: string) =>
+  scope.getByRole('button', {
+    name: new RegExp(`${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`),
+  });
+
+/** Chooses an option of a select by its label, as a person does. */
+export async function chooseOption(scope: Page | Locator, label: string, option: string) {
+  await selectButton(scope, label).click();
+  await pageOf(scope).getByRole('option', { name: option, exact: true }).click();
+  await expect(selectButton(scope, label)).toContainText(option);
 }
 
 /** The Exercițiu select in the context bar. */

@@ -89,6 +89,70 @@ export function formatMonths(months: readonly string[]) {
     .join(', ');
 }
 
+const quarterNames = ['I', 'II', 'III', 'IV'] as const;
+const isoQuarter = /^(\d{4})-Q([1-4])$/;
+const isoYear = /^\d{4}$/;
+
+/**
+ * A period as the engine names it, by name: a month `2026-01` → `ianuarie 2026`, a quarter
+ * `2026-Q1` → `trimestrul I 2026`, a year `2026` → `2026`; anything else is returned unchanged.
+ */
+export function formatPeriod(period: string | number) {
+  const text = String(period);
+  const quarter = isoQuarter.exec(text);
+  if (quarter) return `trimestrul ${quarterNames[Number(quarter[2]) - 1]} ${quarter[1]}`;
+  return formatMonth(text);
+}
+
+/**
+ * Periods collapsed for a chip: months into runs (`ian–dec 2026`), quarters of a year into runs
+ * (`trim. I–III 2026`), years listed; groups in that order, joined with `, `.
+ */
+export function formatPeriods(periods: readonly string[]) {
+  const months = periods.filter((period) => isoMonth.test(period));
+  const quarters = [...new Set(periods.filter((period) => isoQuarter.test(period)))].sort();
+  const years = [...new Set(periods.filter((period) => isoYear.test(period)))].sort();
+  const quarterRuns: string[] = [];
+  for (const year of [...new Set(quarters.map((quarter) => quarter.slice(0, 4)))]) {
+    const numbers = quarters
+      .filter((quarter) => quarter.startsWith(year))
+      .map((quarter) => Number(quarter.slice(6)));
+    const runs: [number, number][] = [];
+    for (const number of numbers) {
+      const last = runs.at(-1);
+      if (last && number === last[1] + 1) last[1] = number;
+      else runs.push([number, number]);
+    }
+    for (const [from, to] of runs)
+      quarterRuns.push(
+        `trim. ${quarterNames[from - 1]}${from === to ? '' : `–${quarterNames[to - 1]}`} ${year}`,
+      );
+  }
+  const other = periods.filter(
+    (period) => !isoMonth.test(period) && !isoQuarter.test(period) && !isoYear.test(period),
+  );
+  return [formatMonths(months), ...quarterRuns, ...years, ...new Set(other)]
+    .filter(Boolean)
+    .join(', ');
+}
+
+/** A day by its name in the year: `2026-11-25` → `25 noiembrie`; with a year other than `year`,
+ * the year follows: `25 ianuarie 2027`. Anything that is not an ISO date is returned unchanged. */
+export function formatDay(date: string, year?: string | number) {
+  const match = isoDate.exec(date);
+  if (!match) return date;
+  const day = `${Number(match[3])} ${monthName(Number(match[2]))}`;
+  return year !== undefined && String(year) !== match[1] ? `${day} ${match[1]}` : day;
+}
+
+/** A count grouped by thousands: `1200` → `1.200`. */
+export function formatCount(count: number | string) {
+  const text = String(count);
+  return /^-?\d+$/.test(text)
+    ? `${text.startsWith('-') ? minus : ''}${group(text.replace('-', ''))}`
+    : text;
+}
+
 /** Groups the digits of a whole number by thousands with a dot: `1234567` → `1.234.567`. */
 function group(digits: string) {
   return digits.replace(/\B(?=(\d{3})+(?!\d))/g, '.');

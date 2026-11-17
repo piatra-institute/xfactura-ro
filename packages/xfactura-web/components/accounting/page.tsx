@@ -1,13 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { I18nProvider, RouterProvider } from 'react-aria-components';
 import { ApiError, command, field, get, signIn, signOut } from './api';
 import { sectionUrl, useAccountingNavigation, useMovedSections } from './navigation';
 import { Shell, companyUrl, type Company, type Person } from './shell';
 import { Button, Feedback, LinkButton, NumberField, TextField } from './ui';
-import Workspace from './workspace';
+import Workspace, { type SectionCounts } from './workspace';
 
 /** Every widget reads the Romanian locale; links inside widgets move through the history. */
 export default function AccountingPage() {
@@ -27,6 +27,8 @@ function Accounting() {
   const [selected, setSelected] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  // The sidebar's counts, as the open company's workspace last read them.
+  const [counts, setCounts] = useState<{ company: string; counts: SectionCounts } | null>(null);
   const params = useSearchParams();
   const { view } = useAccountingNavigation();
   useMovedSections();
@@ -38,6 +40,17 @@ function Accounting() {
   const creating = requestedCompany === 'new' || !company;
   // The company last opened, by the switcher or by an address: the new company page returns to it.
   if (company && !creating && company.id !== selected) setSelected(company.id);
+  const shownCompany = company?.id;
+  const onCounts = useCallback(
+    (next: SectionCounts) =>
+      shownCompany &&
+      setCounts((current) =>
+        current?.company === shownCompany && sameCounts(current.counts, next)
+          ? current
+          : { company: shownCompany, counts: next },
+      ),
+    [shownCompany],
+  );
 
   async function createCompany(body: { name: string; cui: string; year: number }) {
     setBusy(true);
@@ -158,6 +171,7 @@ function Accounting() {
       companies={companies}
       company={creating ? undefined : company}
       current={creating ? null : view.id}
+      counts={!creating && counts && counts.company === company?.id ? counts.counts : {}}
       search={params?.toString() ?? ''}
       onSignOut={async () => {
         setBusy(true);
@@ -194,12 +208,15 @@ function Accounting() {
               <Feedback error={error} />
             </div>
           ) : null}
-          <Workspace key={company.id} company={company} />
+          <Workspace key={company.id} company={company} onCounts={onCounts} />
         </>
       )}
     </Shell>
   );
 }
+
+/** Whether two count sets say the same, so an unchanged read renders nothing again. */
+const sameCounts = (a: SectionCounts, b: SectionCounts) => JSON.stringify(a) === JSON.stringify(b);
 
 function CompanyForm({
   busy,

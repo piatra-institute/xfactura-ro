@@ -96,8 +96,10 @@ test('return links select the exercise and focus its heading; changing exercise 
     { ...common, 'years.list': { items: years, next: null } },
   );
   await page.goto('/contabilitate?company=company&view=review&year=year-2026');
-  await page.locator('[data-work-id="older-return"] > summary').click();
-  await page.getByRole('link', { name: 'Deschide declarația în Declarații', exact: true }).click();
+  const row = page.locator('[data-work-id="older-return"]');
+  await expect(row.locator('.acc-work-title')).toHaveText('D300 · octombrie 2025');
+  // The row's action opens the return in the exercise its period belongs to.
+  await row.getByRole('link', { name: 'Deschide', exact: true }).click();
   await expect(yearSelect(page)).toContainText('2025');
   await expect(page.getByRole('heading', { name: 'D300 · 2025-10', exact: true })).toBeFocused();
   const summary = page.locator('[data-return="D300|2025-10"] > summary');

@@ -2,14 +2,18 @@
 import { describe, expect, test } from 'bun:test';
 import {
   formatAmount,
+  formatCount,
   formatDate,
   formatDateTime,
+  formatDay,
   formatMinor,
   formatMoney,
   formatMoneyInput,
   formatMonth,
   formatMonths,
   formatMonthShort,
+  formatPeriod,
+  formatPeriods,
   formatQuantity,
   parseMoney,
 } from '../../components/accounting/format';
@@ -40,6 +44,37 @@ describe('dates and months', () => {
     expect(formatMonths(['2026-02', '2025-11', '2025-12', '2026-01'])).toBe('nov 2025–feb 2026');
     expect(formatMonths(['2026-05', '2026-05', '2026-06'])).toBe('mai–iun 2026');
     expect(formatMonths([])).toBe('');
+  });
+
+  test('a period reads by name, whatever its length', () => {
+    expect(formatPeriod('2026-01')).toBe('ianuarie 2026');
+    expect(formatPeriod('2026-Q3')).toBe('trimestrul III 2026');
+    expect(formatPeriod('2026')).toBe('2026');
+    expect(formatPeriod(2027)).toBe('2027');
+    expect(formatPeriod('altceva')).toBe('altceva');
+  });
+
+  test('periods collapse into runs of months, runs of quarters and years', () => {
+    expect(formatPeriods(['2026-01', '2026-02', '2026-03'])).toBe('ian–mar 2026');
+    expect(formatPeriods(['2026-Q2', '2026-Q1', '2026-Q3'])).toBe('trim. I–III 2026');
+    expect(formatPeriods(['2026-Q1', '2026-Q3'])).toBe('trim. I 2026, trim. III 2026');
+    expect(formatPeriods(['2026', '2026-12', '2026-11', '2027-Q1'])).toBe(
+      'nov–dec 2026, trim. I 2027, 2026',
+    );
+    expect(formatPeriods([])).toBe('');
+  });
+
+  test('a day reads by name, with its year only when it is not the year given', () => {
+    expect(formatDay('2026-11-25')).toBe('25 noiembrie');
+    expect(formatDay('2026-11-05', 2026)).toBe('5 noiembrie');
+    expect(formatDay('2027-01-25', '2026')).toBe('25 ianuarie 2027');
+    expect(formatDay('mâine')).toBe('mâine');
+  });
+
+  test('counts are grouped by thousands', () => {
+    expect(formatCount(1200)).toBe('1.200');
+    expect(formatCount(7)).toBe('7');
+    expect(formatCount('-1234567')).toBe('−1.234.567');
   });
 
   test('an instant reads in Bucharest time', () => {

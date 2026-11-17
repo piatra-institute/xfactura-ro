@@ -36,6 +36,60 @@ type Capability = { id: string };
 /** What every list operation returns: one page of items, and the cursor of the next or null. */
 export type List<T> = { items: T[]; next: string | null };
 
+/** An amount as `company.summary` states it: integer minor units and their currency. */
+export type Money = { minor: string; currency: string };
+type OpenSide = {
+  count: number;
+  currencies: {
+    currency: string;
+    total: string;
+    count: number;
+    overdue: string;
+    overdueCount: number;
+  }[];
+  unrepresented: { code: 'UNSUPPORTED'; accounts: { account: string; balance: Money }[] } | null;
+};
+/** The company on a day, every amount the engine's (`company.summary`). */
+export type Summary = {
+  date: string;
+  cash: {
+    accounts: {
+      id: string;
+      kind: 'bank' | 'cash';
+      name: string;
+      ledgerAccount: string;
+      currency: string;
+      balance: Money;
+      ledgerBalance: Money;
+    }[];
+    totals: Money[];
+  };
+  receivables: OpenSide;
+  payables: OpenSide;
+  tax: { owed: Money; overdue: Money; claims: Money; net: Money; obligations: number } | null;
+  taxReason: { code: 'RULE_GAP'; message: string; details: unknown } | null;
+  work: {
+    total: number;
+    by: { person: number; agent: number; neither: number };
+    severity: { block: number; warn: number; info: number };
+    complete: boolean;
+    next: string | null;
+    asOfSeq: number;
+  };
+  deadlines: {
+    kind: string;
+    period: string;
+    deadline: string;
+    due: string | null;
+    status: string;
+    artifactId: string | null;
+  }[];
+};
+
+/** A count beside a section in the sidebar; `more` when the engine stopped counting early. */
+export type SectionCount = { count: number; more: boolean };
+export type SectionCounts = Partial<Record<'review' | 'questions', SectionCount>>;
+
 /** What every section needs: the company, its capabilities and a way to act and report. */
 export type Workspace = {
   company: Company;
@@ -46,6 +100,9 @@ export type Workspace = {
   year: Year | undefined;
   evidence: Evidence[];
   version: number;
+  /** The last `company.summary` read: no data before the first read or when it could not be read,
+   * `loading` while it is read again. */
+  summary: { data: Summary | null; error: string; loading: boolean };
   /** Runs an action, reports its outcome and refreshes every section. */
   act: (
     action: () => Promise<unknown>,
@@ -76,7 +133,24 @@ const sectionComponents: Record<Section, typeof Documents> = {
   setup: Setup,
 };
 
-export default function WorkspaceView({ company }: { company: Company }) {
+/** A summary is read whole; anything else is reported as not read rather than shown in part. */
+const isSummary = (value: unknown): value is Summary =>
+  !!value &&
+  typeof value === 'object' &&
+  'cash' in value &&
+  'receivables' in value &&
+  'payables' in value &&
+  'work' in value &&
+  'deadlines' in value;
+
+export default function WorkspaceView({
+  company,
+  onCounts,
+}: {
+  company: Company;
+  /** Receives the sidebar's counts each time the workspace is read again. */
+  onCounts?: (counts: SectionCounts) => void;
+}) {
   const { section, params, href } = useAccountingNavigation();
   const [capabilities, setCapabilities] = useState<Set<string>>(new Set());
   const [years, setYears] = useState<Year[]>([]);
@@ -84,6 +158,17 @@ export default function WorkspaceView({ company }: { company: Company }) {
   const [version, setVersion] = useState(0);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [summary, setSummary] = useState<{
+    read: string;
+    data: Summary | null;
+    error: string;
+  } | null>(null);
+  // The summary is read again on every change to the books and each time Acasă is opened, so
+  // Acasă never shows a position older than its visit.
+  const [homeVisits, setHomeVisits] = useState({ section, count: 0 });
+  if (homeVisits.section !== section)
+    setHomeVisits({ section, count: homeVisits.count + (section === 'home' ? 1 : 0) });
+  const summaryRead = `${version}:${homeVisits.count}`;
   const financial = years.filter((year) => year.kind === 'financial');
   const year =
     financial.find((year) => year.id === params.get('year')) ??
@@ -133,6 +218,40 @@ export default function WorkspaceView({ company }: { company: Company }) {
     };
   }, [call, version]);
 
+  // The company's summary and its open questions, read again whenever the workspace changes: Acasă
+  // shows the summary, the sidebar counts what waits on a person.
+  useEffect(() => {
+    let active = true;
+    const failure = (reason: unknown) =>
+      reason instanceof Error ? reason.message : 'Situația companiei nu a putut fi citită.';
+    Promise.all([
+      call<unknown>('company.summary').then(
+        (data) =>
+          isSummary(data)
+            ? { data, error: '' }
+            : { data: null, error: 'Situația companiei nu a putut fi citită.' },
+        (reason: unknown) => ({ data: null, error: failure(reason) }),
+      ),
+      call<Partial<List<unknown>>>('questions.list', { status: 'open', limit: 200 }).catch(
+        () => null,
+      ),
+    ]).then(([read, questions]) => {
+      if (!active) return;
+      setSummary({ read: summaryRead, ...read });
+      onCounts?.({
+        ...(read.data
+          ? { review: { count: read.data.work.by.person, more: !read.data.work.complete } }
+          : {}),
+        ...(Array.isArray(questions?.items)
+          ? { questions: { count: questions.items.length, more: !!questions.next } }
+          : {}),
+      });
+    });
+    return () => {
+      active = false;
+    };
+  }, [call, summaryRead, onCounts]);
+
   const act = useCallback(
     async (
       action: () => Promise<unknown>,
@@ -169,6 +288,11 @@ export default function WorkspaceView({ company }: { company: Company }) {
     year,
     evidence,
     version,
+    summary: {
+      data: summary?.data ?? null,
+      error: summary?.error ?? '',
+      loading: summary?.read !== summaryRead,
+    },
     act,
     refresh: () => setVersion((value) => value + 1),
   };

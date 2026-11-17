@@ -257,45 +257,6 @@ a.acc-nav-link[aria-current='page']::before {
   margin-top: 0;
 }
 
-/* Acasă */
-.acc-home {
-  display: grid;
-  gap: 28px;
-}
-.acc-balances {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin: 0;
-}
-.acc-balances > div {
-  padding: 16px 18px;
-  background: var(--acc-raised);
-  border: 1px solid var(--acc-border);
-  border-radius: var(--acc-radius-lg);
-}
-.acc-balances dt {
-  font-size: var(--acc-text-sm);
-  color: var(--acc-text-muted);
-  margin-bottom: 6px;
-}
-.acc-balances dd {
-  margin: 0;
-  font-size: var(--acc-text-2xl);
-  font-weight: 620;
-  letter-spacing: -0.01em;
-  font-variant-numeric: tabular-nums;
-  color: var(--acc-amount);
-}
-.acc-home-links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
 /* Login and the new company page: one centred form. */
 .acc-center {
   display: flex;
@@ -395,12 +356,6 @@ a.acc-nav-link[aria-current='page']::before {
   }
   .acc-body {
     padding: 16px 16px 56px;
-  }
-  .acc-balances {
-    grid-template-columns: 1fr;
-  }
-  .acc-balances dd {
-    font-size: var(--acc-text-xl);
   }
   .acc-company-form .acc-form-row {
     grid-template-columns: 1fr;

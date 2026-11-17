@@ -1,0 +1,563 @@
+/* Acasă, De verificat, „Profilul firmei” and the proposal review, drawn from the theme tokens. */
+
+/* Rows of work: a title that opens the row, what it affects, and one action at the right. */
+.acc-work-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 20px;
+  margin: 0 0 20px;
+}
+.acc-filter {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.acc-filter .acc-select-trigger {
+  min-width: 184px;
+  min-height: var(--acc-control-height-small);
+  font-size: var(--acc-text-sm);
+}
+.acc-work-reload {
+  margin-left: auto;
+}
+.acc-work-group {
+  margin-bottom: 28px;
+}
+.accounting .acc-work-group > h2 {
+  font-size: var(--acc-text-sm);
+  font-weight: 600;
+  color: var(--acc-text-secondary);
+  margin: 0 0 8px;
+  padding: 0;
+  border: 0;
+}
+.acc-work-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--acc-raised);
+  border: 1px solid var(--acc-border);
+  border-radius: var(--acc-radius-lg);
+}
+.acc-work-row + .acc-work-row {
+  border-top: 1px solid var(--acc-border);
+}
+.acc-work-row[data-open] {
+  background: var(--acc-raised);
+}
+.acc-work-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'heading action'
+    'facts action';
+  column-gap: 16px;
+  row-gap: 6px;
+  align-items: center;
+  padding: 10px 14px;
+}
+.accounting .acc-work-heading {
+  grid-area: heading;
+  margin: 0;
+  font-size: var(--acc-text-base);
+  font-weight: 600;
+  line-height: 1.4;
+}
+.acc-content .acc-work-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-height: 0;
+  padding: 2px 0;
+  border: 0;
+  border-radius: var(--acc-radius-sm);
+  background: transparent;
+  color: var(--acc-text);
+  font: inherit;
+  font-weight: 600;
+  line-height: 1.4;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.acc-content .acc-work-toggle:hover {
+  background: transparent;
+  color: var(--acc-accent-text);
+}
+.acc-work-toggle > .acc-icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  color: var(--acc-text-muted);
+  transition: transform 120ms ease;
+}
+.acc-work-toggle[aria-expanded='true'] > .acc-icon {
+  transform: rotate(90deg);
+}
+.acc-work-facts {
+  grid-area: facts;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding-left: 24px;
+  min-width: 0;
+}
+.acc-work-meta-text {
+  color: var(--acc-text-muted);
+  font-size: var(--acc-text-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.acc-work-refusal {
+  color: var(--acc-text-muted);
+  font-size: var(--acc-text-sm);
+}
+.acc-work-action {
+  grid-area: action;
+  justify-self: end;
+}
+.acc-work-body {
+  padding: 2px 18px 18px 38px;
+  outline: none;
+  overflow-wrap: anywhere;
+}
+.acc-work-body[data-focus-visible],
+.acc-work-body:focus-visible {
+  outline: 2px solid var(--acc-focus);
+  outline-offset: -2px;
+}
+.acc-work-body > :first-child {
+  margin-top: 0;
+}
+.acc-work-members {
+  border: 0;
+  border-top: 1px solid var(--acc-border);
+  border-radius: 0 0 var(--acc-radius-lg) var(--acc-radius-lg);
+  background: var(--acc-sunken);
+  padding-left: 24px;
+}
+.acc-work-members .acc-work-row {
+  background: transparent;
+}
+.acc-work-more {
+  margin-top: 4px;
+}
+.acc-work-error {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.acc-work-error .acc-error {
+  margin: 0;
+}
+.acc-worklist > .acc-empty-state {
+  margin-bottom: 24px;
+}
+.acc-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+/* Forms whose action sits beside a field keep it level with the control, under the label, so a
+ * reason appearing under the field never moves the button between press and release. */
+.acc-work-dispose {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  max-width: 640px;
+}
+.acc-work-dispose > .acc-button {
+  flex: none;
+  margin-top: calc(var(--acc-text-sm) * 1.5 + 6px);
+}
+.acc-work-dispose > .acc-field {
+  flex: 1;
+  min-width: 0;
+}
+.acc-technical .acc-technical-value {
+  white-space: pre-wrap;
+}
+
+/* „Profilul firmei”: each missing fact with its control in place. */
+.acc-facts {
+  margin: 0 0 24px;
+  background: var(--acc-raised);
+  border: 1px solid var(--acc-border);
+  border-left: 3px solid var(--acc-accent);
+  border-radius: var(--acc-radius-lg);
+}
+.accounting .acc-facts > h2,
+.accounting .acc-facts > h3 {
+  margin: 0;
+  padding: 12px 16px 4px;
+  font-size: var(--acc-text-md);
+  font-weight: 620;
+}
+.acc-facts > .acc-error {
+  margin: 0;
+  padding: 4px 16px;
+}
+.acc-fact-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.acc-fact {
+  padding: 10px 16px 12px;
+}
+.acc-fact + .acc-fact {
+  border-top: 1px solid var(--acc-border);
+}
+.acc-fact-form {
+  display: grid;
+  grid-template-columns: minmax(0, 28rem) 10rem auto;
+  justify-content: start;
+  align-items: start;
+  gap: 8px 16px;
+}
+.acc-fact-form > .acc-button {
+  margin-top: calc(var(--acc-text-sm) * 1.5 + 6px + 3px);
+}
+.acc-fact-value .acc-field-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.acc-fact-value .acc-field-label {
+  color: var(--acc-text);
+  font-size: var(--acc-text-base);
+}
+.acc-fact-name {
+  font-weight: 600;
+}
+.accounting .acc-fact-refusal {
+  grid-column: 2 / -1;
+  margin: 0;
+  color: var(--acc-text-muted);
+  font-size: var(--acc-text-sm);
+}
+.accounting .acc-fact-error {
+  margin: 6px 0 0;
+  font-size: var(--acc-text-sm);
+}
+
+/* Acasă */
+.acc-home {
+  display: grid;
+  gap: 32px;
+}
+.accounting .acc-home-section > h2 {
+  margin: 0 0 12px;
+}
+.acc-home-section > .acc-facts {
+  margin-bottom: 12px;
+}
+.acc-home-work {
+  margin-bottom: 12px;
+}
+.accounting .acc-home-all {
+  margin: 0;
+}
+.acc-home-all .acc-badge {
+  margin-left: 2px;
+}
+.acc-home-error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.acc-home-error .acc-error {
+  margin: 0;
+}
+
+/* Bani: a statement in four columns, every figure the engine's. */
+.acc-money {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  background: var(--acc-raised);
+  border: 1px solid var(--acc-border);
+  border-radius: var(--acc-radius-lg);
+}
+.acc-money-block {
+  padding: 14px 18px 16px;
+  min-width: 0;
+}
+.acc-money-block + .acc-money-block {
+  border-left: 1px solid var(--acc-border);
+}
+.accounting .acc-money-block > h3 {
+  margin: 0 0 8px;
+  font-size: var(--acc-text-sm);
+  font-weight: 600;
+  color: var(--acc-text-secondary);
+}
+.acc-money-block > .acc-empty-state {
+  padding: 10px 12px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+.acc-statement {
+  margin: 0;
+}
+.acc-statement-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 0;
+}
+.acc-statement-line dt {
+  min-width: 0;
+  color: var(--acc-text-secondary);
+  overflow-wrap: anywhere;
+}
+.acc-statement-line dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: right;
+  color: var(--acc-amount);
+}
+.acc-statement-total {
+  font-weight: 600;
+}
+.acc-statement-total dt {
+  color: var(--acc-text);
+}
+.acc-statement-line + .acc-statement-total {
+  margin-top: 4px;
+  padding-top: 7px;
+  border-top: 1px solid var(--acc-border);
+}
+.acc-statement-note {
+  display: block;
+  color: var(--acc-text-muted);
+  font-size: var(--acc-text-xs);
+  font-weight: 400;
+}
+.accounting .acc-amount--danger {
+  color: var(--acc-amount-negative);
+}
+.accounting .acc-amount--muted {
+  color: var(--acc-amount-zero);
+}
+.accounting .acc-money-note {
+  margin: 6px 0 0;
+  color: var(--acc-text-muted);
+  font-size: var(--acc-text-sm);
+}
+
+/* Termene: the next returns, their day first. */
+.acc-deadlines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--acc-raised);
+  border: 1px solid var(--acc-border);
+  border-radius: var(--acc-radius-lg);
+}
+.acc-deadline {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 10px 14px;
+}
+.acc-deadlines--dated .acc-deadline {
+  grid-template-columns: 9rem minmax(0, 1fr) auto auto;
+}
+.acc-deadline + .acc-deadline {
+  border-top: 1px solid var(--acc-border);
+}
+.acc-deadline-day {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.acc-deadline-return {
+  min-width: 0;
+  color: var(--acc-text-secondary);
+}
+.acc-deadline-return strong {
+  color: var(--acc-text);
+  margin-right: 4px;
+}
+
+/* The review of a proposal */
+.accounting .acc-proposal-title {
+  font-size: var(--acc-text-md);
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+.acc-review-heading .acc-chip {
+  flex: none;
+}
+.accounting .acc-review-columns h5 {
+  margin: 0 0 10px;
+  font-size: var(--acc-text-sm);
+  font-weight: 600;
+  color: var(--acc-text-secondary);
+}
+.acc-review-notes {
+  margin: 12px 0 0;
+  padding-left: 18px;
+  font-size: var(--acc-text-sm);
+}
+/* The shared table inside a section: the legacy table rules of base.css (right-aligned cells, no
+ * left padding on the first cell, no wrapping) do not apply to it. */
+.acc-content .acc-table .acc-table-cell,
+.acc-content .acc-table .acc-table-column {
+  padding: 6px 12px;
+  text-align: left;
+  white-space: normal;
+}
+.acc-content .acc-table .acc-numeric {
+  text-align: right;
+  white-space: nowrap;
+}
+.acc-content .acc-table .acc-table-column {
+  white-space: nowrap;
+}
+.acc-review-effect .acc-table .acc-table-cell:first-child {
+  white-space: nowrap;
+  font-weight: 600;
+}
+.acc-effect-name {
+  display: block;
+}
+.acc-effect-memo,
+.acc-effect-currency {
+  display: block;
+  color: var(--acc-text-muted);
+  font-size: var(--acc-text-xs);
+}
+.acc-checklist {
+  display: grid;
+  gap: 6px;
+  margin: 18px 0 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.accounting .acc-checklist legend {
+  padding: 0;
+  margin-bottom: 6px;
+  font-size: var(--acc-text-sm);
+  font-weight: 600;
+  color: var(--acc-text-secondary);
+}
+.acc-content .acc-checklist label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--acc-radius);
+  background: var(--acc-warning-subtle);
+  color: var(--acc-text);
+  font-weight: 500;
+  cursor: pointer;
+}
+.acc-checklist input[type='checkbox'] {
+  margin-top: 3px;
+}
+.acc-review-withdraw {
+  display: grid;
+  gap: 12px;
+  max-width: 520px;
+  margin-top: 16px;
+  margin-left: auto;
+}
+.acc-proposal .acc-technical {
+  margin-top: 16px;
+}
+
+@media (max-width: 1099px) {
+  .acc-money {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .acc-money-block:nth-child(3) {
+    border-left: 0;
+  }
+  .acc-money-block:nth-child(n + 3) {
+    border-top: 1px solid var(--acc-border);
+  }
+}
+
+@media (max-width: 699px) {
+  .acc-work-line {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'heading'
+      'facts'
+      'action';
+  }
+  .acc-work-action {
+    justify-self: start;
+    padding-left: 24px;
+  }
+  .acc-work-body {
+    padding: 2px 14px 16px;
+  }
+  .acc-work-members {
+    padding-left: 0;
+  }
+  .acc-work-reload {
+    margin-left: 0;
+  }
+  .acc-filter {
+    flex: 1 1 100%;
+  }
+  .acc-filter .acc-field-label {
+    min-width: 5.5rem;
+  }
+  .acc-filter .acc-select-trigger {
+    flex: 1;
+    min-width: 0;
+  }
+  .acc-fact-form {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .acc-fact-value,
+  .accounting .acc-fact-refusal {
+    grid-column: 1 / -1;
+  }
+  .acc-fact-value .acc-field-label {
+    white-space: normal;
+  }
+  .acc-money {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .acc-money-block + .acc-money-block {
+    border-left: 0;
+    border-top: 1px solid var(--acc-border);
+  }
+  .acc-deadline,
+  .acc-deadlines--dated .acc-deadline {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .acc-deadline-day:empty {
+    display: none;
+  }
+  .acc-deadline-day,
+  .acc-deadline-return {
+    grid-column: 1;
+  }
+  .acc-deadline-status {
+    grid-column: 1;
+  }
+  .acc-deadline > .acc-button {
+    grid-column: 2;
+    grid-row: 1 / span 3;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .acc-work-toggle > .acc-icon {
+    transition: none;
+  }
+}

@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
-import { openSection } from './support/shell';
-import { mockWorklist, workItem } from './support/worklist';
+import { chooseOption, openSection, selectButton } from './support/shell';
+import { mockWorklist, openWorkRow, workItem, workRow } from './support/worklist';
+import type { WorkItem } from '../../packages/xfactura-web/components/accounting/work-model';
 
 test('a padded dismissal reason reaches the engine and shows its error', async ({ page }) => {
   const item = workItem('Document de clasat', {
@@ -37,7 +38,7 @@ test('a padded dismissal reason reaches the engine and shows its error', async (
     return { body: {} };
   });
   await page.goto('/contabilitate?view=review');
-  await page.locator('.acc-work-item > summary').click();
+  await openWorkRow(page.locator('.acc-work-row'));
   const reason = '     scurt     ';
   await page.getByLabel('Motivul închiderii').fill(reason);
   await page.getByRole('button', { name: 'Închide cu motiv', exact: true }).click();
@@ -47,64 +48,78 @@ test('a padded dismissal reason reaches the engine and shows its error', async (
   expect(reasons).toEqual([reason]);
 });
 
-test('matching structured causes collapse across pages and keep each return and its steps', async ({
+test('items that share a cause collapse across pages into one row and keep each return and its steps', async ({
   page,
 }, info) => {
-  const gap = 'Lipsesc regimul TVA și perioada fiscală.';
-  const question = {
-    kind: 'profile.fact',
-    subject: { kind: 'company', id: 'company' },
-    params: { axis: 'vat.status', year: 2026 },
+  const cause = (axis: string, message: string) => ({
+    id: `fact:${axis}`,
+    kind: 'fact' as const,
+    message,
+    subject: { kind: 'profile', id: axis },
+  });
+  const vat = cause('vat.status', 'Regimul TVA al companiei nu este înregistrat.');
+  const labels: WorkItem['labels'] = {
+    kind: { label: 'Declarație', type: 'text' },
+    period: { label: 'Perioadă', type: 'period' },
+    status: { label: 'Stare', type: 'text' },
+    gap: { label: 'Ce lipsește', type: 'text' },
+    question: { label: 'Întrebare', type: 'text' },
   };
-  const obligation = (id: string, period: string, details: Record<string, unknown> = {}) =>
-    workItem(id, {
+  const obligation = (kind: string, period: string, causes = [vat]) => {
+    const question = causes[0]
+      ? { kind: 'profile.fact', subject: causes[0].subject, params: { axis: causes[0].subject.id } }
+      : null;
+    return workItem(`obligation.due:obligation:${kind}|${period}`, {
       kind: 'obligation.due',
-      subject: { kind: 'obligation', id },
+      subject: { kind: 'obligation', id: `${kind}|${period}` },
       severity: 'block',
       period,
-      message: `Mesaj distinct pentru ${id}`,
-      details: { kind: 'D300', status: 'blocked', gap, question, ...details },
-      next: [
-        {
-          operation: 'questions.answer',
-          by: 'human',
-          allowed: true,
-          inputHint: { questionId: id },
-        },
-      ],
+      message: `Mesaj distinct pentru ${kind} ${period}`,
+      ...(causes.length ? { causes } : {}),
+      details: {
+        kind,
+        period,
+        status: 'blocked',
+        gap: causes.map((item) => item.message).join(' ') || 'Lipsește regula.',
+        ...(question ? { question } : {}),
+      },
+      labels,
+      next: question
+        ? [{ operation: 'questions.ask', by: 'agent', allowed: true, inputHint: question }]
+        : [],
     });
-  const first = obligation('D300|2026-01', '2026-01');
-  const second = obligation('D300|2026-02', '2026-02', {
-    question: {
-      params: { year: 2026, axis: 'vat.status' },
-      subject: { id: 'company', kind: 'company' },
-      kind: 'profile.fact',
-    },
-  });
-  const third = obligation('D300|2026-03', '2026-03');
-  const differentQuestion = obligation('D112|2026-01', '2026-01', {
-    kind: 'D112',
-    question: { ...question, params: { axis: 'employer', year: 2026 } },
-  });
-  const differentBlockers = obligation('D394|2026-01', '2026-01', {
-    gap: 'Lipsește și regimul încasării.',
-    kind: 'D394',
-  });
-  const unstructured = obligation('D100|2026-01', '2026-01', { kind: 'D100', question: null });
-  const sameMessage = obligation('D101|2026', '2026', { kind: 'D101', question: null });
-  sameMessage.message = unstructured.message;
-  const otherKind = workItem('Alt element cu aceeași întrebare', {
-    details: first.details,
+  };
+  const first = obligation('D300', '2026-01');
+  const second = obligation('D300', '2026-02');
+  const informative = obligation('D394', '2026-01');
+  const third = obligation('D300', '2026-03');
+  const otherCause = obligation('D112', '2026-01', [
+    cause('employer', 'Nu este înregistrat dacă firma are salariați.'),
+  ]);
+  // Its first cause is another fact: it waits on that one first.
+  const laterCause = obligation('D406', '2026-01', [
+    cause('entity.form', 'Forma juridică a companiei nu este înregistrată.'),
+    vat,
+  ]);
+  const uncaused = obligation('D100', '2026-01', []);
+  const sameText = workItem('Același text, fără cauză', { message: vat.message });
+  const otherKind = workItem('question.needed:proposal:p', {
+    kind: 'question.needed',
+    subject: { kind: 'proposal', id: 'p' },
+    severity: 'block',
+    message: 'Propunerea Factură așteaptă un răspuns.',
+    causes: [vat],
     next: first.next,
   });
   const items = [
     first,
     second,
+    informative,
     third,
-    differentQuestion,
-    differentBlockers,
-    unstructured,
-    sameMessage,
+    otherCause,
+    laterCause,
+    uncaused,
+    sameText,
     otherKind,
   ];
   await mockWorklist(page, (operation, input) => {
@@ -129,35 +144,49 @@ test('matching structured causes collapse across pages and keep each return and 
   await page.goto('/contabilitate?view=review');
   const group = page.locator('.acc-work-cause');
   await expect(group).toHaveCount(1);
-  await expect(group).not.toHaveAttribute('open');
-  await expect(group.locator(':scope > summary')).toContainText(gap);
-  await expect(group.locator(':scope > summary')).toContainText('2 declarații');
-  await expect(page.locator('[data-work-id="D112|2026-01"]')).toBeVisible();
-  await expect(page.locator('[data-work-id="D394|2026-01"]')).toBeVisible();
-  await expect(page.locator('[data-work-id="D100|2026-01"]')).toBeVisible();
-  await expect(page.locator('[data-work-id="D101|2026"]')).toBeVisible();
-  await expect(page.locator('[data-work-id="Alt element cu aceeași întrebare"]')).toBeVisible();
-  await expect(page.locator('[data-work-id="D300|2026-01"]')).not.toBeVisible();
+  await expect(group).toHaveAttribute('data-cause', 'fact:vat.status');
+  const toggle = group.locator('.acc-work-toggle').first();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(toggle).toHaveText(vat.message);
+  // The cause's returns, grouped by return with their months collapsed.
+  const chips = group.locator(':scope > .acc-work-line .acc-chip');
+  await expect(chips).toHaveText(['D300 · ian–feb 2026', 'D394 · ian 2026', 'Blocant']);
+  for (const item of [otherCause, laterCause, uncaused, sameText])
+    await expect(workRow(page, item.id)).toBeVisible();
+  await expect(workRow(page, otherCause.id).locator('.acc-work-title')).toHaveText(
+    'D112 · ianuarie 2026',
+  );
+  await expect(workRow(page, first.id)).toHaveCount(0);
   await page.getByRole('button', { name: 'Mai multe elemente' }).click();
-  await expect(group.locator(':scope > summary')).toContainText('3 declarații');
+  await expect(chips).toHaveText(['D300 · ian–mar 2026', 'D394 · ian 2026', 'Blocant']);
   await page.screenshot({ path: info.outputPath('grouped-causes.png'), fullPage: true });
-  await group.locator(':scope > summary').click();
-  await expect(group.locator('.acc-work-message')).toHaveText([
-    'Declarația D300 · 2026-01',
-    'Declarația D300 · 2026-02',
-    'Declarația D300 · 2026-03',
+  await toggle.click();
+  await expect(group.locator('.acc-work-members .acc-work-title')).toHaveText([
+    'D300 · ianuarie 2026',
+    'D300 · februarie 2026',
+    'D394 · ianuarie 2026',
+    'Propunerea Factură așteaptă un răspuns.',
+    'D300 · martie 2026',
   ]);
-  const row = page.locator('[data-work-id="D300|2026-01"]');
-  await row.locator(':scope > summary').click();
-  await expect(row.getByText(first.message, { exact: true })).toBeVisible();
-  // Obligation actions open the return's complete lifecycle in Declarații.
+  const row = workRow(page, first.id);
+  // A return's row opens its lifecycle in Declarații.
+  await expect(row.getByRole('link', { name: 'Deschide', exact: true })).toHaveAttribute(
+    'href',
+    /view=deadlines.*return=D300%7C2026-01/,
+  );
+  await openWorkRow(row);
+  const details = row.getByRole('region');
+  await expect(details.locator('.acc-work-details').first()).toContainText(
+    'Ce lipsește' + vat.message,
+  );
+  await expect(details).toContainText('Blocată');
   await expect(
-    row.getByRole('link', { name: 'Deschide declarația în Declarații', exact: true }),
+    details.getByRole('link', { name: 'Deschide declarația în Declarații', exact: true }),
   ).toHaveAttribute('href', /view=deadlines.*return=D300%7C2026-01/);
-  await expect(row.getByRole('button')).toHaveCount(0);
+  await expect(details.getByRole('button')).toHaveCount(0);
 });
 
-test('document details show names and exact decimals while identifiers and minor units stay closed', async ({
+test('details read under the engine labels, typed, while codes and identifiers stay closed', async ({
   page,
 }, info) => {
   const documentId = '00000000-0000-4000-8000-000000000001';
@@ -166,6 +195,28 @@ test('document details show names and exact decimals while identifiers and minor
   const treasuryId = '00000000-0000-4000-8000-000000000004';
   const item = workItem('Document de verificat', {
     subject: { kind: 'document', id: documentId },
+    // The labels and types the engine gives each detail (`labels`).
+    labels: {
+      kind: { label: 'Tip', type: 'text' },
+      number: { label: 'Număr', type: 'text' },
+      date: { label: 'Dată', type: 'date' },
+      partyId: { label: 'Partener', type: 'id', kind: 'party' },
+      evidenceId: { label: 'Document justificativ', type: 'id', kind: 'evidence' },
+      members: { label: 'Copii ale documentului', type: 'text' },
+      currency: { label: 'Monedă', type: 'text' },
+      totals: { label: 'Totaluri', type: 'text' },
+      authority: { label: 'Sursă', type: 'text' },
+      treasuryAccountId: { label: 'Cont de trezorerie', type: 'id', kind: 'treasuryAccount' },
+      bookingDate: { label: 'Data operațiunii', type: 'date' },
+      amountMinor: { label: 'Sumă', type: 'minor', currencyKey: 'currency' },
+      operation: { label: 'Operațiune', type: 'text' },
+      mediaType: { label: 'Tip fișier', type: 'text' },
+      size: { label: 'Dimensiune (octeți)', type: 'count' },
+      uploadId: { label: 'Încărcare SPV', type: 'id', kind: 'spvUpload' },
+      artifactId: { label: 'Declarație', type: 'id', kind: 'artifact' },
+      code: { label: 'Cod', type: 'text' },
+      blocks: { label: 'Declarații afectate', type: 'text' },
+    },
     details: {
       kind: 'invoice.received',
       number: 'DOC-1',
@@ -184,6 +235,9 @@ test('document details show names and exact decimals while identifiers and minor
       size: 1200,
       uploadId: 'anaf-upload',
       artifactId: 'anaf-artifact',
+      code: 'FACT_UNKNOWN',
+      blocks: ['D300|2026-01', 'D300|2026-02', 'D394|2026-Q1'],
+      unlabelled: 'cheie-fara-eticheta',
     },
   });
   await mockWorklist(
@@ -215,31 +269,52 @@ test('document details show names and exact decimals while identifiers and minor
     },
   );
   await page.goto('/contabilitate?view=review');
-  const row = page.locator('.acc-work-item');
-  await row.locator(':scope > summary').click();
-  await expect(row.getByText('Furnizor Sintetic SRL', { exact: true })).toBeVisible();
+  const row = page.locator('.acc-work-row');
+  // The returns a detail names are the row's chips, grouped by return.
+  await expect(row.locator('.acc-work-facts .acc-chip')).toHaveText([
+    'D300 · ian–feb 2026',
+    'D394 · trim. I 2026',
+  ]);
+  await openWorkRow(row);
+  // The value a detail shows beside its label, the label matched whole.
+  const whole = (text: string) => new RegExp(`^${text.replace(/[.*+?^$|()[\]\\{}]/g, '\\$&')}$`);
+  const value = (label: string) =>
+    row
+      .locator('.acc-work-details')
+      .first()
+      .locator(':scope > div')
+      .filter({ has: page.locator(':scope > dt', { hasText: whole(label) }) })
+      .locator(':scope > dd');
+  await expect(value('Partener')).toHaveText('Furnizor Sintetic SRL');
   await expect(row.getByRole('link', { name: 'DOC-1.xml' }).first()).toBeVisible();
-  await expect(row.getByText('Cont curent EUR', { exact: true })).toBeVisible();
-  await expect(row.getByText('Fișier XML încărcat', { exact: true })).toBeVisible();
+  await expect(value('Cont de trezorerie')).toHaveText('Cont curent EUR');
+  await expect(value('Sursă')).toHaveText('Fișier XML încărcat');
+  await expect(value('Dată')).toHaveText('01.01.2026');
+  await expect(value('Data operațiunii')).toHaveText('02.01.2026');
+  await expect(value('Declarații afectate')).toHaveText('D300 · ian–feb 2026D394 · trim. I 2026');
+  // Decimals keep every digit; minor units are read in their currency's minor digits.
   await expect(row.locator('.acc-work-amount')).toHaveText([
     '1.000,01 EUR',
     '234,56 EUR',
     '1.234,57 EUR',
+    '1.234,57 EUR',
   ]);
   await expect(row.locator('.acc-work-amount').first()).toHaveCSS('text-align', 'right');
-  await expect(row.getByText('Verifică răspunsurile din SPV', { exact: true })).toBeVisible();
-  await expect(row.getByText('1200 octeți', { exact: true })).toBeVisible();
+  await expect(value('Operațiune')).toHaveText('Verifică răspunsurile din SPV');
+  await expect(value('Dimensiune (octeți)')).toHaveText('1.200');
   const technical = row.locator('.acc-technical');
   await expect(technical).not.toHaveAttribute('open');
   const text = await row.innerText();
-  for (const id of [documentId, partyId, evidenceId, treasuryId, '123457'])
-    expect(text).not.toContain(id);
+  for (const code of [documentId, partyId, evidenceId, treasuryId, '123457', 'FACT_UNKNOWN'])
+    expect(text).not.toContain(code);
+  expect(text).not.toContain('cheie-fara-eticheta');
   await page.screenshot({ path: info.outputPath('readable-details.png'), fullPage: true });
   await technical.getByText('Detalii tehnice', { exact: true }).click();
-  for (const id of [documentId, partyId, evidenceId, treasuryId, '123457'])
-    await expect(technical).toContainText(id);
-  await expect(technical.getByText('Identificatorul încărcării', { exact: true })).toBeVisible();
-  await expect(technical.getByText('Identificatorul declarației', { exact: true })).toBeVisible();
+  for (const code of [documentId, partyId, evidenceId, treasuryId, 'FACT_UNKNOWN'])
+    await expect(technical).toContainText(code);
+  await expect(technical).toContainText('cheie-fara-eticheta');
+  await expect(technical.getByText('Încărcare SPV', { exact: true })).toBeVisible();
+  await expect(technical.getByText('Declarație', { exact: true })).toBeVisible();
 });
 
 test('incomplete steps have no button, mismatched previews stay disabled and blocking items cannot be dismissed', async ({
@@ -300,16 +375,19 @@ test('incomplete steps have no button, mismatched previews stay disabled and blo
           preview: { month: '2026-01', findings: [] },
         },
       };
+    // The sidebar's count of open questions is a read.
+    if (operation === 'questions.list') return { body: { items: [], next: null } };
     writes.push(operation);
     return { body: {} };
   });
   await page.goto('/contabilitate?view=review');
-  for (const item of items) await page.locator(`[data-work-id="${item.id}"] > summary`).click();
+  for (const item of items) await openWorkRow(workRow(page, item.id));
   const incompleteRow = page.locator('[data-work-id="Acțiune incompletă"]');
   await expect(
     incompleteRow.getByText('Aprobă această previzualizare: sunt necesare date suplimentare.'),
   ).toBeVisible();
-  await expect(incompleteRow.getByRole('button')).toHaveCount(0);
+  // Once a row is open, only its title remains a button above what it holds.
+  await expect(incompleteRow.getByRole('region').getByRole('button')).toHaveCount(0);
   const mismatchRow = page.locator('[data-work-id="Acțiune schimbată"]');
   await expect(
     mismatchRow.getByText('Previzualizarea s-a schimbat. Reîncarcă lista înainte de aprobare.'),
@@ -324,7 +402,7 @@ test('incomplete steps have no button, mismatched previews stay disabled and blo
     ),
   ).toBeVisible();
   await expect(blockRow.getByLabel('Motivul închiderii')).toHaveCount(0);
-  await expect(blockRow.getByRole('button')).toHaveCount(0);
+  await expect(blockRow.getByRole('region').getByRole('button')).toHaveCount(0);
   for (const id of [unrelated.id, staleJournal.id])
     await expect(page.locator(`[data-work-id="${id}"]`).getByRole('link')).toHaveCount(0);
   expect(writes).toEqual([]);
@@ -360,7 +438,7 @@ for (const state of ['resolved', 'disposed'] as const)
       return { body: {} };
     });
     await page.goto('/contabilitate?view=review');
-    await page.locator('.acc-work-item > summary').click();
+    await openWorkRow(page.locator('.acc-work-row'));
     await expect(page.getByLabel('Motivul închiderii')).toBeVisible();
     current = state;
     await page.getByRole('button', { name: 'Reîncarcă lista', exact: true }).click();
@@ -417,7 +495,7 @@ test('refresh after a decision uses fresh cursors and retains items from the sec
   await page.getByRole('button', { name: 'Mai multe elemente' }).click();
   await expect(page.locator('[data-work-id="Document din a doua pagină"]')).toBeVisible();
   const row = page.locator('[data-work-id="Document din prima pagină"]');
-  await row.locator(':scope > summary').click();
+  await openWorkRow(row);
   await row.getByLabel('Motivul închiderii').fill('Verificat fără înregistrare.');
   await row.getByRole('button', { name: 'Închide cu motiv', exact: true }).click();
   await expect(row).toHaveCount(0);
@@ -432,14 +510,19 @@ test('filters belong to De verificat and the selected tab shows keyboard focus',
 }) => {
   await mockWorklist(page, () => ({ body: { items: [], next: null, asOfSeq: 1 } }));
   await page.goto('/contabilitate?company=company&view=review&family=documents&severity=warn');
-  await expect(page.getByRole('combobox', { name: 'Familie' })).toHaveValue('documents');
+  await expect(selectButton(page, 'Familie')).toContainText('Documente');
+  await expect(selectButton(page, 'Severitate')).toContainText('Avertismente și blocante');
+  // „Toate” clears a filter from the address.
+  await chooseOption(page, 'Severitate', 'Toate');
+  await expect(page).not.toHaveURL(/severity=/);
+  await expect(page).toHaveURL(/family=documents/);
   await openSection(page, 'Registre');
   await expect(page).not.toHaveURL(/family=|severity=/);
   await openSection(page, 'Documente');
   await expect(page).toHaveURL(/view=documents/);
   await expect(page).not.toHaveURL(/family=|severity=|section=/);
   await openSection(page, 'De verificat');
-  await expect(page.getByRole('combobox', { name: 'Familie' })).toHaveValue('');
+  await expect(selectButton(page, 'Familie')).toContainText('Toate');
   await openSection(page, 'Setări');
   // The keyboard reaches the selected part after the context bar's action, with a visible ring.
   await page.getByRole('link', { name: 'Adaugă documente', exact: true }).focus();

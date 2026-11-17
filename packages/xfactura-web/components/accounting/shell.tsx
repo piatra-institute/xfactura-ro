@@ -1,7 +1,7 @@
 'use client';
 
 import { useSearchParams } from 'next/navigation';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useId, useState, type ReactNode } from 'react';
 import { Button as AriaButton } from 'react-aria-components';
 import { accountingViews, followLink, sectionUrl, type ViewId } from './navigation';
 import {
@@ -52,6 +52,8 @@ export type ShellProps = {
   company: Company | undefined;
   /** The view shown, when it belongs to the company; none on the new company page. */
   current: ViewId | null;
+  /** What waits on the person in a section, beside its link. */
+  counts?: Partial<Record<ViewId, { count: number; more: boolean }>>;
   /** The address the sidebar's section links are built from. */
   search: string;
   onSignOut: () => void;
@@ -67,6 +69,7 @@ export function Shell({
   companies,
   company,
   current,
+  counts,
   search,
   onSignOut,
   children,
@@ -92,6 +95,7 @@ export function Shell({
       companies={companies}
       company={company}
       current={current}
+      counts={counts}
       search={search}
       onSignOut={onSignOut}
       onNavigate={inDrawer ? () => setDrawer(false) : undefined}
@@ -119,18 +123,26 @@ function Sidebar({
   companies,
   company,
   current,
+  counts,
   search,
   onSignOut,
   onNavigate,
 }: Omit<ShellProps, 'children'> & { onNavigate?: () => void }) {
+  // The sidebar and the drawer each render the links: each keeps its own description ids.
+  const countId = useId();
   const link = (view: (typeof accountingViews)[number]) => {
     const href = sectionUrl(view.sections[0].id, {}, search);
+    const waiting = counts?.[view.id];
+    const shown = waiting && waiting.count > 0 ? `${waiting.count}${waiting.more ? '+' : ''}` : '';
+    // The count is read as the link's description, so the link keeps the section's name.
+    const described = shown ? `${countId}-${view.id}` : undefined;
     return (
       <li key={view.id}>
         <a
           className="acc-nav-link"
           href={href}
           aria-current={current === view.id ? 'page' : undefined}
+          aria-describedby={described}
           onClick={(event) => {
             followLink(event);
             onNavigate?.();
@@ -138,7 +150,17 @@ function Sidebar({
         >
           {sectionIcons[view.id]}
           <span>{view.label}</span>
+          {shown ? (
+            <span className="acc-badge acc-nav-count" aria-hidden="true">
+              {shown}
+            </span>
+          ) : null}
         </a>
+        {shown ? (
+          <span id={described} hidden>
+            {view.id === 'questions' ? `${shown} deschise` : `${shown} de făcut de tine`}
+          </span>
+        ) : null}
       </li>
     );
   };

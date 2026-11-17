@@ -331,7 +331,7 @@ test('„Companie nouă” in the company switcher creates a company and opens i
     // viewport, and the sidebar's foot stays on screen however far it scrolls.
     await openSection(page, 'De verificat');
     await expect(page.locator('.acc-worklist')).toHaveAttribute('aria-busy', 'false');
-    const causes = page.locator('.acc-work-cause > summary');
+    const causes = page.locator('.acc-work-cause > .acc-work-line .acc-work-toggle');
     for (let index = 0; index < (await causes.count()); index++) await causes.nth(index).click();
     const viewport = page.viewportSize()!;
     expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeGreaterThan(

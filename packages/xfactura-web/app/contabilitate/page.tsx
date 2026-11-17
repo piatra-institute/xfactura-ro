@@ -7,6 +7,7 @@ import './components.css';
 import './shell.css';
 import './settings.css';
 import './ledger-forms.css';
+import './work.css';
 
 export const metadata = {
   title: 'Contabilitate · xFactura',

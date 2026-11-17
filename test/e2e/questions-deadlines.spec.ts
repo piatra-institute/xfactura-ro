@@ -6,7 +6,8 @@ import type { WorkItem } from '../../packages/xfactura-web/components/accounting
 import { invoiceXml } from '../../packages/xfactura-api/test/engine/fixtures/invoice';
 import { capability, evidence } from './support/books';
 import { approveAndPost, signInWithCompany } from './support/session';
-import { chooseMonth, openSection, typeDate } from './support/shell';
+import { chooseMonth, chooseOption, openSection, typeDate } from './support/shell';
+import { openWorkRow, workRow } from './support/worklist';
 
 test('a vehicle purchase asks a person, retains the answer and is revised by an agent before human approval', async ({
   page,
@@ -77,9 +78,18 @@ test('a vehicle purchase asks a person, retains the answer and is revised by an 
   const question = await capability<Question>(page, 'questions.ask', ask.inputHint, agent.token);
   await openSection(page, 'De verificat');
   await page.getByRole('button', { name: 'Reîncarcă lista', exact: true }).click();
-  await page.getByRole('combobox', { name: 'Familie', exact: true }).selectOption('proposals');
-  const work = page.locator('[data-work-kind="question.needed"]');
-  await work.locator(':scope > summary').click();
+  await chooseOption(page, 'Familie', 'Propuneri');
+  // The proposal and the question it waits on are one row, titled by the question, whose
+  // action answers it in Întrebări.
+  const cause = page.locator('.acc-work-cause[data-cause^="question:vehicle.use|"]');
+  await expect(cause.locator('.acc-work-toggle').first()).toContainText('Întrebarea privind');
+  await expect(cause.getByRole('link', { name: 'Răspunde', exact: true })).toHaveAttribute(
+    'href',
+    new RegExp(`view=questions.*question=${question.id}`),
+  );
+  await openWorkRow(cause);
+  const work = cause.locator('[data-work-kind="question.needed"]');
+  await openWorkRow(work);
   await work.getByRole('link', { name: 'Deschide întrebarea în Întrebări', exact: true }).click();
   await expect(page).toHaveURL(/view=questions.*question=/);
   const card = page.locator(`[data-question-id="${question.id}"]`);
@@ -174,12 +184,16 @@ test('a VAT deadline prepares D300, shows the validator response and retains the
   });
   await openSection(page, 'De verificat');
   await page.getByRole('button', { name: 'Reîncarcă lista', exact: true }).click();
-  await page.getByRole('combobox', { name: 'Familie', exact: true }).selectOption('deadlines');
-  const work = page
-    .locator('[data-work-kind="obligation.due"]')
-    .filter({ hasText: 'Decontul de TVA (D300) pentru octombrie 2026' });
-  await work.locator(':scope > summary').click();
-  await work.getByRole('link', { name: 'Deschide declarația în Declarații', exact: true }).click();
+  await chooseOption(page, 'Familie', 'Termene');
+  // The D300s waiting to be prepared are one row, opened to each month.
+  const due = page.locator('[data-return-group="D300|due"]');
+  await expect(due.locator('.acc-work-title').first()).toHaveText('D300');
+  await expect(due.locator(':scope > .acc-work-line .acc-chip').first()).toHaveText(/^oct/);
+  await openWorkRow(due);
+  const work = workRow(due, 'obligation.due:obligation:D300|2026-10');
+  await expect(work.locator('.acc-work-title')).toHaveText('D300 · octombrie 2026');
+  await expect(work).toContainText('Termen 25.11.2026');
+  await work.getByRole('link', { name: 'Deschide', exact: true }).click();
   await expect(page).toHaveURL(/view=deadlines/);
   const card = page.locator('[data-return="D300|2026-10"]');
   await expect(card).toContainText('2026-11-25');

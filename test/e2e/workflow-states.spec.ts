@@ -296,7 +296,10 @@ test('question and deadline reads show loading, empty and retryable error states
   });
   await mockWorklist(
     page,
-    (operation) => {
+    (operation, input) => {
+      // The sidebar counts the open questions on its own read; the view's read is held here.
+      if (operation === 'questions.list' && input.status === 'open')
+        return { body: { items: [], next: null } };
       if (operation === 'questions.list') {
         if (first) {
           first = false;
