@@ -45,7 +45,7 @@ These are ideas to evaluate after their dependencies exist, rather than prerequi
 
 - Core accounting, fiscal updates, reports, collaboration, basic API access, self-hosting and complete exports follow the free product contract. A feature's deterministic accounting operation must work without a model.
 - Optional AI uses a regular paid Piatra AI user key or a user-supplied provider key, including OpenAI/OpenRouter, from the backend. Provider charging follows that account. No new xFactura wallet or privileged Piatra credential is a dependency.
-- Keep the existing black verification interface, direct Romanian task labels and accessible source links. Do not turn each accounting module into another mandatory manual-entry application. Show the precise business question or consequence; keep milestone numbers and project governance out of product copy.
+- Follow [DESIGN.md](DESIGN.md): direct Romanian labels, the fix shown where the problem is, accessible source links. Do not turn each accounting module into another mandatory manual-entry application. Show the precise business question or consequence; keep milestone numbers and project governance out of product copy.
 - Accounting permission, provider access, professional authority, filing mandate, outbound messaging and payment authority are distinct. New integrations do not inherit them implicitly.
 - Future capabilities appear in discovery and product claims only after their input, accounting/fiscal effect, approval, error, export and recovery behavior exists and has evidence.
 
