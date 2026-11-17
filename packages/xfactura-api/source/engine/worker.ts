@@ -25,3 +25,5 @@ while (!stop) {
   }
 }
 await db.close();
+// Under `bun --watch` a finished script keeps the process waiting for file changes.
+process.exit(0);

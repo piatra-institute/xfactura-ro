@@ -57,9 +57,16 @@ if (legacy) {
 }
 const port = Number(process.env.PORT ?? 8089);
 const server = app.listen(port, '0.0.0.0', () => console.log(`xFactura API listening on ${port}.`));
+// The process exits once closed: keep-alive sockets from the web proxy would otherwise hold the
+// server open, and under `bun --watch` a finished script keeps the process waiting for changes.
+let stopping = false;
 async function stop() {
+  if (stopping) return;
+  stopping = true;
   server.close();
+  server.closeAllConnections();
   if (accounting) await accounting.close();
+  process.exit(0);
 }
 process.on('SIGINT', stop);
 process.on('SIGTERM', stop);
